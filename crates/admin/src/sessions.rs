@@ -68,8 +68,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
-    // in force, or the share of the account's own 5-hour window through the table's reference rates over its
-    // tier's factor. Each account's tier is read once per request.
+    // in force, or the share of the account's own 5-hour window through the model's anchor rates over its tier's
+    // capacity ratio. Each account's tier is read once per request.
     let dollar_rates = state.pricing.current().rate_table();
     let share_rates = state.tables.rate_table(FIVE_HOUR);
     let mut tiers: std::collections::HashMap<String, Option<String>> =
@@ -129,8 +129,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     tiers.insert(p.account_id.clone(), tier);
                 }
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
-                // A tier the table does not size, or a cell it leaves null under this pin's burn, prices nothing,
-                // so the figure reads null rather than a guess.
+                // A tier the model does not size, or a model it has no weight for, prices nothing, so the figure
+                // reads null rather than a guess.
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))
                     .and_then(|factor| {
                         share_rates

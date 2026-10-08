@@ -6,16 +6,17 @@ use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
-    PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
-    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    BurnRates, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
+    KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, Refusal, RefusalFacts,
+    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
+    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PoolRow, RoutingLoad, RulesMode, StorageKey, Store, Strategy,
-    SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, ShedPin,
+    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -51,6 +52,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
     }
@@ -121,6 +123,9 @@ fn request(
 ) -> SelectRequest {
     let s = handle.snapshot();
     SelectRequest {
+        request_id: "r-1".into(),
+        attempt: 1,
+        seq: 1,
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         agent_id: "main".into(),
@@ -199,6 +204,9 @@ fn affinity_report(
         cache_write_5m_tokens: None,
         cache_write_1h_tokens: None,
         uniform_ttl_ms: None,
+        request_id: "r-1".into(),
+        seq: 1,
+        attempt: 1,
     }
 }
 
@@ -228,6 +236,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -402,6 +411,7 @@ async fn a_pool_with_no_member_at_admission_and_one_added_before_the_selection_s
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -566,6 +576,8 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             lifecycle_generation: 1,
             credential_generation: 1,
             incarnation: 1,
+            cause: StateCause::AuthFailed,
+            detail: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -629,6 +641,41 @@ async fn a_report_the_stopped_task_cannot_take_counts_one_drop_under_its_kind_an
         None
     );
     assert_dropped(&handle, "cooldown", 1);
+}
+
+#[tokio::test]
+async fn a_refusal_the_stopped_task_cannot_take_counts_one_drop() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(handle.dropped_refusals(), 0);
+    handle.shutdown().await.unwrap();
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal);
+    assert_eq!(handle.dropped_refusals(), 1);
+    assert_dropped(&handle, "cooldown", 0);
+}
+
+#[tokio::test]
+async fn a_refusal_queued_behind_the_shutdown_lands_with_the_drain() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let park = handle.park_loop().await;
+    let stopping = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.shutdown().await }
+    });
+    wait_for(WRITTEN, || (handle.queued() == 1).then_some(())).await;
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal);
+    drop(park);
+    stopping.await.unwrap().unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (summary.kind, record.request.request_id.as_str()),
+        ("refused", "r-drift")
+    );
+    assert_eq!(handle.dropped_refusals(), 0, "the mailbox took it");
 }
 
 #[tokio::test]
@@ -696,7 +743,7 @@ async fn two_samples_of_one_key_replace_each_other_and_the_newest_observed_alone
 async fn a_stale_account_state_never_replaces_a_current_pending_one() {
     let store = seeded(&["a"]);
     // A reconnect: the lifecycle moves on and the credential generation starts again.
-    assert_eq!(store.bump_lifecycle("a").unwrap(), 2);
+    assert_eq!(store.bump_lifecycle("a", StateCause::Operator).unwrap(), 2);
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
         .unwrap();
@@ -711,6 +758,8 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             incarnation: 1,
             lifecycle_generation: 2,
             credential_generation: credential,
+            cause: StateCause::AuthFailed,
+            detail: None,
         })
         .await;
     // The previous lifecycle's verdict, under a credential generation the reconnect has not reached again.
@@ -721,6 +770,8 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: credential + 2,
+            cause: StateCause::FundingRefused,
+            detail: None,
         })
         .await;
     drop(park);
@@ -751,6 +802,8 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: 1,
+            cause: StateCause::AuthFailed,
+            detail: None,
         },
         Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
@@ -830,6 +883,8 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             lifecycle_generation: 1,
             credential_generation: generation,
             incarnation: 1,
+            cause: StateCause::AuthFailed,
+            detail: None,
         })
         .await;
     // The verdict named the key the store has since replaced, so the writer fences it out.
@@ -844,6 +899,8 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             lifecycle_generation: 1,
             credential_generation: generation + 1,
             incarnation: 1,
+            cause: StateCause::AuthFailed,
+            detail: None,
         })
         .await;
     wait_for(WRITTEN, || {
@@ -951,6 +1008,9 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
     let req = |handle: &phoebis_routing::RouterHandle, now: i64| {
         let s = handle.snapshot();
         SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
@@ -1081,6 +1141,9 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
     let s = handle.snapshot();
     let answer = handle
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
@@ -1185,6 +1248,7 @@ fn restore_a(store: &Store) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
 }
@@ -1586,7 +1650,9 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
     let SelectResult::Selected(other) = second.result else {
         panic!()
     };
-    store.bump_lifecycle(&other.account.id).unwrap();
+    store
+        .bump_lifecycle(&other.account.id, StateCause::Operator)
+        .unwrap();
     handle.reload().await.unwrap();
     assert!(
         second.cancel.is_cancelled(),
@@ -1971,6 +2037,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -2009,6 +2076,7 @@ fn insert_account_a(store: &Store) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -2088,6 +2156,8 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             lifecycle_generation: 1,
             credential_generation: 1,
             incarnation: 1,
+            cause: StateCause::FundingRefused,
+            detail: None,
         })
         .await;
     handle
@@ -2274,6 +2344,7 @@ async fn a_reading_reported_for_a_previous_incarnation_changes_nothing() {
             account_id: "a".into(),
             sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     handle
@@ -2513,6 +2584,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             utilization: 0.5,
             reset: Some(10 * HOUR),
             observed_at: 1_000,
+            source: WindowSource::Poll,
         };
         Report::Sample {
             account_id: "a".into(),
@@ -2521,6 +2593,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
                 .with(SEVEN_DAY, reading)
                 .with(SEVEN_DAY_FABLE, reading),
             incarnation,
+            source_request_id: None,
         }
     };
     let used = |model: &str, incarnation: u64| Report::Usage {
@@ -2587,6 +2660,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     with_tier(&store, "a");
@@ -2613,6 +2687,7 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
         utilization,
         reset: Some(100 * HOUR),
         observed_at: 1_000,
+        source: WindowSource::Head,
     };
     handle
         .report(observed(
@@ -2646,7 +2721,13 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
     handle
         .report(observed(
             "a",
-            sample_with(900, FIVE_HOUR, 0.9, Some(100 * HOUR)),
+            sample(900).with(
+                FIVE_HOUR,
+                WindowReading {
+                    observed_at: 900,
+                    ..reading(0.9)
+                },
+            ),
         ))
         .await;
     handle.shutdown().await.unwrap();
@@ -2679,6 +2760,7 @@ async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() 
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     with_tier(&store, "a");
@@ -2745,6 +2827,7 @@ async fn a_windows_write_queued_for_a_deleted_holder_lands_nowhere_and_its_repla
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
@@ -2774,6 +2857,279 @@ async fn next_event(
         .expect("not lagged")
 }
 
+/// The next event, which has to be a decision: its summary and its record.
+async fn next_decision(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> (DecisionSummary, DecisionRecord) {
+    match next_event(events).await {
+        phoebis_routing::RouterEvent::Decision {
+            summary, record, ..
+        } => (*summary, *record),
+        other => panic!("the decision comes first, not {other:?}"),
+    }
+}
+
+/// A decision's pin events as the task emits them after it, `(kind, reason)` in order.
+fn pin_events_of(record: &DecisionRecord) -> Vec<(&'static str, Option<&str>)> {
+    record
+        .outcome
+        .pin_events
+        .iter()
+        .map(|event| (event.kind, event.reason.as_deref()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_selection_emits_its_decision_before_its_pin_event() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(pin_events_of(&record), [("pin_created", None)]);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a"),
+        "the pin event the record names follows the decision"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_idle_pin_the_selection_replaces_emits_the_decision_then_both_pin_events() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let mut events = handle.subscribe_events();
+    // One millisecond past the pool's hour-long affinity TTL.
+    handle
+        .select(request(&handle, Some("s1"), 1_000 + HOUR + 1))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(
+        record
+            .pin
+            .as_ref()
+            .map(|pin| (pin.found, pin.released.clone())),
+        Some(("expired_idle", vec!["expired"])),
+        "the reasons the task read before the selection join the pin block"
+    );
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("expired")), ("pin_created", None)]
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s1" && reasons == vec!["expired"])
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a")
+    );
+}
+
+#[tokio::test]
+async fn a_pin_whose_account_left_the_pool_is_replaced_with_both_events_in_order() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: to.into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(record.pin.as_ref().map(|pin| pin.found), Some("left_pool"));
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("unserved")), ("pin_created", None)],
+        "the expiry names the first reason the task read against the pin"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == from && reasons == vec!["unserved"])
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { account_id, .. } if account_id == to)
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_emits_a_decision_with_a_two_line_walk() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let admitted = request(&handle, Some("s1"), 1_000);
+    store.revoke_api_key("k", 2, "test").unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    let answer = handle.select(admitted).await.unwrap();
+    assert!(matches!(
+        answer.result,
+        SelectResult::Refused(Refusal::Key(KeyRefusal::Revoked))
+    ));
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (summary.kind, summary.by.kind, summary.by.value.as_str()),
+        ("refused", "refusal", "key")
+    );
+    assert_eq!(
+        record
+            .walk
+            .iter()
+            .map(|step| (step.step, step.verdict))
+            .collect::<Vec<_>>(),
+        [("admission", "refused"), ("selection", "not_run")]
+    );
+    assert!(record.candidates.is_empty(), "the engine never ran");
+    assert_eq!(
+        (
+            record.request.request_id.as_str(),
+            record.request.attempt,
+            record.request.seq
+        ),
+        ("r-1", 1, 1)
+    );
+}
+
+/// A drifted client's refusal as the relay records it: the request's one decision.
+fn drift_refusal() -> (RefusedRequest, RefusalFacts) {
+    (
+        RefusedRequest {
+            request_id: "r-drift".into(),
+            attempt: 1,
+            seq: 1,
+            at: 1_000,
+            key_id: "k".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            parent_agent_id: None,
+            session_id: Some("s1".into()),
+            request_class: None,
+            canonical_model: "claude-sonnet-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
+            client: ClientClass::ClaudeCode,
+            client_version: Some("2.1.274".into()),
+        },
+        RefusalFacts {
+            kind: "client",
+            reason: "hash".into(),
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_relay_refusal_recorded_through_the_handle_emits_a_client_decision() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal.clone());
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            summary.kind,
+            summary.by.value.as_str(),
+            summary.refusal.as_ref()
+        ),
+        ("refused", "client", Some(&refusal))
+    );
+    assert_eq!(record.outcome.refusal.as_ref(), Some(&refusal));
+    assert_eq!(
+        (
+            record.request.request_id.as_str(),
+            record.request.seq,
+            record.request.attempt,
+            record.request.at
+        ),
+        ("r-drift", 1, 1, 1_000)
+    );
+    assert_eq!(handle.dropped_refusals(), 0);
+}
+
+#[tokio::test]
+async fn a_completed_answer_emits_the_cache_map_it_wrote() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
+            message_ttl_ms: Some(300_000),
+            cache_touched: true,
+            prefix_tokens: 1_200,
+            request_id: "r-7".into(),
+            seq: 2,
+            attempt: 3,
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::CacheMapWritten {
+            request_id,
+            seq,
+            attempt,
+            entries,
+            at,
+        } => {
+            assert_eq!(
+                (request_id.as_str(), seq, attempt, at),
+                ("r-7", 2, 3, 1_000)
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|e| (
+                        e.tier,
+                        e.depth,
+                        e.prefix_tokens,
+                        e.ttl_ms,
+                        e.account_id.as_str()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    ("message", 1, 1_200, 300_000, "a"),
+                    ("message", 2, 1_200, 300_000, "a")
+                ]
+            );
+        }
+        other => panic!("the cache map, not {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     use phoebis_routing::RouterEvent;
@@ -2798,6 +3154,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .await
         .unwrap();
     let a = picked(&first);
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, at: 1_000, .. } if session_id == "s1" && account_id == a)
     );
@@ -2834,6 +3191,12 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .unwrap();
     let b = picked(&second);
     assert_ne!(a, b);
+    let (moved, _) = next_decision(&mut events).await;
+    assert_eq!(
+        (moved.kind, moved.rule),
+        ("placed", Some("cooldown")),
+        "a hard failover's reason is the decision's rule"
+    );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "cooldown")
     );
@@ -2889,6 +3252,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .select(request(&handle, Some("s2"), 2_000))
         .await
         .unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
     );
@@ -2925,9 +3289,11 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
                     utilization: 0.2,
                     reset: None,
                     observed_at: 1_500,
+                    source: WindowSource::Poll,
                 },
             ),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     // The ask is handled after a drain that holds the report, so the task has applied the sample before it answers
@@ -2959,6 +3325,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         other => panic!("{other:?}"),
     };
     let b = if a == "a" { "b" } else { "a" };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -2970,6 +3337,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
+                source: WindowSource::Poll,
             },
         )
     };
@@ -2978,6 +3346,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
             account_id: a.clone(),
             sample: spent(1.0, 1_500),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     handle
@@ -2985,6 +3354,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
             account_id: b.into(),
             sample: spent(0.2, 1_500),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     let second = handle
@@ -2992,6 +3362,12 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         .await
         .unwrap();
     assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::WindowSpent { account_id, window, .. } if account_id == a && window == FIVE_HOUR),
+        "the reading that spent the window lands ahead of the selection that reads it"
+    );
+    let (moved, _) = next_decision(&mut events).await;
+    assert_eq!((moved.kind, moved.rule), ("moved", Some("spent")));
     let event = next_event(&mut events).await;
     assert!(
         matches!(event, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
@@ -3014,6 +3390,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
         other => panic!("{other:?}"),
     };
     let b = if a == "a" { "b" } else { "a" };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3025,6 +3402,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
+                source: WindowSource::Poll,
             },
         )
     };
@@ -3046,13 +3424,17 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
             account_id: a.clone(),
             sample: spent(1_500),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
+    // Read back before the next reading lands, so the two spent windows leave in the order reported.
+    handle.samples().await.unwrap();
     handle
         .report(Report::Sample {
             account_id: b.into(),
             sample: spent(1_500),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     let second = handle
@@ -3060,6 +3442,18 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
         .await
         .unwrap();
     assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    for account in [a.as_str(), b] {
+        assert!(
+            matches!(next_event(&mut events).await, RouterEvent::WindowSpent { account_id, .. } if account_id == account),
+            "{account}'s spent window lands ahead of the selection"
+        );
+    }
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(placed.kind, "placed");
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("cooldown")), ("pin_created", None)]
+    );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == a && reasons == vec!["cooldown", "spent"]),
         "no sibling holds allowance, so the spent rule names no destination and the cooled pin expires"
@@ -3112,6 +3506,7 @@ fn sample_with(
             utilization,
             reset,
             observed_at,
+            source: WindowSource::Poll,
         },
     )
 }
@@ -3121,6 +3516,7 @@ fn observed(account: &str, sample: UtilizationSample) -> Report {
         account_id: account.into(),
         sample,
         incarnation: 1,
+        source_request_id: None,
     }
 }
 
@@ -3154,6 +3550,7 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
         ),
         "the rejection is in force"
     );
+    assert_eq!(next_decision(&mut events).await.0.kind, "exhausted");
     // Anthropic moved the reset in: hours before the deadline the 429 announced, the window reads below 1.
     now.store(2_000, Ordering::SeqCst);
     handle
@@ -3304,6 +3701,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 1.0,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3330,6 +3728,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 0.9,
                     reset: None,
                     observed_at: 2_002,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3384,6 +3783,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
+                        source: WindowSource::Poll,
                     },
                 )
                 .with(
@@ -3392,6 +3792,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
+                        source: WindowSource::Poll,
                     },
                 ),
         ))
@@ -3505,6 +3906,7 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
                     utilization: 0.1,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3726,6 +4128,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         SelectResult::Selected(s) => s.account.id.clone(),
         other => panic!("{other:?}"),
     };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3765,9 +4168,20 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         panic!("{:?}", second.result)
     };
     assert_eq!(sel.trace.moved, Some("cooldown"));
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.kind, placed.rule, record.outcome.rule),
+        ("placed", Some("cooldown"), Some("cooldown")),
+        "the trace's move is the record's rule"
+    );
+    assert_eq!(
+        record.outcome.from_account_id.as_deref(),
+        Some(a.as_str()),
+        "the record names the account the fail-over left, as the pin's move does"
+    );
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
+        RouterEvent::PinMigrated { reason, from_account, .. } if reason == "cooldown" && from_account == a
     ));
 }
 
@@ -3789,6 +4203,7 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
     let from = selection.account.id.clone();
     let to = if from == "a" { "b" } else { "a" };
     let pin = selection.pin.clone().unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3831,6 +4246,8 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         (sel.account.id.as_str(), sel.trace.moved),
         (to, Some("fast_lane"))
     );
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!((placed.kind, placed.rule), ("placed", Some("fast_lane")));
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinMigrated { from_account, to_account, reason, .. }
@@ -3912,6 +4329,7 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
                     utilization: 0.4,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -4338,6 +4756,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         SelectResult::Selected(s) => s.account.id.clone(),
         other => panic!("{other:?}"),
     };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -4379,6 +4798,12 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         .await
         .unwrap();
     assert!(matches!(&sibling.result, SelectResult::Selected(_)));
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.kind, placed.rule),
+        ("placed", None),
+        "the sibling's placement takes no other agent's move"
+    );
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { agent_id, .. } if agent_id == "worker"
@@ -4391,6 +4816,8 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         panic!("{:?}", main_next.result)
     };
     assert_eq!(sel.trace.moved, Some("cooldown"));
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!((placed.kind, placed.rule), ("placed", Some("cooldown")));
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinMigrated { agent_id, reason, .. } if agent_id == "main" && reason == "cooldown"
@@ -5133,6 +5560,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -5393,4 +5821,1260 @@ async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates
             .all(|r| !(r.pool_id == "p" && r.account_id == "a")),
         "a stale Month row is not answered for a member now configured on Day: {rows:?}"
     );
+}
+
+/// Proves nothing further reaches the broadcast for 200 ms: every purge tick and report in flight has had its turn.
+async fn no_further_event(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) {
+    stays_for(Duration::from_millis(200), || {
+        matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        )
+    })
+    .await;
+}
+
+/// A head's reading of the 5-hour window, reported with the request whose head carried it.
+fn head_reading(at: i64, utilization: f64, reset: Option<i64>, request_id: &str) -> Report {
+    Report::Sample {
+        account_id: "a".into(),
+        sample: sample(at).with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization,
+                reset,
+                observed_at: at,
+                source: WindowSource::Head,
+            },
+        ),
+        incarnation: 1,
+        source_request_id: Some(request_id.into()),
+    }
+}
+
+#[tokio::test]
+async fn a_shedding_round_emits_its_pins_and_marks_once() {
+    use phoebis_routing::{PinKeyFacts, RouterEvent};
+    let store = seeded_oauth(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shed_ahead_of_pace = Some(0.2);
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // Two sessions on `a`, `s1` burning four times what `s2` burns.
+    let s1 = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let s2 = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), 1_000))
+            .await
+            .unwrap(),
+    );
+    for (pin, input) in [(s1, 4_000_000), (s2, 1_000_000)] {
+        handle
+            .report(renewal(
+                pin,
+                2_000,
+                PinUsage {
+                    input,
+                    ..PinUsage::default()
+                },
+                "client",
+                300_000,
+            ))
+            .await;
+    }
+    // A 5-hour reading with no reset runs ahead of its pace by its whole utilization.
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.9, None)))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // Ten minutes on, `s2`'s cache has lapsed. `s1`'s is the one this request refreshes, so it reads warm.
+    let at = 1_000 + 600_000;
+    now.store(at, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), at))
+        .await
+        .unwrap();
+    let (summary, _) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "renewed", "s1 is not marked, so it stays");
+    let key = |session: &str| PinKeyFacts {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+    };
+    match next_event(&mut events).await {
+        RouterEvent::SheddingRound {
+            account_id,
+            pool_id,
+            request_id,
+            key_id,
+            session_id,
+            agent_id,
+            model,
+            round,
+            at: emitted,
+        } => {
+            assert_eq!(
+                (
+                    account_id.as_str(),
+                    pool_id.as_str(),
+                    request_id.as_str(),
+                    key_id.as_str(),
+                    session_id.as_str(),
+                    agent_id.as_str(),
+                    model.as_str(),
+                    emitted
+                ),
+                ("a", "p", "r-1", "k", "s1", "main", "claude-sonnet-5", at)
+            );
+            assert_eq!(
+                (round.window.as_str(), round.unit, round.warm_sessions),
+                ("five_hour", "window_share", "when_needed")
+            );
+            assert!((round.utilization - 0.9).abs() < 1e-9);
+            assert!((round.ahead - 0.9).abs() < 1e-9);
+            assert_eq!(round.elapsed_share, 0.0);
+            assert!((round.threshold - 0.2).abs() < 1e-9);
+            assert!(
+                (round.margin - 0.7).abs() < 1e-9,
+                "the hot window's lead less the threshold"
+            );
+            assert_eq!(
+                round
+                    .pins
+                    .iter()
+                    .map(|p| (p.session_id.as_str(), p.cold, p.marked, p.note))
+                    .collect::<Vec<_>>(),
+                [
+                    ("s2", true, true, None),
+                    ("s1", false, false, Some("current"))
+                ],
+                "the round's order: the cold pin first, then the warm one, and the cold one marked"
+            );
+            assert!(round.pins.iter().all(|p| p.burn.is_some()));
+            let sum: f64 = round.pins.iter().filter_map(|p| p.burn).sum();
+            assert!((round.burn_sum - sum).abs() < 1e-9);
+            assert!((round.target - 0.5 * sum).abs() < 1e-9);
+            assert_eq!(round.marks, vec![key("s2")]);
+            assert_eq!(
+                (round.dwell_seconds, round.dwell_until),
+                (900, at + 900_000)
+            );
+        }
+        other => panic!("the round follows its decision, not {other:?}"),
+    }
+    // Inside the dwell no round runs, so the next decision comes alone: the marked `s2` has no sibling to move to.
+    handle
+        .select(request(&handle, Some("s2"), at + 1_000))
+        .await
+        .unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
+    no_further_event(&mut events).await;
+}
+
+/// A clock past the cache TTL, so a pin last refreshed an hour before it reads cold.
+const AT: i64 = 10 * HOUR;
+
+/// `request` under the `quota` class, which leaves the pin's warmth as it was, so a pin last refreshed an hour ago
+/// reads cold on it.
+fn quota_turn(handle: &RouterHandle, session: Option<&str>, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_class: Some("quota".into()),
+        ..request(handle, session, now)
+    }
+}
+
+/// Session `session`'s pin under the store's key `k` on `account`, burning `burn` input tokens a second in both
+/// copies, used a second before `AT` and last refreshed an hour before it, so it is live and cold.
+fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64) -> PinRow {
+    let rates = PinBurn {
+        input: burn,
+        ..PinBurn::default()
+    };
+    PinRow {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: account.into(),
+        epoch,
+        created_at: AT - HOUR,
+        last_used_at: AT - 1_000,
+        // The key's creation time, so the purge reads the pin as its key's rather than a replaced key's.
+        key_generation: store.api_key("k").unwrap().unwrap().created_at,
+        incarnation: 1,
+        burn: rates,
+        burn_at: Some(AT),
+        burn_banded: rates,
+        last_input_tokens: 1_000,
+        last_refresh_at: AT - HOUR,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+    }
+}
+
+fn shed_pin(session: &str, epoch: u64, marked: bool) -> ShedPin {
+    ShedPin {
+        key: PinKey {
+            key_id: "k".into(),
+            session_id: session.into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+        },
+        epoch,
+        marked,
+    }
+}
+
+/// The pool `p` over OAuth accounts `ids` in that priority order, shedding at a lead of 0.2 over pace.
+fn shedding_store(ids: &[&str]) -> Arc<Store> {
+    let store = seeded_oauth(ids);
+    store
+        .set_pool_members(
+            "p",
+            &ids.iter()
+                .enumerate()
+                .map(|(priority, id)| MemberWrite {
+                    account_id: id.to_string(),
+                    priority: priority as u32,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shed_ahead_of_pace = Some(0.2);
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    store
+}
+
+/// A second pool `q` on its own dwell, holding no member: the pool `a` left for `p`, since an account belongs to one
+/// pool, whose rounds on `a` stay on file.
+fn second_pool(store: &Store, dwell_seconds: u64) {
+    store
+        .insert_pool(
+            &PoolRow {
+                shedding: Shedding {
+                    source_dwell_seconds: dwell_seconds,
+                    ..Shedding::default()
+                },
+                ..PoolRow::for_tests("q")
+            },
+            "test",
+        )
+        .unwrap();
+}
+
+/// Both shared windows at `five_hour` and `seven_day` with no reset, so each one's lead over pace is its reading.
+fn windows(account: &str, five_hour: f64, seven_day: f64, at: i64) -> Report {
+    observed(
+        account,
+        sample_with(at, FIVE_HOUR, five_hour, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: seven_day,
+                reset: None,
+                observed_at: at,
+                source: WindowSource::Poll,
+            },
+        ),
+    )
+}
+
+/// Where the selection landed and the rule that moved it there.
+fn landed_on(
+    answer: phoebis_routing::SelectAnswer,
+) -> (String, Option<phoebis_routing::MigrateReason>) {
+    match answer.result {
+        SelectResult::Selected(sel) => (sel.account.id, sel.migrated),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The `round` fact of the decision's shed line: `ran`, or `within_dwell` while the pool's last round on the
+/// account gates the next.
+fn shed_round_fact(record: &DecisionRecord) -> Option<phoebis_routing::FactValue> {
+    record
+        .walk
+        .iter()
+        .find(|step| step.step == "move:shed")?
+        .facts
+        .iter()
+        .find(|fact| fact.key == "round")
+        .map(|fact| fact.value.clone())
+}
+
+/// Every event the broadcast holds until it stays quiet for 200 ms.
+async fn drained(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> Vec<phoebis_routing::RouterEvent> {
+    let mut seen = Vec::new();
+    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(200), events.recv()).await
+    {
+        seen.push(event);
+    }
+    seen
+}
+
+fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
+    !events
+        .iter()
+        .any(|event| matches!(event, phoebis_routing::RouterEvent::SheddingRound { .. }))
+}
+
+#[tokio::test]
+async fn the_marks_and_the_dwell_gate_survive_a_restart() {
+    use phoebis_routing::MigrateReason;
+    let store = shedding_store(&["a", "b"]);
+    // Neither pin burns, so a round run now would mark nothing: s1 moves on the stored mark alone.
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 0.0),
+        stored_pin(&store, "s2", "a", 2, 0.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // The previous run's round on a, a minute before the restart, marked s1 and left s2.
+    store
+        .replace_shed_round(
+            "p",
+            "a",
+            1,
+            AT - 60_000,
+            &[shed_pin("s1", 1, true), shed_pin("s2", 2, false)],
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the loaded mark moves s1 at its next request"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    assert!(record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into()))
+    );
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s2"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    let later = drained(&mut events).await;
+    assert!(
+        no_round(&later),
+        "inside the loaded dwell no round runs on the hot account: {later:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_after_a_restart() {
+    use phoebis_routing::MigrateReason;
+    let store = shedding_store(&["a", "b", "c"]);
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 4.0),
+        stored_pin(&store, "s0", "a", 2, 1.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // c holds no reading, so it reads as cool and a mark that outlived the move would find it a destination, while
+    // the spent move below, which needs a reading of the window, has only a to go to.
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    handle.report(windows("b", 1.0, 0.1, AT + 500)).await;
+    handle.samples().await.unwrap();
+    now.store(AT + 1_000, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "b spends its window and the spent move takes s1 back to a, inside a's dwell"
+    );
+    handle.shutdown().await.unwrap();
+
+    now.store(AT + 2_000, Ordering::SeqCst);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
+    handle.report(windows("b", 1.0, 0.1, AT + 2_000)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 2_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "the move consumed s1's mark before the restart, so it renews in place rather than going to c"
+    );
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "renewed");
+    assert!(record.pin.as_ref().is_some_and(|pin| !pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into())),
+        "the round before the restart still gates a"
+    );
+    let later = drained(&mut events).await;
+    assert!(no_round(&later), "{later:?}");
+}
+
+#[tokio::test]
+async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
+    let store = shedding_store(&["a", "b"]);
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 4.0),
+        stored_pin(&store, "s0", "a", 2, 1.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // s0's request runs a's round, which marks s1, the heavier, and leaves s0 where it is.
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s0"), AT))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    next_decision(&mut events).await;
+    match next_event(&mut events).await {
+        phoebis_routing::RouterEvent::SheddingRound { round, .. } => assert_eq!(
+            round
+                .marks
+                .iter()
+                .map(|key| key.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1"]
+        ),
+        other => panic!("the round follows its decision, not {other:?}"),
+    }
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    now.store(AT + 1_000, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "a fresh pin under the key lands on a under a new epoch"
+    );
+    handle.shutdown().await.unwrap();
+
+    now.store(AT + 2_000, Ordering::SeqCst);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
+    handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 2_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "the released pin's mark left with it, so the fresh pin stays rather than moving to b"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    assert!(record.pin.as_ref().is_some_and(|pin| !pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into())),
+        "the round's dwell still gates a"
+    );
+    let later = drained(&mut events).await;
+    assert!(no_round(&later), "{later:?}");
+}
+
+#[tokio::test]
+async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
+    let store = seeded(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shedding.source_dwell_seconds = 600;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    second_pool(&store, 1_800);
+    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart, and q's
+    // round is past q's dwell, the longest.
+    store
+        .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
+        .unwrap();
+    store
+        .replace_shed_round("q", "a", 1, AT - 2_000_000, &[shed_pin("s2", 2, false)])
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let _handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let kept = wait_for_async(WRITTEN, || async {
+        let rounds = store.load_routing().unwrap().shed_rounds;
+        (rounds.len() == 1).then(|| rounds[0].pool_id.clone())
+    })
+    .await;
+    assert_eq!(
+        kept, "p",
+        "the cut is now less the longest dwell of the snapshot's pools"
+    );
+}
+
+#[tokio::test]
+async fn after_a_restart_an_account_reads_as_shed_by_its_former_pool_s_round() {
+    use phoebis_routing::{FactValue, MigrateReason};
+    let store = seeded(&["x", "a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[("x", 0), ("a", 1)]
+                .into_iter()
+                .map(|(id, priority)| MemberWrite {
+                    account_id: id.into(),
+                    priority,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shed_ahead_of_pace = Some(0.2);
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    second_pool(&store, 900);
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))
+        .unwrap();
+    // q's round on a a minute before the restart, run while a was q's member, and p never ran one there.
+    store
+        .replace_shed_round("q", "a", 1, AT - 60_000, &[shed_pin("s9", 9, true)])
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("x", 1.0, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "with no cool sibling the spent move falls through to the rule's own destination"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    let cool = record
+        .walk
+        .iter()
+        .find(|step| step.step == "cool")
+        .expect("the spent rule's cool line");
+    let about_a = |key: &str| {
+        cool.facts
+            .iter()
+            .find(|fact| fact.key == key && fact.account_id.as_deref() == Some("a"))
+            .map(|fact| fact.value.clone())
+    };
+    assert_eq!(
+        (cool.verdict, about_a("last_shed_age_ms"), about_a("cool")),
+        (
+            "fell_through",
+            Some(FactValue::Int(60_000)),
+            Some(FactValue::Bool(false))
+        ),
+        "a reads as just shed by its former pool's round, which p never ran"
+    );
+}
+
+#[tokio::test]
+async fn the_load_counts_name_the_marks_within_the_dwell_and_the_stale_rows() {
+    let store = seeded(&["a"]);
+    second_pool(&store, 600);
+    // s2 was created again under another epoch since its round marked it.
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 0.0),
+        stored_pin(&store, "s2", "a", 9, 0.0),
+        stored_pin(&store, "s3", "a", 3, 0.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // p's round a minute ago is inside its 900-second dwell: s1's mark counts, s2's names an epoch its pin left and
+    // s3 is unmarked. q's round is past its 600-second dwell, both rows of it stale.
+    store
+        .replace_shed_round(
+            "p",
+            "a",
+            1,
+            AT - 60_000,
+            &[
+                shed_pin("s1", 1, true),
+                shed_pin("s2", 2, true),
+                shed_pin("s3", 3, false),
+            ],
+        )
+        .unwrap();
+    store
+        .replace_shed_round(
+            "q",
+            "a",
+            1,
+            AT - 700_000,
+            &[shed_pin("s1", 1, true), shed_pin("s3", 3, false)],
+        )
+        .unwrap();
+    let handle = spawn(store, Arc::new(|| AT), RouterConfig::default()).unwrap();
+    let counts = handle.load_counts();
+    assert_eq!(
+        (counts.pins, counts.shed_marks, counts.shed_rounds_stale),
+        (3, 1, 2)
+    );
+}
+
+#[tokio::test]
+async fn a_credits_reading_that_flips_blocked_emits_one_change() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(credits_at(true, None, Some(0.2), 1_000))
+        .await;
+    handle.cooldowns().await.unwrap();
+    handle
+        .report(credits_at(false, Some("org_level_disabled"), None, 2_000))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::FastCreditsChanged {
+            account_id,
+            before,
+            after,
+            blocked_before,
+            blocked_after,
+            ..
+        } => {
+            assert_eq!(account_id, "a");
+            assert_eq!(
+                before.map(|b| (b.enabled, b.observed_at)),
+                Some((true, 1_000))
+            );
+            assert_eq!((after.enabled, after.observed_at), (false, 2_000));
+            assert_eq!(
+                (blocked_before, blocked_after.as_deref()),
+                (None, Some("org_level_disabled"))
+            );
+        }
+        other => panic!("one credits change, not {other:?}"),
+    }
+    // The same refusal read again moves no edge.
+    handle
+        .report(credits_at(false, Some("org_level_disabled"), None, 3_000))
+        .await;
+    handle.cooldowns().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_sample_that_spends_a_window_emits_window_spent_once() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = Some(10 * HOUR);
+    for (at, utilization, request_id) in [(1_000, 0.9, "r-0"), (2_000, 1.0, "r-1")] {
+        handle
+            .report(head_reading(at, utilization, reset, request_id))
+            .await;
+        handle.samples().await.unwrap();
+    }
+    match next_event(&mut events).await {
+        RouterEvent::WindowSpent {
+            account_id,
+            window,
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization,
+                spent_reset,
+                source,
+                source_request_id.as_deref()
+            ),
+            ("a", FIVE_HOUR, 1.0, reset, WindowSource::Head, Some("r-1"))
+        ),
+        other => panic!("one window spent, not {other:?}"),
+    }
+    // A reading that stays spent crosses nothing.
+    handle.report(head_reading(3_000, 1.0, reset, "r-2")).await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_sample_with_a_later_reset_emits_window_reset_by_sample() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.6, Some(5 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+        ))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                reset_at,
+                next_reset,
+                observed
+            ),
+            ("a", FIVE_HOUR, 0.6, 5 * HOUR, Some(10 * HOUR), "sample")
+        ),
+        other => panic!("one window reset, not {other:?}"),
+    }
+    // A newer reading of the same window names the same reset.
+    handle
+        .report(observed(
+            "a",
+            sample_with(3_000, FIVE_HOUR, 0.2, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_poll_naming_a_head_s_reset_to_the_millisecond_names_the_same_reset() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    // A head names the reset in whole seconds. The poll names the same reset to the millisecond.
+    let reset = 5 * HOUR;
+    handle
+        .report(head_reading(1_000, 0.4, Some(reset), "r-1"))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.4, Some(reset + 400)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // The ticks before the reset find it ahead and announce nothing.
+    no_further_event(&mut events).await;
+    now.store(2_000, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            restored,
+            at,
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                reset_at,
+                next_reset,
+                observed,
+                restored,
+                at
+            ),
+            ("a", FIVE_HOUR, 0.7, 2_000, None, "clock", false, 2_000)
+        ),
+        other => panic!("the tick's reset, not {other:?}"),
+    }
+    // The stored reading still names the passed reset at every later tick.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_clock_reset_then_a_new_sample_names_one_row() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowReset {
+            reset_at: 2_000,
+            observed: "clock",
+            ..
+        }
+    ));
+    // The poll's next reading names the window after it: the reset it passed was announced already.
+    handle
+        .report(observed(
+            "a",
+            sample_with(3_000, FIVE_HOUR, 0.1, Some(2_000 + 5 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_reading_with_no_reset_after_the_stored_reset_passed_announces_it_by_sample() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.6, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // Parked, so no purge tick runs between the clock passing the reset and the reading that replaces it.
+    let park = handle.park_loop().await;
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(3_000, FIVE_HOUR, 0.0, None)))
+        .await;
+    drop(park);
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                reset_at,
+                next_reset,
+                observed
+            ),
+            ("a", FIVE_HOUR, 0.6, 2_000, None, "sample")
+        ),
+        other => panic!("the passed reset, by the sample, not {other:?}"),
+    }
+    // A reload runs the purge, whose clock walk finds nothing left to announce.
+    handle.reload().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_member_entering_its_wind_down_emits_once() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    // Forty minutes out, ten more than the pool's thirty-minute wind-down.
+    let end = 1_000 + 40 * 60_000;
+    store.set_cancelled("a", true, Some(end)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    // The ticks before the end comes inside the window find the member outside it.
+    no_further_event(&mut events).await;
+    let inside = end - 20 * 60_000;
+    now.store(inside, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindDownStarted {
+            account_id,
+            pool_id,
+            ends_at,
+            wind_down_minutes,
+            end_source,
+            restored,
+            at,
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                pool_id.as_str(),
+                ends_at,
+                wind_down_minutes,
+                end_source,
+                restored,
+                at
+            ),
+            ("a", "p", end, 30, "cancelled", false, inside)
+        ),
+        other => panic!("the wind-down's start, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restored() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    // Ten minutes out under the pool's thirty-minute wind-down: inside the window before the router starts.
+    let end = 1_000 + 10 * 60_000;
+    store.set_cancelled("a", true, Some(end)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    match next_event(&mut events).await {
+        RouterEvent::WindDownStarted {
+            account_id,
+            ends_at,
+            restored,
+            ..
+        } => assert_eq!((account_id.as_str(), ends_at, restored), ("a", end, true)),
+        other => panic!("the restored wind-down, not {other:?}"),
+    }
+    // A reload's purge is a later one, and the member is still inside the window it already announced.
+    handle.reload().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_member_past_its_cancelled_end_emits_no_wind_down() {
+    let store = seeded(&["a"]);
+    // The subscription ended an hour before the router starts: past its end, not entering a wind-down.
+    store.set_cancelled("a", true, Some(1_000 - HOUR)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn the_purge_groups_expired_entries_per_root() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.affinity_ttl_seconds = 1;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    for (root, chain) in [("s1", &["x1", "x2", "x3"][..]), ("s2", &["y1"][..])] {
+        handle
+            .report(Report::Affinity(AffinityReport {
+                root: Some(root.into()),
+                message_boundaries: Arc::from(
+                    chain.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+                ),
+                ..affinity_report(&handle, "a", 1_000)
+            }))
+            .await;
+        assert!(matches!(
+            next_event(&mut events).await,
+            RouterEvent::CacheMapWritten { .. }
+        ));
+    }
+    // Past the pool's one-second TTL for every entry.
+    now.store(2_001, Ordering::SeqCst);
+    let mut expired = Vec::new();
+    for _ in 0..2 {
+        match next_event(&mut events).await {
+            RouterEvent::WarmPrefixExpired {
+                account_id,
+                key_id,
+                root,
+                model,
+                entries,
+                cause,
+                at,
+                ..
+            } => expired.push((account_id, key_id, root, model, entries, cause, at)),
+            other => panic!("an expiry per root, not {other:?}"),
+        }
+    }
+    let row = |root: &str, entries: u32| {
+        (
+            "a".to_string(),
+            "k".to_string(),
+            root.to_string(),
+            "claude-sonnet-5".to_string(),
+            entries,
+            "ttl",
+            2_001,
+        )
+    };
+    assert_eq!(expired, [row("s1", 3), row("s2", 1)]);
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn an_expiry_reports_the_depth_the_entry_was_written_at_when_its_chain_is_partly_purged() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.affinity_ttl_seconds = 1;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    let chain = |hashes: &[&str]| -> Arc<[String]> {
+        Arc::from(hashes.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+    };
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: chain(&["b1", "b2", "b3"]),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CacheMapWritten { .. }
+    ));
+    // The middle boundary alone is refreshed in place, so its chain's first and last entries age out without it.
+    now.store(1_600, Ordering::SeqCst);
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: chain(&["b2"]),
+            ..affinity_report(&handle, "a", 1_600)
+        }))
+        .await;
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CacheMapWritten { .. }
+    ));
+    now.store(2_100, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WarmPrefixExpired {
+            root,
+            entries,
+            deepest,
+            cause,
+            ..
+        } => assert_eq!(
+            (root.as_str(), entries, deepest.depth, deepest.tier, cause),
+            ("b1", 2, 3, "message", "ttl")
+        ),
+        other => panic!("the root's expiry, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_moved_account_state_emits_the_relay_s_cause() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    let before = store.account("a").unwrap().unwrap().revision;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let verdict = || Report::AccountState {
+        account_id: "a".into(),
+        state: AccountState::ReauthRequired,
+        incarnation: 1,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        cause: StateCause::AuthFailed,
+        detail: Some("invalid x-api-key".into()),
+    };
+    handle.report(verdict()).await;
+    match next_event(&mut events).await {
+        RouterEvent::AccountStateChanged {
+            account_id,
+            to,
+            incarnation,
+            revision,
+            cause,
+            detail,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                to,
+                incarnation,
+                revision,
+                cause,
+                detail.as_deref()
+            ),
+            (
+                "a",
+                AccountState::ReauthRequired,
+                1,
+                before + 1,
+                StateCause::AuthFailed,
+                Some("invalid x-api-key")
+            )
+        ),
+        other => panic!("the moved row's event, not {other:?}"),
+    }
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::AuthFailed),
+        "the fenced write stored the word the event names"
+    );
+    // The same verdict again lands under its fences and leaves the state where it was.
+    handle.report(verdict()).await;
+    wait_for(WRITTEN, || {
+        (store.account("a").unwrap().unwrap().revision == before + 2).then_some(())
+    })
+    .await;
+    no_further_event(&mut events).await;
 }

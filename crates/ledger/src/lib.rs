@@ -7,6 +7,7 @@ mod db;
 mod events;
 mod generations;
 mod histogram;
+mod keys;
 mod metrics;
 mod pattern;
 mod plan;
@@ -22,7 +23,7 @@ mod usage;
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
 pub use db::LedgerDb;
-pub use events::{event_of, spawn_event_mirror};
+pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
@@ -33,29 +34,36 @@ pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
-pub use plan::{Band, CostTable, Factors, ModelCells, PlanTables};
+pub use plan::{
+    Capacity, DefinedBy, ModelWindow, Override, Peak, PerWindow, PlanTables, SubscriptionCosts,
+    TypeMultiplier, TypeOverride, Unit,
+};
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 #[cfg(any(test, feature = "test-support"))]
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_tables;
 pub use query::{
-    breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard, group_of,
-    hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests, literal_like,
-    member_spends, moves_by_reason, parked_count, parked_summary, parse_range,
-    pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, recent_gaps,
-    request_by_id, request_events, request_totals, rewrite_series,
-    series_paged, session_activity, session_burn_series,
-    session_identities, BudgetedMember, BurnPoint, Dashboard, GroupRow, LiveKeys, ParkedSummary,
-    PlacementRow, ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint,
-    SessionActivity, SessionIdentity, Tiers, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS,
-    MAX_RANGE_MS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
+    decision_record, group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota,
+    list_requests, list_routing_log, literal_like, member_spends, moves_by_reason, parked_count,
+    parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
+    recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
+    rewrite_series, series_paged,
+    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
+    CacheFacts, Dashboard, DecisionListRow, EventListRow, GroupRow, LiveKeys, ParkedSummary,
+    PlacementRow, ProbeCounts, RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter,
+    RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity,
+    Tiers, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
+    PROBE_KIND,
 };
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
     PROFILE_EVERY_POLLS,
 };
 pub use record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta, ParkedRecord,
-    QuotaSampleRecord, RequestRecord,
+    AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
+    KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,

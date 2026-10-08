@@ -507,6 +507,12 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         }
         sql.push_str("ALTER TABLE quota_samples DROP COLUMN observed_at; ");
         sql.push_str("DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; ");
+        sql.push_str("DROP TABLE decisions; DROP INDEX IF EXISTS events_account; ");
+        sql.push_str("DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; ");
+        sql.push_str("ALTER TABLE events DROP COLUMN request_id; ");
+        sql.push_str(
+            "ALTER TABLE events DROP COLUMN agent_id; ALTER TABLE events DROP COLUMN pool_id; ",
+        );
         sql.push_str("UPDATE meta SET value = '4' WHERE key = 'schema_version';");
         db.write(|c| {
             c.execute_batch(&sql)?;
@@ -515,7 +521,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

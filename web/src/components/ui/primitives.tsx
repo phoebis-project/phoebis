@@ -104,11 +104,13 @@ export function Pill({ children, active = false, onClick, disabled, title, icon 
   );
 }
 
-export function Segmented<T extends string>({ value, options, onChange, ariaLabel, title }: { ariaLabel: string; onChange: (v: T) => void; options: { label: ReactNode; name?: string; value: T }[]; title?: string; value: T }) {
+/** An option's `title` replaces the tooltip its `name` sets, so a disabled option says why without a screen reader
+ *  hearing the reason as its name. */
+export function Segmented<T extends string>({ value, options, onChange, ariaLabel, title }: { ariaLabel: string; onChange: (v: T) => void; options: { disabled?: boolean; label: ReactNode; name?: string; title?: string; value: T }[]; title?: string; value: T }) {
   return (
     <div className="segmented" role="group" aria-label={ariaLabel} title={title}>
       {options.map((o) => (
-        <button key={o.value} type="button" className={o.value === value ? 'is-active' : ''} aria-label={o.name} title={o.name} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
+        <button key={o.value} type="button" className={o.value === value ? 'is-active' : ''} aria-label={o.name} title={o.title ?? o.name} aria-pressed={o.value === value} disabled={o.disabled} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
@@ -324,13 +326,13 @@ function DialogInner({ children }: { children: ReactNode }) {
   );
 }
 
-export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560 }: { children: ReactNode; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
+export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560, className }: { children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
   const ref = useModalDialog(open, onClose);
   const titleId = useId();
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={className ? `dialog ${className}` : 'dialog'}
       aria-labelledby={titleId}
       style={{ width: `min(${width}px, calc(100vw - 32px))` }}
       onClick={(e) => {

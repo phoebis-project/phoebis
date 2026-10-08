@@ -2,7 +2,7 @@
 //! byte reaches the caller.
 
 use phoebis_routing::{FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON};
-use phoebis_store::{AccountKind, AccountState};
+use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
@@ -60,7 +60,8 @@ pub enum Verdict {
     Commit,
     FailOver {
         cooldown: Option<Cooldown>,
-        mark: Option<AccountState>,
+        /// The state the verdict marks its account with and who moved it, the word the store keeps beside it.
+        mark: Option<(AccountState, StateCause)>,
     },
     Refresh,
     /// An upstream 400 `invalid_request_error` whose message names one or more items the relay injected: the
@@ -183,7 +184,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
         {
             return Verdict::FailOver {
                 cooldown: None,
-                mark: Some(AccountState::FundingRequired),
+                mark: Some((AccountState::FundingRequired, StateCause::FundingRefused)),
             };
         }
         _ => {}
@@ -198,7 +199,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
             AccountKind::Oauth => Verdict::Refresh,
             AccountKind::ApiKey => Verdict::FailOver {
                 cooldown: None,
-                mark: Some(AccountState::ReauthRequired),
+                mark: Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
             },
         };
     }
@@ -486,7 +487,7 @@ fn names_credit_balance(body: &[u8]) -> bool {
 
 /// The body's `error.message`: read off the parsed document when it is complete, and textually as far as the cut
 /// when the body was read only up to the buffer bound.
-fn error_message(body: &[u8]) -> Option<String> {
+pub(crate) fn error_message(body: &[u8]) -> Option<String> {
     match serde_json::from_slice::<Value>(body) {
         Ok(value) => value["error"]["message"].as_str().map(str::to_string),
         Err(_) => textual_member(valid_text(body), "message").map(str::to_string),
@@ -1042,7 +1043,7 @@ mod tests {
             classify(&head(400, &[]), &api),
             Verdict::FailOver {
                 cooldown: None,
-                mark: Some(AccountState::FundingRequired)
+                mark: Some((AccountState::FundingRequired, StateCause::FundingRefused))
             }
         ));
     }
@@ -1315,7 +1316,7 @@ mod tests {
             classify(&head(401, &[]), &context(AccountKind::ApiKey)),
             Verdict::FailOver {
                 cooldown: None,
-                mark: Some(AccountState::ReauthRequired)
+                mark: Some((AccountState::ReauthRequired, StateCause::AuthFailed))
             }
         ));
         let mut ctx = context(AccountKind::Oauth);

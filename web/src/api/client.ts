@@ -13,6 +13,7 @@ import type {
   CapturedBodies,
   CatalogModel,
   CreatedApiKey,
+  DecisionRecord,
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
@@ -37,6 +38,8 @@ import type {
   RequestPage,
   RequestQuery,
   RewritePoint,
+  RoutingLogPage,
+  RoutingLogQuery,
   Session,
   SessionInfo,
   Settings,
@@ -172,6 +175,8 @@ export interface Api {
   /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */
   getAttention(): Promise<AttentionItem[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
+  /** Null for a decision the ledger no longer holds. */
+  getDecision(requestId: string, seq: number): Promise<DecisionRecord | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getKeyModels(keyId: string): Promise<KeyModels>;
   getModelsState(): Promise<ModelsState>;
@@ -191,6 +196,7 @@ export interface Api {
   listKeys(): Promise<ApiKey[]>;
   listPools(): Promise<Pool[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
+  listRoutingLog(query?: RoutingLogQuery): Promise<RoutingLogPage>;
   listSessions(): Promise<Session[]>;
   login(secret: string): Promise<SessionInfo>;
   logout(): Promise<void>;

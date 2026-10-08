@@ -1,9 +1,10 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint,
   WastedProbeReason,
 } from '@/api/types';
-import { bucketShare, tierFactors } from '@/lib/analytics';
+import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { shareOf, tierCapacity } from '@/lib/costs';
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
@@ -11,7 +12,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
 import { USER_AGENTS } from './requests';
-import { SETTINGS_SAMPLE } from './samples';
+import { TABLES } from './samples';
 import { DAY, HOUR, iso } from './time';
 
 /**
@@ -246,66 +247,15 @@ function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
   return { bucketMs, starts };
 }
 
-const TABLES = SETTINGS_SAMPLE.planTables;
 type Window = 'five_hour' | 'seven_day';
 
 /**
- * The shipped cost table's row for a model, matched by the family its id names: the longest table id the model's
- * own id includes, so a dated id reads its undated row and Fable 5.1 does not read Fable 5's.
- */
-function cellsOf(window: Window, model: string): PlanModelCells | undefined {
-  const rows = TABLES.cost.windows[window] ?? {};
-  const id = Object.keys(rows)
-    .filter((k) => model.includes(k))
-    .sort((a, b) => b.length - a.length)[0];
-  return id === undefined ? undefined : rows[id];
-}
-
-/** A tier's factor on `window`, matched as the console matches it; null for a tier the table lacks or a factor it
- *  leaves unmeasured. */
-function tierFactorOf(tier: string | undefined, window: Window): number | null {
-  const row = tier === undefined ? undefined : tierFactors(TABLES.cost.tiers, tier);
-  if (row === undefined) return null;
-  return window === 'five_hour' ? row.fiveHour : row.sevenDay;
-}
-
-/** The factor of the last band row naming `window` when its hours cover `at` in its zone, else 1, as the route reads it. */
-function bandAt(window: Window, at: number): number {
-  const naming = TABLES.cost.bands.filter((b) => b.windows.includes(window));
-  const band = naming[naming.length - 1];
-  if (band === undefined) return 1;
-  const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: band.zone, weekday: 'short' }).formatToParts(at);
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value);
-  const weekend = ['Sat', 'Sun'].includes(parts.find((p) => p.type === 'weekday')?.value ?? '');
-  return (!band.weekdays || !weekend) && band.fromHour <= hour && hour < band.toHour ? band.factor : 1;
-}
-
-/**
- * A subscription row's share of each of its account's windows: the table's Max 20x cells for its model over the
- * tier's factor, the 5-hour share weighed by the band at the row's hour; null for a tier or a model the table lacks,
- * a factor it leaves unmeasured, or a token type the row holds whose cell is unmeasured.
+ * A subscription row's share of each of its account's windows through the cost model, completing at the row's hour;
+ * null for a tier or a model the model does not price.
  */
 function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, number | null> {
-  const one = (window: Window) => {
-    const cells = cellsOf(window, r.model);
-    const factor = tierFactorOf(tier, window);
-    if (cells === undefined || factor === null) return null;
-    const read = [
-      [r.tokens.uncachedInput, cells.input],
-      [r.tokens.cacheRead, cells.cacheRead],
-      [r.tokens.cacheWrite5m, cells.cacheWrite5m],
-      [r.tokens.cacheWrite1h, cells.cacheWrite1h],
-      [r.tokens.output, cells.output],
-    ] as const;
-    let onMax20x = 0;
-    for (const [tokens, cell] of read) {
-      if (tokens === 0) continue;
-      if (cell === null) return null;
-      onMax20x += (tokens * cell) / 1_000_000;
-    }
-    const band = window === 'five_hour' ? bandAt(window, Date.parse(r.hour)) : 1;
-    return (onMax20x / factor) * band;
-  };
+  const usage = { cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output };
+  const one = (window: Window) => (tier === undefined ? null : shareOf(TABLES, window, tier, r.model, usage, Date.parse(r.hour)));
   return { five_hour: one('five_hour'), seven_day: one('seven_day') };
 }
 
@@ -336,8 +286,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
-    // A fast answer spends usage credits in dollars on either kind and draws no plan window: on a tier the tables
-    // size it reads as a zero share, so the account is still a priced one.
+    // A fast answer spends usage credits in dollars on either kind and draws no plan window: on a tier the cost model
+    // sizes it reads as a zero share, so the account is still a priced one.
     const fast = r.speed === 'fast';
     const group = groupOf(r);
     const byAt = sums.get(group) ?? new Map();
@@ -349,13 +299,14 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
     s.usd += oauth && !fast ? 0 : r.costUsd;
-    // A row with no token has nothing to price, as the route reads it: a failed request on a model the table has no
-    // row for never nulls a priced bucket.
+    // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has
+    // no weight for never nulls a priced bucket.
     if (!oauth || tokens === 0) continue;
     if (fast) {
       // The zero rests on the tier alone, as the route reads a fast row, and never nulls a bucket.
-      if (tierFactorOf(tiers.get(r.accountId), 'five_hour') !== null) s.fiveHour.push(0);
-      if (tierFactorOf(tiers.get(r.accountId), 'seven_day') !== null) s.sevenDay.push(0);
+      const tier = tiers.get(r.accountId);
+      if (tier !== undefined && tierCapacity(TABLES, tier, 'five_hour') !== null) s.fiveHour.push(0);
+      if (tier !== undefined && tierCapacity(TABLES, tier, 'seven_day') !== null) s.sevenDay.push(0);
       continue;
     }
     const shares = sharesOf(r, tiers.get(r.accountId));

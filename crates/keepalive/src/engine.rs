@@ -13,8 +13,8 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
-use phoebis_relay::{CacheTtlPolicy, Relay};
-use phoebis_routing::{budget_deadline, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle};
+use phoebis_relay::Relay;
+use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::{KeepaliveLimits, KeepalivePolicy, FIVE_MINUTES_MS, MAX_WORKERS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::{dispatched_types, gross_saving, settlement_unit};
+use crate::savings::{gross_saving, settlement_unit};
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -290,7 +290,7 @@ pub struct EngineParts {
     /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
     /// saving is a share of, and the budgets a restart resumes.
     pub store: Arc<Store>,
-    /// The shipped cost table, for a probe or a kept-warm saving on a plan-funded attempt.
+    /// The subscription cost model, for a probe or a kept-warm saving on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
 }
 
@@ -457,9 +457,10 @@ impl Agent {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
-    /// The unit the covering probe's cost settled in; `None` when the account it warmed left the registry
-    /// before the probe landed, in which case the credit never fires (`same_account` cannot match a gone
-    /// account either).
+    /// The unit the covering probe's cost settled in, so the credit it earns settles in the same one; a probe the
+    /// cost model cannot price falls the unit back to dollars along with the cost, so the two never split. `None`
+    /// when the account it warmed left the registry before the probe landed, in which case the credit never fires
+    /// (`same_account` cannot match a gone account either).
     pub unit: Option<SavingsUnit>,
     pub model: String,
     /// The covering recipe's speed, which the credited request's has to match.
@@ -1654,7 +1655,7 @@ impl Engine {
         if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
             // The mark says a probe kept this request warm, which is true whatever the tables know; a model the
             // price table does not list saves dollars at its dearest cells, as its probes cost, and the share is
-            // what the cost table can put a number on, zero where it cannot. The agent's own net settles in the
+            // what the cost model can put a number on, zero where it cannot. The agent's own net settles in the
             // covering probe's unit, a share of the tier the store names now, priced at this settlement; the
             // ledger's kept-warm column stays dollars whatever that unit was.
             let tables = &self.parts.tables;
@@ -1870,7 +1871,7 @@ impl Engine {
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
             inner.follow_resolutions(&view.canonical);
-            let mut due: Vec<(i64, SessionKey, String, PinUsage)> = Vec::new();
+            let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .iter()
@@ -1950,7 +1951,7 @@ impl Engine {
                         .unwrap();
                     gate(&view, agent, &key.1, spent, share_spent, &self.parts.tables)
                 };
-                let types = match held {
+                match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
@@ -1982,8 +1983,8 @@ impl Engine {
                         }
                         continue;
                     }
-                    Ok(types) => types,
-                };
+                    Ok(()) => {}
+                }
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
                 }
@@ -1993,12 +1994,12 @@ impl Engine {
                     continue;
                 };
                 if at <= now {
-                    due.push((at, key, agent_id, types));
+                    due.push((at, key, agent_id));
                 }
             }
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
-            for (_, key, agent_id, types) in due {
+            for (_, key, agent_id) in due {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
@@ -2027,7 +2028,6 @@ impl Engine {
                     canonical_model: agent.canonical_model.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
-                    types,
                     counted_idle_tick: idle,
                 };
                 agent.in_flight = true;
@@ -2103,8 +2103,8 @@ pub(crate) struct RouterView {
     /// on, so a sibling's pin never overwrites an agent's own.
     pub pins: BTreeMap<(String, String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
-    /// A subscription account's own `organization.rate_limit_tier`: an account the cost table cannot size settles
-    /// its probes in dollars, so the stop reads that balance.
+    /// A subscription account's own `organization.rate_limit_tier`: an account on a tier the cost model has no capacity
+    /// for settles its probes in dollars, so the stop reads that balance.
     pub tiers: HashMap<String, String>,
 }
 
@@ -2252,8 +2252,7 @@ impl Engine {
 }
 
 /// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
-/// the recipe goes; `Ok` carries the typed usage the gate decided the probe's unit on, which the job takes to its
-/// settlement.
+/// the recipe goes; `Ok` lets the probe run.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
@@ -2261,7 +2260,7 @@ pub(crate) fn gate(
     spent_today: &BTreeMap<String, f64>,
     share_spent_today: &BTreeMap<String, f64>,
     tables: &PlanTables,
-) -> Result<PinUsage, Gate> {
+) -> Result<(), Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
@@ -2360,25 +2359,10 @@ pub(crate) fn gate(
     } else {
         Funding::of(account.kind, in_overage).unit()
     };
-    // Decided before the share cap and taken again by the settlement: a probe the table cannot price on the
+    // Decided before the share cap and taken again by the settlement: a probe the cost model cannot price on the
     // account's tier settles in dollars, so a zero share cap never holds it and the stop reads its dollar balance.
     let tier = view.tiers.get(&account.id).map(String::as_str);
-    let longest_ttl_ms = agent
-        .current
-        .as_ref()
-        .map_or(0, |o| o.recipe.longest_ttl_ms);
-    // The relay rewrites the probe's markers to the TTL of its agent's branch in the pool's policy, from the set
-    // whoever pays for the write selects as `Relay::dispatch_to` selects it, so the types are the dispatched
-    // body's, not the recipe's own.
-    let types = dispatched_types(
-        &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
-        &agent.canonical_model,
-        in_overage || account.kind == AccountKind::ApiKey,
-        &agent.id,
-        agent.ttl_ms,
-        longest_ttl_ms,
-    );
-    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model, types);
+    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model);
     // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
     // price, so the sum caps against the configured share directly.
     if let Some(share) = policy.probe_cap_window_share_per_day {
@@ -2392,14 +2376,12 @@ pub(crate) fn gate(
     if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
         return Err(Gate::Hold(Reason::NetNegative));
     }
-    Ok(types)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use phoebis_routing::FIVE_HOUR;
-
-    use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+    use crate::config::FIVE_MINUTES_MS;
 
     use super::*;
 
@@ -2490,16 +2472,6 @@ mod tests {
         overage_policy: OveragePolicy,
         share_cap: Option<f64>,
     ) -> RouterView {
-        stop_view_dispatching(o_in_overage, overage_policy, share_cap, "{}")
-    }
-
-    /// `stop_view_with` with the pool's cache TTL policy stored as `cache_ttl_json`.
-    fn stop_view_dispatching(
-        o_in_overage: bool,
-        overage_policy: OveragePolicy,
-        share_cap: Option<f64>,
-        cache_ttl_json: &str,
-    ) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
             stop_when_net_negative: true,
@@ -2517,6 +2489,7 @@ mod tests {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Operator,
         };
         let member = |account_id: &str| phoebis_store::PoolMember {
             pool_id: "main".into(),
@@ -2558,7 +2531,6 @@ mod tests {
                 overage_policy,
                 keepalive_json: serde_json::to_string(&policy).unwrap(),
                 prefer_subscription: false,
-                cache_ttl_json: cache_ttl_json.into(),
                 ..phoebis_store::PoolRow::for_tests("main")
             }],
             ..phoebis_store::RegistryLoad::default()
@@ -2654,7 +2626,7 @@ mod tests {
                 usd: -0.50,
             }),
             Some(Gate::Hold(Reason::NetNegative)),
-            "every Opus 5 cell is null, so its probe settles in dollars and the dollar balance decides"
+            "the shipped model has no weight for Opus 5, so its probe settles in dollars and the dollar balance decides"
         );
         assert_eq!(
             unmeasured(Net {
@@ -2663,61 +2635,6 @@ mod tests {
             }),
             None,
             "a negative share balance says nothing about a probe that settles in dollars"
-        );
-    }
-
-    #[test]
-    fn a_row_whose_hour_cell_is_null_gates_a_five_minute_probe_on_the_share() {
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        let net = Net {
-            five_hour_share: -0.01,
-            usd: 0.50,
-        };
-        let gated = |view: &RouterView, ttl_ms: i64| {
-            let mut agent = Agent::new("main", "k", 1, 0);
-            agent.account = Some("o".into());
-            agent.canonical_model = "claude-opus-5-5".into();
-            agent.ttl_ms = ttl_ms;
-            agent.net = net;
-            agent.grace_left = 0;
-            gate(
-                view,
-                &mut agent,
-                "s",
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &tables,
-            )
-            .err()
-        };
-        assert_eq!(
-            gated(&stop_view(false), FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "a five-minute probe never writes for an hour, so it settles in the share and the share balance decides"
-        );
-        assert_eq!(
-            gated(&stop_view(false), ONE_HOUR_MS),
-            None,
-            "an hour recipe's probe can, so it settles in dollars and the dollar balance is positive"
-        );
-        let capped = stop_view_capped(false, Some(0.0));
-        assert_eq!(
-            gated(&capped, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a zero share cap holds a probe that settles in the share"
-        );
-        assert_eq!(
-            gated(&capped, ONE_HOUR_MS),
-            None,
-            "and never one that settles in dollars"
         );
     }
 
@@ -2860,21 +2777,14 @@ mod tests {
     }
 
     #[test]
-    fn a_recipe_with_an_hour_marker_on_a_row_whose_hour_cell_is_null_gates_in_dollars() {
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        let gated = |view: &RouterView, longest_ttl_ms: i64| {
+    fn a_recipe_on_a_model_without_a_weight_gates_in_dollars_and_one_on_a_weighted_model_in_the_share(
+    ) {
+        // The test table leaves Opus 5 without a weight and weighs Opus 5.5.
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        let gated = |view: &RouterView, model: &str| {
             let mut agent = Agent::new("main", "k", 1, 0);
             agent.account = Some("o".into());
-            agent.canonical_model = "claude-opus-5-5".into();
-            // The shortest marker is the TTL in force; the recipe also marks a part for an hour.
+            agent.canonical_model = model.into();
             agent.ttl_ms = FIVE_MINUTES_MS;
             agent.current = Some(Observation {
                 id: "obs".into(),
@@ -2883,9 +2793,9 @@ mod tests {
                 recipe: Recipe {
                     body: Vec::new(),
                     headers: Vec::new(),
-                    model: "claude-opus-5-5".into(),
+                    model: model.into(),
                     ttl_ms: FIVE_MINUTES_MS,
-                    longest_ttl_ms,
+                    longest_ttl_ms: FIVE_MINUTES_MS,
                     size: 0,
                     static_hash: None,
                     tail_hash: None,
@@ -2914,117 +2824,19 @@ mod tests {
             .err()
         };
         assert_eq!(
-            gated(&stop_view(false), ONE_HOUR_MS),
+            gated(&stop_view(false), "claude-opus-5"),
             None,
-            "a cold probe writes the hour-marked part, which the row cannot price, so the positive dollar balance decides"
+            "a model without a weight settles in dollars, so the positive dollar balance decides"
         );
         assert_eq!(
-            gated(&stop_view_capped(false, Some(0.0)), ONE_HOUR_MS),
+            gated(&stop_view_capped(false, Some(0.0)), "claude-opus-5"),
             None,
             "and a zero share cap never holds it"
         );
         assert_eq!(
-            gated(&stop_view(false), FIVE_MINUTES_MS),
+            gated(&stop_view(false), "claude-opus-5-5"),
             Some(Gate::Hold(Reason::NetNegative)),
-            "with five-minute markers alone the probe settles in the share"
-        );
-    }
-
-    #[test]
-    fn a_probe_gates_on_the_ttl_its_agents_branch_dispatches_it_with() {
-        let mut hourless = PlanTables::shipped();
-        hourless
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        // A zero share cap holds exactly the probes that settle in the share, so whether it holds names the unit.
-        let gated_as =
-            |agent_id: &str, cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
-                let view =
-                    stop_view_dispatching(false, OveragePolicy::Allow, Some(0.0), cache_ttl_json);
-                let mut agent = Agent::new(agent_id, "k", 1, 0);
-                agent.account = Some("o".into());
-                agent.canonical_model = "claude-opus-5-5".into();
-                agent.ttl_ms = marker_ms;
-                let mut current = observation(false);
-                current.recipe.ttl_ms = marker_ms;
-                current.recipe.longest_ttl_ms = marker_ms;
-                agent.current = Some(current);
-                gate(
-                    &view,
-                    &mut agent,
-                    "s",
-                    &BTreeMap::new(),
-                    &BTreeMap::new(),
-                    tables,
-                )
-                .err()
-            };
-        let gated = |cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
-            gated_as("main", cache_ttl_json, tables, marker_ms)
-        };
-        let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"1h"}}"#;
-        assert_eq!(
-            gated(probes_for_an_hour, &hourless, FIVE_MINUTES_MS),
-            None,
-            "the relay rewrites the five-minute markers to the hour the main branch holds, which the row cannot price, so the probe settles in dollars"
-        );
-        assert_eq!(
-            gated(probes_for_an_hour, &PlanTables::shipped(), FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "with the hour cell priced the same probe settles in the share"
-        );
-        assert_eq!(
-            gated("{}", &hourless, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "with the policy off the five-minute markers go as sent"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"plan":{"main":"5m"}}"#,
-                &hourless,
-                ONE_HOUR_MS
-            ),
-            Some(Gate::Hold(Reason::CapReached)),
-            "an hour recipe whose probe the pool dispatches for five minutes never writes for an hour"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"metered":{"main":"1h"},"plan":{"main":"5m"}}"#,
-                &hourless,
-                FIVE_MINUTES_MS
-            ),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a plan-funded probe reads the plan set, never the metered set"
-        );
-        assert_eq!(
-            gated(probes_for_an_hour, &hourless, 0),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a body without a marker goes without one, so it writes nothing for an hour"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#,
-                &hourless,
-                0
-            ),
-            None,
-            "unless the policy adds the marker, at the hour"
-        );
-        let by_agent = r#"{"enabled":true,"plan":{"main":"5m","subagent":"1h"}}"#;
-        assert_eq!(
-            gated(by_agent, &hourless, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a main agent's probe reads the main branch's five minutes"
-        );
-        assert_eq!(
-            gated_as("sub-1", by_agent, &hourless, FIVE_MINUTES_MS),
-            None,
-            "a subagent's probe reads the subagent branch's hour, which the row cannot price, so the probe settles in dollars"
+            "a weighted model settles in the share, so the share balance decides"
         );
     }
 

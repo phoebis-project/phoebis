@@ -11,6 +11,8 @@ const point = (at, group, over = {}) => {
   return { tokens: p.cachedTokens + p.uncachedTokens, ...p };
 };
 const NONE = new Set();
+/** The cost model with nothing in it, which a test fills with the rows it needs. */
+const EMPTY = d.decodeSubscriptionCosts(undefined);
 
 test('a conversation class and an overhead class split as the legend says', () => {
   for (const conversation of ['compaction', 'main', 'subagent']) assert.equal(d.classLegendOf(conversation), 'conversation', conversation);
@@ -129,7 +131,7 @@ test('a capped axis top rises to the last of the five ticks recharts would draw 
   assert.equal(d.niceAxisTop(0), 0, 'an empty axis stays empty');
 });
 
-test('an account burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
+test('an account burns in the unit its figures come in, a subscription whose tier the cost model does not size in none, and every other grouping in dollars', () => {
   const answered = [
     point(0, 'overflow', { unit: 'usd', usd: 1.2 }),
     point(0, 'nightly', { fiveHourShare: 0.01, sevenDayShare: 0.001, unit: 'window_share' }),
@@ -213,11 +215,11 @@ test('a bucket with cache writes and output alone is not idle', () => {
 });
 
 test('a known tier whose every share is null is a planned line listed as model unlisted', () => {
-  // A Max 20x account whose range traffic ran on a model the table leaves unmeasured throughout.
+  // A Max 20x account whose range traffic ran on a model the cost model has no weight for throughout.
   const answered = [point(0, 'a', { tokens: 300, uncachedTokens: 300, unit: 'window_share' }), point(HOUR, 'a', { tokens: 200, uncachedTokens: 200, unit: 'window_share' })];
   const [line] = d.foldBurn(answered, 'account', 3_600, new Set(['a'])).lines;
   assert.deepEqual([line.unit, line.fiveHourPerHour, line.sevenDayPerHour, line.unpriced], ['window_share', null, null, { fiveHour: true, sevenDay: true }]);
-  assert.equal(d.foldBurn(answered, 'account', 3_600, NONE).lines[0].unit, 'unknown', 'the same traffic on an account whose tier the table does not size');
+  assert.equal(d.foldBurn(answered, 'account', 3_600, NONE).lines[0].unit, 'unknown', 'the same traffic on an account whose tier the cost model does not size');
 });
 
 test('a known tier with only a priced 7-day share keeps its 7-day series', () => {
@@ -255,25 +257,42 @@ test("the mock's burn fold prices only rows with tokens and nulls a window on an
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   const priced = row('claude-opus-5-5', 1_000_000);
-  // A failed request on Sonnet 4.5, which the table has no row for, carries no token.
+  // The shipped model the mock prices through, so the fold's figure is the one the share rule gives for the row.
+  const costs = d.decodeSettings(fixture('settings')).subscriptionCosts;
+  const want = d.shareOf(costs, 'five_hour', 'default_claude_max_20x', 'claude-opus-5-5', { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 1_000_000, output: 0 }, hour);
+  assert.ok(want !== null && want > 0, 'the shipped model prices Opus 5.5 on Max 20x');
+  // A failed request on Sonnet 4.5, which the cost model has no weight for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
-  for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - 0.01461) < 1e-12, 'a row with no token leaves the priced share');
+  for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share');
   assert.equal(shareOf([failed, row('claude-opus-5-5', 0)]), null, 'rows with no token alone are an idle bucket, not a share of zero');
   const unpriced = row('claude-sonnet-5', 1_000);
-  for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the table cannot price nulls the window');
+  for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
 });
 
-test('an account is sized when the cost table holds its stored tier', () => {
-  const account = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
-  const accounts = [account('stored', 'default_claude_max_20x'), account('bare', 'claude_max_20x'), account('team', 'claude_team'), account('key', null)];
-  const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
-  assert.deepEqual([...d.sizedAccounts(accounts, tiers)].sort(), ['bare', 'stored']);
-  const unmeasured = { ...tiers, default_claude_pro: { fiveHour: null, sevenDay: null } };
+const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
+const SIZED_ACCOUNTS = [sizedAccount('stored', 'default_claude_max_20x'), sizedAccount('bare', 'claude_max_20x'), sizedAccount('team', 'claude_team'), sizedAccount('key', null)];
+const SIZED_COSTS = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
+// Pro listed with a 7-day capacity alone, Max 5x with a 5-hour capacity alone.
+const ONE_WINDOW = { ...SIZED_COSTS, capacity: { ...SIZED_COSTS.capacity, default_claude_ai: { fiveHour: null, sevenDay: 1 }, default_claude_max_5x: { fiveHour: 1, sevenDay: null } } };
+const ONE_WINDOW_ACCOUNTS = [...SIZED_ACCOUNTS, sizedAccount('pro', 'default_claude_ai'), sizedAccount('max5', 'default_claude_max_5x')];
+
+test('an account is sized for the plan chart when the cost model lists its stored tier, whatever windows it has a capacity on', () => {
+  assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS)].sort(), ['bare', 'stored']);
   assert.deepEqual(
-    [...d.sizedAccounts([...accounts, account('pro', 'default_claude_pro')], unmeasured)].sort(),
-    ['bare', 'stored'],
-    'a tier the table lists with no 5-hour factor sizes nothing, as the route prices nothing on it',
+    [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW)].sort(),
+    ['bare', 'max5', 'pro', 'stored'],
+    'a listed tier with no capacity on a window draws that window as model unlisted, never as tier unknown',
   );
+});
+
+test('an account is sized on a window only when its listed tier has a capacity there, as the shed preview reads the 5-hour one', () => {
+  assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS, 'five_hour')].sort(), ['bare', 'stored']);
+  assert.deepEqual(
+    [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW, 'five_hour')].sort(),
+    ['bare', 'max5', 'stored'],
+    'the sessions route reads no burn for a pin of a tier with no 5-hour capacity, so the preview leaves it out',
+  );
+  assert.deepEqual([...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW, 'seven_day')].sort(), ['bare', 'pro', 'stored'], 'the window named is the one read');
 });
 
 test('a burn read outside the account grouping reads no accounts, so a failed account read leaves it whole', async () => {
@@ -302,7 +321,7 @@ test('a priced bucket between unpriced ones, or at an end beside one, is an isol
 });
 
 test('every burn read reads the accounts again, so a tier a profile refresh supplied sizes the account on the next range', async () => {
-  const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
+  const costs = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
   const reads = [null, 'default_claude_max_20x'];
   const source = {
     getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
@@ -314,7 +333,7 @@ test('every burn read reads the accounts again, so a tier a profile refresh supp
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
   const before = await d.readBurn(source, range, 'account');
   const after = await d.readBurn(source, range, 'account');
-  assert.deepEqual([d.sizedAccounts(before.accounts, tiers).has('primary'), d.sizedAccounts(after.accounts, tiers).has('primary')], [false, true]);
+  assert.deepEqual([d.sizedAccounts(before.accounts, costs).has('primary'), d.sizedAccounts(after.accounts, costs).has('primary')], [false, true]);
   assert.deepEqual(after.answer, { bucketSeconds: 3_600, points: [] });
 });
 
@@ -353,7 +372,7 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
 
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
   const api = new d.MockApi();
-  const cells = new Map((await api.getSettings()).pricing.models.map((p) => [p.model, p.fast]));
+  const cells = new Map((await api.getSettings()).apiPrices.models.map((p) => [p.model, p.fast]));
   const priced = (fast, u) => (u.input * fast.inputPerM + u.cacheRead * fast.cacheReadPerM + u.cacheWrite5m * fast.cacheWrite5mPerM + u.cacheWrite1h * fast.cacheWrite1hPerM + u.output * fast.outputPerM) / 1_000_000;
   // A synthesized hour prices its tokens whole; one folded from the log sums its requests, each rounded to 1e-4.
   const hours = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
@@ -390,4 +409,30 @@ test('the session fold groups a user agent under its first product token, as the
   assert.deepEqual(d.foldGroups(rows, 'user_agent').map((g) => [g.key, g.requests]).sort(), [['-', 1], ['claude-cli/2.1.269', 2], ['other', 1]], 'a header without a product token files under other, and one never sent under the reserved id');
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.269'] });
   assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.269', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
+});
+
+test('the cooldown move reason reads failed over and the other seven keep their words', () => {
+  assert.deepEqual(d.PIN_MIGRATION_LABEL, {
+    cooldown: 'failed over',
+    drain: 'winding down',
+    fast_lane: 'fast lane cooling',
+    mark: 'account marked',
+    overage: 'overage',
+    return_to_plan: 'returned to plan',
+    shed: 'shed',
+    spent: 'window spent',
+  });
+  assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
+});
+
+test('RULE_MOVE_REASONS names the five rule reasons and leaves the three failover reasons out', () => {
+  assert.deepEqual([...d.RULE_MOVE_REASONS], ['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
+  const failovers = Object.keys(d.PIN_MIGRATION_LABEL).filter((reason) => !d.RULE_MOVE_REASONS.includes(reason));
+  assert.deepEqual(failovers, ['cooldown', 'fast_lane', 'mark'], 'every reason the map names is a rule reason or a failover');
+});
+
+test('FAILOVER_MOVE_REASONS names the three failover reasons and no reason the map does not label', () => {
+  assert.deepEqual([...d.FAILOVER_MOVE_REASONS], ['cooldown', 'fast_lane', 'mark']);
+  assert.deepEqual([...d.RULE_MOVE_REASONS, ...d.FAILOVER_MOVE_REASONS].sort(), Object.keys(d.PIN_MIGRATION_LABEL).sort(), 'the two sets split the labeled reasons');
+  assert.equal(d.FAILOVER_MOVE_REASONS.includes('unknown'), false, "the route's unknown reason is no failover");
 });

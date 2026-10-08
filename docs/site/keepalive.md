@@ -141,82 +141,84 @@ answers the full policy with every default filled in, so a pool created with `{}
 
 Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
 where they stood. A probe settled in dollars counts toward its pool's `probe_cost_cap_usd_per_day`: one on an api_key
-account or a subscription account in overage, a plan-funded one the cost table cannot price (see [The cost
+account or a subscription account in overage, a plan-funded one the cost model cannot price (see [The cost
 reference](#the-cost-reference)), and a fast-mode session's whatever the account's funding. A probe settled in the
 window share counts toward its account's `probe_cap_window_share_per_day`. A migrated probe is priced from its usage
 like any other and counts against the daily caps.
 
 ## The cost reference
 
-The Sessions view's Cost reference dialog builds its table from the shipped price table (`crates/ledger/pricing.yaml`,
-effective 2026-09-30), or the file `stats.pricing_path` names (default `./pricing.yaml`) when that file exists (see
-[Statistics](statistics.md)). Per model it lists uncached input, cache write 5m, cache write 1h, cache read, and output,
-each in USD per million tokens (a model that serves fast mode adds a fast-mode row beneath it at its fast cells, what an
-answer served fast costs), plus six derived comparisons explained below the table:
+The Cost reference dialog shows what a million tokens costs, in dollars at list price and as a share of a subscription
+window, on three tabs. The Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool
+dialog's Write cost and Daily probe cost cap hints on API prices, and the subtitle of the Dashboard's 5-hour ring and
+the note of the Analytics Burn view's Plan per hour chart on Tiers and peak band. It reads the two tables in force: the
+shipped price table (`crates/ledger/api_prices.yaml`), or the file `stats.api_prices_path` names (default
+`./api_prices.yaml`) when that file exists, and the subscription cost model (`crates/ledger/subscription_costs.yaml`),
+or the file `stats.subscription_costs_path` names (see [Statistics](statistics.md)).
 
-<dl markdown="1">
-<dt>Per prefix token</dt>
-<dd>Every column is per prefix token, so the comparison leaves out the new tokens each turn writes.</dd>
-<dt>Turns to pay off</dt>
-<dd>The number of later turns that must read the prefix before writing it into the cache was cheaper than sending
-it uncached each turn.</dd>
-<dt>Hold warm</dt>
-<dd>The cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a
-multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it
-cold once. A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour
-entry needs one.</dd>
-<dt>Payoff</dt>
-<dd>The idle span after which the larger 1-hour write has been repaid by the probes a 5-minute entry would have
-spent by then.</dd>
-<dt>Fable 5.1</dt>
-<dd>On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a
-1-hour entry for any idle span; a session with cache warming on may set `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on the
-client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
-<dt>Window share</dt>
-<dd>Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type
-consume, from the cost table the ledger ships. An account on another tier spends that share over its tier's factor from
-the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
-multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is
-priced. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic the long TTL is free and the
-pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a write costs money a 1-hour write
-is 2x against 1.25x, so the metered rule set defaults to `5m` throughout.</dd>
-</dl>
+**Tiers and peak band.** Windows by tier draws a row per tier the cost model sizes, its name over the tier key the
+profile reports, with the 5-hour and the 7-day window each as a bar labeled as a multiple of the smallest tier's window
+(Pro's in the shipped model), and the week counted in full 5-hour windows. A Peak band switch, outside the band until
+turned, redraws the bars and the count for a request completing inside the band, where each window holds its capacity
+factor of its capacity. Peak band draws this week, Monday to Sunday in the browser's time zone (on a day the band is
+off, the week of the next day it covers), the band's hours on each day it covers and a marker at now when that week
+holds it, under a caption that names this week's hours here and in the zone the cost model defines them in. Beside the
+grid it says whether the band runs now and until when, names the next change of the local hours that opens within ten
+weeks, from its first day to the last before the hours return, or as lasting when they have not returned 26 weeks on,
+and draws each window's capacity factor. A zone the browser's time zone data lacks leaves the band's state unknown: the
+card gives the band's hours in that zone alone, says the browser cannot read it, and draws no grid and no change.
 
-Below the prices, a second table reads the cost table the ledger ships (`crates/ledger/cost_table.yaml`) in two column
-groups: the share of a Max 20x subscription's 5-hour window and of its 7-day window that one million tokens of each type
-consume, one row per model either table lists, sorted by id. An account on another tier spends the share over its
-tier's factor from the same file (Max 5x 0.25 and Pro 0.05 of Max 20x's 5-hour window; their 7-day factors are
-unmeasured). A cell the plan meter has not measured shows a dash; a dated model id reads the cells of its undated name;
-a model the cost table has no row for shows a dash in every cell.
+**Plan rates.** The share of a tier's 5-hour and 7-day window that a token count of each type spends, per model, for a
+request completing outside or inside the band. The tab opens on the cost model's anchor tier, Max 20x, outside the band,
+at one million tokens; with a zone the browser cannot read it opens inside the band and asks the reader to pick the
+state. A tier chooser, the band control, and a token field in millions with quick picks for 100k, 1M and 10M redraw the
+table and its caption. A weight column draws each model's weight on the 5-hour window against the lightest weighted
+model's, and reads "by window" for a model whose shared weight is `null` and that an override weighs on some windows,
+its title naming each window's weight. A Fable model with a weight on the Fable week carries a Fable week row under its
+7-day group, priced on that week, half the 7-day window. On the plan a cache read costs 0.025 of an input token in the
+shipped model, and a 1-hour write spends the same share as a 5-minute one. A cell past a full window takes a warning
+tint. The models the cost model does not weigh on any window follow a divider, each cell a dash and the weight "not
+weighed".
 
-The prices carry one caveat: "API list prices. A subscription account on plan quota spends the window share columns
-instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
-each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
-plan-funded probe whose token types the cost table cannot price on the account's tier (no row, or a cell left unmeasured
-under a type the probe carries: input, cache reads, output, the 5-minute write, and the 1-hour write when the probe goes
-out for an hour), or on an account whose tier the table does not size, settles in dollars too, counts toward the dollar
-cap and never toward the window-share cap; so does a probe whose answer carries a type the table cannot price, which
-never books a share. A probe goes out for an hour when the pool's cache TTL policy is on and the rule set the account's
-funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the probe to that TTL (and
-adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks any part
-of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
-dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request such a probe kept warm
-saves at the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the
-account's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of
-the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose account changed
-funding while it was warmed.
+**API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
+with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
 
-The four shipped rows, all prices in USD per million tokens:
+Both tables list the models family by family, Fable, Opus, Sonnet, Haiku, the newest version first, the order both
+shipped files keep, and a file kept in another order lists the same. Plan rates lists the weighted models first and the
+others under the divider. The dialog's footer names each table's date and source, `shipped` or `file`, with the key and
+the path that set or would replace it in the title.
 
-| Model | Uncached input | Cache write 5m | Cache write 1h | Cache read | Output |
+API prices carries the caption "USD per million tokens at list price. An API-key account pays these. A
+subscription account pays them in overage and for fast-mode answers." A recipe's own net follows the same split: the
+share of the account's 5-hour window, the band inside each probe's price, on a subscription account outside overage, and
+dollars on an api_key account or one in overage; a plan-funded probe the cost model cannot price on the account's tier
+(no weight on the 5-hour window, or a tier with no capacity on it), or on an account whose tier the model does not size,
+settles in dollars too, counts toward the dollar cap and never toward the window-share cap. A probe goes out for an hour
+when the pool's cache TTL policy is on and the rule set the account's funding selects holds `1h` for the probe's agent,
+since the relay rewrites every marker of the probe to that TTL (and adds one where `inject_when_absent` is on); with the
+policy off, when the recipe keeps an hour's cache or marks any part of its prefix for an hour. A probe settled in
+dollars on a model the price table does not list prices at the table's dearest cell of each type, never at zero, so the
+dollar cap and the net still bound it; a request such a probe kept warm saves at the same cells, so its net stays
+positive while the cache saves more than the probes cost. Whatever the account's funding, a fast-mode session's net is a
+dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the
+5-hour window", in dollars, or both for an agent whose account changed funding while it was warmed.
+
+The eight shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
+(the three Opus models' fast cells are twice each figure):
+
+| Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
 | --- | --- | --- | --- | --- | --- |
-| `claude-fable-5-1` | 10.00 | 12.50 | 20.00 | 0.25 | 50.00 |
-| `claude-haiku-4-5-20251001` | 1.00 | 1.25 | 2.00 | 0.10 | 5.00 |
-| `claude-opus-5` | 5.00 | 6.25 | 10.00 | 0.50 | 25.00 |
-| `claude-sonnet-5` | 2.00 | 2.50 | 4.00 | 0.20 | 10.00 |
+| `claude-fable-5-1` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
+| `claude-fable-5` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
+| `claude-opus-5-5` | 4.00 | 0.20 | 5.00 | 8.00 | 20.00 |
+| `claude-opus-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
+| `claude-opus-4-8` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
+| `claude-sonnet-5-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-sonnet-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 |
 
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price
-over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
+over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5` and 12.5 for the other five.
 
 ## Recipe states
 
@@ -334,10 +336,11 @@ table lists one row per session, led by the row's menu, and offers eleven column
 (last request, agents and next probe start hidden, and the Columns control turns any on): key, session,
 model, account, last used, requests, last request, agents, companion, cache warming, and next probe. The model
 column reads the family and version, with the whole id on hover, and the account cell names the account's kind on hover
-and to a screen reader. Opening a row expands into the recipe each of its agents carries. A session's menu offers
-Release, and, once it has ledgered traffic, "View in analytics" and "View in observe"; the analytics view opens on the
-requests of the key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that
-keeps sending requests stays on it, and its tiles once a minute.
+and to a screen reader. Opening a row expands into the recipe each of its agents carries. A session's menu offers "View
+in analytics" and "View in observe" once it has ledgered traffic, "View in routing log",
+which opens the log on that session's decisions, and Release. The analytics view opens on the requests of the
+key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending
+requests stays on it, and its tiles once a minute.
 
 A session
 whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth

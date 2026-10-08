@@ -77,14 +77,15 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (45, V45),
     (46, V46),
     (47, V47),
+    (48, V48),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 47;
+pub const SCHEMA_VERSION: u32 = 48;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
-pub const ONE_POOL_VERSION: u32 = 46;
+pub const ONE_POOL_VERSION: u32 = 47;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -663,12 +664,40 @@ const V45: &str = r#"
 ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
 "#;
 
+// One row per pin of a pool's and account's latest shedding round, marked or not, so the round itself (and the
+// dwell it arms) is on disk even when it marked nothing. `round_at` is the same on every row of one round. `epoch`
+// is the pin's at the round and `incarnation` the account's: a mark is read back only for the pin it was made on,
+// never for a replacement pin under the key or a replaced account. A pin write that removes the pin or replaces it
+// under another epoch clears the mark in its own transaction (`marked` 0, the row and its `round_at` kept for the
+// dwell gate). A deleted account takes its rows with it, as the pins' cascade does. The affinity table gains the
+// ordinal of each entry's boundary in its chain, which the routing map records at the write and the purge reports.
+// The accounts table gains the word for who moved its state, so the routing log's transition row reads the cause off
+// the registry rather than inferring it from the path a change reached the mirror by. A row from before the column
+// reads `unrecorded`.
+const V46: &str = r#"
+CREATE TABLE IF NOT EXISTS shed_rounds (
+  pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  incarnation INTEGER NOT NULL,
+  key_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  epoch INTEGER NOT NULL,
+  round_at INTEGER NOT NULL,
+  marked INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, account_id, key_id, session_id, agent_id, model)
+);
+ALTER TABLE affinity ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN state_cause TEXT NOT NULL DEFAULT 'unrecorded';
+"#;
+
 // An account's one membership, enforced below the member write's own check.
-const V46: &str = "CREATE UNIQUE INDEX pool_members_one_pool ON pool_members (account_id);";
+const V47: &str = "CREATE UNIQUE INDEX pool_members_one_pool ON pool_members (account_id);";
 
 // A pool or key created again under a deleted id must not answer its predecessor's edit token; the tombstones
 // outlive the rows as the accounts' do.
-const V47: &str = r#"
+const V48: &str = r#"
 ALTER TABLE pools ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE api_keys ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
 CREATE TABLE IF NOT EXISTS pool_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);

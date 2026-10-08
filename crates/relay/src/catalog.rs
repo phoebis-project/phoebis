@@ -1,7 +1,7 @@
 //! The live model catalog: a per-account listing fetched on demand and held until the next read, and the
 //! published map that folds an undated spelling to the newest dated id the enabled accounts' listings carry.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -72,6 +72,8 @@ const PUBLISHED_POISONED: &str = "catalog published map poisoned by a prior pani
 const LISTED_POISONED: &str = "catalog listed-ids set poisoned by a prior panic";
 const SERVED_REFRESHED_POISONED: &str = "catalog served-refresh map poisoned by a prior panic";
 const MISMATCHED_POISONED: &str = "catalog mismatched-triple set poisoned by a prior panic";
+const LISTINGS_POISONED: &str = "catalog previous-listing map poisoned by a prior panic";
+const ON_CHANGE_POISONED: &str = "catalog change hook poisoned by a prior panic";
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.
 fn at_models_bound(error: TransportError) -> TransportError {
@@ -98,6 +100,18 @@ pub enum DiscoveryError {
 pub struct Discovered {
     pub models: Vec<CatalogRow>,
 }
+
+/// An account's listing differs from the one before: the ids that came and went and the new count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogChange {
+    pub account_id: String,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub count: usize,
+    pub at: i64,
+}
+
+pub type CatalogHook = Arc<dyn Fn(CatalogChange) + Send + Sync>;
 
 /// An account's catalog as of one fetch: rows, or none with the error the fetch ended in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +186,10 @@ pub struct CatalogService {
     /// account outright by the periodic sweep's next refresh of it; a served-model refresh instead re-judges
     /// the account's triples one by one, since it must not erase the ones it did not just answer for.
     mismatched: Mutex<HashSet<(String, String, String)>>,
+    /// Each account's last listing as its ids, with the incarnation it was read for: what the next listing is
+    /// compared with. Kept apart from the slots, since a refresh empties the account's slot before it reads.
+    listings: Mutex<HashMap<String, (u64, BTreeSet<String>)>>,
+    on_change: Mutex<Option<CatalogHook>>,
     tasks: TaskTracker,
     stop: CancellationToken,
 }
@@ -231,9 +249,17 @@ impl CatalogService {
             startup_bound,
             served_refreshed: Mutex::new(HashMap::new()),
             mismatched: Mutex::new(HashSet::new()),
+            listings: Mutex::new(HashMap::new()),
+            on_change: Mutex::new(None),
             tasks: TaskTracker::new(),
             stop: CancellationToken::new(),
         }
+    }
+
+    /// Called once per fill whose listing differs from the one the slot held. The first listing of an account
+    /// fires nothing, since there is no listing before it to differ from.
+    pub fn set_on_change(&self, hook: CatalogHook) {
+        *self.on_change.lock().expect(ON_CHANGE_POISONED) = Some(hook);
     }
 
     /// The uncached probe with the measured request shape; the admin's verify and the staged-secret check.
@@ -332,12 +358,23 @@ impl CatalogService {
             .copied()
             .unwrap_or(0);
         if still_current && current_generation == generation {
+            let change = catalog
+                .error
+                .is_none()
+                .then(|| self.listing_changed(&key, &catalog))
+                .flatten();
             self.slots.lock().expect(SLOTS_POISONED).insert(
                 key,
                 Slot {
                     cached: Some(catalog.clone()),
                 },
             );
+            if let Some(change) = change {
+                let hook = self.on_change.lock().expect(ON_CHANGE_POISONED).clone();
+                if let Some(hook) = hook {
+                    hook(change);
+                }
+            }
             if !catalog.models.is_empty() {
                 let service = Arc::clone(self);
                 let handle = self
@@ -358,6 +395,29 @@ impl CatalogService {
             }
         }
         catalog
+    }
+
+    /// What a landed listing moved against the account's previous one, which it then replaces, or `None` for the
+    /// first listing of a holder, whose incarnation names no listing before it, and for one that moved nothing.
+    fn listing_changed(&self, key: &SlotKey, catalog: &Catalog) -> Option<CatalogChange> {
+        let ids: BTreeSet<String> = catalog.models.iter().map(|row| row.id.clone()).collect();
+        let (incarnation, before) = self
+            .listings
+            .lock()
+            .expect(LISTINGS_POISONED)
+            .insert(key.account_id.clone(), (key.incarnation, ids.clone()))?;
+        if incarnation != key.incarnation {
+            return None;
+        }
+        let added: Vec<String> = ids.difference(&before).cloned().collect();
+        let removed: Vec<String> = before.difference(&ids).cloned().collect();
+        (!added.is_empty() || !removed.is_empty()).then(|| CatalogChange {
+            account_id: key.account_id.clone(),
+            added,
+            removed,
+            count: catalog.models.len(),
+            at: catalog.fetched_at,
+        })
     }
 
     /// `invalidate_listing` then `fetch`.

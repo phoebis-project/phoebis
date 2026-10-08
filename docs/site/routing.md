@@ -133,8 +133,9 @@ round again.
 
 Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
 attention line ([conditions](statistics.md#conditions-and-gauges)) filtered to the pools each item names, one row per
-condition with its badge, its subject linked where it is fixed (the pool's own row stays unlinked) and its detail, the
-age in the row's title.
+condition with its badge, its subject linked where it is fixed and its detail, the age in the row's title. The pool's
+own exhausted row opens the [routing log](statistics.md#routing-log) on the pool's exhausted decisions since the
+condition began. The card's other rows keep their targets, and a row that points at the pool's own card stays unlinked.
 
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
 the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
@@ -265,12 +266,12 @@ at save time when it is empty, longer than 256 characters, ends in an unquoted b
 in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
 The Models view shows the processed list for a chosen key, each entry with the level it came from and the accounts
-cooling for a model it matches, and a note that an entry for an undated model is written with a trailing `*`; then
-every model-scoped cooldown grouped by model with a clear button per row, and the last rejections and permits the
-ledger recorded.
+cooling for a model it matches, and a note that an entry for an undated model is written with a trailing `*`. It then
+shows every model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model
+rejected and model permitted rows.
 
-![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][ml]
-![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][md]
+![The Models view: the processed rules of a key, the cooldowns by model, the link to the routing log][ml]
+![The Models view: the processed rules of a key, the cooldowns by model, the link to the routing log][md]
 
 [ml]: assets/models-light.png#only-light
 [md]: assets/models-dark.png#only-dark
@@ -348,6 +349,10 @@ A non-portable request, one whose body references a `file_id`, a `container`, or
 its live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
 account-scoped reference it carries may then not resolve.
 
+Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
+[routing log](statistics.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies
+are the ones this page uses.
+
 ### The windows the router works from
 
 The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's own
@@ -357,7 +362,7 @@ it, and feeds no allowance until a row names it. The windows are read from two s
 answers, and a poll of the usage endpoint every five minutes per account, each account on its own phase, backed off
 alone on a 429 (see the [statistics page](statistics.md#quota-samples)). Between readings the router predicts: a reading
 stands until its window's reset, plus the share of the window the router's own requests consumed since the reading
-(priced through the cost table and the account's tier factor); a window the table cannot price for the request's model
+(priced through the subscription cost model on the account's tier); a window the cost model cannot price for the request
 adds nothing and holds its reading; at the reset it reads zero and counts the requests since, a weekly window's reset
 advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset stands
 until the next reading; an API-key account's rate-limit buckets stand until their reset or, without one, for a
@@ -421,28 +426,30 @@ prompt size in tokens), and marks them in that order until the marked burn reach
 burn on the account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin there, so a
 pool with one session on the account sheds nothing, and no round takes all of an account's burn. A pin a former pool
 left on the account is outside the round until it ends. A pin whose burn carries the total past the share stays marked,
-and the round stops there. A pin whose burn the table cannot price ranks after every priced pin of its group, counts
-nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the order:
-`never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders every pin
-by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing request was
-sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to
-shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to
+and the round stops there. A pin whose burn the cost model cannot price ranks after every priced pin of its group,
+counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the
+order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders
+every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing
+request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no
+share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to
 standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
 conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move replays the round over the
 pool's own sessions on each member ahead of pace, leaves out the pins of a subscription account on its plan whose tier
-the cost table does not size, which the round still ranks on the table's reference tier and sheds, and keeps a pin whose
-burn the table cannot price in the order unmarked, as the round does.
+the cost model does not size, which the round still ranks on the model's anchor rates and sheds, and keeps a pin whose
+burn the cost model cannot price in the order unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
 marked session stays where it is. A marked pin whose account is cooling for the session's model is released instead,
 with `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can
-hold one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked
-session that stays idle never moves, no new round runs on the account until its dwell passes, and a restart forgets the
-marks, so the next request after it may start a fresh round.
+hold one model alone. An unmarked pin never moves for utilization. The marks last for the dwell: a marked session that
+stays idle never moves, and no new round runs on the account until its dwell passes. The round's marks and its dwell are
+written to the registry and survive a restart, so a restart neither forgets a mark nor starts a fresh round inside the
+dwell; a held request does not survive one (the relay's open connection closes and the client retries), and the routing
+log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -467,8 +474,8 @@ the pin and leaves its cache TTL as it was.
 renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
 while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a
 subscription account in overage, so leaving overage switches the reading without a reset and a session that moves
-between tiers reads the right share on both. A keepalive probe's usage never counts. A burn the table cannot price, for
-a model it lacks or a cell it leaves unmeasured, reads as none.
+between tiers reads the right share on both. A keepalive probe's usage never counts. A burn the model cannot price, for
+a model it has no weight for or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,

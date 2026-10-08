@@ -1,6 +1,7 @@
 //! The ledger task: one bounded channel from the assembler and every other producer, one writer that lands
 //! batches through `spawn_blocking`, and the gap event that says what was lost.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -8,19 +9,21 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber};
 use phoebis_oauth::Clock;
-use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
-use phoebis_store::{AccountKind, Store};
+use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle};
+use phoebis_store::{AccountKind, BudgetPeriod, Store};
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{
-    begin_write, delete_parked_in, insert_event_in, insert_request_in, insert_samples_in,
+    begin_write, delete_parked_in, insert_decision_in, insert_event_in, insert_request_in,
+    insert_samples_in, newest_row_at, update_cache_map_in,
 };
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
-use crate::query::{member_spends, BudgetedMember};
+use crate::query::{member_spends, period_bounds, BudgetedMember};
 use crate::record::{
     AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
 };
@@ -66,6 +69,9 @@ pub struct LedgerConfig {
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
+    /// The binary's version for the `router_started` row `spawn` records ahead of everything it starts. `None`
+    /// records none, as a test's ledger does.
+    pub start_version: Option<String>,
 }
 
 impl Default for LedgerConfig {
@@ -76,6 +82,7 @@ impl Default for LedgerConfig {
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
+            start_version: None,
         }
     }
 }
@@ -97,6 +104,12 @@ pub struct LedgerStats {
     pub parked_priced: AtomicU64,
     /// Retention passes the purge task finished since start, whatever each one cut.
     pub purge_passes: AtomicU64,
+    /// Cache-map writes whose decision row the ledger never stored (dropped under pressure, or purged), counted
+    /// and never retried, since the decision precedes its answer's end by the upstream's whole turn.
+    pub cache_map_orphans: AtomicU64,
+    /// Router events the mirror's broadcast receiver missed because it lagged, each a decision or an event row
+    /// never written, counted apart from `dropped`, which counts the ledger's own records.
+    pub mirror_lagged: AtomicU64,
 }
 
 /// What the relay's ledger check reads: counted here, since every `behind` answer is one `ledger_behind` refusal.
@@ -325,6 +338,15 @@ pub fn spawn(
         clock: clock.clone(),
     };
     let purge_store = store.clone();
+    // Into the empty channel before the mirror exists, so the mirror's first tick lands behind it and the gap the
+    // writer dates from its newest row ends at the previous run's last one.
+    if let Some(version) = &config.start_version {
+        ledger.record(Record::RouterStarted {
+            version: version.clone(),
+            counts: router.load_counts(),
+            at: clock(),
+        });
+    }
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
@@ -486,20 +508,22 @@ async fn writer(
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
     let mut member_revision = router.snapshot().revision;
-    let refresh_spend = |due: Option<i64>| {
-        refresh(
-            &db,
-            &pricing,
-            &router,
-            &stats,
-            &clock,
-            due,
-            config.event_poll,
-        )
+    let mut spends = Spends {
+        db: db.clone(),
+        pricing: pricing.clone(),
+        router: router.clone(),
+        stats: stats.clone(),
+        metrics: metrics.clone(),
+        clock: clock.clone(),
+        event_poll: config.event_poll,
+        budgets: Budgets::default(),
+        pending: Vec::new(),
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
     let _ = land_parked(&db, &pricing, &stats, &metrics, clock()).await;
-    let mut spend_due = refresh_spend(None).await;
+    // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
+    // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
+    let mut spend_due = spends.start().await;
     // A batch whose transaction failed: while it is held the loop takes no new record, so order holds and the
     // channel fills behind it, which is what moves admission's mark before more money is spent.
     let mut held: Option<Held> = None;
@@ -529,7 +553,7 @@ async fn writer(
                 Retry::Settled => {
                     stats.retrying.store(0, Ordering::Relaxed);
                     member_revision = router.snapshot().revision;
-                    spend_due = refresh_spend(spend_due).await;
+                    spend_due = spends.refresh(spend_due, &[]).await;
                 }
             }
             continue;
@@ -539,7 +563,7 @@ async fn writer(
         let revision = router.snapshot().revision;
         if revision != member_revision {
             member_revision = revision;
-            spend_due = refresh_spend(spend_due).await;
+            spend_due = spends.refresh(spend_due, &[]).await;
         }
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
@@ -566,7 +590,7 @@ async fn writer(
                         // before the caller hears the counts, so a selection after a replay that crossed a budget is
                         // refused.
                         member_revision = router.snapshot().revision;
-                        spend_due = refresh_spend(spend_due).await;
+                        spend_due = spends.refresh(spend_due, &[]).await;
                         let remaining = db.read(crate::query::parked_count).await;
                         remaining.map(|remaining| Replayed { landed, remaining })
                     }
@@ -586,12 +610,15 @@ async fn writer(
                 rx.close();
                 continue;
             }
-            // Nothing but the top-of-loop check runs here; see the arm's own comment above.
-            _ = revision_poll.tick() => continue,
+            // Beside the top-of-loop check, the start's budget rows land here when no record came to carry them.
+            _ = revision_poll.tick() => {
+                spends.flush().await;
+                continue;
+            }
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {
-                spend_due = refresh_spend(spend_due).await;
+                spend_due = spends.refresh(spend_due, &[]).await;
                 continue;
             }
         };
@@ -602,14 +629,15 @@ async fn writer(
                 Err(_) => break,
             }
         }
-        let priced = wrote_priced_attempt(&records);
+        let priced = priced_attempts(&records);
+        records.extend(spends.take_pending());
         let batch = Arc::new(records);
         match land(&db, &pricing, &stats, &metrics, &batch, 0..batch.len()).await {
             // A degraded ledger reads the spend after any batch that lands, since that read is what clears it.
             Landed::Written => {
-                if priced || stats.degraded.load(Ordering::Relaxed) {
+                if !priced.is_empty() || stats.degraded.load(Ordering::Relaxed) {
                     member_revision = router.snapshot().revision;
-                    spend_due = refresh_spend(spend_due).await;
+                    spend_due = spends.refresh(spend_due, &priced).await;
                 }
             }
             Landed::Refused { .. } => {
@@ -647,6 +675,7 @@ async fn writer(
             }
         }
     }
+    spends.flush().await;
     let _ = done.send(());
 }
 
@@ -982,41 +1011,300 @@ fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<BudgetedMember> {
         .collect()
 }
 
-/// What a spend refresh did: the deadline to arm next, and whether the read succeeded and its reports reached the
-/// router, which is what lets a degraded ledger clear.
+/// A priced attempt the batch that triggered a spend refresh landed: what a budget crossing names as its source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PricedAttempt {
+    pub pool_id: String,
+    pub account_id: String,
+    pub request_id: String,
+    pub received_at: i64,
+}
+
+/// One member's spend over one period as a refresh read it, with the newest priced attempt of the refresh's batch
+/// that the member served inside the row's period.
+#[derive(Debug)]
+struct SpentRow {
+    spend: MemberSpend,
+    source_request_id: Option<String>,
+}
+
+/// What a spend refresh did: the deadline to arm next, whether the read succeeded and its reports reached the
+/// router, which is what lets a degraded ledger clear, and the rows it read, `None` when the read failed.
 #[derive(Debug)]
 struct SpendRefresh {
     due: Option<i64>,
     refreshed: bool,
+    rows: Option<Vec<SpentRow>>,
 }
 
-/// Runs `refresh_member_spends` and settles the ledger's standing on it. The writer calls this with nothing held,
-/// so a read that succeeded and reached the router clears `degraded`; one that did not, while degraded, runs again
-/// one `event_poll` later rather than at the period's end, since every budgeted member waits on it.
-async fn refresh(
-    db: &Arc<LedgerDb>,
-    pricing: &Arc<Pricing>,
-    router: &RouterHandle,
-    stats: &LedgerStats,
-    clock: &Clock,
-    current: Option<i64>,
-    event_poll: Duration,
-) -> Option<i64> {
-    let now = clock();
-    let degraded = stats.degraded.load(Ordering::Relaxed);
-    let spend =
-        refresh_member_spends(db, pricing, router, now, current, event_poll, degraded).await;
-    if spend.refreshed {
-        if stats.degraded.swap(false, Ordering::Relaxed) {
-            tracing::info!("the ledger caught up; budgeted members are placed on again");
+/// A member and the period kind its budget runs over.
+type SpendKey = (String, String, BudgetPeriod);
+
+/// The budget edges the writer announces, measured from one refresh to the next.
+#[derive(Default)]
+struct Budgets {
+    /// The rows the last refresh read.
+    last: HashMap<SpendKey, MemberSpend>,
+    /// The members this run wrote `budget_reached` for in the period each is in: a period's end is announced only
+    /// after its crossing was.
+    reached: HashSet<SpendKey>,
+    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
+    /// takes as this run's own.
+    announced: HashMap<SpendKey, i64>,
+}
+
+impl Budgets {
+    /// The budget rows `rows` cross against the rows the last refresh read, which they then replace: a spend at or
+    /// above its member's budget where the held row of the same period was under it, or absent, or where this period
+    /// wrote no crossing yet (an edit lowered the budget under the spend), is reached. A row of a later period than
+    /// the held one ends the held period.
+    fn edges(
+        &mut self,
+        snapshot: &RegistrySnapshot,
+        rows: Vec<SpentRow>,
+        at: i64,
+    ) -> Vec<EventRecord> {
+        // A crossing the previous run wrote for the period a row is in is held as if this run had read it, so a
+        // restart writes no second one and the period's end is still announced.
+        for row in &rows {
+            let key = (
+                row.spend.pool_id.clone(),
+                row.spend.account_id.clone(),
+                row.spend.period,
+            );
+            if self.announced.get(&key) == Some(&row.spend.period_end)
+                && !self.last.contains_key(&key)
+            {
+                self.reached.insert(key.clone());
+                self.last.insert(key, row.spend.clone());
+            }
         }
-        return spend.due;
+        self.announced.clear();
+        let mut out = Vec::new();
+        let mut last = HashMap::with_capacity(rows.len());
+        for SpentRow {
+            spend,
+            source_request_id,
+        } in rows
+        {
+            let key = (
+                spend.pool_id.clone(),
+                spend.account_id.clone(),
+                spend.period,
+            );
+            let held = self.last.remove(&key);
+            let same_period = held
+                .as_ref()
+                .filter(|held| held.period_start == spend.period_start);
+            if let Some(held) = held
+                .as_ref()
+                .filter(|h| h.period_start < spend.period_start)
+            {
+                if self.reached.remove(&key) {
+                    out.push(budget_period_ended(held, &spend, at));
+                }
+            }
+            let budget = snapshot
+                .members(&spend.pool_id)
+                .iter()
+                .find(|member| member.account_id == spend.account_id)
+                .and_then(|member| member.budget(spend.period));
+            if let Some(budget) = budget {
+                let was_under = same_period.is_none_or(|held| held.spent_usd < budget)
+                    || !self.reached.contains(&key);
+                if spend.spent_usd >= budget && was_under {
+                    self.reached.insert(key.clone());
+                    out.push(budget_reached(&spend, budget, source_request_id, at));
+                }
+            }
+            last.insert(key, spend);
+        }
+        self.reached.retain(|key| last.contains_key(key));
+        self.last = last;
+        out
     }
-    if !degraded {
-        return spend.due;
+}
+
+/// The newest `budget_reached` row since `from` per pool, account and period, as the end of the period it was written
+/// in.
+fn announced_crossings(
+    conn: &rusqlite::Connection,
+    from: i64,
+) -> Result<HashMap<SpendKey, i64>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT pool_id, account_id, detail FROM events WHERE kind = 'budget_reached' AND at >= ?1 \
+         ORDER BY at, rowid",
+    )?;
+    let rows = stmt.query_map([from], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (Some(pool_id), Some(account_id), Some(detail)) = row? else {
+            continue;
+        };
+        let Ok(detail) = serde_json::from_str::<serde_json::Value>(&detail) else {
+            continue;
+        };
+        let period = detail["period"].as_str().and_then(BudgetPeriod::parse);
+        if let (Some(period), Some(period_end)) = (period, detail["period_end"].as_i64()) {
+            out.insert((pool_id, account_id, period), period_end);
+        }
     }
-    let retry = now + event_poll.as_millis() as i64;
-    Some(spend.due.map_or(retry, |due| due.min(retry)))
+    Ok(out)
+}
+
+fn budget_reached(
+    spend: &MemberSpend,
+    budget: f64,
+    source_request_id: Option<String>,
+    at: i64,
+) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "budget_reached".into(),
+        account_id: Some(spend.account_id.clone()),
+        detail: Some(
+            json!({
+                "period": spend.period.as_str(),
+                "budget_usd": budget,
+                "spent_usd": spend.spent_usd,
+                "period_end": spend.period_end,
+                "source_request_id": source_request_id,
+            })
+            .to_string(),
+        ),
+        pool_id: Some(spend.pool_id.clone()),
+        request_id: source_request_id,
+        ..Default::default()
+    }
+}
+
+fn budget_period_ended(previous: &MemberSpend, spend: &MemberSpend, at: i64) -> EventRecord {
+    EventRecord {
+        at,
+        kind: "budget_period_ended".into(),
+        account_id: Some(spend.account_id.clone()),
+        detail: Some(
+            json!({
+                "period": spend.period.as_str(),
+                "previous_spent_usd": previous.spent_usd,
+                "period_start": spend.period_start,
+            })
+            .to_string(),
+        ),
+        pool_id: Some(spend.pool_id.clone()),
+        ..Default::default()
+    }
+}
+
+/// The writer's spend refresh: the handles it reads and reports through, the budget edges measured across refreshes,
+/// and the budget rows not yet landed.
+struct Spends {
+    db: Arc<LedgerDb>,
+    pricing: Arc<Pricing>,
+    router: RouterHandle,
+    stats: Arc<LedgerStats>,
+    metrics: Arc<Metrics>,
+    clock: Clock,
+    event_poll: Duration,
+    budgets: Budgets,
+    pending: Vec<EventRecord>,
+}
+
+impl Spends {
+    /// The writer's first read, after taking the crossings the ledger holds since the current month began (every
+    /// period starts in it). A crossing without a row, such as one a budget set while the router was down made, is
+    /// announced.
+    async fn start(&mut self) -> Option<i64> {
+        let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
+        match self
+            .db
+            .read(move |conn| announced_crossings(conn, from))
+            .await
+        {
+            Ok(announced) => self.budgets.announced = announced,
+            Err(error) => tracing::warn!(
+                %error,
+                "the ledger's budget crossings could not be read; a member over its budget is announced again"
+            ),
+        }
+        self.read(None, &[]).await
+    }
+
+    /// Runs `refresh_member_spends` and settles the ledger's standing on it. The writer calls this with nothing held,
+    /// so a read that succeeded and reached the router clears `degraded`. One that did not, while degraded, runs again
+    /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
+    /// rows the read crosses wait in `pending`.
+    async fn read(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
+        let now = (self.clock)();
+        let degraded = self.stats.degraded.load(Ordering::Relaxed);
+        let spend = refresh_member_spends(
+            &self.db,
+            &self.pricing,
+            &self.router,
+            now,
+            current,
+            self.event_poll,
+            degraded,
+            priced,
+        )
+        .await;
+        if let Some(rows) = spend.rows {
+            let edges = self.budgets.edges(&self.router.snapshot(), rows, now);
+            self.pending.extend(edges);
+        }
+        if spend.refreshed {
+            if self.stats.degraded.swap(false, Ordering::Relaxed) {
+                tracing::info!("the ledger caught up; budgeted members are placed on again");
+            }
+            return spend.due;
+        }
+        if !degraded {
+            return spend.due;
+        }
+        let retry = now + self.event_poll.as_millis() as i64;
+        Some(spend.due.map_or(retry, |due| due.min(retry)))
+    }
+
+    /// `read`, then the pending budget rows landed.
+    async fn refresh(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
+        let due = self.read(current, priced).await;
+        self.flush().await;
+        due
+    }
+
+    /// Lands the pending budget rows as a batch of their own, as the gap report lands its row.
+    async fn flush(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let batch: Batch = Arc::new(self.pending.iter().cloned().map(Record::Event).collect());
+        let landed = land(
+            &self.db,
+            &self.pricing,
+            &self.stats,
+            &self.metrics,
+            &batch,
+            0..batch.len(),
+        )
+        .await;
+        // A refused batch keeps its rows for the next batch or refresh, as a held batch keeps its records.
+        if !matches!(landed, Landed::Refused { .. }) {
+            self.pending.clear();
+        }
+    }
+
+    /// The pending budget rows, for a batch to carry behind its records.
+    fn take_pending(&mut self) -> impl Iterator<Item = Record> {
+        std::mem::take(&mut self.pending)
+            .into_iter()
+            .map(Record::Event)
+    }
 }
 
 /// Re-reads every budgeted member's spend and reports it to the router, then the ledger's standing after it, which
@@ -1028,6 +1316,7 @@ async fn refresh(
 /// tick where it was rather than disarming it), otherwise arms a retry at `now + event_poll`: a tick that had already
 /// reached its deadline would otherwise re-fire at once on every following timer tick, repeating the failing read
 /// and its warning for as long as the error lasts.
+#[allow(clippy::too_many_arguments)]
 async fn refresh_member_spends(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
@@ -1036,12 +1325,14 @@ async fn refresh_member_spends(
     current: Option<i64>,
     event_poll: Duration,
     degraded: bool,
+    priced: &[PricedAttempt],
 ) -> SpendRefresh {
     let members = budgeted_members(&router.snapshot());
     if members.is_empty() {
         return SpendRefresh {
             due: None,
             refreshed: !degraded || reached(router, Report::Accounting { degraded: false }).await,
+            rows: Some(Vec::new()),
         };
     }
     let table = pricing.current();
@@ -1052,11 +1343,31 @@ async fn refresh_member_spends(
         Ok(rows) => {
             let earliest = rows.iter().map(|r| r.period_end).min();
             // The standing follows the rows on the same queue, so the selector resumes on spend it has read.
-            let refreshed = reached(router, Report::MemberSpend(rows)).await
+            let refreshed = reached(router, Report::MemberSpend(rows.clone())).await
                 && reached(router, Report::Accounting { degraded: false }).await;
+            let rows = rows
+                .into_iter()
+                .map(|spend| {
+                    let source_request_id = priced
+                        .iter()
+                        .filter(|attempt| {
+                            attempt.pool_id == spend.pool_id
+                                && attempt.account_id == spend.account_id
+                                && (spend.period_start..spend.period_end)
+                                    .contains(&attempt.received_at)
+                        })
+                        .max_by_key(|attempt| attempt.received_at)
+                        .map(|attempt| attempt.request_id.clone());
+                    SpentRow {
+                        spend,
+                        source_request_id,
+                    }
+                })
+                .collect();
             SpendRefresh {
                 due: earliest,
                 refreshed,
+                rows: Some(rows),
             }
         }
         Err(error) => {
@@ -1068,6 +1379,7 @@ async fn refresh_member_spends(
             SpendRefresh {
                 due,
                 refreshed: false,
+                rows: None,
             }
         }
     }
@@ -1095,20 +1407,38 @@ async fn sleep_until(deadline: Option<i64>, clock: &Clock) {
     }
 }
 
-/// Whether the batch landed a request whose attempt carried usage: what `price_attempts` would have priced,
-/// the signal the member spend refresh reacts to.
-fn wrote_priced_attempt(batch: &[Record]) -> bool {
-    batch.iter().any(|record| match record {
-        Record::Request { attempts, .. } => attempts.iter().any(AttemptRecord::has_usage),
-        _ => false,
-    })
+/// One `PricedAttempt` per attempt with usage of each request in the batch: what `price_attempts` would have
+/// priced, the signal the member spend refresh reacts to. A request without a pool names no member, so its pool
+/// reads empty.
+fn priced_attempts(batch: &[Record]) -> Vec<PricedAttempt> {
+    batch
+        .iter()
+        .flat_map(|record| match record {
+            Record::Request {
+                request, attempts, ..
+            } => attempts
+                .iter()
+                .filter(|attempt| attempt.has_usage())
+                .map(|attempt| PricedAttempt {
+                    pool_id: request.pool_id.clone().unwrap_or_default(),
+                    account_id: attempt.account_id.clone(),
+                    request_id: request.id.clone(),
+                    received_at: request.received_at,
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 fn table_of(record: &Record) -> &'static str {
     match record {
+        Record::CacheMap(_) => "cache_map",
+        Record::Decision(_) => "decisions",
         Record::Event(_) => "events",
         Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
+        Record::RouterStarted { .. } => "events",
         Record::Samples { .. } => "samples",
     }
 }
@@ -1162,6 +1492,9 @@ async fn land_acknowledging(
     let tables: Vec<&'static str> = batch[range.clone()].iter().map(table_of).collect();
     let written = tokio::task::spawn_blocking(move || {
         let mut observations = Vec::new();
+        // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
+        // that rolls back is tried again with it.
+        let mut orphans = Vec::new();
         let result = db.write(|conn| {
             let tx = begin_write(conn)?;
             for record in &records[range] {
@@ -1205,6 +1538,48 @@ async fn land_acknowledging(
                             quota: quota.clone(),
                         });
                     }
+                    Record::Decision(row) => {
+                        let summary = serde_json::to_string(&row.summary)?;
+                        // Compressed here, inside the batch on the blocking thread, so the request path and the
+                        // broadcast carry the typed record and no frame. The default level folds this JSON four
+                        // to six times. The one-shot call writes the content size into the frame's header, which
+                        // a reader checks against its bound before it decodes.
+                        let frame = zstd::bulk::compress(&serde_json::to_vec(&row.record)?, 0)?;
+                        insert_decision_in(&tx, row, &summary, &frame)?;
+                    }
+                    Record::CacheMap(write) => {
+                        let entries = serde_json::to_string(&write.entries)?;
+                        if update_cache_map_in(&tx, write, &entries)? == 0 {
+                            orphans.push((write.request_id.clone(), write.seq, write.attempt));
+                        }
+                    }
+                    Record::RouterStarted {
+                        version,
+                        counts,
+                        at,
+                    } => {
+                        let event = EventRecord {
+                            at: *at,
+                            kind: "router_started".into(),
+                            detail: Some(
+                                json!({
+                                    "version": version,
+                                    "pins_loaded": counts.pins,
+                                    "shedding_marks_loaded": counts.shed_marks,
+                                    "shedding_rounds_stale": counts.shed_rounds_stale,
+                                    "windows_loaded": counts.windows,
+                                    "affinity_entries_loaded": counts.affinity_entries,
+                                    "down_since": newest_row_at(&tx)?,
+                                    // A held request lives in the process alone, so no start keeps one.
+                                    "holds_lost": true,
+                                })
+                                .to_string(),
+                            ),
+                            ..Default::default()
+                        };
+                        insert_event_in(&tx, &event)?;
+                        crate::rollup::fold_event(&tx, &event)?;
+                    }
                 }
             }
             if let Some(id) = parked {
@@ -1213,12 +1588,23 @@ async fn land_acknowledging(
             tx.commit()?;
             Ok::<(), LedgerError>(())
         });
-        (result, observations)
+        (result, observations, orphans)
     })
     .await;
     match written {
-        Ok((Ok(()), observations)) => {
+        Ok((Ok(()), observations, orphans)) => {
             stats.written.fetch_add(size, Ordering::Relaxed);
+            stats
+                .cache_map_orphans
+                .fetch_add(orphans.len() as u64, Ordering::Relaxed);
+            for (request_id, seq, attempt) in orphans {
+                tracing::debug!(
+                    %request_id,
+                    seq,
+                    attempt,
+                    "a cache map found no decision to land on; it is counted and dropped"
+                );
+            }
             for observation in observations {
                 match observation {
                     Observation::Request {
@@ -1231,7 +1617,7 @@ async fn land_acknowledging(
             }
             Landed::Written
         }
-        Ok((Err(error), _)) => {
+        Ok((Err(error), _, _)) => {
             tracing::error!(%error, records = size, "a ledger batch could not be written");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             Landed::Refused {
@@ -1349,6 +1735,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Operator,
             })
             .unwrap();
         store
@@ -1385,7 +1772,8 @@ mod tests {
         let event_poll = Duration::from_secs(5);
 
         let first =
-            refresh_member_spends(&db, &pricing, &router, 1_000, None, event_poll, false).await;
+            refresh_member_spends(&db, &pricing, &router, 1_000, None, event_poll, false, &[])
+                .await;
         assert!(first.due.is_some(), "a working read arms the boundary tick");
         assert!(
             first.refreshed,
@@ -1398,9 +1786,17 @@ mod tests {
         })
         .unwrap();
 
-        let after_failure =
-            refresh_member_spends(&db, &pricing, &router, 2_000, first.due, event_poll, false)
-                .await;
+        let after_failure = refresh_member_spends(
+            &db,
+            &pricing,
+            &router,
+            2_000,
+            first.due,
+            event_poll,
+            false,
+            &[],
+        )
+        .await;
         assert_eq!(
             after_failure.due, first.due,
             "a failed read keeps the previous boundary armed rather than disarming it"
@@ -1428,12 +1824,289 @@ mod tests {
         // following timer tick, so the retry arms one poll interval out instead.
         let past_due = Some(500);
         let now = 1_000;
-        let after_failure =
-            refresh_member_spends(&db, &pricing, &router, now, past_due, event_poll, false).await;
+        let after_failure = refresh_member_spends(
+            &db,
+            &pricing,
+            &router,
+            now,
+            past_due,
+            event_poll,
+            false,
+            &[],
+        )
+        .await;
         assert_eq!(
             after_failure.due,
             Some(now + event_poll.as_millis() as i64),
             "a past deadline retries at the poll cadence rather than at once"
+        );
+    }
+
+    /// The writer's spend refresh over a router whose pool `p` holds the API-key members given with their monthly
+    /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`, with the registry beside it.
+    fn spends_over(members: &[(&str, f64)], clock: Arc<AtomicI64>) -> (Spends, Arc<Store>) {
+        let store =
+            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        for (id, _) in members {
+            store
+                .insert_account(&phoebis_store::AccountRow {
+                    id: id.to_string(),
+                    kind: AccountKind::ApiKey,
+                    label: id.to_string(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: phoebis_store::AccountState::Ready,
+                    state_cause: phoebis_store::StateCause::Operator,
+                })
+                .unwrap();
+        }
+        store
+            .insert_pool(&phoebis_store::PoolRow::for_tests("p"), "test")
+            .unwrap();
+        let writes: Vec<phoebis_store::MemberWrite> = members
+            .iter()
+            .enumerate()
+            .map(|(priority, (id, budget))| phoebis_store::MemberWrite {
+                account_id: id.to_string(),
+                priority: priority as u32,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(*budget),
+            })
+            .collect();
+        store.set_pool_members("p", &writes, "test").unwrap();
+        let router = phoebis_routing::spawn(
+            store.clone(),
+            Arc::new(|| 1_000),
+            phoebis_routing::RouterConfig::default(),
+        )
+        .unwrap();
+        let dollar = crate::pricing::ModelPrice {
+            input: 1_000_000.0,
+            cache_write_5m: 1_000_000.0,
+            cache_write_1h: 1_000_000.0,
+            cache_read: 1_000_000.0,
+            output: 1_000_000.0,
+        };
+        let table = PriceTable {
+            version: "test".into(),
+            effective: "test".into(),
+            source: "test".into(),
+            models: [(
+                "m".to_string(),
+                crate::pricing::ModelRow {
+                    standard: dollar,
+                    fast: None,
+                },
+            )]
+            .into(),
+        };
+        let spends = Spends {
+            db: Arc::new(LedgerDb::open_in_memory().unwrap()),
+            pricing: Arc::new(Pricing::new(table)),
+            router,
+            stats: Arc::new(LedgerStats::default()),
+            metrics: Arc::new(Metrics::new()),
+            clock: Arc::new(move || clock.load(Ordering::SeqCst)),
+            event_poll: Duration::from_secs(5),
+            budgets: Budgets::default(),
+            pending: Vec::new(),
+        };
+        (spends, store)
+    }
+
+    /// A request on pool `p` whose one attempt on `account` used `tokens` input tokens of `m`, a dollar each: written
+    /// to the ledger, and answered as the batch record that carried it.
+    fn spend(spends: &Spends, id: &str, account: &str, received_at: i64, tokens: u64) -> Record {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at,
+            pool_id: Some("p".into()),
+            canonical_model: "m".into(),
+            model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(tokens),
+            ..Default::default()
+        };
+        spends
+            .db
+            .insert_request(&request, std::slice::from_ref(&attempt), None)
+            .unwrap();
+        Record::Request {
+            request,
+            attempts: vec![attempt],
+            bodies: None,
+        }
+    }
+
+    /// The budget rows the ledger holds, in order: kind, account, request column and detail.
+    async fn budget_rows(
+        spends: &Spends,
+    ) -> Vec<(String, Option<String>, Option<String>, serde_json::Value)> {
+        spends
+            .db
+            .events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind.starts_with("budget_"))
+            .map(|e| {
+                assert_eq!(e.pool_id.as_deref(), Some("p"));
+                let detail = serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                (e.kind, e.account_id, e.request_id, detail)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_spend_that_crosses_its_budget_writes_budget_reached_once() {
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let under = spend(&spends, "r1", "a", 100, 6);
+        spends.refresh(None, &priced_attempts(&[under])).await;
+        assert!(budget_rows(&spends).await.is_empty(), "6 of 10 spent");
+        let over = spend(&spends, "r2", "a", 200, 6);
+        spends.refresh(None, &priced_attempts(&[over])).await;
+        spends.refresh(None, &[]).await;
+        let rows = budget_rows(&spends).await;
+        assert_eq!(rows.len(), 1, "two refreshes over the budget write one row");
+        let (kind, account, request, detail) = &rows[0];
+        assert_eq!(
+            (kind.as_str(), account.as_deref(), request.as_deref()),
+            ("budget_reached", Some("a"), Some("r2"))
+        );
+        assert_eq!(
+            *detail,
+            serde_json::json!({
+                "period": "month",
+                "budget_usd": 10.0,
+                "spent_usd": 12.0,
+                "period_end": 2_678_400_000_i64,
+                "source_request_id": "r2",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_budget_crossing_names_the_member_s_own_request_and_not_a_sibling_s_in_the_batch() {
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, _) = spends_over(&[("a", 10.0), ("b", 10.0)], clock.clone());
+        // One batch: `a`'s request crosses its budget, then a later one of `b` lands beside it.
+        let batch = [
+            spend(&spends, "ra", "a", 100, 12),
+            spend(&spends, "rb", "b", 200, 1),
+        ];
+        spends.refresh(None, &priced_attempts(&batch)).await;
+        // `b` crosses on spend the timer's refresh finds, with no batch behind it.
+        spend(&spends, "rb2", "b", 300, 10);
+        spends.refresh(None, &[]).await;
+        let named: Vec<(Option<String>, Option<String>, serde_json::Value)> = budget_rows(&spends)
+            .await
+            .into_iter()
+            .map(|(kind, account, request, detail)| {
+                assert_eq!(kind, "budget_reached");
+                (account, request, detail["source_request_id"].clone())
+            })
+            .collect();
+        assert_eq!(
+            named,
+            [
+                (Some("a".into()), Some("ra".into()), serde_json::json!("ra")),
+                (Some("b".into()), None, serde_json::Value::Null),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_period_writes_budget_period_ended_with_the_previous_spend() {
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let over = spend(&spends, "r1", "a", 100, 12);
+        spends.refresh(None, &priced_attempts(&[over])).await;
+        // The first of February 1970, the next monthly period.
+        let february = 2_678_400_000_i64;
+        clock.store(february + 1_000, Ordering::SeqCst);
+        spends.refresh(None, &[]).await;
+        spends.refresh(None, &[]).await;
+        let rows = budget_rows(&spends).await;
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["budget_reached", "budget_period_ended"]
+        );
+        assert_eq!(
+            (rows[1].1.as_deref(), &rows[1].3),
+            (
+                Some("a"),
+                &serde_json::json!({
+                    "period": "month",
+                    "previous_spent_usd": 12.0,
+                    "period_start": february,
+                })
+            ),
+            "the first refresh of the new period names what the last one spent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_period_whose_budget_was_never_reached_ends_without_a_row() {
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let under = spend(&spends, "r1", "a", 100, 6);
+        spends.refresh(None, &priced_attempts(&[under])).await;
+        clock.store(2_678_400_000 + 1_000, Ordering::SeqCst);
+        spends.refresh(None, &[]).await;
+        assert!(budget_rows(&spends).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_budget_lowered_under_the_spend_writes_budget_reached() {
+        let clock = Arc::new(AtomicI64::new(1_000));
+        let (mut spends, store) = spends_over(&[("a", 10.0)], clock.clone());
+        let under = spend(&spends, "r1", "a", 100, 6);
+        spends.refresh(None, &priced_attempts(&[under])).await;
+        store
+            .set_pool_members(
+                "p",
+                &[phoebis_store::MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: Some(5.0),
+                }],
+                "test",
+            )
+            .unwrap();
+        spends.router.reload().await.unwrap();
+        spends.refresh(None, &[]).await;
+        spends.refresh(None, &[]).await;
+        let rows = budget_rows(&spends).await;
+        assert_eq!(
+            rows.iter()
+                .map(|r| (
+                    r.0.as_str(),
+                    r.3["budget_usd"].clone(),
+                    r.3["spent_usd"].clone()
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                "budget_reached",
+                serde_json::json!(5.0),
+                serde_json::json!(6.0)
+            )],
+            "the edit put the spend over the budget, once"
         );
     }
 }

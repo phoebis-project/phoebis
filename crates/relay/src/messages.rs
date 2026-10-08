@@ -24,14 +24,14 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
-    HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal,
-    Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace,
-    BUDGET_WINDOW,
+    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, EvidenceSource,
+    Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence, PinRef,
+    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
+    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    Secret, Store,
+    Secret, StateCause, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -51,7 +51,8 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict, MARGIN_MS,
+    classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
+    MARGIN_MS,
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
@@ -783,7 +784,7 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
             AttemptOutcome::RateLimited
         }
         Verdict::FailOver {
-            mark: Some(AccountState::ReauthRequired),
+            mark: Some((AccountState::ReauthRequired, _)),
             ..
         } => AttemptOutcome::AuthFailed,
         Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
@@ -1491,7 +1492,7 @@ impl Relay {
             (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
                 restorable_version(version).map(|version| RestoreContext {
                     cli_version: version.to_string(),
-                    prompt_units: facts.prompt_units,
+                    prompt_units: facts.prompt_units.clone(),
                     prompt_id: memory_key.as_ref().map(|key| {
                         self.memory.prompt_id(
                             key,
@@ -1513,7 +1514,14 @@ impl Relay {
         // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
         let stamp = match crate::body::drift(&raw) {
             Ok(None) => None,
-            Ok(Some(kind)) => Some(self.drift_refusal(kind, &parts.headers)),
+            Ok(Some(kind)) => Some(self.drift_refusal(
+                kind,
+                &parts.headers,
+                &trace,
+                &key,
+                &identity,
+                client_version.as_deref(),
+            )),
             Err(error) => Some(LocalRefusal::from(relay_failure(&error))),
         };
         if let Some(refusal) = stamp {
@@ -1531,11 +1539,18 @@ impl Relay {
         if let Some(context) = &restore {
             let check = VersionCheck {
                 client_version: &context.cli_version,
-                prompt_units: context.prompt_units,
+                prompt_units: &context.prompt_units,
             };
             if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
                 if let Some(kind) = crate::body::version_drift(&raw, check) {
-                    let refusal = self.drift_refusal(kind, &parts.headers);
+                    let refusal = self.drift_refusal(
+                        kind,
+                        &parts.headers,
+                        &trace,
+                        &key,
+                        &identity,
+                        client_version.as_deref(),
+                    );
                     return self
                         .refused(
                             &trace,
@@ -1613,6 +1628,9 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
+        // The selections asked for this request, the decision's `seq`: a hold and the placement after it are two
+        // decisions of one wire attempt, and a retry in place or a refresh pass dispatches again under one.
+        let mut selections: u32 = 0;
         // The accounts this request was held for once already. A freed slot is read, not reserved, so another
         // request can take it before the next selection; without this the same account could hold the request
         // again on every pass.
@@ -1645,9 +1663,15 @@ impl Relay {
                     )
                     .await;
             }
+            selections += 1;
             let answer = match self
                 .router
                 .select(SelectRequest {
+                    request_id: trace.request_id.clone(),
+                    // The pass loop of `dispatch_to` increments the counter before it publishes, so the attempt
+                    // this decision dispatches is the next one.
+                    attempt: u32::from(attempt) + 1,
+                    seq: selections,
                     key_id: key.id.clone(),
                     key_generation: key.created_at,
                     agent_id: identity.agent_id.clone(),
@@ -1792,6 +1816,7 @@ impl Relay {
                 .dispatch_to(
                     &admitted,
                     &selection,
+                    selections,
                     &answer.cancel,
                     answer.ticket,
                     &mut attempt,
@@ -1914,18 +1939,21 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
-    /// ticket the selection charged for the leg's first pass.
+    /// carries. `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
+    /// `key_permit` is the request's own, which a committed stream takes into its body. `selected` is the ticket the
+    /// selection charged for the leg's first pass.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
     /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
     /// the wait. The token endpoint's floor is waited out once per request, through `Admitted::floor_held`, since a
     /// second account's bad minute is the same minute. Every wait ends at `Admitted::deadline`, past which the
     /// attempt loop answers the exhaustion.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
         selection: &Selection,
+        seq: u32,
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
         attempt: &mut u8,
@@ -2247,6 +2275,7 @@ impl Relay {
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
+                seq,
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
@@ -2460,8 +2489,14 @@ impl Relay {
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         self.report_overage(ctx.account, &head, head_at).await;
-        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at)
-            .await;
+        self.report_head_sample(
+            ctx.account,
+            &head,
+            &ctx.identity.canonical_model,
+            head_at,
+            ctx.request_id,
+        )
+        .await;
 
         // Heads the table reads a body for are drained within the bound. A body past the bound is classified from
         // the prefix the drain read as if it were the whole body, and keeps its reader for the rest should the
@@ -2570,16 +2605,17 @@ impl Relay {
             verdict,
             Verdict::Refresh
                 | Verdict::FailOver {
-                    mark: Some(AccountState::ReauthRequired),
+                    mark: Some((AccountState::ReauthRequired, _)),
                     ..
                 }
         );
+        let classified = attempt_outcome(&verdict, head.status, first_event.as_deref());
         ctx.trace
             .head(
                 ctx.attempt,
                 &head,
                 committing,
-                attempt_outcome(&verdict, head.status, first_event.as_deref()),
+                classified,
                 cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
                 written_at,
                 head_at,
@@ -2590,10 +2626,18 @@ impl Relay {
             ctx.account.lifecycle_generation,
             ctx.credential_generation,
         );
+        // A mark this head forms carries the upstream's own words for it to the log's row.
+        let marked = |(state, cause): (AccountState, StateCause)| {
+            (state, cause, decoded.as_deref().and_then(error_message))
+        };
 
         let (cooldown, mark, moves_pin) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
+            Verdict::Refresh if ctx.replayed => (
+                None,
+                Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
+                false,
+            ),
             Verdict::Refresh => {
                 // Nothing of the rejection goes back, so a body cut at the bound gives up its connection before
                 // the ladder's waits rather than hold the rest unread through them.
@@ -2626,9 +2670,11 @@ impl Relay {
                                 // re-authentication mark is the manager's store write alone, so it is reported:
                                 // the routing writer's fenced write and the reload after it take the snapshot's
                                 // row off `ready`, and until that reload the manager's cache refuses the marked
-                                // credential, so no leg dials the account in between.
-                                let mark = matches!(error, AcquireError::ReauthRequired)
-                                    .then_some(AccountState::ReauthRequired);
+                                // credential, so no leg dials the account in between. The word is the manager's,
+                                // so the re-report stores what its own write stored.
+                                let mark = matches!(error, AcquireError::ReauthRequired).then_some(
+                                    (AccountState::ReauthRequired, StateCause::RefreshFailed),
+                                );
                                 break (None, mark, !marked);
                             }
                             // One wait on the same account, bounded by the manager's own rule: a short refusal
@@ -2677,9 +2723,11 @@ impl Relay {
             }
             // An account marked for re-authentication keeps its pin, as a refresh's own mark does: the next
             // selection moves the session off it under the account's state.
-            Verdict::FailOver { cooldown, mark } => {
-                (cooldown, mark, mark != Some(AccountState::ReauthRequired))
-            }
+            Verdict::FailOver { cooldown, mark } => (
+                cooldown,
+                mark,
+                mark.map(|(state, _)| state) != Some(AccountState::ReauthRequired),
+            ),
             Verdict::Commit => {
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
@@ -2759,7 +2807,7 @@ impl Relay {
                             // migrates; a non-portable request keeps its pin. The deadline is measured
                             // from the error's arrival, not from the selection.
                             let now = clock();
-                            if let Verdict::FailOver { cooldown, mark } = classify(
+                            let verdict = classify(
                                 &head,
                                 &HeadContext {
                                     kind,
@@ -2777,12 +2825,13 @@ impl Relay {
                                     model_rejection_ms,
                                     fast,
                                 },
-                            ) {
+                            );
+                            if let Verdict::FailOver { cooldown, mark } = verdict {
                                 for report in failover_reports(
                                     &account_id,
                                     &canonical_model,
                                     cooldown,
-                                    mark,
+                                    mark.map(|(state, cause)| (state, cause, None)),
                                     pin,
                                     &request_id,
                                     generations,
@@ -2834,10 +2883,12 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
-        if mark == Some(AccountState::ReauthRequired) {
+        let marked_state = mark.map(|(state, _)| state);
+        if marked_state == Some(AccountState::ReauthRequired) {
             ctx.auth_marked = true;
         }
-        let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
+        let retry_in_place =
+            self.retry_in_place(&ctx, &head, cooldown.as_ref(), marked_state, arrived);
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
         // for the siblings, and the pin stays where the retry lands.
@@ -2846,7 +2897,7 @@ impl Relay {
             &ctx.account.id,
             &ctx.identity.canonical_model,
             cooldown,
-            mark,
+            mark.map(marked),
             (ctx.portable && moves_pin && retry_in_place.is_none())
                 .then(|| ctx.pin.cloned())
                 .flatten(),
@@ -3062,6 +3113,9 @@ impl Relay {
             static_ttl_ms: ctx.tier_ttls.0,
             message_ttl_ms: ctx.tier_ttls.1,
             uniform_ttl_ms: ctx.uniform_ttl_ms,
+            request_id: ctx.trace.request_id.clone(),
+            seq: ctx.seq,
+            attempt: u32::from(ctx.attempt),
         })
     }
 
@@ -3311,13 +3365,47 @@ impl Relay {
         .await
     }
 
-    /// A client-drift refusal with its trigger, and the warn that tells the operator which client to re-pin to.
-    fn drift_refusal(&self, kind: &'static str, headers: &HeaderMap) -> LocalRefusal {
+    /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
+    /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
+    /// rather than delaying the 400.
+    fn drift_refusal(
+        &self,
+        kind: &'static str,
+        headers: &HeaderMap,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        identity: &RequestIdentity,
+        client_version: Option<&str>,
+    ) -> LocalRefusal {
         tracing::warn!(
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
             "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
+        );
+        self.router.record_refusal(
+            RefusedRequest {
+                request_id: trace.request_id.clone(),
+                attempt: 1,
+                seq: 1,
+                at: (self.clock)(),
+                key_id: key.id.clone(),
+                key_generation: key.created_at,
+                agent_id: identity.agent_id.clone(),
+                parent_agent_id: None,
+                session_id: identity.session_id.clone(),
+                request_class: None,
+                canonical_model: identity.canonical_model.clone(),
+                lane: LaneFacts::default(),
+                flags: RequestFlags::default(),
+                chain: ChainFacts::default(),
+                client: identity.class,
+                client_version: client_version.map(str::to_string),
+            },
+            RefusalFacts {
+                kind: "client",
+                reason: kind.to_string(),
+            },
         );
         LocalRefusal {
             failure: relay_failure(&RelayError::ClientDrift { kind }),
@@ -3508,6 +3596,7 @@ impl Relay {
         head: &ResponseHead,
         canonical_model: &str,
         now: i64,
+        request_id: &str,
     ) {
         let observed_at = upstream_date(head).unwrap_or(now);
         let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
@@ -3518,6 +3607,7 @@ impl Relay {
                 account_id: account.id.clone(),
                 sample,
                 incarnation: account.incarnation,
+                source_request_id: Some(request_id.to_string()),
             })
             .await;
     }
@@ -3885,6 +3975,9 @@ struct Responding<'a> {
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
+    /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
+    /// leg answers under it.
+    seq: u32,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
@@ -3949,7 +4042,7 @@ impl From<Failure> for LocalRefusal {
 /// attempt actually tries.
 struct RestoreContext {
     cli_version: String,
-    prompt_units: [u16; 3],
+    prompt_units: Vec<[u16; 3]>,
     prompt_id: Option<String>,
     system_is_array: bool,
 }
@@ -4033,7 +4126,7 @@ pub(crate) async fn report_failover(
     account_id: &str,
     canonical_model: &str,
     cooldown: Option<Cooldown>,
-    mark: Option<AccountState>,
+    mark: Option<Mark>,
     pin: Option<PinRef>,
     request_id: &str,
     generations: (u64, u64, u64),
@@ -4053,6 +4146,10 @@ pub(crate) async fn report_failover(
     }
 }
 
+/// The state a verdict marks its account with, who moved it as its mark site names it, and the upstream error's
+/// message where the verdict read one.
+pub(crate) type Mark = (AccountState, StateCause, Option<String>);
+
 /// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
 /// mark.
 #[allow(clippy::too_many_arguments)]
@@ -4060,7 +4157,7 @@ pub(crate) fn failover_reports(
     account_id: &str,
     canonical_model: &str,
     cooldown: Option<Cooldown>,
-    mark: Option<AccountState>,
+    mark: Option<Mark>,
     pin: Option<PinRef>,
     request_id: &str,
     generations: (u64, u64, u64),
@@ -4102,13 +4199,15 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
         });
     }
-    if let Some(state) = mark {
+    if let Some((state, cause, detail)) = mark {
         reports.push(Report::AccountState {
             account_id: account_id.to_string(),
             state,
             incarnation: generations.0,
             lifecycle_generation: generations.1,
             credential_generation: generations.2,
+            cause,
+            detail,
         });
     }
     reports

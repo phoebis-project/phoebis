@@ -1,23 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage, WindowId } from '@/api/types';
-import { PIN_RELEASE_REASON_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import { SelectionTrace } from '@/components/SelectionTrace';
+import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
+import { Chips } from '@/components/DecisionCard';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
-import { requestTrail } from '@/lib/trail';
+import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
 
 const COLUMNS = [
@@ -38,6 +37,8 @@ const COLUMNS = [
 type ColumnId = (typeof COLUMNS)[number]['id'];
 // The drawer names all three, and leaving them out lets the default set fit the card at 1280 by 800.
 const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
+/** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
+const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
 const RANGES = [
   { label: 'Last hour', value: '1h', ms: 3_600_000 },
@@ -155,55 +156,22 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   succeeded: 'succeeded',
 };
 
-const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
-  auth_failed: 'Auth failed',
-  canceled: 'Canceled',
-  rate_limited: 'Rate limited',
-  succeeded: 'Succeeded',
-  transport_error: 'Transport error',
-  upstream_error: 'Upstream error',
-};
-
-const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
-  attempted: 'already tried by this request',
-  budget: 'account at its budget',
-  client_error: 'client error',
-  cooldown: 'account cooled',
-  deleted: 'account deleted',
-  disconnected: 'account disconnected',
-  expired: 'pin idle past the affinity window',
-  fast_credits: 'usage credits unavailable for fast mode',
-  fast_rate_limit: 'fast lane rate limited',
-  funding_required: 'funding required',
-  overage: 'in overage',
-  paused: 'account paused',
-  reauth_required: 'needs re-auth',
-  released: 'nothing else stood against the account',
-  spent: 'window spent',
-  subscription_ended: 'subscription ended',
-  unpaired: 'account unpaired',
-  unserved: 'model no longer served here',
-};
-const releaseLabel = (reasons: unknown): string =>
-  (Array.isArray(reasons) ? reasons : [])
-    .map((r) => {
-      const reason = PIN_RELEASE_REASON_VALUES.find((v) => v === r);
-      return reason === undefined ? String(r) : PIN_RELEASE_LABEL[reason];
-    })
-    .join(', ');
-
 /** Where a hold waited: its cohort's account, else the last one it waited on. */
 const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an account';
-/** The badge rounds the wait, so its hover carries it whole with where it was placed, as the drawer names it. */
+/** The badge rounds the wait, so its hover carries it whole with where it was placed. */
 const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(h)}`;
 
-// A fixed three-slot readout: a plan that serves no Fable reports two windows in
-// its headers, and the empty third slot is the point rather than a gap to hide.
-const ATTEMPT_WINDOWS: { id: WindowId; label: string }[] = [
-  { id: '5h', label: '5h' },
-  { id: '7d', label: '7d' },
-  { id: '7d_fable', label: 'Fable' },
-];
+/**
+ * The router's ids run to 44 characters, which would wrap the drawer head to a second line beside its two actions at
+ * 400 px, so the head shows this many and its hover keeps the id whole.
+ */
+const HEAD_ID_CHARS = 24;
+
+/** The log on this request, a quarter hour either side of it. A row with no duration is read as a moment. */
+const routingLogHref = (r: RequestLog, now: number) => {
+  const at = Date.parse(r.at);
+  return logHref(requestLink(r.id, at, r.durationMs === null ? null : at + r.durationMs, now));
+};
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -263,6 +231,7 @@ export function RequestsPage() {
   const active = paramsFromFilters({ ...filters, rows: DEFAULTS.rows }).toString() !== '';
   const reset = () => setSearchParams(paramsFromFilters({ ...DEFAULTS, rows: filters.rows }), { replace: true });
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
+  const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
 
   return (
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
@@ -361,19 +330,19 @@ export function RequestsPage() {
             <table className="table table--hover requests__table">
               <thead>
                 <tr>
-                  {visible.has('time') && <th>Time</th>}
-                  {visible.has('key') && <th>Key</th>}
-                  {visible.has('pool') && <th>Pool</th>}
-                  {visible.has('account') && <th>Account</th>}
-                  {visible.has('model') && <th>Model</th>}
-                  {visible.has('client') && <th>Client</th>}
-                  {visible.has('kind') && <th>Kind</th>}
-                  {visible.has('transport') && <th>Transport</th>}
-                  {visible.has('status') && <th>Status</th>}
-                  {visible.has('attempts') && <th>Attempts</th>}
-                  {visible.has('ttfb') && <th className="right">TTFB</th>}
-                  {visible.has('tokens') && <th className="right">Tokens</th>}
-                  {visible.has('cost') && <th className="right">Cost</th>}
+                  {shown.has('time') && <th>Time</th>}
+                  {shown.has('key') && <th>Key</th>}
+                  {shown.has('pool') && <th>Pool</th>}
+                  {shown.has('account') && <th>Account</th>}
+                  {shown.has('model') && <th>Model</th>}
+                  {shown.has('client') && <th>Client</th>}
+                  {shown.has('kind') && <th>Kind</th>}
+                  {shown.has('transport') && <th>Transport</th>}
+                  {shown.has('status') && <th>Status</th>}
+                  {shown.has('attempts') && <th>Attempts</th>}
+                  {shown.has('ttfb') && <th className="right">TTFB</th>}
+                  {shown.has('tokens') && <th className="right">Tokens</th>}
+                  {shown.has('cost') && <th className="right">Cost</th>}
                   <th />
                 </tr>
               </thead>
@@ -381,7 +350,7 @@ export function RequestsPage() {
                 {requests.loading && !requests.data
                   ? Array.from({ length: 8 }, (_, i) => (
                       <tr key={i}>
-                        <td colSpan={visible.size + 1}>
+                        <td colSpan={shown.size + 1}>
                           <Skeleton />
                         </td>
                       </tr>
@@ -392,23 +361,24 @@ export function RequestsPage() {
                         className={r.id === requestId ? 'is-selected' : ''}
                         onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                         tabIndex={0}
-                        onKeyDown={(e) => e.key === 'Enter' && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                        // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log alone.
+                        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                       >
-                        {visible.has('time') && (
+                        {shown.has('time') && (
                           <td className="num" title={fmtAbsolute(r.at)}>
                             {fmtTime(r.at)}
                             <span className="sub mono">{shortId(r.id, 12)}</span>
                           </td>
                         )}
-                        {visible.has('key') && <td className="mono">{r.keyId ?? '-'}</td>}
-                        {visible.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
-                        {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
-                        {visible.has('model') && (
+                        {shown.has('key') && <td className="mono">{r.keyId ?? '-'}</td>}
+                        {shown.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
+                        {shown.has('account') && <td>{r.accountId ?? '-'}</td>}
+                        {shown.has('model') && (
                           <td className="mono nowrap" title={shortModel(r.model) === r.model ? undefined : r.model}>
                             {shortModel(r.model)}
                           </td>
                         )}
-                        {visible.has('client') && (
+                        {shown.has('client') && (
                           <td className="mono requests__client" title={r.client ?? undefined}>
                             {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text">{r.client}</span>}
                             {r.agentType && (
@@ -418,13 +388,13 @@ export function RequestsPage() {
                             )}
                           </td>
                         )}
-                        {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
-                        {visible.has('transport') && (
+                        {shown.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
+                        {shown.has('transport') && (
                           <td>
                             <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
                           </td>
                         )}
-                        {visible.has('status') && (
+                        {shown.has('status') && (
                           <td>
                             <span className="requests__status">
                               <StatusBadge status={r.status} />
@@ -432,7 +402,7 @@ export function RequestsPage() {
                             </span>
                           </td>
                         )}
-                        {visible.has('attempts') && (
+                        {shown.has('attempts') && (
                           <td>
                             <span className="requests__attempts">
                               <AttemptTrail attempts={r.attempts} />
@@ -444,24 +414,29 @@ export function RequestsPage() {
                             </span>
                           </td>
                         )}
-                        {visible.has('ttfb') && <td className="right num">{fmtMs(r.ttfbMs)}</td>}
-                        {visible.has('tokens') && (
+                        {shown.has('ttfb') && <td className="right num">{fmtMs(r.ttfbMs)}</td>}
+                        {shown.has('tokens') && (
                           <td className="right num">
                             {fmtCompact(tokensTotal(r.usage))}
                             <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
                           </td>
                         )}
-                        {visible.has('cost') && <td className="right num">{fmtUsd(r.costUsd)}</td>}
+                        {shown.has('cost') && <td className="right num">{fmtUsd(r.costUsd)}</td>}
                         <td className="right">
-                          <Link to={{ pathname: `/requests/${r.id}`, search: location.search }} onClick={(e) => e.stopPropagation()}>
-                            Details
-                          </Link>
+                          <span className="requests__links">
+                            <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
+                              Routing
+                            </Link>
+                            <Link to={{ pathname: `/requests/${r.id}`, search: location.search }} onClick={(e) => e.stopPropagation()}>
+                              Details
+                            </Link>
+                          </span>
                         </td>
                       </tr>
                     ))}
                 {!requests.loading && rows.length === 0 && (
                   <tr>
-                    <td colSpan={visible.size + 1}>
+                    <td colSpan={shown.size + 1}>
                       {requests.error ? (
                         <ErrorState title="Could not load the request log" body={requests.error} action={<Button onClick={requests.reload}>Try again</Button>} />
                       ) : (
@@ -513,7 +488,7 @@ export function RequestsPage() {
 }
 
 function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
-  // One read answers the row and its events; the list's own row draws the summary while it runs.
+  // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
   // for this id is read.
@@ -523,27 +498,38 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
-  const trail = r === null || fetched === null ? [] : requestTrail(fetched.events, r);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // The last attempt is the one whose answer the request ended on.
+  const serving = r && r.attempts.length > 0 ? r.attempts[r.attempts.length - 1] : null;
+  const answer = serving ? answerChips(serving.response) : [];
 
   return (
     <aside className="drawer" aria-label="Request details">
       <header className="drawer__head">
         <div>
-          <h2 className="drawer__title mono">{r?.id ?? requestId}</h2>
+          <h2 className="drawer__title mono" title={r?.id ?? requestId}>
+            {shortId(r?.id ?? requestId, HEAD_ID_CHARS)}
+          </h2>
           {r && (
             <p className="muted" title={fmtAbsolute(r.at)}>
-              {fmtAbsolute(r.at)} ({fmtRelative(r.at, now)})
+              {fmtTime(r.at)}, {fmtRelative(r.at, now)}
             </p>
           )}
         </div>
-        <button type="button" className="dialog__close" onClick={onClose} aria-label="Close details">
-          <IconX size={16} />
-        </button>
+        <div className="drawer__actions">
+          {r && (
+            <Link className="btn btn--secondary btn--sm" to={routingLogHref(r, now)}>
+              Routing log
+            </Link>
+          )}
+          <button type="button" className="dialog__close" onClick={onClose} aria-label="Close details">
+            <IconX size={16} />
+          </button>
+        </div>
       </header>
       {!r ? (
         detail.loading ? (
@@ -554,173 +540,26 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
       ) : (
         <div className="drawer__body">
           <section>
-            <h3 className="section-title">Summary</h3>
+            <h3 className="section-title">Outcome</h3>
             <KeyValue
               rows={[
-                { label: 'Session', value: r.sessionId ?? '-', mono: true },
-                { label: 'Agent', value: r.agentId ?? '-', mono: true },
-                {
-                  label: 'Client',
-                  // The class badge sits in the row, so only the client text takes the mono face; the badge keeps
-                  // the face every other badge in the drawer has.
-                  value: (
-                    <>
-                      <span className="mono">{r.client ?? '-'}</span>
-                      {r.requestClass !== null && (
-                        <>
-                          {' '}
-                          <Badge title="The request class the client sent">{r.requestClass}</Badge>
-                        </>
-                      )}
-                    </>
-                  ),
-                },
-                { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
-                { label: 'Key', value: r.keyId ?? '-', mono: true },
-                { label: 'Pool', value: r.poolId ?? '-', mono: true },
+                { label: 'Status', value: <StatusBadge status={r.status} /> },
+                { label: 'Outcome', value: REQUEST_OUTCOME_LABEL[r.outcome] },
                 { label: 'Account', value: r.accountId === null ? '-' : <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link> },
                 { label: 'Model', value: r.model, mono: true },
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
-                { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
-                { label: 'Status', value: <StatusBadge status={r.status} /> },
-                { label: 'Outcome', value: REQUEST_OUTCOME_LABEL[r.outcome] },
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
                 { label: 'Duration', value: fmtMs(r.durationMs) },
                 { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },
                 ...(r.clientDrift ? [{ label: 'Client drift', value: r.clientDrift, mono: true }] : []),
+                ...(serving
+                  ? [
+                      { label: 'Answer', value: answer.length ? <Chips chips={answer} /> : <span className="muted">none</span> },
+                      { label: 'Cache', value: <CacheValue attempt={serving} usage={r.usage} /> },
+                    ]
+                  : []),
               ]}
             />
-          </section>
-
-          <section>
-            <h3 className="section-title">Request shape</h3>
-            <KeyValue
-              rows={[
-                { label: 'Effort', value: r.shape.effort ?? <span className="muted">not sent</span>, mono: Boolean(r.shape.effort) },
-                { label: 'Thinking', value: r.shape.thinkingType ? `${r.shape.thinkingType}${r.shape.thinkingBudget !== null ? `, budget ${fmtInt(r.shape.thinkingBudget)}` : ''}` : <span className="muted">not sent</span> },
-                { label: 'Max tokens', value: r.shape.maxTokens !== null ? fmtInt(r.shape.maxTokens) : <span className="muted">not sent</span> },
-                { label: 'Tools, system blocks, messages', value: `${fmtInt(r.shape.toolCount)}, ${fmtInt(r.shape.systemBlocks)}, ${fmtInt(r.shape.messageCount)}` },
-                { label: 'Context edits', value: r.shape.contextEdits.length ? r.shape.contextEdits.join(', ') : <span className="muted">none</span>, mono: r.shape.contextEdits.length > 0 },
-                { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
-                { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
-                { label: 'Auto mode', value: autoModeLabel(r.autoMode), mono: false },
-              ]}
-            />
-          </section>
-
-          <section>
-            <h3 className="section-title">Client hints</h3>
-            <KeyValue
-              rows={[
-                { label: 'Agent type', value: r.agentType ?? <span className="muted">not sent</span>, mono: Boolean(r.agentType) },
-                { label: 'Compaction', value: r.compaction ?? <span className="muted">not sent</span>, mono: Boolean(r.compaction) },
-                { label: 'Context compacted', value: r.contextCompacted ?? <span className="muted">not sent</span>, mono: Boolean(r.contextCompacted) },
-                { label: 'Turn origin', value: r.turnOrigin ?? <span className="muted">not sent</span>, mono: Boolean(r.turnOrigin) },
-                { label: 'Tool time before this turn', value: r.prevToolMs !== null ? fmtMs(r.prevToolMs) : <span className="muted">not sent</span> },
-              ]}
-            />
-          </section>
-
-          <section>
-            <h3 className="section-title">Attempts</h3>
-            <ol className="attempts">
-              {r.attempts.map((a) => (
-                <li key={a.index} className={`attempt attempt--${a.outcome}`}>
-                  <div className="attempt__head">
-                    <span className="attempt__index">{a.index + 1}</span>
-                    <Link to={`/accounts/${a.accountId}`}>{a.accountId}</Link>
-                    <StatusBadge status={a.upstreamStatus} />
-                    <span className="secondary">{OUTCOME_LABEL[a.outcome]}</span>
-                    <span className="muted num" style={{ marginLeft: 'auto' }}>
-                      {fmtMs(a.durationMs)}
-                    </span>
-                  </div>
-                  {a.upstreamRequestId !== null && <div className="attempt__id mono secondary">request {a.upstreamRequestId}</div>}
-                  {a.upstreamMessageId !== null && <div className="attempt__id mono secondary">message {a.upstreamMessageId}</div>}
-                  <ul className="attempt__windows">
-                    {a.windows.length > 0 &&
-                      ATTEMPT_WINDOWS.map(({ id, label }) => {
-                        const w = a.windows.find((x) => x.id === id) ?? null;
-                        return (
-                          <li key={id}>
-                            <span className="muted">{label}</span>
-                            <span className={`num ${w && w.utilization !== null ? '' : 'muted'}`}>{w ? (w.utilization === null ? 'utilization not reported' : `${fmtPct(w.utilization)} used`) : 'n/a'}</span>
-                            <span className="muted" title={w ? fmtAbsolute(w.resetsAt) : undefined}>
-                              {w ? `resets ${fmtRelative(w.resetsAt, now)}` : 'not reported'}
-                            </span>
-                          </li>
-                        );
-                      })}
-                    <CacheRow attempt={a} usage={r.usage} />
-                  </ul>
-                  {a.selection && <SelectionTrace trace={a.selection} usage={r.usage} />}
-                  {(a.response.stopReason || a.response.servedModel || (a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0)) && (
-                    <div className="attempt__response secondary">
-                      {a.response.stopReason && <span>stopped: {a.response.stopReason}{a.response.refusalCategory ? ` (${a.response.refusalCategory}${a.response.refusalRecommendedModel ? `, try ${a.response.refusalRecommendedModel}` : ''})` : ''}</span>}
-                      {a.response.servedModel && <span className="mono">served by {a.response.servedModel}</span>}
-                      {a.response.speed && <span>{a.response.speed}</span>}
-                      {a.response.inferenceGeo && <span>{a.response.inferenceGeo}</span>}
-                      {a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0 && <span>{fmtInt(a.response.clearedInputTokens)} tokens cleared by context edits</span>}
-                    </div>
-                  )}
-                  {a.cooldownSet && (
-                    <div className="attempt__cooldown">
-                      <Badge tone="warning">cooldown set</Badge>
-                      <span>
-                        {a.cooldownSet.reason}, until <span title={fmtAbsolute(a.cooldownSet.until)}>{fmtRelative(a.cooldownSet.until, now)}</span>
-                      </span>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ol>
-            {/* One builder sums every hold into the row and into the trace of the attempt placed after them, so the two
-                agree only when an attempt followed every wait; a hold that ended with nothing dispatched, or one after
-                an attempt that failed over, is named by no trace. */}
-            {r.held && !r.attempts.some((a) => a.selection?.cohortHold?.heldMs === r.held?.heldMs) && (
-              <p className="attempt__hold">
-                held {fmtMs(r.held.heldMs)} on {heldOn(r.held)}
-              </p>
-            )}
-            {trail.map((e) => {
-              if (e.kind === 'pin_expired') {
-                return (
-                  <p className="attempt__migration" key={`${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
-                    Session released from {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
-                  </p>
-                );
-              }
-              const account = e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-';
-              if (e.kind === 'model_rejected') {
-                return (
-                  <p className="attempt__migration" key={`${e.kind}-${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
-                    Model rejected by {account}: {String(e.detail?.wire_model ?? r.model)}
-                  </p>
-                );
-              }
-              if (e.kind === 'model_permitted') {
-                const rejectedBy = Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [];
-                return (
-                  <p className="attempt__migration" key={`${e.kind}-${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
-                    Model permitted by {account} after{' '}
-                    {rejectedBy.map((id, i) => (
-                      <span key={id}>
-                        {i > 0 && ', '}
-                        <Link to={`/accounts/${id}`}>{id}</Link>
-                      </span>
-                    ))}
-                  </p>
-                );
-              }
-              const reason = String(e.detail?.reason ?? '');
-              const from = String(e.detail?.from_account ?? '-');
-              return (
-                <p className="attempt__migration" key={`${e.at}-${from}`} title={fmtAbsolute(e.at)}>
-                  Session moved from <Link to={`/accounts/${from}`}>{from}</Link> to{' '}
-                  {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {moveLabel(reason)}
-                </p>
-              );
-            })}
           </section>
 
           <section>
@@ -770,6 +609,69 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
           </section>
 
           <section>
+            <h3 className="section-title">Request</h3>
+            <KeyValue
+              rows={[
+                { label: 'Session', value: r.sessionId ?? '-', mono: true },
+                { label: 'Agent', value: r.agentId ?? '-', mono: true },
+                {
+                  label: 'Client',
+                  // The class badge sits in the row, so only the client text takes the mono face; the badge keeps
+                  // the face every other badge in the drawer has.
+                  value: (
+                    <>
+                      <span className="mono">{r.client ?? '-'}</span>
+                      {r.requestClass !== null && (
+                        <>
+                          {' '}
+                          <Badge title="The request class the client sent">{r.requestClass}</Badge>
+                        </>
+                      )}
+                    </>
+                  ),
+                },
+                { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
+                { label: 'Key', value: r.keyId ?? '-', mono: true },
+                { label: 'Pool', value: r.poolId ?? '-', mono: true },
+                { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
+                ...r.attempts.flatMap((a) => {
+                  const ids = upstreamIdChips(a);
+                  return ids.length ? [{ label: `Attempt ${a.index + 1}`, value: <Chips chips={ids} /> }] : [];
+                }),
+              ]}
+            />
+          </section>
+
+          <section>
+            <h3 className="section-title">Request shape</h3>
+            <KeyValue
+              rows={[
+                { label: 'Effort', value: r.shape.effort ?? <span className="muted">not sent</span>, mono: Boolean(r.shape.effort) },
+                { label: 'Thinking', value: r.shape.thinkingType ? `${r.shape.thinkingType}${r.shape.thinkingBudget !== null ? `, budget ${fmtInt(r.shape.thinkingBudget)}` : ''}` : <span className="muted">not sent</span> },
+                { label: 'Max tokens', value: r.shape.maxTokens !== null ? fmtInt(r.shape.maxTokens) : <span className="muted">not sent</span> },
+                { label: 'Tools, system blocks, messages', value: `${fmtInt(r.shape.toolCount)}, ${fmtInt(r.shape.systemBlocks)}, ${fmtInt(r.shape.messageCount)}` },
+                { label: 'Context edits', value: r.shape.contextEdits.length ? r.shape.contextEdits.join(', ') : <span className="muted">none</span>, mono: r.shape.contextEdits.length > 0 },
+                { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
+                { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
+                { label: 'Auto mode', value: autoModeLabel(r.autoMode), mono: false },
+              ]}
+            />
+          </section>
+
+          <section>
+            <h3 className="section-title">Client hints</h3>
+            <KeyValue
+              rows={[
+                { label: 'Agent type', value: r.agentType ?? <span className="muted">not sent</span>, mono: Boolean(r.agentType) },
+                { label: 'Compaction', value: r.compaction ?? <span className="muted">not sent</span>, mono: Boolean(r.compaction) },
+                { label: 'Context compacted', value: r.contextCompacted ?? <span className="muted">not sent</span>, mono: Boolean(r.contextCompacted) },
+                { label: 'Turn origin', value: r.turnOrigin ?? <span className="muted">not sent</span>, mono: Boolean(r.turnOrigin) },
+                { label: 'Tool time before this turn', value: r.prevToolMs !== null ? fmtMs(r.prevToolMs) : <span className="muted">not sent</span> },
+              ]}
+            />
+          </section>
+
+          <section>
             <h3 className="section-title">Captured bodies</h3>
             {!r.capturedBodies ? (
               <p className="muted">Not captured for this key. Enable body capture on the key to record the exchange.</p>
@@ -794,24 +696,49 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
 }
 
 /**
- * The cache diagnostics reading for one attempt, on the same three-slot grid as
- * the window rows above it. The usage is the request's: diagnostics and the
- * token counts both come off the response the final attempt drew.
+ * The answer's facts as the serving attempt's response named them, each its own chip, so no value has to be read out
+ * of a joined line.
  */
-function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
+function answerChips(response: AttemptResponse): Chip[] {
+  const chips: Chip[] = [];
+  if (response.stopReason) chips.push({ value: `stopped: ${response.stopReason}` });
+  if (response.speed) chips.push({ title: "The answer's speed", value: response.speed });
+  if (response.inferenceGeo) chips.push({ value: response.inferenceGeo });
+  if (response.servedModel) chips.push({ mono: true, value: `served by ${response.servedModel}` });
+  if (response.clearedInputTokens !== null && response.clearedInputTokens > 0) chips.push({ value: `${fmtInt(response.clearedInputTokens)} tokens cleared by context edits` });
+  if (response.refusalCategory) chips.push({ value: `category: ${response.refusalCategory}` });
+  if (response.refusalRecommendedModel) chips.push({ mono: true, value: `try ${response.refusalRecommendedModel}` });
+  return chips;
+}
+
+/**
+ * The upstream's own ids for one attempt: its request id, and the message id of an answer that carried one. The ids'
+ * own `req_` and `msg_` prefixes name them, so a chip carries no label that would push it past the 400 px drawer.
+ */
+const upstreamIdChips = (a: Attempt): Chip[] => [
+  ...(a.upstreamRequestId === null ? [] : [{ mono: true, title: "The upstream's request id", value: a.upstreamRequestId }]),
+  ...(a.upstreamMessageId === null ? [] : [{ mono: true, title: "The upstream's message id", value: a.upstreamMessageId }]),
+];
+
+/**
+ * The serving attempt's cache diagnostics. The usage is the request's: diagnostics and the token counts both come off
+ * the response the final attempt drew.
+ */
+function CacheValue({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   const reason = attempt.cacheMissReason;
-  const detail = () => {
-    if (reason === null) return 'no response to read';
-    if (reason === 'none') return `${fmtCompact(usage.cacheRead)} read, ${fmtCompact(usage.cacheWrite5m + usage.cacheWrite1h)} written`;
-    if (isDivergence(reason)) return `diverged at ${reason.slice(0, -'_changed'.length)}`;
-    return '';
-  };
+  const detail =
+    reason === null
+      ? 'no response to read'
+      : reason === 'none'
+        ? `${fmtCompact(usage.cacheRead)} read, ${fmtCompact(usage.cacheWrite5m + usage.cacheWrite1h)} written`
+        : isDivergence(reason)
+          ? `diverged at ${reason.slice(0, -'_changed'.length)}`
+          : '';
   return (
-    <li>
-      <span className="muted">Cache</span>
-      <span className={reason === null || reason === 'not_requested' ? 'muted' : ''}>{reason === null ? 'n/a' : missLabel(reason)}</span>
-      <span className="muted">{detail()}</span>
-    </li>
+    <>
+      <span className={reason === null || reason === 'not_requested' ? 'muted' : undefined}>{reason === null ? 'n/a' : missLabel(reason)}</span>
+      {detail && <span className="muted">, {detail}</span>}
+    </>
   );
 }
 

@@ -1233,7 +1233,11 @@ async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_ex
     let cookie = login(&parts.app, "admin-secret").await;
     parts
         .store
-        .set_state("business", phoebis_store::AccountState::Ready)
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Ready,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"allow","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
     let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();

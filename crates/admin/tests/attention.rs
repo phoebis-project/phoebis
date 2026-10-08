@@ -6,7 +6,7 @@ use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
 };
-use phoebis_store::{AccountState, AttemptOutcome};
+use phoebis_store::{AccountState, AttemptOutcome, StateCause};
 use serde_json::json as j;
 
 fn observed(id: &str, key: &str, pool: &str) -> Event {
@@ -102,11 +102,19 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     let run_started = run.last().unwrap().started_at;
     parts
         .store
-        .set_state("business", AccountState::ReauthRequired)
+        .set_state(
+            "business",
+            AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     parts
         .store
-        .set_state("direct", AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     // Both exhaustions are newer than the refresh run, which still ranks after them; the spare pool's is older.
     let later = run_started + 60_000;
@@ -217,7 +225,7 @@ async fn an_api_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
     parts
         .store
-        .set_state("direct", AccountState::ReauthRequired)
+        .set_state("direct", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
     assert_eq!(

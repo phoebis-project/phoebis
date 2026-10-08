@@ -47,7 +47,8 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle, and the sidebar carries eleven views.
+toggle, and the sidebar carries eleven views. A Diagnostics heading at its foot adds the Routing log while the expert
+view is on or the log is open.
 
 ![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dl]
 ![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dd]
@@ -69,7 +70,8 @@ The sidebar shows the views in this order:
 | Requests | Individual relayed requests (see [Statistics](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
+| Settings | Client setup and the router's version and paths (see [Installation](installation.md)). |
+| Routing log | Each routing decision and the state changes behind it (see [Statistics](statistics.md#routing-log)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
 issues a key. The console and this site call the account kind whose credential is an Anthropic API key "API key";

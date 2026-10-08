@@ -25,6 +25,7 @@ const DAY_S: i64 = 86_400;
 pub struct Purged {
     pub attempts: usize,
     pub bodies: usize,
+    pub decisions: usize,
     pub events: usize,
     pub extra_usage_samples: usize,
     pub quota_samples: usize,
@@ -36,6 +37,7 @@ impl Purged {
     fn add(&mut self, slice: &Purged) {
         self.attempts += slice.attempts;
         self.bodies += slice.bodies;
+        self.decisions += slice.decisions;
         self.events += slice.events;
         self.extra_usage_samples += slice.extra_usage_samples;
         self.quota_samples += slice.quota_samples;
@@ -51,6 +53,7 @@ enum Family {
     Requests,
     KeptWarmMarks,
     Events,
+    Decisions,
     QuotaSamples,
     ExtraUsageSamples,
     Rollups,
@@ -58,11 +61,12 @@ enum Family {
 }
 
 impl Family {
-    const ALL: [Family; 8] = [
+    const ALL: [Family; 9] = [
         Family::Bodies,
         Family::Requests,
         Family::KeptWarmMarks,
         Family::Events,
+        Family::Decisions,
         Family::QuotaSamples,
         Family::ExtraUsageSamples,
         Family::Rollups,
@@ -76,6 +80,7 @@ impl Family {
             Family::Bodies => slice.bodies,
             Family::Requests | Family::KeptWarmMarks => slice.requests,
             Family::Events => slice.events,
+            Family::Decisions => slice.decisions,
             Family::QuotaSamples => slice.quota_samples,
             Family::ExtraUsageSamples => slice.extra_usage_samples,
             Family::Rollups | Family::AccountRollups => slice.rollups,
@@ -158,6 +163,10 @@ const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT i
 
 const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
+/// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
+/// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
+const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
+
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid.
 fn purge_slice(
     db: &LedgerDb,
@@ -207,6 +216,10 @@ fn purge_slice(
                     "DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)",
                     cutoffs.request,
                 )?,
+                ..Purged::default()
+            },
+            Family::Decisions => Purged {
+                decisions: cut(PURGE_DECISIONS, cutoffs.request)?,
                 ..Purged::default()
             },
             Family::QuotaSamples => Purged {
@@ -306,6 +319,7 @@ mod tests {
             (PURGE_BODIES, "INDEX bodies_expires"),
             (PURGE_ATTEMPTS, "INDEX requests_received"),
             (PURGE_REQUESTS, "INDEX requests_received"),
+            (PURGE_DECISIONS, "INDEX decisions_at"),
         ] {
             let lines = plan(&db, sql);
             assert!(

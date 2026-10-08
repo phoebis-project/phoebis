@@ -1,5 +1,6 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { fmtAbsolute, fmtRelative } from './format';
+import { instant as clockInstant, logHref, sinceCondition } from './routingLog';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',
@@ -29,11 +30,34 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
 /** How often a page with a reader open asks the route again, so an exhaustion or a cleared failure shows unprompted. */
 export const ATTENTION_REFRESH_MS = 30_000;
 
-/** The account's entry on Accounts, the pool's card on Pools or the key's row on Keys; null when the item names none. */
-export function attentionHref({ link }: Pick<AttentionItem, 'link'>): string | null {
+type LinkedItem = Pick<AttentionItem, 'kind' | 'link' | 'since'>;
+
+/**
+ * The pool whose exhausted decisions the item opens in the routing log. The decoder reads a kind this build does not
+ * know as `pool_exhausted`, so the link must name a pool as well, or an account's id would be read as one.
+ */
+const exhaustedPool = ({ kind, link }: LinkedItem): string | null => (kind === 'pool_exhausted' && link?.page === 'pools' ? link.id : null);
+
+/**
+ * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start. Every
+ * other kind opens the account, pool or key where it is fixed. Null when the item names none.
+ */
+export function attentionHref(item: LinkedItem, now: number): string | null {
+  const { link } = item;
   if (link === null) return null;
+  const pool = exhaustedPool(item);
+  if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...sinceCondition(Date.parse(item.since), now) });
   const id = encodeURIComponent(link.id);
   return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
+}
+
+/**
+ * The last line of a title whose item opens the routing log, naming what the log opens on, the start with its date
+ * once it is a day away, or null for any other item.
+ */
+export function attentionLogLine(item: LinkedItem, now: number): string | null {
+  const pool = exhaustedPool(item);
+  return pool === null ? null : `Opens the Routing log: pool ${pool}, exhausted, since ${clockInstant(Date.parse(item.since), now)}`;
 }
 
 /** The id an address's hash names, the way `attentionHref` wrote it; null for no hash or one that does not decode. */
@@ -100,7 +124,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 /**
  * The detail's members as `name: value` lines in name order, an instant the route sends in milliseconds read as one,
  * then the age: the title of a badge on the dashboard's line. A member the route left null says nothing and is left
- * out. An item that carries no pool leads with its sentence, since no pool card's row draws it.
+ * out. An item that carries no pool leads with its sentence, since no pool card's row draws it. An item that opens the
+ * routing log ends with the line that says so.
  */
 export function attentionTitle(item: AttentionItem, now: number): string {
   const members = Object.entries(item.detail)
@@ -111,7 +136,8 @@ export function attentionTitle(item: AttentionItem, now: number): string {
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
     });
   const sentence = item.pools.length === 0 ? [attentionDetail(item, now)] : [];
-  return [...sentence, ...members, `started ${fmtRelative(item.since, now)}`].join('\n');
+  const log = attentionLogLine(item, now);
+  return [...sentence, ...members, `started ${fmtRelative(item.since, now)}`, ...(log === null ? [] : [log])].join('\n');
 }
 
 export interface AttentionRead {

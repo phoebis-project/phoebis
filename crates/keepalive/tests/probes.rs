@@ -1175,7 +1175,11 @@ async fn an_exhaustion_503_pauses_under_its_own_reason() {
     .await;
     r.observe("main").await;
     r.h.store
-        .set_state("a", AccountState::Disconnected)
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
@@ -1437,7 +1441,11 @@ async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pau
     // holds it for the full probe deadline.
     r.up.push_credential_rule(B, "/v1/messages", held_stream());
     r.h.store
-        .set_state("a", AccountState::Disconnected)
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
 
@@ -1580,18 +1588,12 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let _guard = captured.install();
     let dir = tempfile::tempdir().unwrap();
     let registry = dir.path().join("router.sqlite");
-    // The rig's model priced on the 5-hour window, so a readable tier would settle the probe in the share.
+    // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
     let mut tables = phoebis_ledger::PlanTables::shipped();
-    tables.cost.windows.get_mut("five_hour").unwrap().insert(
-        "claude-sonnet-4-5".to_string(),
-        phoebis_ledger::ModelCells {
-            cache_read: Some(0.001),
-            cache_write_1h: Some(0.02),
-            cache_write_5m: Some(0.01),
-            input: Some(0.01),
-            output: Some(0.05),
-        },
-    );
+    tables
+        .costs
+        .model_weight
+        .insert("claude-sonnet-4-5".to_string(), Some(1.0));
     let mut r = rig(RigSpec {
         registry: Some(registry.clone()),
         tables,

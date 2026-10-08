@@ -181,6 +181,121 @@ async fn patching_deleting_and_disconnecting_accounts() {
 }
 
 #[tokio::test]
+async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
+    use phoebis_store::{AccountState, StateCause};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let read = |id: &str| {
+        let row = store.account(id).unwrap().unwrap();
+        (row.state, row.state_cause)
+    };
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"console","kind":"api_key","label":"Console","secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(read("console"), (AccountState::Ready, StateCause::Operator));
+
+    // Each route below starts from a word no admin route writes, so the word it leaves is its own.
+    store
+        .set_state("direct", AccountState::Unpaired, StateCause::Paired)
+        .unwrap();
+    let rekeyed = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"secret":"sk-ant-api03-AGAIN"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(rekeyed.status(), 200);
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    for route in ["pause", "resume"] {
+        assert_eq!(
+            post(
+                &app,
+                &format!("/admin/accounts/direct/{route}"),
+                "",
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            204
+        );
+        assert_eq!(
+            read("direct"),
+            (AccountState::Ready, StateCause::Paired),
+            "{route} moves the flag and leaves the word"
+        );
+    }
+
+    store
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts/direct/clear-funding",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(
+        delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("direct"),
+        (AccountState::Unpaired, StateCause::Operator),
+        "an api_key slot rests unpaired after its disconnect, under the same word"
+    );
+
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    assert_eq!(
+        post(
+            &app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(read("business"), (AccountState::Ready, StateCause::Paired));
+    assert_eq!(
+        delete(&app, "/admin/accounts/business/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("business"),
+        (AccountState::Disconnected, StateCause::Operator)
+    );
+}
+
+#[tokio::test]
 async fn an_account_write_ignores_a_member_the_route_does_not_name() {
     let (app, _up, _store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -337,7 +452,9 @@ async fn a_disconnect_between_the_exchange_and_the_confirm_answers_a_conflict() 
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let id = common::exchanged_session_for(&app, &cookie, "business").await;
-    store.bump_lifecycle("business").unwrap();
+    store
+        .bump_lifecycle("business", phoebis_store::StateCause::Operator)
+        .unwrap();
     let confirmed = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/confirm"),
@@ -542,7 +659,11 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
         "not in funding_required"
     );
     store
-        .set_state("direct", phoebis_store::AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            phoebis_store::AccountState::FundingRequired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     assert_eq!(
         post(
@@ -564,7 +685,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
 #[tokio::test]
 async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_any_reading() {
     use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
-    use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR};
+    use phoebis_routing::{UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let row = |id: &'static str| {
@@ -580,6 +701,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
         utilization,
         reset: Some(common::NOW + reset),
         observed_at: common::NOW,
+        source: WindowSource::Head,
     };
     let sample = |windows: &[(&str, WindowReading)]| {
         windows.iter().fold(
@@ -598,6 +720,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
                 (FAST_OUTPUT, reading(0.08, 20_000)),
             ]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     // A plan window alone is no fast reading, so this account's row keeps its null.
@@ -606,6 +729,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
             account_id: "business".into(),
             sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
@@ -689,7 +813,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     let now = common::NOW;
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_5x".into()),
@@ -893,7 +1017,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
         .store
         .set_profile(
             "second",
-            r#"{"account":{"uuid":"s","email_address":"second@example.invalid"}}"#,
+            r#"{"account":{"uuid":"s","email":"second@example.invalid"}}"#,
             &SubscriptionRow::default(),
         )
         .unwrap();
@@ -936,7 +1060,7 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
         .store
         .set_profile(
             "business",
-            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
                 plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),

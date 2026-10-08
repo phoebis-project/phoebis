@@ -67,6 +67,25 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
 
+test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecision names its path', async () => {
+  const record = JSON.parse(readFileSync(new URL('./fixtures/decision.json', import.meta.url), 'utf8')).body;
+  const calls = stub((url) => (url.startsWith('/admin/routing-log') ? answer(200, { next_cursor: null, rows: [] }) : url.includes('/gone/') ? answer(404, { error: 'no decision 1 for request gone' }) : answer(200, record)));
+  const api = new HttpApi();
+  const page = await api.listRoutingLog({ accountIds: ['primary'], cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keyIds: ['a', 'b'], kinds: ['placed', 'probe'], limit: 25, models: ['claude-sonnet-5'], poolIds: ['all'], request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z' });
+  assert.deepEqual(page, { counts: null, nextCursor: null, rows: [] });
+  const url = new URL(calls[0].url, 'http://x');
+  assert.equal(url.pathname, '/admin/routing-log');
+  assert.deepEqual(Object.fromEntries(url.searchParams), {
+    accounts: 'primary', cursor: '1000:1:r/1', from: '2026-09-16T13:30:00.000Z', keys: 'a,b', kinds: 'placed,probe', limit: '25', models: 'claude-sonnet-5', pools: 'all', request: 'req_1', session: 's1', to: '2026-09-16T14:30:00.000Z',
+  }, 'the route reads RFC 3339 instants, so both times travel as the page wrote them');
+  await api.listRoutingLog();
+  assert.equal(calls[1].url, '/admin/routing-log', 'no filter sends no query');
+  const decoded = await api.getDecision('req/1', 2);
+  assert.equal(calls[2].url, '/admin/requests/req%2F1/decisions/2');
+  assert.deepEqual([decoded.version, decoded.requestId], [1, 'r-static']);
+  assert.equal(await api.getDecision('gone', 1), null, 'a decision the ledger no longer holds answers null');
+});
+
 test('createAccount sends the id, kind, label, and secret in snake_case', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, body));
@@ -184,13 +203,13 @@ test('the burn and rewrite reads send the range and the grouping and answer what
   const [burnUrl, rewritesUrl] = calls.map((c) => new URL(c.url, 'http://x'));
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
-  // A subscription point that burned, whose 5-hour share a misnamed field would read as null.
-  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0);
+  // A subscription point that burned, whose window shares a misnamed field would read as null.
+  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0 && p.seven_day_share > 0);
   assert.ok(planned >= 0, 'the fixture reports a subscription point that burned');
   assert.deepEqual(
     [burn.bucketSeconds, burn.points.length, burn.points[planned].fiveHourShare, burn.points[planned].sevenDayShare],
-    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].five_hour_share, null],
-    'every 7-day cell is unmeasured',
+    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].five_hour_share, bodies['/admin/analytics/burn'].points[planned].seven_day_share],
+    'both window shares read as the route answers them',
   );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
 });

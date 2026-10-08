@@ -17,7 +17,9 @@ use phoebis_attention::{
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceTable, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
-use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret, StorageKey, Store};
+use phoebis_store::{
+    AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
+};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -479,10 +481,18 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     rig.store
-        .set_state("business", AccountState::ReauthRequired)
+        .set_state(
+            "business",
+            AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     rig.store
-        .set_state("direct", AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     read(&attention, NOW + 1_000);
     let conditions = read(&attention, NOW + 5_000);
@@ -507,9 +517,11 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
         })
     );
     rig.store
-        .set_state("business", AccountState::Ready)
+        .set_state("business", AccountState::Ready, StateCause::Operator)
         .unwrap();
-    rig.store.set_state("direct", AccountState::Ready).unwrap();
+    rig.store
+        .set_state("direct", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     let conditions = read(&attention, NOW + 6_000);
     assert!(
         !find(&conditions, Kind::ReauthRequired, "business")
@@ -522,7 +534,11 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
             .holds
     );
     rig.store
-        .set_state("business", AccountState::ReauthRequired)
+        .set_state(
+            "business",
+            AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     let conditions = read(&attention, NOW + 9_000);
     assert_eq!(
@@ -534,7 +550,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
     );
     // The relay marks an API key the upstream refuses as it marks an OAuth login whose refresh is gone.
     rig.store
-        .set_state("direct", AccountState::ReauthRequired)
+        .set_state("direct", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     let conditions = read(&attention, NOW + 12_000);
     let refused = find(&conditions, Kind::ReauthRequired, "direct").unwrap();

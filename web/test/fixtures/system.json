@@ -8,10 +8,12 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 29,
-      "written": 14,
+      "schema_version": 30,
+      "written": 18,
       "dropped": 0,
       "write_failures": 0,
+      "cache_map_orphans": 1,
+      "mirror_lagged": 0,
       "gaps": 0,
       "last_gap_at": 0,
       "channel_depth": 4096,
@@ -39,6 +41,7 @@
         "sample": 0,
         "usage": 0
       },
+      "dropped_refusals": 0,
       "writer": {
         "depth": 0,
         "deferred": 0,
@@ -68,6 +71,18 @@
       "in_flight": 0
     },
     "pricing_unknown_models": 0,
+    "pricing": {
+      "api_prices": {
+        "path": null,
+        "source": "shipped",
+        "effective": "2026-10-01"
+      },
+      "subscription_costs": {
+        "path": null,
+        "source": "shipped",
+        "effective": "2026-10-05"
+      }
+    },
     "gaps": [],
     "keepalive": {
       "agents": 1,

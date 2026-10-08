@@ -1,16 +1,20 @@
-import { useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { IconCheck, IconChevron, IconX } from './icons';
 
 export interface Option {
+  /** The heading the option is listed under. The options of one group are adjacent. */
+  group?: string;
   label: string;
   value: string;
 }
 
 /**
  * `disabled` holds the trigger shut, for a filter whose options did not load; `description` says why, in the trigger's
- * title for a pointer and in a hidden node the trigger points at for a screen reader.
+ * title for a pointer and in a hidden node the trigger points at for a screen reader. A filter whose default checks
+ * some options passes `active` false at that default, so the trigger reads unset and offers no Clear, and `summary` in
+ * place of the label and its count.
  */
-export function MultiSelect({ label, options, value, onChange, searchable = false, mono = false, disabled = false, description }: { description?: string; disabled?: boolean; label: string; mono?: boolean; onChange: (v: string[]) => void; options: Option[]; searchable?: boolean; value: string[] }) {
+export function MultiSelect({ label, options, value, onChange, searchable = false, mono = false, disabled = false, description, active = value.length > 0, summary }: { active?: boolean; description?: string; disabled?: boolean; label: string; mono?: boolean; onChange: (v: string[]) => void; options: Option[]; searchable?: boolean; summary?: string; value: string[] }) {
   const [open, setOpen] = useState(false);
   const descriptionId = useId();
   const [query, setQuery] = useState('');
@@ -31,7 +35,7 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
   }, [open]);
   const visible = useMemo(() => options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase())), [options, query]);
   const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
-  const summary = value.length === 0 ? label : `${label} (${value.length})`;
+  const shown = summary ?? (value.length === 0 ? label : `${label} (${value.length})`);
   // The keys act only while the list is open, so an Escape on a closed filter still reaches the page, whose drawer
   // closes on it. Home and End stay with the search field, where they move the caret.
   const onKeys = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -69,7 +73,7 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
     if (e.relatedTarget && !ref.current?.contains(e.relatedTarget)) setOpen(false);
   };
   return (
-    <div className={`mselect ${value.length ? 'has-value' : ''}`} ref={ref} onBlur={closeOnLeave} onKeyDown={onKeys}>
+    <div className={`mselect ${active ? 'has-value' : ''}`} ref={ref} onBlur={closeOnLeave} onKeyDown={onKeys}>
       <button
         type="button"
         ref={triggerRef}
@@ -81,10 +85,10 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
         aria-describedby={description ? descriptionId : undefined}
         onClick={() => setOpen((v) => !v)}
       >
-        <span>{summary}</span>
-        {value.length === 0 && <IconChevron size={14} />}
+        <span>{shown}</span>
+        {!active && <IconChevron size={14} />}
       </button>
-      {value.length > 0 && (
+      {active && (
         <button
           type="button"
           className="mselect__clear"
@@ -102,13 +106,20 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
         <div className="mselect__list" role="listbox" aria-multiselectable ref={listRef}>
           {searchable && <input className="input mselect__search" placeholder={`Search ${label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />}
           {visible.length === 0 && <div className="mselect__empty">No matches</div>}
-          {visible.map((o) => {
+          {visible.map((o, i) => {
             const on = value.includes(o.value);
             return (
-              <button key={o.value} type="button" role="option" aria-selected={on} className={`mselect__option ${on ? 'is-on' : ''} ${mono ? 'mono' : ''}`} onClick={() => toggle(o.value)}>
-                <span className="mselect__check">{on && <IconCheck size={14} />}</span>
-                {o.label}
-              </button>
+              <Fragment key={o.value}>
+                {o.group !== undefined && o.group !== visible[i - 1]?.group && (
+                  <div className="mselect__group" role="presentation">
+                    {o.group}
+                  </div>
+                )}
+                <button type="button" role="option" aria-selected={on} className={`mselect__option ${on ? 'is-on' : ''} ${mono ? 'mono' : ''}`} onClick={() => toggle(o.value)}>
+                  <span className="mselect__check">{on && <IconCheck size={14} />}</span>
+                  {o.label}
+                </button>
+              </Fragment>
             );
           })}
         </div>

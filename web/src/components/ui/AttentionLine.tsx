@@ -64,7 +64,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
       {items.map((item) => {
         const text = `${ATTENTION_LABEL[item.kind]}: ${item.subject.label}`;
         const title = attentionTitle(item, now);
-        const href = attentionHref(item);
+        const href = attentionHref(item, now);
         const key = `${item.kind}:${item.subject.type}:${item.subject.id}`;
         return href ? (
           <BadgeLink key={key} to={href} tone={ATTENTION_TONE[item.kind]} title={title}>

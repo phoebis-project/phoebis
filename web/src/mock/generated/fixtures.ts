@@ -2215,8 +2215,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0.0072,
-          "five_hour_share": 0.000035185,
-          "seven_day_share": null,
+          "five_hour_share": 0.00003525,
+          "seven_day_share": 0.000005875,
           "cached_tokens": 1500,
           "tokens": 5400,
           "uncached_tokens": 3000
@@ -2226,8 +2226,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0,
-          "five_hour_share": 0.000035185,
-          "seven_day_share": null,
+          "five_hour_share": 0.00003525,
+          "seven_day_share": 0.000005875,
           "cached_tokens": 1000,
           "tokens": 3600,
           "uncached_tokens": 2000
@@ -4455,7 +4455,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -4569,7 +4569,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -4677,7 +4677,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -4785,7 +4785,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5005,7 +5005,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5227,6 +5227,429 @@ export const FIXTURES: Record<string, Fixture> = {
       }
     }
   },
+  "decision": {
+    "route": "GET /admin/requests/r-static/decisions/1",
+    "body": {
+      "request_id": "r-static",
+      "seq": 1,
+      "version": 1,
+      "request": {
+        "request_id": "r-static",
+        "attempt": 1,
+        "seq": 1,
+        "at": 1000000,
+        "key_id": "desktop",
+        "key_generation": 1791268384992,
+        "pool_id": "main",
+        "routing_session_id": "s-static",
+        "agent_id": "main",
+        "parent_agent_id": null,
+        "client_class": "claude_code",
+        "request_class": null,
+        "canonical_model": "claude-sonnet-5",
+        "lane": {
+          "speed": "standard",
+          "thinking": "none",
+          "effort": "-"
+        },
+        "flags": {
+          "fast": false,
+          "count": false,
+          "probe": false,
+          "portable": false,
+          "marker": true,
+          "context_compacted": false
+        },
+        "chain": {
+          "static_boundaries": 1,
+          "boundaries": 0,
+          "static_hash": false
+        },
+        "attempted": [],
+        "holds": [],
+        "registry_revision": 66
+      },
+      "pin": {
+        "found": "none",
+        "account_id": null,
+        "epoch": null,
+        "incarnation": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_refresh_at": null,
+        "idle_ms": null,
+        "refresh_age_ms": null,
+        "lane": null,
+        "shed": null,
+        "marked": false,
+        "warmth": null,
+        "warmth_cause": null,
+        "released": []
+      },
+      "pin_reason": null,
+      "settings": {
+        "strategy": "pace",
+        "prefer_subscription": true,
+        "overage_policy": "prefer_plan",
+        "affinity_ttl_seconds": 600,
+        "affinity_mode": "always",
+        "session_placement": "by_warm_prefix",
+        "min_shared_prefix_tokens": 20000,
+        "subagent_placement": "by_cohort",
+        "select_below_utilization": null,
+        "shed_ahead_of_pace": null,
+        "migrate_when_spent": true,
+        "overage_move_grace_minutes": 30,
+        "wind_down_minutes": 30,
+        "shed_share": 0.5,
+        "burn_window_seconds": 600,
+        "source_dwell_seconds": 900,
+        "warm_sessions": "when_needed",
+        "in_flight_cap": 16,
+        "retry_in_place_seconds": 60,
+        "pace_floor": 0.05,
+        "migrate_band": 0.05,
+        "pool_updated_at": 1791268385223
+      },
+      "candidates": [
+        {
+          "account_id": "business",
+          "incarnation": 1,
+          "kind": "oauth",
+          "plan_tier": "default_claude_max_20x",
+          "enabled": true,
+          "state": "ready",
+          "priority": 0,
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "in_overage": false,
+          "overage": null,
+          "in_flight": 0,
+          "in_flight_cap": 16,
+          "windows": {
+            "fast_input": {
+              "utilization": 0.42,
+              "reset": 1030000,
+              "source": "head",
+              "observed_at": 995000,
+              "age_ms": 5000,
+              "ahead": null
+            },
+            "fast_output": {
+              "utilization": 0.08,
+              "reset": 1030000,
+              "source": "head",
+              "observed_at": 995000,
+              "age_ms": 5000,
+              "ahead": null
+            }
+          },
+          "allowance_known": false,
+          "pace": {
+            "remaining": 1,
+            "reset": null,
+            "end": null,
+            "deadline": null,
+            "hours": 168,
+            "score": 0.005952380952380952
+          },
+          "budget": [
+            {
+              "period": "month",
+              "budget_usd": 30,
+              "spent_usd": 0,
+              "period_start": 0,
+              "period_end": 2678400000,
+              "observed_at": 1000000
+            }
+          ],
+          "cooldowns": [
+            {
+              "scope": "model:claude-haiku-4-5-20251001",
+              "reason": "model_rejected",
+              "window": "model_rejection",
+              "until": 2800000,
+              "blocking": false
+            }
+          ],
+          "credits": null,
+          "term": {
+            "since": 1773482400000,
+            "trial_ends_at": null,
+            "cancelled": false,
+            "ends_at": null,
+            "winding_down": false,
+            "ended": false
+          },
+          "prefix": {
+            "content": null,
+            "content_match": null,
+            "static": {
+              "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "written_at": 1000000,
+              "ttl_ms": 3600000,
+              "live": true,
+              "refused_by": null
+            },
+            "static_match": {
+              "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "written_at": 1000000,
+              "ttl_ms": 3600000,
+              "live": true,
+              "refused_by": null
+            },
+            "with_main": false
+          },
+          "obstacle": null,
+          "partition": null,
+          "rank": null,
+          "score": null,
+          "verdict": "chosen"
+        },
+        {
+          "account_id": "direct",
+          "incarnation": 1,
+          "kind": "api_key",
+          "plan_tier": null,
+          "enabled": true,
+          "state": "ready",
+          "priority": 1,
+          "tier": [
+            2,
+            1,
+            0
+          ],
+          "in_overage": false,
+          "overage": null,
+          "in_flight": 0,
+          "in_flight_cap": 16,
+          "windows": {},
+          "allowance_known": true,
+          "pace": {
+            "remaining": 1,
+            "reset": null,
+            "end": null,
+            "deadline": null,
+            "hours": null,
+            "score": 1
+          },
+          "budget": [
+            {
+              "period": "month",
+              "budget_usd": 50,
+              "spent_usd": 0.0036,
+              "period_start": 0,
+              "period_end": 2678400000,
+              "observed_at": 1000000
+            }
+          ],
+          "cooldowns": [],
+          "credits": null,
+          "term": {
+            "since": null,
+            "trial_ends_at": null,
+            "cancelled": false,
+            "ends_at": null,
+            "winding_down": false,
+            "ended": false
+          },
+          "prefix": {
+            "content": null,
+            "content_match": null,
+            "static": null,
+            "static_match": null,
+            "with_main": false
+          },
+          "obstacle": null,
+          "partition": null,
+          "rank": null,
+          "score": null,
+          "verdict": "not_needed"
+        }
+      ],
+      "walk": [
+        {
+          "step": "pin",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "found",
+              "value": "none",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "eligible",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "standing",
+              "value": "eligible",
+              "account_id": "business",
+              "unit": null
+            },
+            {
+              "key": "standing",
+              "value": "eligible",
+              "account_id": "direct",
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "partitions",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "spent",
+              "value": "off",
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "at_cap",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "above_ceiling",
+              "value": "off",
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "winding_down",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "floor",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:content",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "reason",
+              "value": "no_entry",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:with_main",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "reason",
+              "value": "class",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:static",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "depth",
+              "value": 1,
+              "account_id": null,
+              "unit": "count"
+            },
+            {
+              "key": "prefix_tokens",
+              "value": 31200,
+              "account_id": null,
+              "unit": "tokens"
+            },
+            {
+              "key": "account_id",
+              "value": "business",
+              "account_id": "business",
+              "unit": null
+            },
+            {
+              "key": "hash",
+              "value": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        }
+      ],
+      "outcome": {
+        "kind": "placed",
+        "account_id": "business",
+        "from_account_id": null,
+        "upstream_model": "claude-sonnet-5",
+        "tier": null,
+        "strategy": "pace",
+        "rule": null,
+        "rung": {
+          "rung": "static",
+          "depth": 1,
+          "prefix_tokens": 31200
+        },
+        "in_overage": false,
+        "pin_written": {
+          "action": "created",
+          "epoch": 3,
+          "lane": "claude-sonnet-5|standard|none|-",
+          "refresh_stamped": true,
+          "hashes_stamped": false
+        },
+        "pin_events": [
+          {
+            "kind": "pin_created",
+            "reason": null
+          }
+        ],
+        "hold": null,
+        "exhaustion": null,
+        "refusal": null,
+        "cohort_hold": null,
+        "shed_marks": null,
+        "completion": {
+          "status": 200,
+          "cache_read_tokens": 500,
+          "input_tokens": 1000,
+          "promised_tokens": 31200,
+          "hit": true,
+          "held_ms": null,
+          "freed": false,
+          "cache_map_written": [
+            {
+              "tier": "message",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "ttl_ms": 300000,
+              "account_id": "business"
+            }
+          ],
+          "completed_at": 999400
+        }
+      }
+    }
+  },
   "keepalive_overview": {
     "route": "GET /admin/keepalive/overview",
     "body": {
@@ -5267,7 +5690,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": "claude-sonnet-5",
           "net_five_hour_share": 0,
           "net_usd": 0,
-          "next_probe_at": 1236970,
+          "next_probe_at": 1235549,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -6134,9 +6557,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "H9GzDJiPXyTICXs3C5dVdP-vMSfmLOixl92Udf0gLs4",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A60002%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=1_LUyrktzR0tAFWrcrYWMAV_gI3yQ2sCtgcfiMHvWbI&code_challenge_method=S256&state=b5VL89Or598oqaUdKbRj9HOYarW_bc7s6n3fujPIKTM",
-      "redirect_uri": "http://localhost:60002/callback",
+      "id": "tlHP9K1EYft3_yMxe0EjSJYe6daKSZoY_hv2nyFcIoo",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A62685%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=CfY5-yMXkOs9yWRQGAziA5a3xbKntaaRp1MMN5W68aQ&code_challenge_method=S256&state=q_Z5gzWgrAMttY-fpP-bdATFCAcb9EB0KaV2j1zXQKI",
+      "redirect_uri": "http://localhost:62685/callback",
       "expires_at": 1600000
     }
   },
@@ -6630,101 +7053,151 @@ export const FIXTURES: Record<string, Fixture> = {
   "pricing": {
     "route": "GET /admin/pricing",
     "body": {
-      "version": "2026-10-01",
-      "effective": "2026-10-01",
-      "source": "shipped",
-      "models": [
-        {
-          "model": "claude-fable-5",
-          "input_per_m": 10,
-          "cache_write_5m_per_m": 12.5,
-          "cache_write_1h_per_m": 20,
-          "cache_read_per_m": 0.25,
-          "output_per_m": 50,
-          "fast": null
-        },
-        {
-          "model": "claude-fable-5-1",
-          "input_per_m": 10,
-          "cache_write_5m_per_m": 12.5,
-          "cache_write_1h_per_m": 20,
-          "cache_read_per_m": 0.25,
-          "output_per_m": 50,
-          "fast": null
-        },
-        {
-          "model": "claude-haiku-4-5",
-          "input_per_m": 1,
-          "cache_write_5m_per_m": 1.25,
-          "cache_write_1h_per_m": 2,
-          "cache_read_per_m": 0.1,
-          "output_per_m": 5,
-          "fast": null
-        },
-        {
-          "model": "claude-opus-4-8",
-          "input_per_m": 5,
-          "cache_write_5m_per_m": 6.25,
-          "cache_write_1h_per_m": 10,
-          "cache_read_per_m": 0.5,
-          "output_per_m": 25,
-          "fast": {
-            "input_per_m": 10,
-            "cache_write_5m_per_m": 12.5,
-            "cache_write_1h_per_m": 20,
-            "cache_read_per_m": 1,
-            "output_per_m": 50
+      "api_prices": {
+        "effective": "2026-10-01",
+        "source": "shipped",
+        "content": {
+          "effective": "2026-10-01",
+          "models": {
+            "claude-fable-5-1": {
+              "input": 10,
+              "cache_write_5m": 12.5,
+              "cache_write_1h": 20,
+              "cache_read": 0.25,
+              "output": 50
+            },
+            "claude-fable-5": {
+              "input": 10,
+              "cache_write_5m": 12.5,
+              "cache_write_1h": 20,
+              "cache_read": 0.25,
+              "output": 50
+            },
+            "claude-opus-5-5": {
+              "input": 4,
+              "cache_write_5m": 5,
+              "cache_write_1h": 8,
+              "cache_read": 0.2,
+              "output": 20,
+              "fast": {
+                "input": 8,
+                "cache_write_5m": 10,
+                "cache_write_1h": 16,
+                "cache_read": 0.4,
+                "output": 40
+              }
+            },
+            "claude-opus-5": {
+              "input": 5,
+              "cache_write_5m": 6.25,
+              "cache_write_1h": 10,
+              "cache_read": 0.5,
+              "output": 25,
+              "fast": {
+                "input": 10,
+                "cache_write_5m": 12.5,
+                "cache_write_1h": 20,
+                "cache_read": 1,
+                "output": 50
+              }
+            },
+            "claude-opus-4-8": {
+              "input": 5,
+              "cache_write_5m": 6.25,
+              "cache_write_1h": 10,
+              "cache_read": 0.5,
+              "output": 25,
+              "fast": {
+                "input": 10,
+                "cache_write_5m": 12.5,
+                "cache_write_1h": 20,
+                "cache_read": 1,
+                "output": 50
+              }
+            },
+            "claude-sonnet-5-5": {
+              "input": 2,
+              "cache_write_5m": 2.5,
+              "cache_write_1h": 4,
+              "cache_read": 0.2,
+              "output": 10
+            },
+            "claude-sonnet-5": {
+              "input": 2,
+              "cache_write_5m": 2.5,
+              "cache_write_1h": 4,
+              "cache_read": 0.2,
+              "output": 10
+            },
+            "claude-haiku-4-5": {
+              "input": 1,
+              "cache_write_5m": 1.25,
+              "cache_write_1h": 2,
+              "cache_read": 0.1,
+              "output": 5
+            }
           }
-        },
-        {
-          "model": "claude-opus-5",
-          "input_per_m": 5,
-          "cache_write_5m_per_m": 6.25,
-          "cache_write_1h_per_m": 10,
-          "cache_read_per_m": 0.5,
-          "output_per_m": 25,
-          "fast": {
-            "input_per_m": 10,
-            "cache_write_5m_per_m": 12.5,
-            "cache_write_1h_per_m": 20,
-            "cache_read_per_m": 1,
-            "output_per_m": 50
-          }
-        },
-        {
-          "model": "claude-opus-5-5",
-          "input_per_m": 4,
-          "cache_write_5m_per_m": 5,
-          "cache_write_1h_per_m": 8,
-          "cache_read_per_m": 0.2,
-          "output_per_m": 20,
-          "fast": {
-            "input_per_m": 8,
-            "cache_write_5m_per_m": 10,
-            "cache_write_1h_per_m": 16,
-            "cache_read_per_m": 0.4,
-            "output_per_m": 40
-          }
-        },
-        {
-          "model": "claude-sonnet-5",
-          "input_per_m": 2,
-          "cache_write_5m_per_m": 2.5,
-          "cache_write_1h_per_m": 4,
-          "cache_read_per_m": 0.2,
-          "output_per_m": 10,
-          "fast": null
-        },
-        {
-          "model": "claude-sonnet-5-5",
-          "input_per_m": 2,
-          "cache_write_5m_per_m": 2.5,
-          "cache_write_1h_per_m": 4,
-          "cache_read_per_m": 0.2,
-          "output_per_m": 10,
-          "fast": null
         }
-      ]
+      },
+      "subscription_costs": {
+        "effective": "2026-10-05",
+        "source": "shipped",
+        "content": {
+          "effective": "2026-10-05",
+          "unit": {
+            "defined_by": {
+              "band": "out_of_band",
+              "tier": "default_claude_max_20x",
+              "window": "five_hour"
+            },
+            "units_per_window": 150000000
+          },
+          "capacity": {
+            "default_claude_ai": {
+              "five_hour": 7500000,
+              "seven_day": 90000000
+            },
+            "default_claude_max_5x": {
+              "five_hour": 37500000,
+              "seven_day": 450000000
+            },
+            "default_claude_max_20x": {
+              "five_hour": 150000000,
+              "seven_day": 900000000
+            }
+          },
+          "peak": {
+            "capacity_factor": {
+              "five_hour": 0.7,
+              "seven_day": 1
+            },
+            "from_hour": 5,
+            "to_hour": 11,
+            "weekdays": true,
+            "zone": "America/Los_Angeles"
+          },
+          "type_multiplier": {
+            "cache_read": 0.025,
+            "cache_write_1h": 1.25,
+            "cache_write_5m": 1.25,
+            "input": 1,
+            "output": 5
+          },
+          "model_weight": {
+            "claude-fable-5-1": 10,
+            "claude-opus-5-5": 2.2,
+            "claude-sonnet-5-5": 1.5,
+            "claude-haiku-4-5": 1
+          },
+          "model_windows": {
+            "seven_day_fable": {
+              "capacity_factor": 0.5,
+              "of": "seven_day"
+            }
+          },
+          "overrides": {}
+        }
+      }
     }
   },
   "replay": {
@@ -6748,7 +7221,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791261397600,
+        "key_generation": 1791268384992,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -6947,7 +7420,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "from_account": "direct",
             "epoch": 2,
             "reason": "spent"
-          }
+          },
+          "pool_id": null,
+          "agent_id": "main",
+          "request_id": null
         },
         {
           "at": -2599800,
@@ -6963,7 +7439,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown",
               "spent"
             ]
-          }
+          },
+          "pool_id": null,
+          "agent_id": "main",
+          "request_id": null
         },
         {
           "at": -2599700,
@@ -6978,7 +7457,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "request_id": "req-rejected",
             "source_request_id": "r-failover",
             "wire_model": "claude-haiku-4-5"
-          }
+          },
+          "pool_id": null,
+          "agent_id": null,
+          "request_id": "r-failover"
         },
         {
           "at": -2599650,
@@ -6996,7 +7478,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "request_id": "req-permitted",
             "source_request_id": "r-failover",
             "wire_model": "claude-haiku-4-5"
-          }
+          },
+          "pool_id": null,
+          "agent_id": null,
+          "request_id": "r-failover"
         }
       ]
     }
@@ -7031,7 +7516,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -7145,7 +7630,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7253,7 +7738,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -7361,7 +7846,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7581,7 +8066,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7770,10 +8255,1325 @@ export const FIXTURES: Record<string, Fixture> = {
       "next_cursor": null
     }
   },
+  "routing_log": {
+    "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:16:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,reauth_required,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+    "body": {
+      "rows": [
+        {
+          "type": "decision",
+          "request_id": "r-warm",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "strategy",
+            "value": "pace",
+            "tier": [
+              0,
+              0,
+              0
+            ]
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "last account",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-static",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": 1,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "rung",
+            "value": "static",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "prefix",
+              "value": 31200,
+              "unit": "tokens",
+              "entity": null
+            },
+            {
+              "key": "depth",
+              "value": 1,
+              "unit": "count",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": {
+            "rung": "static",
+            "depth": 1,
+            "prefix_tokens": 31200
+          },
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": {
+            "hit": true,
+            "read_tokens": 500,
+            "promised_tokens": 31200,
+            "input_tokens": 1000
+          },
+          "status": 200
+        },
+        {
+          "type": "decision",
+          "request_id": "r-renew",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "renewed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "none",
+            "value": "",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "idle",
+              "value": 0,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "refresh",
+            "cause": "chainless"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-refused",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "refused",
+          "probe": false,
+          "key_id": "retired",
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "refusal",
+            "value": "key",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "key",
+              "value": "retired",
+              "unit": null,
+              "entity": {
+                "kind": "key",
+                "id": "retired"
+              }
+            }
+          ],
+          "rule": null,
+          "strategy": "",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": {
+            "kind": "key",
+            "reason": "the key is not in the registry"
+          },
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-probe",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "renewed",
+          "probe": true,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "none",
+            "value": "",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "epoch",
+              "value": 2,
+              "unit": "count",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "untouched",
+            "cause": "probe"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-move",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "moved",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "direct",
+          "from_account_id": "business",
+          "by": {
+            "kind": "rule",
+            "value": "spent",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "only candidate",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": "spent",
+          "strategy": "pace",
+          "tier": [
+            2,
+            1,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "direct",
+            "score": 1,
+            "unit": "percent"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "refresh",
+            "cause": "chainless"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-held",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "held",
+              "value": 800,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-held",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "held",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "in_flight",
+              "value": "1/1",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": {
+            "account_id": "business",
+            "cohort": null,
+            "bound_ms": 60000
+          },
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-exhausted",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "exhausted",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "exhaustion",
+            "value": "timed",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "retry",
+              "value": 1600000,
+              "unit": "time",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": {
+            "kind": "timed",
+            "deadline": 1600000,
+            "window": "five_hour",
+            "reason": null,
+            "obstacle": null
+          },
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-2",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5-5",
+          "account_id": "direct",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "cohort",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "held",
+              "value": 1250,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": {
+            "rung": "content",
+            "depth": 2,
+            "prefix_tokens": 500
+          },
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-1",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-fixture",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "strategy",
+            "value": "pace",
+            "tier": [
+              0,
+              0,
+              0
+            ]
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "only candidate",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "event",
+          "id": 21,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "direct",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-move",
+          "actor": null,
+          "detail": {
+            "scope": "account",
+            "until": 1600000,
+            "reason": "rate_limited",
+            "window": "five_hour",
+            "source_request_id": "r-move"
+          }
+        },
+        {
+          "type": "event",
+          "id": 20,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-move",
+          "actor": null,
+          "detail": {
+            "scope": "account",
+            "until": 1600000,
+            "reason": "rate_limited",
+            "window": "five_hour",
+            "source_request_id": "r-move"
+          }
+        },
+        {
+          "type": "event",
+          "id": 19,
+          "at": 1000000,
+          "kind": "pin_released",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main"
+          }
+        },
+        {
+          "type": "event",
+          "id": 18,
+          "at": 1000000,
+          "kind": "cooldown_cleared",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "cause": "admin",
+            "scope": "model:claude-haiku-4-5-20251001"
+          }
+        },
+        {
+          "type": "event",
+          "id": 17,
+          "at": 1000000,
+          "kind": "fast_credits_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "before": null,
+            "after": {
+              "enabled": false,
+              "disabled_reason": "out_of_credits",
+              "utilization": 0.25
+            },
+            "blocked_before": null,
+            "blocked_after": "out_of_credits",
+            "observed_at": 1000000
+          }
+        },
+        {
+          "type": "event",
+          "id": 16,
+          "at": 1000000,
+          "kind": "overage_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "since": 940000
+          }
+        },
+        {
+          "type": "event",
+          "id": 14,
+          "at": 1000000,
+          "kind": "pin_migrated",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "from_account": "business",
+            "epoch": 5,
+            "reason": "spent"
+          }
+        },
+        {
+          "type": "event",
+          "id": 13,
+          "at": 1000000,
+          "kind": "window_spent",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-probe",
+          "actor": null,
+          "detail": {
+            "window": "five_hour",
+            "utilization": 1,
+            "reset": 4600000,
+            "source": "head",
+            "source_request_id": "r-probe"
+          }
+        },
+        {
+          "type": "event",
+          "id": 12,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 4
+          }
+        },
+        {
+          "type": "event",
+          "id": 11,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 3
+          }
+        },
+        {
+          "type": "event",
+          "id": 10,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 2
+          }
+        },
+        {
+          "type": "event",
+          "id": 9,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "scope": "model:claude-haiku-4-5-20251001",
+            "until": 2800000,
+            "reason": "model_rejected",
+            "window": "model_rejection",
+            "source_request_id": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 4,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-fixture",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 1
+          }
+        },
+        {
+          "type": "event",
+          "id": 3,
+          "at": 1000000,
+          "kind": "account_state_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 15,
+          "at": 940000,
+          "kind": "overage_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 37,
+          "at": -1580000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 16,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 36,
+          "at": -1640000,
+          "kind": "refresh_uncertain",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "cause": "refresh_response_lost",
+            "error": "refresh response lost: the token endpoint did not answer"
+          }
+        },
+        {
+          "type": "event",
+          "id": 35,
+          "at": -1700000,
+          "kind": "refresh_failed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "cause": "invalid_grant",
+            "error": "refresh rejected with status 400 (invalid_grant)"
+          }
+        },
+        {
+          "type": "event",
+          "id": 34,
+          "at": -1760000,
+          "kind": "refresh_succeeded",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "until": 4600000,
+            "access_expires_at": 4600000,
+            "refresh_expires_at": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 33,
+          "at": -1820000,
+          "kind": "reauth_required",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 32,
+          "at": -1880000,
+          "kind": "ledger_gap",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-gap",
+          "actor": null,
+          "detail": {
+            "request_id": "r-gap",
+            "reason": "chunk_skipped"
+          }
+        },
+        {
+          "type": "event",
+          "id": 31,
+          "at": -1940000,
+          "kind": "budget_period_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "period": "day",
+            "previous_spent_usd": 4.2,
+            "period_start": -1940000
+          }
+        },
+        {
+          "type": "event",
+          "id": 30,
+          "at": -2000000,
+          "kind": "budget_reached",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "period": "month",
+            "budget_usd": 30,
+            "spent_usd": 30.4,
+            "period_end": 87400000,
+            "source_request_id": "r-failover"
+          }
+        },
+        {
+          "type": "event",
+          "id": 29,
+          "at": -2060000,
+          "kind": "catalog_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "added": [
+              "claude-sonnet-5-5"
+            ],
+            "removed": [
+              "claude-sonnet-4-5"
+            ],
+            "count": 12
+          }
+        },
+        {
+          "type": "event",
+          "id": 28,
+          "at": -2120000,
+          "kind": "poll_backoff_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "duration_ms": 120000,
+            "attempts": 2,
+            "resumed_at": -2120000
+          }
+        },
+        {
+          "type": "event",
+          "id": 27,
+          "at": -2240000,
+          "kind": "poll_backoff_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "reason": "429",
+            "endpoint": "usage",
+            "attempts": 1,
+            "next_attempt_at": -2180000,
+            "last_clean_poll_at": -2300000
+          }
+        },
+        {
+          "type": "event",
+          "id": 26,
+          "at": -2300000,
+          "kind": "window_reset",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "window": "seven_day",
+            "utilization_before": 0.83,
+            "reset_at": -2300000,
+            "next_reset": 602500000,
+            "observed": "sample"
+          }
+        },
+        {
+          "type": "event",
+          "id": 25,
+          "at": -2360000,
+          "kind": "wind_down_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "ends_at": 87400000,
+            "wind_down_minutes": 1440,
+            "end_source": "cancelled"
+          }
+        },
+        {
+          "type": "event",
+          "id": 24,
+          "at": -2420000,
+          "kind": "warm_prefix_expired",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s0",
+          "agent_id": null,
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "root": "s0",
+            "entries": 3,
+            "deepest": {
+              "tier": "message",
+              "depth": 3,
+              "prefix_tokens": 52000,
+              "ttl_ms": 300000,
+              "account_id": "direct"
+            },
+            "lane": "claude-sonnet-5|standard|none|-",
+            "cause": "ttl"
+          }
+        },
+        {
+          "type": "event",
+          "id": 23,
+          "at": -2480000,
+          "kind": "shedding_round",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "window": "five_hour",
+            "utilization": 0.71,
+            "elapsed_share": 0.5,
+            "ahead": 0.21,
+            "threshold": 0.15,
+            "margin": 0.06,
+            "unit": "window_share",
+            "burn_window_seconds": 900,
+            "shed_share": 0.5,
+            "burn_sum": 0.12,
+            "target": 0.06,
+            "warm_sessions": "when_needed",
+            "pins": [
+              {
+                "key_id": "desktop",
+                "session_id": "s0",
+                "agent_id": "main",
+                "model": "claude-sonnet-5",
+                "cold": true,
+                "burn": 0.07,
+                "last_input_tokens": 48100,
+                "per_rewrite": 0.004,
+                "marked": true,
+                "note": null
+              }
+            ],
+            "marks": [
+              {
+                "key_id": "desktop",
+                "session_id": "s0",
+                "agent_id": "main",
+                "model": "claude-sonnet-5"
+              }
+            ],
+            "dwell_seconds": 900,
+            "dwell_until": -1580000,
+            "persisted": true
+          }
+        },
+        {
+          "type": "event",
+          "id": 22,
+          "at": -2540000,
+          "kind": "router_started",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "version": "0.0.0-fixture",
+            "pins_loaded": 3,
+            "shedding_marks_loaded": 2,
+            "shedding_rounds_stale": 1,
+            "windows_loaded": 2,
+            "affinity_entries_loaded": 5,
+            "down_since": 1791397146397,
+            "holds_lost": true
+          }
+        },
+        {
+          "type": "event",
+          "id": 8,
+          "at": -2599650,
+          "kind": "model_permitted",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "attempt": 2,
+            "rejected_by": [
+              "business"
+            ],
+            "request_id": "req-permitted",
+            "source_request_id": "r-failover",
+            "wire_model": "claude-haiku-4-5"
+          }
+        },
+        {
+          "type": "event",
+          "id": 7,
+          "at": -2599700,
+          "kind": "model_rejected",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "attempt": 1,
+            "request_id": "req-rejected",
+            "source_request_id": "r-failover",
+            "wire_model": "claude-haiku-4-5"
+          }
+        },
+        {
+          "type": "event",
+          "id": 6,
+          "at": -2599800,
+          "kind": "pin_expired",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "reasons": [
+              "cooldown",
+              "spent"
+            ]
+          }
+        },
+        {
+          "type": "event",
+          "id": 5,
+          "at": -2599900,
+          "kind": "pin_migrated",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "from_account": "direct",
+            "epoch": 2,
+            "reason": "spent"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "AWPfYfCLuNS85G3LHQEFehCk5kKhk6PLyqq4OE85T5Y"
+      "session_id": "TdruwbkAPcCPb0AOf5da3OfQjc-mcFH11JvF67JeoOo"
     }
   },
   "sessions": {
@@ -7782,7 +9582,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -7816,7 +9616,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -7850,7 +9650,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -7875,7 +9675,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_guard": "rearm",
             "net_five_hour_share": 0,
             "net_usd": 0,
-            "next_probe_at": 1236970,
+            "next_probe_at": 1235549,
             "state": "busy"
           },
           "historical": false,
@@ -7884,7 +9684,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791261397600,
+          "key_generation": 1791268384992,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -7960,16 +9760,6 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective": "2026-10-01",
       "models": [
         {
-          "model": "claude-fable-5",
-          "input_per_m": 10,
-          "cache_write_5m_per_m": 12.5,
-          "cache_write_1h_per_m": 20,
-          "cache_read_per_m": 0.25,
-          "output_per_m": 50,
-          "reads_per_write_5m": 50,
-          "fast": null
-        },
-        {
           "model": "claude-fable-5-1",
           "input_per_m": 10,
           "cache_write_5m_per_m": 12.5,
@@ -7980,29 +9770,29 @@ export const FIXTURES: Record<string, Fixture> = {
           "fast": null
         },
         {
-          "model": "claude-haiku-4-5",
-          "input_per_m": 1,
-          "cache_write_5m_per_m": 1.25,
-          "cache_write_1h_per_m": 2,
-          "cache_read_per_m": 0.1,
-          "output_per_m": 5,
-          "reads_per_write_5m": 12.5,
+          "model": "claude-fable-5",
+          "input_per_m": 10,
+          "cache_write_5m_per_m": 12.5,
+          "cache_write_1h_per_m": 20,
+          "cache_read_per_m": 0.25,
+          "output_per_m": 50,
+          "reads_per_write_5m": 50,
           "fast": null
         },
         {
-          "model": "claude-opus-4-8",
-          "input_per_m": 5,
-          "cache_write_5m_per_m": 6.25,
-          "cache_write_1h_per_m": 10,
-          "cache_read_per_m": 0.5,
-          "output_per_m": 25,
-          "reads_per_write_5m": 12.5,
+          "model": "claude-opus-5-5",
+          "input_per_m": 4,
+          "cache_write_5m_per_m": 5,
+          "cache_write_1h_per_m": 8,
+          "cache_read_per_m": 0.2,
+          "output_per_m": 20,
+          "reads_per_write_5m": 25,
           "fast": {
-            "input_per_m": 10,
-            "cache_write_5m_per_m": 12.5,
-            "cache_write_1h_per_m": 20,
-            "cache_read_per_m": 1,
-            "output_per_m": 50
+            "input_per_m": 8,
+            "cache_write_5m_per_m": 10,
+            "cache_write_1h_per_m": 16,
+            "cache_read_per_m": 0.4,
+            "output_per_m": 40
           }
         },
         {
@@ -8022,20 +9812,30 @@ export const FIXTURES: Record<string, Fixture> = {
           }
         },
         {
-          "model": "claude-opus-5-5",
-          "input_per_m": 4,
-          "cache_write_5m_per_m": 5,
-          "cache_write_1h_per_m": 8,
-          "cache_read_per_m": 0.2,
-          "output_per_m": 20,
-          "reads_per_write_5m": 25,
+          "model": "claude-opus-4-8",
+          "input_per_m": 5,
+          "cache_write_5m_per_m": 6.25,
+          "cache_write_1h_per_m": 10,
+          "cache_read_per_m": 0.5,
+          "output_per_m": 25,
+          "reads_per_write_5m": 12.5,
           "fast": {
-            "input_per_m": 8,
-            "cache_write_5m_per_m": 10,
-            "cache_write_1h_per_m": 16,
-            "cache_read_per_m": 0.4,
-            "output_per_m": 40
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 1,
+            "output_per_m": 50
           }
+        },
+        {
+          "model": "claude-sonnet-5-5",
+          "input_per_m": 2,
+          "cache_write_5m_per_m": 2.5,
+          "cache_write_1h_per_m": 4,
+          "cache_read_per_m": 0.2,
+          "output_per_m": 10,
+          "reads_per_write_5m": 12.5,
+          "fast": null
         },
         {
           "model": "claude-sonnet-5",
@@ -8048,12 +9848,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "fast": null
         },
         {
-          "model": "claude-sonnet-5-5",
-          "input_per_m": 2,
-          "cache_write_5m_per_m": 2.5,
-          "cache_write_1h_per_m": 4,
-          "cache_read_per_m": 0.2,
-          "output_per_m": 10,
+          "model": "claude-haiku-4-5",
+          "input_per_m": 1,
+          "cache_write_5m_per_m": 1.25,
+          "cache_write_1h_per_m": 2,
+          "cache_read_per_m": 0.1,
+          "output_per_m": 5,
           "reads_per_write_5m": 12.5,
           "fast": null
         }
@@ -8070,6 +9870,92 @@ export const FIXTURES: Record<string, Fixture> = {
       "access": {
         "admin_configured": true
       },
+      "api_prices": {
+        "effective": "2026-10-01",
+        "source": "shipped",
+        "content": {
+          "effective": "2026-10-01",
+          "models": {
+            "claude-fable-5-1": {
+              "input": 10,
+              "cache_write_5m": 12.5,
+              "cache_write_1h": 20,
+              "cache_read": 0.25,
+              "output": 50
+            },
+            "claude-fable-5": {
+              "input": 10,
+              "cache_write_5m": 12.5,
+              "cache_write_1h": 20,
+              "cache_read": 0.25,
+              "output": 50
+            },
+            "claude-opus-5-5": {
+              "input": 4,
+              "cache_write_5m": 5,
+              "cache_write_1h": 8,
+              "cache_read": 0.2,
+              "output": 20,
+              "fast": {
+                "input": 8,
+                "cache_write_5m": 10,
+                "cache_write_1h": 16,
+                "cache_read": 0.4,
+                "output": 40
+              }
+            },
+            "claude-opus-5": {
+              "input": 5,
+              "cache_write_5m": 6.25,
+              "cache_write_1h": 10,
+              "cache_read": 0.5,
+              "output": 25,
+              "fast": {
+                "input": 10,
+                "cache_write_5m": 12.5,
+                "cache_write_1h": 20,
+                "cache_read": 1,
+                "output": 50
+              }
+            },
+            "claude-opus-4-8": {
+              "input": 5,
+              "cache_write_5m": 6.25,
+              "cache_write_1h": 10,
+              "cache_read": 0.5,
+              "output": 25,
+              "fast": {
+                "input": 10,
+                "cache_write_5m": 12.5,
+                "cache_write_1h": 20,
+                "cache_read": 1,
+                "output": 50
+              }
+            },
+            "claude-sonnet-5-5": {
+              "input": 2,
+              "cache_write_5m": 2.5,
+              "cache_write_1h": 4,
+              "cache_read": 0.2,
+              "output": 10
+            },
+            "claude-sonnet-5": {
+              "input": 2,
+              "cache_write_5m": 2.5,
+              "cache_write_1h": 4,
+              "cache_read": 0.2,
+              "output": 10
+            },
+            "claude-haiku-4-5": {
+              "input": 1,
+              "cache_write_5m": 1.25,
+              "cache_write_1h": 2,
+              "cache_read": 0.1,
+              "output": 5
+            }
+          }
+        }
+      },
       "keepalive": {
         "max_agents": 1024,
         "max_retained_bytes": 268435456,
@@ -8079,238 +9965,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "metrics": "127.0.0.1:9464",
         "proxy": "test"
       },
-      "plan_tables": {
-        "cost": {
-          "bands": [
-            {
-              "weekdays": true,
-              "from_hour": 5,
-              "to_hour": 11,
-              "factor": 1.435,
-              "windows": [
-                "five_hour"
-              ],
-              "zone": "America/Los_Angeles"
-            }
-          ],
-          "effective": "2026-10-01",
-          "tiers": {
-            "default_claude_max_20x": {
-              "five_hour": 1,
-              "seven_day": 1
-            },
-            "default_claude_max_5x": {
-              "five_hour": 0.25,
-              "seven_day": null
-            },
-            "default_claude_pro": {
-              "five_hour": 0.05,
-              "seven_day": null
-            }
-          },
-          "windows": {
-            "five_hour": {
-              "claude-fable-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-fable-5-1": {
-                "cache_read": 0.001675,
-                "cache_write_1h": 0.084,
-                "cache_write_5m": 0.08326,
-                "input": 0.06647,
-                "output": 0.3292
-              },
-              "claude-haiku-4-5": {
-                "cache_read": 0.000167,
-                "cache_write_1h": 0.00823,
-                "cache_write_5m": 0.00824,
-                "input": 0.00659,
-                "output": 0.03294
-              },
-              "claude-opus-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5-5": {
-                "cache_read": 0.000365,
-                "cache_write_1h": 0.01824,
-                "cache_write_5m": 0.0183,
-                "input": 0.01461,
-                "output": 0.07279
-              },
-              "claude-sonnet-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5-5": {
-                "cache_read": 0.000249,
-                "cache_write_1h": 0.01251,
-                "cache_write_5m": 0.01247,
-                "input": 0.00999,
-                "output": 0.04984
-              }
-            },
-            "seven_day": {
-              "claude-fable-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-fable-5-1": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-haiku-4-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              }
-            }
-          }
-        }
-      },
-      "pricing": {
-        "version": "2026-10-01",
-        "effective": "2026-10-01",
-        "source": "shipped",
-        "models": [
-          {
-            "model": "claude-fable-5",
-            "input_per_m": 10,
-            "cache_write_5m_per_m": 12.5,
-            "cache_write_1h_per_m": 20,
-            "cache_read_per_m": 0.25,
-            "output_per_m": 50,
-            "fast": null
-          },
-          {
-            "model": "claude-fable-5-1",
-            "input_per_m": 10,
-            "cache_write_5m_per_m": 12.5,
-            "cache_write_1h_per_m": 20,
-            "cache_read_per_m": 0.25,
-            "output_per_m": 50,
-            "fast": null
-          },
-          {
-            "model": "claude-haiku-4-5",
-            "input_per_m": 1,
-            "cache_write_5m_per_m": 1.25,
-            "cache_write_1h_per_m": 2,
-            "cache_read_per_m": 0.1,
-            "output_per_m": 5,
-            "fast": null
-          },
-          {
-            "model": "claude-opus-4-8",
-            "input_per_m": 5,
-            "cache_write_5m_per_m": 6.25,
-            "cache_write_1h_per_m": 10,
-            "cache_read_per_m": 0.5,
-            "output_per_m": 25,
-            "fast": {
-              "input_per_m": 10,
-              "cache_write_5m_per_m": 12.5,
-              "cache_write_1h_per_m": 20,
-              "cache_read_per_m": 1,
-              "output_per_m": 50
-            }
-          },
-          {
-            "model": "claude-opus-5",
-            "input_per_m": 5,
-            "cache_write_5m_per_m": 6.25,
-            "cache_write_1h_per_m": 10,
-            "cache_read_per_m": 0.5,
-            "output_per_m": 25,
-            "fast": {
-              "input_per_m": 10,
-              "cache_write_5m_per_m": 12.5,
-              "cache_write_1h_per_m": 20,
-              "cache_read_per_m": 1,
-              "output_per_m": 50
-            }
-          },
-          {
-            "model": "claude-opus-5-5",
-            "input_per_m": 4,
-            "cache_write_5m_per_m": 5,
-            "cache_write_1h_per_m": 8,
-            "cache_read_per_m": 0.2,
-            "output_per_m": 20,
-            "fast": {
-              "input_per_m": 8,
-              "cache_write_5m_per_m": 10,
-              "cache_write_1h_per_m": 16,
-              "cache_read_per_m": 0.4,
-              "output_per_m": 40
-            }
-          },
-          {
-            "model": "claude-sonnet-5",
-            "input_per_m": 2,
-            "cache_write_5m_per_m": 2.5,
-            "cache_write_1h_per_m": 4,
-            "cache_read_per_m": 0.2,
-            "output_per_m": 10,
-            "fast": null
-          },
-          {
-            "model": "claude-sonnet-5-5",
-            "input_per_m": 2,
-            "cache_write_5m_per_m": 2.5,
-            "cache_write_1h_per_m": 4,
-            "cache_read_per_m": 0.2,
-            "output_per_m": 10,
-            "fast": null
-          }
-        ]
-      },
       "retention": {
         "body_capture_max_hours": 72
       },
@@ -8318,9 +9972,69 @@ export const FIXTURES: Record<string, Fixture> = {
         "expire_after_seconds": 86400
       },
       "storage": {
+        "api_prices_path": null,
         "ledger_path": "test",
         "path": "test",
-        "pricing_path": null
+        "subscription_costs_path": null
+      },
+      "subscription_costs": {
+        "effective": "2026-10-05",
+        "source": "shipped",
+        "content": {
+          "effective": "2026-10-05",
+          "unit": {
+            "defined_by": {
+              "band": "out_of_band",
+              "tier": "default_claude_max_20x",
+              "window": "five_hour"
+            },
+            "units_per_window": 150000000
+          },
+          "capacity": {
+            "default_claude_ai": {
+              "five_hour": 7500000,
+              "seven_day": 90000000
+            },
+            "default_claude_max_5x": {
+              "five_hour": 37500000,
+              "seven_day": 450000000
+            },
+            "default_claude_max_20x": {
+              "five_hour": 150000000,
+              "seven_day": 900000000
+            }
+          },
+          "peak": {
+            "capacity_factor": {
+              "five_hour": 0.7,
+              "seven_day": 1
+            },
+            "from_hour": 5,
+            "to_hour": 11,
+            "weekdays": true,
+            "zone": "America/Los_Angeles"
+          },
+          "type_multiplier": {
+            "cache_read": 0.025,
+            "cache_write_1h": 1.25,
+            "cache_write_5m": 1.25,
+            "input": 1,
+            "output": 5
+          },
+          "model_weight": {
+            "claude-fable-5-1": 10,
+            "claude-opus-5-5": 2.2,
+            "claude-sonnet-5-5": 1.5,
+            "claude-haiku-4-5": 1
+          },
+          "model_windows": {
+            "seven_day_fable": {
+              "capacity_factor": 0.5,
+              "of": "seven_day"
+            }
+          },
+          "overrides": {}
+        }
       },
       "usage": {
         "cache_ttl_seconds": 60
@@ -8337,10 +10051,12 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 29,
-        "written": 14,
+        "schema_version": 30,
+        "written": 18,
         "dropped": 0,
         "write_failures": 0,
+        "cache_map_orphans": 1,
+        "mirror_lagged": 0,
         "gaps": 0,
         "last_gap_at": 0,
         "channel_depth": 4096,
@@ -8368,6 +10084,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "sample": 0,
           "usage": 0
         },
+        "dropped_refusals": 0,
         "writer": {
           "depth": 0,
           "deferred": 0,
@@ -8397,6 +10114,18 @@ export const FIXTURES: Record<string, Fixture> = {
         "in_flight": 0
       },
       "pricing_unknown_models": 0,
+      "pricing": {
+        "api_prices": {
+          "path": null,
+          "source": "shipped",
+          "effective": "2026-10-01"
+        },
+        "subscription_costs": {
+          "path": null,
+          "source": "shipped",
+          "effective": "2026-10-05"
+        }
+      },
       "gaps": [],
       "keepalive": {
         "agents": 1,
@@ -8404,6 +10133,128 @@ export const FIXTURES: Record<string, Fixture> = {
         "retained_bytes": 116,
         "running_probes": 0,
         "sessions": 1
+      }
+    }
+  },
+  "test_tables": {
+    "route": "phoebis_ledger::test_tables",
+    "body": {
+      "api_prices": {
+        "effective": "2026-01-01",
+        "source": "test",
+        "content": {
+          "effective": "2026-01-01",
+          "models": {
+            "claude-opus-5-5": {
+              "input": 10,
+              "cache_write_5m": 12.5,
+              "cache_write_1h": 20,
+              "cache_read": 1,
+              "output": 50,
+              "fast": {
+                "input": 20,
+                "cache_write_5m": 25,
+                "cache_write_1h": 40,
+                "cache_read": 2,
+                "output": 100
+              }
+            },
+            "claude-opus-5": {
+              "input": 5,
+              "cache_write_5m": 6.25,
+              "cache_write_1h": 10,
+              "cache_read": 0.5,
+              "output": 25
+            },
+            "claude-sonnet-5-5": {
+              "input": 3,
+              "cache_write_5m": 3.75,
+              "cache_write_1h": 6,
+              "cache_read": 0.3,
+              "output": 15
+            },
+            "claude-haiku-4-5": {
+              "input": 1,
+              "cache_write_5m": 1.25,
+              "cache_write_1h": 2,
+              "cache_read": 0.1,
+              "output": 5
+            }
+          }
+        }
+      },
+      "subscription_costs": {
+        "effective": "2026-01-01",
+        "source": "test",
+        "content": {
+          "effective": "2026-01-01",
+          "unit": {
+            "defined_by": {
+              "band": "out_of_band",
+              "tier": "default_claude_max_20x",
+              "window": "five_hour"
+            },
+            "units_per_window": 100
+          },
+          "capacity": {
+            "default_claude_ai": {
+              "five_hour": 5,
+              "seven_day": 50
+            },
+            "default_claude_max_5x": {
+              "five_hour": 25,
+              "seven_day": 250
+            },
+            "default_claude_max_20x": {
+              "five_hour": 100,
+              "seven_day": 1000
+            },
+            "default_claude_team": {
+              "five_hour": 10,
+              "seven_day": null
+            }
+          },
+          "peak": {
+            "capacity_factor": {
+              "five_hour": 0.5,
+              "seven_day": 1
+            },
+            "from_hour": 5,
+            "to_hour": 11,
+            "weekdays": true,
+            "zone": "America/Los_Angeles"
+          },
+          "type_multiplier": {
+            "cache_read": 0.1,
+            "cache_write_1h": 2,
+            "cache_write_5m": 2,
+            "input": 1,
+            "output": 10
+          },
+          "model_weight": {
+            "claude-fable-5-1": 10,
+            "claude-opus-5-5": 2,
+            "claude-opus-5": null,
+            "claude-sonnet-5-5": 1,
+            "claude-haiku-4-5": 0.5
+          },
+          "model_windows": {
+            "seven_day_fable": {
+              "capacity_factor": 0.5,
+              "of": "seven_day"
+            }
+          },
+          "overrides": {
+            "claude-haiku-4-5": {
+              "type_multiplier": {
+                "cache_read": 0.2
+              },
+              "weight_by_window": {
+                "seven_day": 1
+              }
+            }
+          }
+        }
       }
     }
   }

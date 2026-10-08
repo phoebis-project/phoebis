@@ -12,18 +12,22 @@ use crate::AdminState;
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let s = &state.settings;
-    let table = state.pricing.current();
-    let tables = &state.tables;
+    let envelopes = crate::pricing::table_envelopes(&state.pricing.current(), &state.tables);
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION") },
         "access": { "admin_configured": true },
+        "api_prices": envelopes["api_prices"],
         "keepalive": s.keepalive,
         "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen },
-        "plan_tables": { "cost": tables.cost },
-        "pricing": crate::pricing::table_json(&table),
         "retention": { "body_capture_max_hours": s.body_capture_max_hours },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
-        "storage": { "ledger_path": s.ledger_path, "path": s.storage_path, "pricing_path": s.pricing_path },
+        "storage": {
+            "api_prices_path": s.api_prices_path,
+            "ledger_path": s.ledger_path,
+            "path": s.storage_path,
+            "subscription_costs_path": s.subscription_costs_path,
+        },
+        "subscription_costs": envelopes["subscription_costs"],
         "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds },
     }))
     .into_response()

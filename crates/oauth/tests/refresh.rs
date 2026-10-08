@@ -9,7 +9,9 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_head, control_response, ControlFixture},
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
+};
 use phoebis_transport::{
     connector_builder,
     control::{ControlClient, ResolveFuture, Resolver},
@@ -117,6 +119,7 @@ fn store_with_account() -> Arc<Store> {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -282,8 +285,10 @@ async fn a_reconnected_slot_answers_its_new_bundle_under_the_restarted_generatio
     let row = store.account("a").unwrap().unwrap();
     let token = mgr.acquire_for(&row, Some(1)).await.unwrap();
     assert_eq!((token.secret.expose(), token.generation), ("before", 1));
-    let lifecycle = store.bump_lifecycle("a").unwrap();
-    store.set_state("a", AccountState::Ready).unwrap();
+    let lifecycle = store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     store
         .commit_credentials("a", 1, lifecycle, None, None, &bundle("after"))
         .unwrap();
@@ -343,6 +348,47 @@ async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
         store.account("a").unwrap().unwrap().state,
         AccountState::ReauthRequired
     ));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_definitive_refresh_failure_and_the_quarantine_store_refresh_failed() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1))
+        .unwrap();
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::ReauthRequired)
+    ));
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::RefreshFailed)
+    );
+    up.shutdown().await;
+
+    // A refresh still open at a start quarantines its account under the same word.
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(2_000_000))
+        .unwrap();
+    store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::RefreshFailed)
+    );
     up.shutdown().await;
 }
 
@@ -1085,8 +1131,10 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     }
 
     // The operator disconnects and pairs the slot again while the token request is still in flight.
-    let lifecycle = store.bump_lifecycle("a").unwrap();
-    store.set_state("a", AccountState::Ready).unwrap();
+    let lifecycle = store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     store
         .commit_credentials(
             "a",
@@ -1195,6 +1243,7 @@ async fn a_reauth_verdict_from_a_previous_incarnation_is_dropped() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -1401,6 +1450,7 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     let bundle = || NewBundle {

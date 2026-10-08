@@ -196,6 +196,8 @@ test('an unknown weekly window decodes under its key after the known ones, in th
 test('plan labels read the tier', () => {
   assert.equal(d.planLabel('default_claude_max_20x'), 'Max 20x');
   assert.equal(d.planLabel('claude_pro'), 'Pro');
+  assert.equal(d.planLabel('default_claude_ai'), 'Pro', 'the tier the profile reports for Pro');
+  assert.equal(d.planLabel('default_claude_max_5x'), 'Max 5x');
   assert.equal(d.planLabel('something_else'), 'something_else');
 });
 
@@ -296,19 +298,13 @@ test('a key\'s processed rule list decodes with the level, the rule, and the coo
   );
 });
 
-test('the model state decodes the cooldowns grouped by model, and the rejections and permits with their detail lifted', () => {
-  const state = d.decodeModelsState(fixture('models_state'));
+test('the model state decodes the cooldowns grouped by model and leaves the rejections and permits to the routing log', () => {
+  const body = fixture('models_state');
+  const state = d.decodeModelsState(body);
   assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
   assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
-  assert.deepEqual(
-    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.upstreamRequestId, r.rejectedBy]),
-    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'r-failover', 'req-rejected', []]],
-  );
-  assert.deepEqual(
-    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.upstreamRequestId, p.rejectedBy]),
-    [['direct', 'claude-haiku-4-5', 'r-failover', 'req-permitted', ['business']]],
-  );
-  assert.ok(isIso(state.rejections[0].at) && isIso(state.permits[0].at));
+  assert.ok(body.rejections.length > 0 && body.permits.length > 0, 'the route still answers both lists');
+  assert.deepEqual(Object.keys(state), ['cooldowns'], 'the console reads neither list');
 });
 
 test('a pool decodes its policy, status, members, and traffic', () => {
@@ -711,15 +707,15 @@ test('the burn series decodes each point with its instant, both token sides, and
   const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
   assert.ok(
-    wire.five_hour_share > 0 && wire.seven_day_share === null && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
-    'the fixture reports a subscription point with a priced 5-hour share and no 7-day one, every 7-day cell being unmeasured, output tokens among its count',
+    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
+    'the fixture reports a subscription point with both window shares priced, output tokens among its count',
   );
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
-    sevenDayShare: null,
+    sevenDayShare: wire.seven_day_share,
     tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
     unit: 'window_share',
@@ -813,6 +809,104 @@ test('a budget reads as a skip obstacle and as a pin release reason', () => {
   assert.ok(d.PIN_RELEASE_REASON_VALUES?.includes('budget'), 'the drawer words a pin released for a member at its budget');
   const released = d.decodeRequestEvent({ at: 1_000, detail: { agent_id: 'main', reasons: ['budget', 'spent'] }, kind: 'pin_expired' });
   assert.deepEqual(released.detail.reasons, ['budget', 'spent']);
+});
+
+test('the routing log page decodes both row shapes from the fixture', () => {
+  const body = fixture('routing_log');
+  const page = d.decodeRoutingLogPage(body);
+  assert.deepEqual(page.rows.map((r) => r.type), body.rows.map((r) => r.type), 'every fixture row decodes, in the route order, under its own type');
+  assert.equal(page.counts, null, 'a page with no request filter answers no counts');
+  assert.equal(page.nextCursor, null);
+  const placed = page.rows.find((r) => r.type === 'decision' && r.requestId === 'r-static');
+  assert.ok(isIso(placed.at), 'a decision time decodes to ISO');
+  assert.deepEqual(placed.fact, [{ entity: null, key: 'prefix', unit: 'tokens', value: 31200 }, { entity: null, key: 'depth', unit: 'count', value: 1 }]);
+  assert.deepEqual(placed.rung, { depth: 1, prefixTokens: 31200, rung: 'static' });
+  assert.deepEqual(placed.cache, { hit: true, inputTokens: 1000, promisedTokens: 31200, readTokens: 500 });
+  const refused = page.rows.find((r) => r.type === 'decision' && r.kind === 'refused');
+  assert.deepEqual(refused.fact, [{ entity: { id: 'retired', kind: 'key' }, key: 'key', unit: null, value: 'retired' }], 'a fact names its entity');
+  assert.deepEqual(refused.refusal, { kind: 'key', reason: 'the key is not in the registry' });
+  const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
+  assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
+  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(1_600_000).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
+  const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
+  assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
+  const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
+  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null }, 'percent_per_hour']);
+  const round = page.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
+  assert.ok(isIso(round.at));
+  assert.deepEqual([round.accountId, round.agentId, round.poolId, round.requestId, round.sessionId], ['business', 'main', 'main', 'r-failover', 's1']);
+  assert.equal(round.detail.persisted, true, "the kind's own fields pass through for the console to read by name");
+  assert.deepEqual(page.rows.find((r) => r.type === 'event' && r.kind === 'overage_started').detail, {}, 'a null detail reads as no fields');
+  assert.deepEqual(d.decodeRoutingLogPage({ ...body, counts: { decisions: 3, events: 4 } }).counts, { decisions: 3, events: 4 });
+});
+
+test('a decision record decodes its six blocks and the completion', () => {
+  const body = fixture('decision');
+  const r = d.decodeDecisionRecord(body);
+  assert.deepEqual([r.version, r.requestId, r.seq], [1, 'r-static', 1]);
+  assert.equal(r.raw, body, 'the record keeps the route answer whole for the card to copy');
+  assert.ok(isIso(r.request.at));
+  assert.deepEqual([r.request.keyId, r.request.poolId, r.request.canonicalModel], ['desktop', 'main', 'claude-sonnet-5']);
+  assert.deepEqual(r.request.lane, { effort: '-', speed: 'standard', thinking: 'none' });
+  assert.equal(r.request.flags.marker, true);
+  assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: false });
+  assert.deepEqual([r.pin.found, r.pin.accountId, r.pin.released], ['none', null, []]);
+  assert.equal(r.pinReason, null, 'a record with a pin block names no reason');
+  assert.ok('shed_ahead_of_pace' in body.settings, 'the route names the shedding margin as the pool row does');
+  assert.ok(r.settings.shedAheadOfPace === null || typeof r.settings.shedAheadOfPace === 'number', 'the decoded settings carry the margin under its field name');
+  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.migrateBand], ['pace', 16, 0.05]);
+  assert.ok(isIso(r.settings.poolUpdatedAt));
+  const [chosen, spare] = r.candidates;
+  assert.match(chosen.prefix.static.hash, /^[0-9a-f]{64}$/, 'a prefix lookup carries the boundary hash whole');
+  assert.equal(chosen.prefix.staticMatch.ttlMs, 3_600_000);
+  assert.ok(isIso(chosen.prefix.static.writtenAt));
+  assert.deepEqual([chosen.prefix.content, chosen.prefix.contentMatch, chosen.prefix.withMain], [null, null, false]);
+  assert.deepEqual(chosen.tier, [0, 0, 0]);
+  assert.deepEqual([chosen.windows.fast_input.source, chosen.windows.fast_input.ageMs, chosen.windows.fast_input.ahead], ['head', 5_000, null]);
+  assert.ok(isIso(chosen.windows.fast_input.observedAt));
+  assert.deepEqual(chosen.cooldowns.map((c) => [c.scope, c.blocking]), [['model:claude-haiku-4-5-20251001', false]]);
+  assert.deepEqual([chosen.verdict, spare.verdict, spare.kind, spare.pace.hours], ['chosen', 'not_needed', 'api_key', null]);
+  assert.equal(spare.budget[0].spentUsd, 0.0036);
+  assert.deepEqual(r.walk.map((s) => s.step), ['pin', 'eligible', 'partitions', 'rung:content', 'rung:with_main', 'rung:static']);
+  assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
+  assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
+  assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 3, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
+  assert.equal(r.outcome.completion.hit, true);
+  assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
+  assert.ok(isIso(r.outcome.completion.completedAt));
+});
+
+test('a row with null optionals decodes to nulls', () => {
+  const s = d.decodeDecisionSummary({
+    account_id: null, agent_id: null, at: 1_000, attempt: 1, attempt_count: null, by: { kind: 'none', tier: null, value: '' }, cache: null, exhaustion: null, fact: [{ entity: null, key: 'pick', unit: null, value: true }, { entity: null, key: 'idle', unit: 'ms', value: 5 }],
+    fast: false, from_account_id: null, hold: null, key_id: null, kind: 'renewed', model: null, pool_id: null, probe: false, refusal: null, request_id: 'r', rule: null, rung: null, runner_up: null, score: null, seq: 1, session_id: null, skipped: 0, status: null, strategy: 'pace', tier: null, type: 'decision', warmth: null,
+  });
+  assert.deepEqual(
+    [s.accountId, s.agentId, s.attemptCount, s.cache, s.exhaustion, s.fromAccountId, s.hold, s.keyId, s.model, s.poolId, s.refusal, s.rule, s.rung, s.runnerUp, s.score, s.sessionId, s.status, s.tier, s.warmth, s.by.tier],
+    Array(20).fill(null),
+  );
+  assert.deepEqual(s.fact, [{ entity: null, key: 'idle', unit: 'ms', value: 5 }], 'a fact whose value is neither a number nor a string is dropped');
+  const e = d.decodeRoutingEvent({ account_id: null, actor: null, agent_id: null, at: 1_000, detail: null, id: 3, key_id: null, kind: 'router_started', model: null, pool_id: null, request_id: null, session_id: null, type: 'event' });
+  assert.deepEqual([e.accountId, e.actor, e.agentId, e.keyId, e.model, e.poolId, e.requestId, e.sessionId, e.detail], [null, null, null, null, null, null, null, null, {}]);
+  const page = d.decodeRoutingLogPage({ next_cursor: '1000:0:3', rows: [{ type: 'summary' }, { account_id: null, at: 1_000, detail: null, id: 3, kind: 'router_started', type: 'event' }, { at: 1_000, kind: 'placed', type: 'decision' }] });
+  assert.deepEqual(page.rows.map((r) => r.type), ['event'], 'a row of another type, or a decision naming no request, is dropped');
+  assert.equal(page.nextCursor, '1000:0:3');
+  const body = fixture('decision');
+  const bare = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, completion: null, hold: null, pin_written: null }, pin: null, pin_reason: 'pinning_off', settings: null });
+  assert.deepEqual([bare.pin, bare.pinReason, bare.settings, bare.outcome.completion, bare.outcome.pinWritten], [null, 'pinning_off', null, null, null]);
+});
+
+test("a refusal's record decodes its pin reason as not looked up", () => {
+  const body = fixture('decision');
+  const refused = { ...body, pin: null, pin_reason: 'not_looked_up', outcome: { ...body.outcome, account_id: null, completion: null, kind: 'refused', pin_events: [], pin_written: null, refusal: { kind: 'client_drift', reason: 'hash' }, rung: null } };
+  const r = d.decodeDecisionRecord(refused);
+  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { kind: 'client_drift', reason: 'hash' }]);
+  assert.equal(d.decodeDecisionRecord({ ...refused, pin_reason: 'looked_away' }).pinReason, null, 'a word outside the list reads as none, which the raw answer still carries');
+  assert.equal(d.decodeDecisionRecord(body).pinReason, null, "the fixture's placement reads its pin, so it names no reason");
+  assert.deepEqual([...d.PIN_REASON_VALUES], ['not_looked_up', 'pinning_off']);
+  assert.ok(d.SKIP_OBSTACLE_VALUES.includes('budget_unknown'), 'a trace names a budgeted member passed over while the ledger is behind');
 });
 
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
@@ -1163,7 +1257,7 @@ test('settings decode the members the route answers and nothing more', () => {
   const s = d.decodeSettings(wire);
   assert.deepEqual(
     Object.keys(s).sort(),
-    ['about', 'access', 'keepalive', 'listeners', 'planTables', 'pricing', 'retention', 'sessions', 'storage', 'usage'],
+    ['about', 'access', 'apiPrices', 'keepalive', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
   );
   const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
   assert.deepEqual(
@@ -1171,13 +1265,13 @@ test('settings decode the members the route answers and nothing more', () => {
     {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
+      apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
       keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
       listeners: ['metrics', 'proxy'],
-      planTables: ['cost'],
-      pricing: ['effective', 'effectiveDate', 'models', 'source'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
-      storage: ['ledgerPath', 'path', 'pricingPath'],
+      storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
+      subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'source', 'typeMultiplier', 'unit'],
       usage: ['cacheTtlSeconds'],
     },
     'each member carries what the pages read and no other key',
@@ -1185,9 +1279,10 @@ test('settings decode the members the route answers and nothing more', () => {
   assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
   assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
-  assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
+  assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
-  assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
+  const configured = d.decodeSettings({ ...wire, storage: { ...wire.storage, api_prices_path: './api_prices.yaml', subscription_costs_path: './subscription_costs.yaml' } }).storage;
+  assert.deepEqual([configured.apiPricesPath, configured.subscriptionCostsPath], ['./api_prices.yaml', './subscription_costs.yaml']);
 });
 
 test('a settings member the answer leaves out decodes to its default', () => {
@@ -1203,40 +1298,135 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
-  assert.deepEqual(without('storage'), { ledgerPath: '', path: '', pricingPath: null });
+  assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
   assert.deepEqual(without('usage'), { cacheTtlSeconds: 0 });
+  const bare = { ...wire };
+  delete bare.subscription_costs;
+  assert.deepEqual(
+    d.decodeSettings(bare).subscriptionCosts,
+    {
+      capacity: {},
+      effective: '',
+      modelWeight: {},
+      modelWindows: {},
+      overrides: {},
+      peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+      problem: null,
+      source: '',
+      typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+      unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+    },
+    'an answer without the cost model reads as an empty one, with no capacity, no weight and no problem',
+  );
 });
 
-test('settings decode the cost table with its tiers and null for unmeasured', () => {
+test('settings decode the subscription cost model from its envelope', () => {
   const wire = fixture('settings');
-  const { cost } = d.decodeSettings(wire).planTables;
-  assert.equal(cost.effective, wire.plan_tables.cost.effective);
-  assert.deepEqual(Object.keys(cost).sort(), ['bands', 'effective', 'tiers', 'windows']);
-  assert.deepEqual(Object.keys(cost.windows).sort(), ['five_hour', 'seven_day']);
-  assert.deepEqual(Object.keys(cost.windows.five_hour).sort(), Object.keys(wire.plan_tables.cost.windows.five_hour).sort());
-  assert.equal(cost.windows.five_hour['claude-opus-5-5'].input, 0.01461, 'a measured cell is its share');
-  assert.equal(cost.windows.five_hour['claude-opus-5'].input, null, 'an unmeasured cell reads null');
-  assert.equal(cost.windows.seven_day['claude-opus-5-5'].output, null, 'every 7-day cell is unmeasured');
-  assert.deepEqual(Object.keys(cost.windows.five_hour['claude-opus-5-5']).sort(), ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output']);
-  assert.deepEqual(cost.bands, [{ factor: 1.435, fromHour: 5, toHour: 11, weekdays: true, windows: ['five_hour'], zone: 'America/Los_Angeles' }]);
-  assert.deepEqual(cost.tiers.default_claude_pro, { fiveHour: 0.05, sevenDay: null });
-  assert.deepEqual(cost.tiers.default_claude_max_20x, { fiveHour: 1, sevenDay: 1 });
+  const s = d.decodeSettings(wire);
+  const costs = s.subscriptionCosts;
+  const content = wire.subscription_costs.content;
+  assert.equal(costs.source, wire.subscription_costs.source);
+  assert.equal(costs.effective, content.effective);
+  assert.deepEqual(costs.unit, { definedBy: { band: content.unit.defined_by.band, tier: content.unit.defined_by.tier, window: content.unit.defined_by.window }, unitsPerWindow: content.unit.units_per_window });
+  assert.equal(costs.capacity.default_claude_ai.fiveHour, content.capacity.default_claude_ai.five_hour, "Pro's 5-hour capacity under the key the profile reports");
+  assert.deepEqual(Object.keys(costs.capacity), Object.keys(content.capacity), "the tiers in the file's order");
+  for (const [tier, row] of Object.entries(content.capacity)) assert.deepEqual(costs.capacity[tier], { fiveHour: row.five_hour, sevenDay: row.seven_day }, tier);
+  assert.deepEqual(Object.keys(costs.modelWeight), Object.keys(content.model_weight), "the weights in the file's order");
+  assert.equal(costs.modelWeight['claude-opus-5-5'], content.model_weight['claude-opus-5-5']);
+  const peak = content.peak;
+  assert.deepEqual(costs.peak, { capacityFactor: { fiveHour: peak.capacity_factor.five_hour, sevenDay: peak.capacity_factor.seven_day }, fromHour: peak.from_hour, toHour: peak.to_hour, weekdays: peak.weekdays, zone: peak.zone });
+  const m = content.type_multiplier;
+  assert.deepEqual(costs.typeMultiplier, { cacheRead: m.cache_read, cacheWrite1h: m.cache_write_1h, cacheWrite5m: m.cache_write_5m, input: m.input, output: m.output });
+  const fable = content.model_windows.seven_day_fable;
+  assert.deepEqual(costs.modelWindows.seven_day_fable, { capacityFactor: fable.capacity_factor, of: fable.of });
+  assert.deepEqual(Object.keys(costs.overrides), Object.keys(content.overrides));
+  assert.deepEqual(s.apiPrices.models.map((p) => p.model), Object.keys(wire.api_prices.content.models), "the price rows in the file's order");
+  assert.deepEqual([s.apiPrices.effective, s.apiPrices.source], [wire.api_prices.content.effective, wire.api_prices.source]);
   const bare = { ...wire };
-  delete bare.plan_tables;
-  assert.deepEqual(d.decodeSettings(bare).planTables, { cost: { bands: [], effective: '', tiers: {}, windows: {} } }, 'an answer without the tables reads as empty ones');
+  delete bare.subscription_costs;
+  assert.deepEqual(Object.keys(d.decodeSettings(bare).subscriptionCosts.capacity), [], 'an answer without the cost model sizes no tier');
+});
+
+test('the cost model decodes an override with the members it names alone, and a null weight and capacity as null', () => {
+  const content = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body.subscription_costs.content;
+  const costs = d.decodeSubscriptionCosts(content);
+  const haiku = content.overrides['claude-haiku-4-5'];
+  assert.deepEqual(costs.overrides['claude-haiku-4-5'], { typeMultiplier: { cacheRead: haiku.type_multiplier.cache_read }, weightByWindow: haiku.weight_by_window });
+  assert.deepEqual(d.decodeSubscriptionCosts({ ...content, overrides: { 'claude-haiku-4-5': { weight_by_window: haiku.weight_by_window } } }).overrides['claude-haiku-4-5'], { weightByWindow: haiku.weight_by_window }, 'an override without multipliers carries none');
+  assert.equal(costs.modelWeight['claude-opus-5'], content.model_weight['claude-opus-5']);
+  assert.equal(costs.modelWeight['claude-opus-5'], null);
+  assert.equal(costs.capacity.default_claude_team.sevenDay, null);
+});
+
+test('a cost model answer with a member missing or of the wrong type reads as the empty model and says so', () => {
+  const wire = fixture('settings');
+  const envelope = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body.subscription_costs;
+  const decoded = (edit) => {
+    const content = structuredClone(envelope.content);
+    return d.decodeSettings({ ...wire, subscription_costs: { ...envelope, content: edit(content) ?? content } }).subscriptionCosts;
+  };
+  const unreadable = {
+    capacity: {},
+    effective: '',
+    modelWeight: {},
+    modelWindows: {},
+    overrides: {},
+    peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+    problem: "The cost model's answer could not be read.",
+    source: envelope.source,
+    typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+    unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+  };
+  // The input multiplier would price at 0, and the band's factor at 1, a share half the one the router charges.
+  assert.deepEqual(decoded((c) => { c.type_multiplier.input = 'bad'; }), unreadable, 'a multiplier that is not a number prices nothing');
+  assert.deepEqual(decoded((c) => { c.peak.capacity_factor.five_hour = '0.5'; }), unreadable, 'a factor sent as a string prices nothing');
+  const malformed = {
+    'a capacity left out': (c) => { delete c.capacity.default_claude_ai.five_hour; },
+    'a model window factor left out': (c) => { delete c.model_windows.seven_day_fable.capacity_factor; },
+    'a weekday flag sent as a string': (c) => { c.peak.weekdays = 'true'; },
+    'a weight map sent as a list': (c) => { c.model_weight = []; },
+    'a weight that is neither a number nor null': (c) => { c.model_weight['claude-opus-5-5'] = '2'; },
+    'a window weight that is null': (c) => { c.overrides['claude-haiku-4-5'].weight_by_window.seven_day = null; },
+    'a zone that is not a string': (c) => { c.peak.zone = 5; },
+    'an override multiplier sent as a string': (c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = '0.2'; },
+  };
+  for (const [what, edit] of Object.entries(malformed)) assert.deepEqual(decoded(edit), unreadable, what);
+  assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: { ...envelope, content: undefined } }).subscriptionCosts, unreadable, 'an envelope without its content');
+  assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: null }).subscriptionCosts, { ...unreadable, source: '' }, 'an envelope that is not an object');
+  const read = decoded(() => undefined);
+  assert.equal(read.problem, null, 'the test tables read with no problem');
+  assert.equal(read.modelWeight['claude-opus-5'], null, 'a null weight still decodes');
+  const weightByWindow = envelope.content.overrides['claude-haiku-4-5'].weight_by_window;
+  assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = null; }).overrides['claude-haiku-4-5'], { typeMultiplier: {}, weightByWindow }, 'a null override multiplier keeps the shared one');
+  assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier = null; }).overrides['claude-haiku-4-5'], { weightByWindow }, 'a null override block names nothing');
 });
 
 test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {
   const wire = fixture('settings');
-  const pricingOf = (effective) => d.decodeSettings({ ...wire, pricing: { ...wire.pricing, effective } }).pricing;
+  const pricingOf = (effective) => d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, content: { ...wire.api_prices.content, effective } } }).apiPrices;
   // V8 reads some free text as a date ("version 3" as March 2001), so only text that opens with an ISO date counts.
   for (const effective of ['v3', '', 'Q3 2026', 'version 3', 'rev 2']) {
     const pricing = pricingOf(effective);
     assert.deepEqual([pricing.effective, pricing.effectiveDate], [effective, null], `${JSON.stringify(effective)} is kept as sent`);
-    assert.equal(pricing.models.length, wire.pricing.models.length, 'the table beside it still decodes');
+    assert.equal(pricing.models.length, Object.keys(wire.api_prices.content.models).length, 'the table beside it still decodes');
   }
   const dated = pricingOf('2026-10-01');
   assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
+});
+
+test("a table's effective date reads as the calendar date the file names in every zone, and free text as sent", () => {
+  // A date-only effective parses to midnight UTC, which a zone west of UTC reads as the evening before; the case sets
+  // such a zone itself, so it holds on a host in any zone.
+  const zone = process.env.TZ;
+  process.env.TZ = 'America/Los_Angeles';
+  try {
+    assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
+    assert.equal(d.effectiveLabel('2026-10-01T23:00'), 'Oct 01, 2026', "a date with a time reads in the browser's zone");
+    assert.equal(d.effectiveLabel('v3'), 'v3');
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
 });
 
 test('an account patch encodes the cancelled flag and its end', () => {
@@ -1246,11 +1436,15 @@ test('an account patch encodes the cancelled flag and its end', () => {
 });
 
 test('settings, pricing, pairing, quota, and usage decode', () => {
-  const s = d.decodeSettings(fixture('settings'));
+  const wire = fixture('settings');
+  const s = d.decodeSettings(wire);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.deepEqual(s.keepalive, { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 });
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
-  assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
+  const rows = wire.api_prices.content.models;
+  assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);
+  const opus = s.apiPrices.models.find((m) => m.model === 'claude-opus-5-5');
+  assert.deepEqual([opus.cacheWrite1hPerM, opus.fast.outputPerM], [rows['claude-opus-5-5'].cache_write_1h, rows['claude-opus-5-5'].fast.output], "a cell and a fast cell read under the file's names");
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));
@@ -1359,13 +1553,13 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
   assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
-test('a session decodes its burn unit and both net balances, and a pin the table cannot price reads no burn', () => {
+test('a session decodes its burn unit and both net balances, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
-  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, whose every cell the cost table leaves unmeasured');
+  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
   const pinned = d.decodeSession(wire);
-  assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its cells');
-  assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the table cannot price reads null beside its unit');
+  assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
+  assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
   const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_usd: 0.25 } }).keepalive;
   assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);

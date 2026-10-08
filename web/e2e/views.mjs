@@ -105,6 +105,8 @@ const VIEWS = [
   { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
+  // Last, so every view before it draws the instant it drew without the log in the pass.
+  { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
 ];
 
 /** How far the page's clock moves per step. */
@@ -592,6 +594,71 @@ async function expertRow(theme) {
   measurements.push(`${theme} /pools sidebar status ${JSON.stringify(read)}`);
   if (JSON.stringify(read.rows) !== '["expert","version"]') failures.push(`${theme} /pools: the sidebar status holds ${read.rows.join(', ') || 'nothing'}, not the Expert view row then the version row`);
   else if (read.expert.bottom > read.version.top) failures.push(`${theme} /pools: the Expert view row ends at ${read.expert.bottom}, past the version row's top at ${read.version.top}`);
+}
+
+/**
+ * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 150 px at both, Account 246 then 256, Model only
+ * at 1440, and the table as wide as its card with nothing to scroll sideways. The pass's viewport is put back for the
+ * shot.
+ */
+async function routingLogColumns(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const table = document.querySelector('.routing-log__table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      const width = (name) => {
+        const th = table.querySelector(`thead th.routing-log__${name}`);
+        return th && getComputedStyle(th).display !== 'none' ? Math.round(th.getBoundingClientRect().width * 10) / 10 : null;
+      };
+      return {
+        account: width('account'),
+        client: wrap.clientWidth,
+        fact: width('fact'),
+        model: width('model'),
+        scroll: wrap.scrollWidth,
+        table: Math.round(table.getBoundingClientRect().width * 10) / 10,
+      };
+    });
+  for (const { account, height, model, width } of [
+    { account: 246, height: 800, model: null, width: 1280 },
+    { account: 256, height: 900, model: 150, width: 1440 },
+  ]) {
+    const where = `at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify(got)}`);
+    if (got === null) {
+      say(`${where} no table to measure`);
+      continue;
+    }
+    if (got.fact !== 150) say(`${where} the Fact column is ${got.fact}px, not 150px`);
+    if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
+    if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+    if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+    if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+}
+
+/**
+ * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
+ * Routing log link, and with the log open both are drawn and the link is the active one.
+ */
+async function diagnosticsNav(theme, path) {
+  const read = await page.evaluate(() => {
+    const link = document.querySelector('nav.nav a[href="/routing-log"]');
+    return { active: link?.classList.contains('is-active') ?? null, heading: document.querySelector('nav.nav .nav__heading')?.textContent ?? null, link: link !== null };
+  });
+  measurements.push(`${theme} ${path} diagnostics group ${JSON.stringify(read)}`);
+  if (path === '/routing-log') {
+    if (read.heading !== 'Diagnostics' || !read.link || read.active !== true) failures.push(`${theme} /routing-log: the sidebar reads ${JSON.stringify(read)}, not the Diagnostics heading over the active Routing log link`);
+  } else if (read.heading !== null || read.link) {
+    failures.push(`${theme} ${path}: the sidebar draws ${JSON.stringify(read)} with the expert view off`);
+  }
 }
 
 async function poolChips(theme) {
@@ -1284,15 +1351,16 @@ async function poolDialogWalk(theme, mode) {
 }
 
 /**
- * The cost reference opened from the pool dialog's Cache TTL group keeps its own capped height, so its footer stays
- * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame. Load shedding,
- * Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the clock,
- * which every view's shot reads, so this runs after the views.
+ * The cost reference opened from the pool dialog's Cache TTL group keeps its own fixed height, so its footer stays
+ * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame under it. Load
+ * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the
+ * clock, which every view's shot reads, so this runs after the views.
  */
 async function poolCostReference(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog Cache TTL: ${what}`);
   const frame = page.locator('dialog.dialog--grouped[open]');
-  const nested = frame.locator('dialog[open]');
+  // The cost reference lives under the body, outside the pool dialog's tree, and opens over it.
+  const nested = page.locator('dialog.dialog--costs[open]');
   try {
     await page.goto(`${base}/pools`);
     await booted();
@@ -1303,14 +1371,14 @@ async function poolCostReference(theme) {
     await frame.locator('section.dialog-group[aria-label="Cache TTL"]').getByRole('button', { name: 'Cost reference', exact: true }).click();
     await nested.waitFor({ state: 'visible', timeout: 15_000 });
     await advance(LOAD_MS);
-    await nested.locator('tbody td.num').first().waitFor({ timeout: 15_000 });
+    await nested.locator('.cost-ref__panel:not([hidden]) tbody td.num').first().waitFor({ timeout: 15_000 });
   } catch (error) {
     say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
   const read = await frame.evaluate((el) => {
     const inner = el.querySelector(':scope > .dialog__inner');
-    const child = el.querySelector('dialog[open]');
+    const child = document.querySelector('dialog.dialog--costs[open]');
     return {
       footBottom: child?.querySelector('.dialog__foot')?.getBoundingClientRect().bottom ?? null,
       frame: el.clientHeight,
@@ -1553,7 +1621,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
-  const want = ['Downstream client configuration', 'Pricing', 'Appearance', 'About'];
+  const want = ['Downstream client configuration', 'Appearance', 'About'];
   if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
   const about = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -1571,7 +1639,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2141,14 +2209,15 @@ async function burnCards(theme) {
 
 /**
  * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
- * 7-day entry, on type and swatch size, and, where an account whose tier the cost table does not size draws a tier
+ * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
  * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
- * for `secondary`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
- * there the pass records that the entry is not drawn.
+ * for `secondary`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
+ * traffic, so there the pass records that the entry is not drawn.
  */
 async function planLegend(theme) {
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
+    if (mock) await burnShot(theme);
     const read = await page.evaluate(() => {
       const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
       if (!card) return null;
@@ -2171,7 +2240,7 @@ async function planLegend(theme) {
       return;
     }
     if (read.unlisted === null) {
-      if (mock) failures.push(`${theme} /analytics: the story's secondary account runs on a model the table cannot price, yet no model unlisted entry draws`);
+      if (mock) failures.push(`${theme} /analytics: the story's secondary account runs on a model the cost model cannot price, yet no model unlisted entry draws`);
       return;
     }
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
@@ -2497,40 +2566,193 @@ async function fastLane(theme, path) {
 }
 
 /**
- * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
- * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
- * list view's shot, so that shot stays the list alone.
+ * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
+ * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
+ * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
+ * type and height, and the request class badge its box. A request that ended with no answer draws no chip, so then the
+ * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
+ * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
+ * alone.
  */
-async function requestDrawer(theme) {
+async function requestDrawerCompact(theme) {
+  const say = (what) => failures.push(`${theme} /requests: ${what}`);
   await page.locator('.requests__table tbody tr').first().click();
   await advance(LOAD_MS);
   try {
-    await page.waitForSelector('.drawer .attempt', { timeout: 15_000 });
+    await page.waitForSelector('.drawer .kv__row', { timeout: 15_000 });
   } catch {
-    failures.push(`${theme} /requests: the drawer drew no attempt`);
+    say('the drawer drew no row');
     return;
   }
-  const drawn = await page.evaluate(() => {
-    const box = (el) => {
-      const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
-    };
-    const status = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Status')?.querySelector('.badge');
-    const client = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Client')?.querySelector('.badge');
-    const traces = [...document.querySelectorAll('.drawer .attempt')].map((a) => a.querySelector('.selection-trace'));
-    return {
-      attempts: traces.length,
-      badges: [...(client ? [client] : []), ...document.querySelectorAll('.drawer .selection-trace .badge')].map((b) => ({ box: box(b), text: b.textContent })),
-      overflow: traces.filter((t) => t && t.scrollWidth > t.clientWidth).length,
-      reference: status ? box(status) : null,
-      traces: traces.filter(Boolean).length,
-    };
+  const read = () =>
+    page.evaluate(() => {
+      // A served model's chip is mono, so a chip's type is read by size and line rather than by face.
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontSize}/${s.lineHeight}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const badgeBox = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const rowOf = (label) => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === label)?.querySelector('dd');
+      const table = document.querySelector('.requests__table');
+      const wrap = table?.closest('.table-wrap');
+      const status = rowOf('Status')?.querySelector('.badge');
+      const requestClass = rowOf('Client')?.querySelector('.badge');
+      const head = document.querySelector('.drawer__head');
+      return {
+        answer: rowOf('Answer')?.textContent ?? null,
+        badge: requestClass && status ? { box: badgeBox(requestClass), reference: badgeBox(status), text: requestClass.textContent } : null,
+        chips: [...document.querySelectorAll('.drawer .kv__row')].flatMap((r) => [...r.querySelectorAll('dd .chip')].map((c) => ({ box: box(c), row: r.querySelector('dt')?.textContent, text: c.textContent }))),
+        drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
+        head: head ? Math.round(head.getBoundingClientRect().height) : null,
+        heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+        reference: status ? box(status) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: table.scrollWidth } : null,
+      };
+    });
+  let chips = 0;
+  for (const { drawer, height, width } of [
+    { drawer: 400, height: 800, width: 1280 },
+    { drawer: 440, height: 900, width: 1440 },
+  ]) {
+    const where = `the open drawer at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
+    if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
+    if (got.head !== 70) say(`${where}: the head is ${got.head}px tall, not 70px`);
+    if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
+    if (got.table === null) say(`${where} has no table to measure`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
+    if (got.reference === null) say(`${where} has no status badge to measure against`);
+    if (got.badge !== null && got.badge.box !== got.badge.reference) say(`${where}: the "${got.badge.text}" class badge measures ${got.badge.box} against the status badge's ${got.badge.reference}`);
+    chips += got.chips.length;
+    for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  if (chips > 0) return;
+  const answered = page.locator('.requests__table tbody tr', { has: page.locator('.requests__status .badge', { hasText: /^200$/ }) }).first();
+  if ((await answered.count()) === 0) {
+    say('no request answered 200 to read the drawer chips on');
+    return;
+  }
+  await answered.click();
+  await advance(LOAD_MS);
+  await settle();
+  const got = await read();
+  measurements.push(`${theme} /requests drawer of the newest answered request ${JSON.stringify(got)}`);
+  if (got.reference === null) say('the newest answered request has no status badge to measure against');
+  if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
+  for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+}
+
+const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
+
+/** Opens `row` beneath itself and answers whether a card with its walk arrived. */
+async function openDecision(row) {
+  await row.locator('td.routing-log__kind').click();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The site's Routing log shot shows a decision card open, so the first decision row (in the mock's story the renewal
+ * at its newest instant) opens before the shot. A second click shuts a row, so `decisionCard` measures this card after
+ * the shot rather than opening it again.
+ */
+async function firstDecisionOpen(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const first = page.locator(DECISION_ROWS).first();
+  if ((await first.count()) === 0) {
+    say('no decision row to open');
+    return;
+  }
+  if (!(await openDecision(first))) say('the first decision row opened to no card');
+  await atRest();
+  await settle();
+}
+
+/**
+ * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the walk and the candidate
+ * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, and every verdict badge of the walk
+ * takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
+ * placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ */
+async function decisionCard(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const decisions = page.locator(DECISION_ROWS);
+  // `firstDecisionOpen` has named the missing card already.
+  if ((await page.locator('.routing-log__panel .decision-card__walk').count()) === 0) return;
+  const read = () =>
+    page.evaluate(() => {
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const card = document.querySelector('.routing-log__panel .decision-card');
+      const walk = card?.querySelector('.decision-card__walk');
+      const table = card?.querySelector('.decision-card__candidates');
+      const wrap = table?.closest('.table-wrap');
+      const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
+      const kind = card?.querySelector('.decision-card__verdict > .badge');
+      return {
+        badges: [...(card?.querySelectorAll('.decision-card__walk .badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
+        card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
+        log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
+        reference: kind ? box(kind) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
+        walk: walk ? { client: walk.clientWidth, scroll: walk.scrollWidth } : null,
+      };
+    });
+  for (const { height, table, width } of [
+    { height: 800, table: 958, width: 1280 },
+    { height: 900, table: 1118, width: 1440 },
+  ]) {
+    const where = `the open card at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log decision card at ${width} by ${height} ${JSON.stringify({ ...got, badges: got.badges.length })}`);
+    if (got.card === null || got.walk === null) {
+      say(`${where} draws no walk`);
+      continue;
+    }
+    if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
+    if (got.walk.scroll > got.walk.client) say(`${where}: the walk runs ${got.walk.scroll}px in ${got.walk.client}px`);
+    if (got.table === null) say(`${where} draws no candidate table`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
+    else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
+    if (got.log !== null && got.log.scroll > got.log.client) say(`${where}: the log's table scrolls sideways (${got.log.scroll}px in ${got.log.client}px)`);
+    if (got.reference === null) say(`${where} has no kind badge to measure against`);
+    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the "${b.text}" verdict badge measures ${b.box} against the kind badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
+  if ((await rung.count()) === 0) {
+    if (mock) say('the story lists no rung placement whose Prefix cell to read');
+    return;
+  }
+  if (!(await openDecision(rung))) {
+    say('the first rung placement opened to no card');
+    return;
+  }
+  const prefix = await page.evaluate(() => {
+    const cell = [...document.querySelectorAll('.routing-log__panel .decision-card')].at(-1)?.querySelector('.decision-card__candidates tr.is-chosen .decision-card__prefix');
+    const hash = cell?.querySelector('.decision-card__hash');
+    return { hash: hash?.textContent ?? null, title: hash?.getAttribute('title') ?? null, warm: cell?.querySelector('.decision-card__warm')?.textContent ?? null };
   });
-  measurements.push(`${theme} /requests drawer ${JSON.stringify(drawn)}`);
-  if (drawn.traces !== drawn.attempts) failures.push(`${theme} /requests: ${drawn.traces} of ${drawn.attempts} attempts draw a selection trace`);
-  if (drawn.overflow > 0) failures.push(`${theme} /requests: ${drawn.overflow} selection traces run past the drawer`);
-  if (drawn.reference === null) failures.push(`${theme} /requests: the drawer has no status badge to measure against`);
-  for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
+  measurements.push(`${theme} /routing-log prefix cell ${JSON.stringify(prefix)}`);
+  if (prefix.hash?.length !== 8 || prefix.title?.length !== 64 || !prefix.title.startsWith(prefix.hash) || !/^warm until /.test(prefix.warm ?? '')) say(`the chosen row's Prefix cell reads ${JSON.stringify(prefix)}, not the hash's eight characters with the whole hash on hover and the warm-until chip`);
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */
@@ -3037,10 +3259,9 @@ async function sessionsLead(theme) {
 }
 
 /**
- * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
- * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
- * and their cells read in the type of the price columns above them; a row the cost table covers is the height of
- * one it does not and of a price row.
+ * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
+ * every second model sits on --surface-2 against --surface with its sub-rows on its shade, and the plan rates'
+ * divider sits on --surface-3. The mock pass writes each tab of the open dialog at 1280 by 800.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -3049,55 +3270,101 @@ async function costReference(theme) {
     await page.getByRole('button', { name: 'Cost reference', exact: true }).first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await advance(LOAD_MS);
-    await dialog.locator('tbody tr td.num').first().waitFor({ timeout: 15_000 });
+    await dialog.locator('.cost-ref__panel:not([hidden]) tbody tr td.num').first().waitFor({ timeout: 15_000 });
   } catch (error) {
-    say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
+    say(`the cost reference never drew its tables (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  const read = await page.evaluate(() => {
-    const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
-    const height = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
-    const dlg = [...document.querySelectorAll('dialog[open]')].pop();
-    const prices = dlg.querySelector('.cost-ref__prices');
-    const shares = dlg.querySelector('.cost-ref__shares');
-    const headOf = (table, text) => [...(table?.querySelectorAll('thead th') ?? [])].find((th) => th.textContent?.trim() === text) ?? null;
-    const overflow = (table) => {
-      const wrap = table?.closest('.table-wrap');
-      return wrap ? wrap.scrollWidth - wrap.clientWidth : null;
-    };
-    // A share row is the model and ten cells, one five-cell group per window.
-    const rows = [...(shares?.querySelectorAll('tbody tr') ?? [])];
-    const covered = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() !== '-');
-    const bare = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() === '-');
-    const priceRow = prices?.querySelector('tbody tr') ?? null;
-    return {
-      bareHeight: height(bare),
-      coveredHeight: height(covered),
-      groups: [...(shares?.querySelectorAll('thead th') ?? [])].filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
-      modelEdges: [prices, shares].map((table) => {
-        const th = table?.querySelector('thead th');
-        return th ? Math.round(th.getBoundingClientRect().right) : null;
-      }),
-      overflow: { prices: overflow(prices), shares: overflow(shares) },
-      planCell: type(covered?.children[2]),
-      planHead: type(headOf(shares, 'Cache read')),
-      priceCell: type(priceRow?.children[4]),
-      priceHead: type(headOf(prices, 'Cache read')),
-      priceHeight: height(priceRow),
-    };
-  });
-  measurements.push(`${theme} /sessions cost reference ${JSON.stringify(read)}`);
-  for (const [table, px] of Object.entries(read.overflow)) if (px === null || px > 0) say(`the ${table} table runs ${px}px past the dialog`);
-  const [priceEdge, shareEdge] = read.modelEdges;
-  if (priceEdge === null || shareEdge === null || Math.abs(priceEdge - shareEdge) > 1) say(`the Model columns end at ${priceEdge}px and ${shareEdge}px`);
-  if (read.planHead === null || read.planHead !== read.priceHead) say(`the 5-hour window's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
-  if (read.groups.length !== 2 || read.groups.some((group) => group !== read.priceHead)) say(`the window group heads read ${JSON.stringify(read.groups)} against the price heads' ${read.priceHead}`);
-  if (read.planCell === null || read.planCell !== read.priceCell) say(`a window share cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
-  if (read.coveredHeight === null || read.coveredHeight !== read.priceHeight) say(`a row with window shares is ${read.coveredHeight}px tall against a price row's ${read.priceHeight}px`);
-  if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with window shares is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
+  const TABS = [
+    ['Tiers and peak band', 'tiers'],
+    ['Plan rates', 'plan-rates'],
+    ['API prices', 'api-prices'],
+  ];
+  for (const size of [
+    { height: 800, width: 1280 },
+    { height: 900, width: 1440 },
+  ]) {
+    await page.setViewportSize(size);
+    await settle();
+    for (const [label, slug] of TABS) {
+      const where = `the cost reference's ${label} at ${size.width} by ${size.height}`;
+      await dialog.getByRole('tab', { name: label, exact: true }).click();
+      await settle();
+      const read = await page.evaluate(() => {
+        const dlg = [...document.querySelectorAll('dialog[open]')].pop();
+        const panel = dlg.querySelector('.cost-ref__panel:not([hidden])');
+        const tone = (name) => {
+          const probe = document.createElement('div');
+          probe.style.background = `var(${name})`;
+          dlg.append(probe);
+          const color = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return color;
+        };
+        const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+        // The color a cell reads on: its own background, else the first ancestor's that paints one.
+        const shade = (el) => {
+          for (let at = el; at; at = at.parentElement) {
+            const bg = getComputedStyle(at).backgroundColor;
+            if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+          }
+          return null;
+        };
+        const tables = [...panel.querySelectorAll('table')].map((table) => {
+          const wrap = table.closest('.table-wrap') ?? table.parentElement;
+          const wrong = [];
+          let n = -1;
+          let alts = 0;
+          for (const row of table.querySelectorAll('tbody tr')) {
+            const name = row.children[0]?.textContent?.trim() ?? '';
+            const bg = shade(row.children[0]);
+            if (row.classList.contains('is-divider')) {
+              n = -1;
+              if (bg !== tones.surface3) wrong.push(`the divider on ${bg}`);
+              continue;
+            }
+            if (!row.classList.contains('cost-ref__sub')) n += 1;
+            const want = n % 2 === 1 ? tones.surface2 : tones.surface;
+            if (n % 2 === 1) alts += 1;
+            if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
+          }
+          return { alts, overflow: Math.max(wrap.scrollWidth - wrap.clientWidth, Math.round(table.getBoundingClientRect().right - wrap.getBoundingClientRect().right)), rows: table.querySelectorAll('tbody tr').length, wrong };
+        });
+        const body = dlg.querySelector('.dialog__body');
+        return { sideways: body.scrollWidth - body.clientWidth, tables, tones };
+      });
+      measurements.push(`${theme} /sessions cost reference ${slug} ${size.width}x${size.height} ${JSON.stringify(read)}`);
+      if (read.tables.length === 0) say(`${where} draws no table`);
+      if (read.sideways > 0) say(`${where} scrolls ${read.sideways}px sideways`);
+      for (const [i, t] of read.tables.entries()) {
+        if (t.overflow > 0) say(`${where}: table ${i + 1} runs ${t.overflow}px past its wrap`);
+        if (t.rows > 1 && t.alts === 0) say(`${where}: table ${i + 1} shades no second row`);
+        for (const w of t.wrong) say(`${where}: table ${i + 1} draws ${w}`);
+      }
+      if (mock && size.width === 1280) {
+        await atRest();
+        await dialog.screenshot({ path: join(shots, theme, `cost-reference-${slug}.png`) });
+      }
+    }
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
+}
+
+/**
+ * The Analytics page's Burn tab, which the views' shots never reach: the plan chart with the peak band shaded. It
+ * runs on the tab the plan legend's check opened, so the pass takes no step of the clock more than it did before.
+ */
+async function burnShot(theme) {
+  await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
+  const areas = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelectorAll('.recharts-reference-area').length ?? 0);
+  measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
+  if (areas === 0) failures.push(`${theme} /analytics: the Burn view's plan chart shades no hour of the peak band`);
+  await atRest();
+  await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }
 
 /**
@@ -3129,8 +3396,8 @@ async function sessionsTableFits(theme) {
 
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
- * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and
- * each item takes a pointer at its centre.
+ * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
+ * item takes a pointer at its centre, and the four entries draw a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3157,7 +3424,7 @@ async function sessionRowMenu(theme) {
     });
     return {
       items,
-      list: { left: Math.round(box.left), right: Math.round(box.right) },
+      list: { height: Math.round(box.height), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) },
       lists: 1,
       placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
       wrap: { left: Math.round(edge.left + wrap.clientLeft), right: Math.round(edge.left + wrap.clientLeft + wrap.clientWidth) },
@@ -3170,6 +3437,7 @@ async function sessionRowMenu(theme) {
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
+  if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
@@ -3332,6 +3600,7 @@ try {
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
+        await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
         await remainingCards(theme);
@@ -3389,6 +3658,11 @@ try {
         await requestsTableFits(theme);
         await speedFilter(theme);
       }
+      if (view.path === '/routing-log') {
+        await routingLogColumns(theme);
+        await diagnosticsNav(theme, view.path);
+        await firstDecisionOpen(theme);
+      }
       if (view.path === '/quota') {
         await quotaChips(theme);
         await quotaPollLines(theme);
@@ -3400,7 +3674,8 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/requests') await requestDrawerCompact(theme);
+      if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }
   }

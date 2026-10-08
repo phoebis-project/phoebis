@@ -90,6 +90,30 @@
   font-weight: 600;
 }
 
+/* The group sits inside the nav, so the nav takes the sidebar's spare height while it is drawn and the group rides its
+   foot, above the status block. */
+.nav:has(> .nav__group) {
+  flex: 1 0 auto;
+}
+
+.nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.nav__heading {
+  padding: 0 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .sidebar__status {
   margin-top: auto;
   padding: 12px 10px 0;
@@ -734,6 +758,15 @@ textarea.input {
   text-align: center;
 }
 
+.mselect__group {
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .menu {
   position: relative;
   display: inline-block;
@@ -953,9 +986,19 @@ textarea.input {
   height: min(800px, calc(100vh - 48px));
 }
 
-/* The child combinator keeps a dialog opened from inside a group, such as the cost reference, on its own capped
-   height, so its body scrolls under a footer that stays in view. */
+/* The child combinator keeps a dialog opened from inside a group on its own capped height, so its body scrolls under a
+   footer that stays in view. */
 .dialog--grouped > .dialog__inner {
+  height: 100%;
+  max-height: none;
+}
+
+/* The cost reference takes the grouped dialogs' fixed height, so the frame stays still between its tabs. */
+.dialog--costs {
+  height: min(800px, calc(100vh - 48px));
+}
+
+.dialog--costs > .dialog__inner {
   height: 100%;
   max-height: none;
 }

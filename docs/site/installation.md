@@ -64,7 +64,7 @@ sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis
 sudo useradd --system --home /var/lib/phoebis --shell /usr/sbin/nologin phoebis
 sudo install -d -m 0755 /etc/phoebis
 sudo install -m 0644 deploy/phoebis.service /etc/systemd/system/phoebis.service
-sudo install -m 0644 crates/ledger/pricing.yaml /etc/phoebis/pricing.yaml
+sudo install -m 0644 crates/ledger/api_prices.yaml /etc/phoebis/api_prices.yaml
 sudo phoebis init --config /etc/phoebis/config.yaml --data-dir /var/lib/phoebis \
   --env-file /etc/phoebis/phoebis.env --owner phoebis
 sudo systemctl daemon-reload
@@ -83,8 +83,10 @@ credential in `router.sqlite`, so it stays out of any backup that carries the da
 
 The file `init` wrote names your listeners. To reach the console or the proxy from another machine, pass
 `--admin-listen` or `--proxy-listen`, with `--admin-cert` and `--admin-key` or `--proxy-cert` and `--proxy-key` for TLS,
-or edit the `tls` key as [TLS on the listeners](#tls-on-the-listeners) says. Then validate it before enabling the
-service:
+or edit the `tls` key as [TLS on the listeners](#tls-on-the-listeners) says. It names
+`/etc/phoebis/subscription_costs.yaml` as `stats.subscription_costs_path`, beside the price table; leave that file
+uninstalled: the shipped model is the plan meter's current measurement and a release updates it, and a copy there would
+shadow every later release's constants until it was copied again. Then validate it before enabling the service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -162,9 +164,10 @@ with `Secure` and the Origin check sees the front's hostname in both headers and
 `Origin`, as it does on a listener that terminates TLS itself.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
-place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
-volume is read at the next start, as `stats.pricing_path` in the container configuration names it. Pulling the image
-needs `docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
+place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
+the volume is read at the next start, as `stats.api_prices_path` in the container configuration names it, and a
+subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` the same. Pulling the image needs
+`docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
 [operations page](operations.md#upgrades).
 
 ## Commands
@@ -243,10 +246,11 @@ file (64 hex characters and a newline, created at `0600` in one open), the envir
 (`0600`, `<NAME>=<secret>` and `RUST_LOG=info`), and the bootstrap file at `--config` (`0644`); it creates the data
 directory and every missing parent of those paths at `0700`. It opens no database, so the first start creates both and
 seals the key canary. The bootstrap file is [the example](#the-bootstrap-file) with the two listeners,
-`admin.secret_env`, the key file, both databases under the data directory and `stats.pricing_path` (`pricing.yaml`
-beside the bootstrap file) filled in, every path absolute and every other line as the example spells it. The admin
-secret is 32 random bytes in base64url, 43 characters, and never lands in the bootstrap file. `init` loads the written
-file the way `check-config` does before it answers.
+`admin.secret_env`, the key file, both databases under the data directory, `stats.api_prices_path` (`api_prices.yaml`
+beside the bootstrap file) and `stats.subscription_costs_path` (`subscription_costs.yaml` beside it) filled in, every
+path absolute and every other line as the example spells it. The admin secret is 32 random bytes in base64url, 43
+characters, and never lands in the bootstrap file. `init` loads the written file the way `check-config` does before it
+answers.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -293,12 +297,13 @@ without `--proxy-key` or an address that does not parse, exits 2.
 
 Under `--container` the bootstrap file's directory is the compose directory: `init` writes `storage.key` and
 `phoebis.env` beside the file, the container's paths inside it (`/run/secrets/router-storage-key`,
-`/var/lib/phoebis/router.sqlite`, `/var/lib/phoebis/ledger.sqlite` and `/var/lib/phoebis/pricing.yaml`), both listeners
-on every interface with no `tls` line, and `metrics_listen: 0.0.0.0:9464`. It asks nothing and creates no data
-directory, since `/var/lib/phoebis` is the volume inside the container. The listen and TLS flags still apply;
-`--data-dir`, `--env-file` and `--key-file` are usage errors beside it. The summary ends with the steps that remain, the
-key file's owner and mode and the image tag in `compose.yaml`, and with `docker compose run --rm phoebis check-config`
-as the next command, since the key's path in the file is the container's.
+`/var/lib/phoebis/router.sqlite`, `/var/lib/phoebis/ledger.sqlite`, `/var/lib/phoebis/api_prices.yaml` and
+`/var/lib/phoebis/subscription_costs.yaml`), both listeners on every interface with no `tls` line, and
+`metrics_listen: 0.0.0.0:9464`. It asks nothing and creates no data directory, since `/var/lib/phoebis` is the volume
+inside the container. The listen and TLS flags still apply; `--data-dir`, `--env-file` and `--key-file` are usage errors
+beside it. The summary ends with the steps that remain, the key file's owner and mode and the image tag in
+`compose.yaml`, and with `docker compose run --rm phoebis check-config` as the next command, since the key's path in the
+file is the container's.
 
 `status` probes the proxy listener, reads the admin API and prints one screen of readiness, pools, accounts and live
 pins ([Is it up?](operations.md#is-it-up) shows the screen and reads it line by line). It probes `proxy.listen` as
@@ -421,17 +426,19 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
 stats:
+  # Overrides the shipped price table; a missing file is fine.
+  api_prices_path: ./api_prices.yaml
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
   ledger_path: ./data/ledger.sqlite
   # Prometheus text format at /metrics; bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Overrides the shipped price table; a missing file is fine.
-  pricing_path: ./pricing.yaml
   # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400
+  # Overrides the shipped subscription cost model; a missing file is fine.
+  subscription_costs_path: ./subscription_costs.yaml
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
@@ -676,23 +683,31 @@ Defaults whole.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
+| `api_prices_path` | `./api_prices.yaml` | a path; a missing file is fine |
 | `body_capture_max_hours` | `72` | 1 to 168 |
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
-| `pricing_path` | `./pricing.yaml` | a path; a missing file is fine |
-| `retention_days` | `90` | 0 for forever, otherwise any number of days; also covers the quota and extra-usage samples |
+| `retention_days` | `90` | 0 for forever, else a number of days; also covers decisions, quota and extra-usage samples |
 | `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
+| `subscription_costs_path` | `./subscription_costs.yaml` | a path; a missing file is fine |
 
 Refused with:
 
+- `api_prices_path`: `loading the price table from {path}` with the rule under it, `pricing table: {rule}`, for a
+  malformed file or a repeated key, and with the read error under it for a file that is there and cannot be read
 - `body_capture_max_hours`: `stats.body_capture_max_hours must be between 1 and 168, not {value}`
 - `ledger_path`: `stats.ledger_path {path} must name a database file inside a directory`; and
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
 - `metrics_listen`: a YAML error
-- `pricing_path`: nothing
 - `retention_days`: nothing
 - `rollup_retention_days`: `stats.rollup_retention_days must be 0 or at least stats.retention_days
   ({retention_days}), not {value}`
+- `subscription_costs_path`: `loading the subscription cost model from {path}` with the rule under it,
+  `plan table: {key}: {rule}`, and with the read error under it for a file that is there and cannot be read
+
+A configuration that names `pricing_path` is refused before anything prints with `the configuration is not valid YAML`,
+and the cause serde prints under it: the unknown key under `stats`, the keys it expected, and the line and column
+where it sits; `api_prices_path` names the price file in its place.
 
 ### storage
 
@@ -778,9 +793,9 @@ which makes it as sensitive as the registry even though it holds no credential, 
 
 `phoebis backup` takes the snapshot; [Operations](operations.md#backup) says how and how to restore it.
 
-![The Settings view: the downstream client block, the price table, Appearance and About
+![The Settings view: the downstream client block, Appearance and About
 ](assets/settings-light.png#only-light)
-![The Settings view: the downstream client block, the price table, Appearance and About
+![The Settings view: the downstream client block, Appearance and About
 ](assets/settings-dark.png#only-dark)
 
 ## Compiled-in limits

@@ -210,6 +210,9 @@ async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_las
                 j!({ "attempt": 1, "request_id": "req-1", "source_request_id": "r-1", "wire_model": "claude-haiku-4-5" })
                     .to_string(),
             ),
+            pool_id: None,
+            agent_id: None,
+            request_id: Some("r-1".into()),
         })
         .unwrap();
     parts
@@ -227,6 +230,9 @@ async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_las
                 j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-2", "source_request_id": "r-1", "wire_model": "claude-haiku-4-5" })
                     .to_string(),
             ),
+            pool_id: None,
+            agent_id: None,
+            request_id: Some("r-1".into()),
         })
         .unwrap();
 

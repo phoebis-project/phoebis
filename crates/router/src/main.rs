@@ -104,20 +104,54 @@ fn main() -> anyhow::Result<()> {
                 config.routing.startup_fetch_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());
-            // The start refuses a price file an estimate cannot use, so the check reads it the same way.
-            phoebis_ledger::Pricing::load(config.stats.pricing_path.as_deref()).with_context(
-                || {
+            // The start refuses a price file or a cost model it cannot use, so the check reads both the same way.
+            let pricing = phoebis_ledger::Pricing::load(config.stats.api_prices_path.as_deref())
+                .with_context(|| {
                     format!(
                         "loading the price table from {}",
                         config
                             .stats
-                            .pricing_path
+                            .api_prices_path
                             .as_deref()
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|| "the built-in table".to_string())
                     )
-                },
-            )?;
+                })?;
+            let prices = pricing.current();
+            println!(
+                "api prices: {}",
+                table_line(
+                    &prices.source,
+                    &prices.effective,
+                    config.stats.api_prices_path.as_deref(),
+                    format!("{} models", prices.models.len())
+                )
+            );
+            let tables =
+                phoebis_ledger::PlanTables::load(config.stats.subscription_costs_path.as_deref())
+                    .with_context(|| {
+                    format!(
+                        "loading the subscription cost model from {}",
+                        config
+                            .stats
+                            .subscription_costs_path
+                            .as_deref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "the built-in model".to_string())
+                    )
+                })?;
+            let costs = &tables.costs;
+            let weighted = costs.weighted_model_count();
+            let sized = costs.sized_tier_count();
+            println!(
+                "subscription costs: {}",
+                table_line(
+                    &tables.source,
+                    &costs.effective,
+                    config.stats.subscription_costs_path.as_deref(),
+                    format!("{weighted} models, {sized} tiers")
+                )
+            );
             let days = |n: u32| {
                 if n == 0 {
                     "forever".to_string()
@@ -458,6 +492,21 @@ fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
         .write_all(printed.as_bytes())
         .and_then(|()| stdout.flush());
     std::process::exit(tls_reload::exit_code(&body))
+}
+
+/// One table's `check-config` line: the file read, or the built-in table with the configured path it found nothing
+/// at, so an operator can tell a missing override from a misspelled one.
+fn table_line(source: &str, effective: &str, path: Option<&Path>, counts: String) -> String {
+    match (source, path) {
+        ("file", Some(path)) => {
+            format!("{} (file, effective {effective}, {counts})", path.display())
+        }
+        (_, Some(path)) => format!(
+            "built in (effective {effective}, {counts}); {} not found",
+            path.display()
+        ),
+        (_, None) => format!("built in (effective {effective}, {counts})"),
+    }
 }
 
 #[cfg(test)]

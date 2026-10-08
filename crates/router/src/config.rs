@@ -206,16 +206,15 @@ pub struct SessionsConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StatsConfig {
+    /// A price table that overrides the shipped one; a missing file is not an error. Default `./api_prices.yaml`.
+    #[serde(default = "default_api_prices_path")]
+    pub api_prices_path: Option<PathBuf>,
     #[serde(default = "default_body_capture_max")]
     pub body_capture_max_hours: u32,
     #[serde(default = "default_ledger_path")]
     pub ledger_path: PathBuf,
     #[serde(default = "default_metrics_listen")]
     pub metrics_listen: SocketAddr,
-    /// A price table that overrides the shipped one; a missing file is not an error, so the example path can
-    /// stay in a fresh configuration.
-    #[serde(default = "default_pricing_path")]
-    pub pricing_path: Option<PathBuf>,
     /// Days the raw request, attempt, and event rows, and the quota and extra-usage samples, are kept; 0 keeps
     /// them forever.
     #[serde(default = "default_retention_days")]
@@ -223,6 +222,10 @@ pub struct StatsConfig {
     /// Days the hourly rollups are kept; 0 keeps them forever, and otherwise at least `retention_days`.
     #[serde(default = "default_rollup_retention_days")]
     pub rollup_retention_days: u32,
+    /// A subscription cost model that overrides the shipped one; a missing file is not an error. Default
+    /// `./subscription_costs.yaml`.
+    #[serde(default = "default_subscription_costs_path")]
+    pub subscription_costs_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -358,12 +361,13 @@ impl Default for SessionsConfig {
 impl Default for StatsConfig {
     fn default() -> Self {
         StatsConfig {
+            api_prices_path: default_api_prices_path(),
             body_capture_max_hours: default_body_capture_max(),
             ledger_path: default_ledger_path(),
             metrics_listen: default_metrics_listen(),
-            pricing_path: default_pricing_path(),
             retention_days: default_retention_days(),
             rollup_retention_days: default_rollup_retention_days(),
+            subscription_costs_path: default_subscription_costs_path(),
         }
     }
 }
@@ -594,6 +598,10 @@ pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
     Ok(Secret::new(&value))
 }
 
+fn default_api_prices_path() -> Option<PathBuf> {
+    Some("./api_prices.yaml".into())
+}
+
 /// Room for 512 one-MiB bodies at once, or sixteen at the per-body bound: a household whose keys carry agent tools
 /// that fan out.
 fn default_body_budget_bytes() -> u64 {
@@ -637,10 +645,6 @@ fn default_model_rejection() -> u64 {
     3_600
 }
 
-fn default_pricing_path() -> Option<PathBuf> {
-    Some("./pricing.yaml".into())
-}
-
 fn default_refresh_concurrency() -> usize {
     2
 }
@@ -659,6 +663,10 @@ fn default_session_expiry() -> u64 {
 
 fn default_startup_fetch() -> u64 {
     30
+}
+
+fn default_subscription_costs_path() -> Option<PathBuf> {
+    Some("./subscription_costs.yaml".into())
 }
 
 fn default_upstream_gzip() -> String {

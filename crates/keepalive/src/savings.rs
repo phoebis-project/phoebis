@@ -6,19 +6,17 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
-use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::{BudgetRow, BudgetScope};
 
-use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
-use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, MAIN_AGENT};
+use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
 /// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
 /// the `tier`'s 5-hour window at `at` (the band inside the price). `None` on the share side alone, for a model the
-/// cost table lacks, a cell it leaves `null`, or a tier it does not size.
+/// subscription cost model has no weight for, or a tier it has no capacity for on the window.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
@@ -45,7 +43,7 @@ pub(crate) fn gross_saving(
         }
         SavingsUnit::WindowShare => {
             let tier = tier?;
-            let priced = |usage| tables.five_hour_share_at(tier, canonical_model, usage, at);
+            let priced = |usage| tables.share_at(FIVE_HOUR, tier, canonical_model, usage, at);
             let as_input = priced(PinUsage {
                 input: cache_read_tokens,
                 ..PinUsage::default()
@@ -60,8 +58,8 @@ pub(crate) fn gross_saving(
 }
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
-/// inside the price). `None` on the share side alone, for a model the cost table lacks, a cell it leaves `null`, or
-/// a tier it does not size.
+/// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
+/// tier it has no capacity for on the window.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -74,7 +72,7 @@ pub(crate) fn probe_cost(
     match unit {
         SavingsUnit::Usd => Some(probe_dollars(table, canonical_model, usage)),
         SavingsUnit::WindowShare => {
-            tables.five_hour_share_at(tier?, canonical_model, typed(usage), at)
+            tables.share_at(FIVE_HOUR, tier?, canonical_model, typed(usage), at)
         }
     }
 }
@@ -122,90 +120,30 @@ fn typed(usage: ProbeUsage) -> PinUsage {
     }
 }
 
-/// One token of each type a probe of a recipe can carry: the uncached tail, the kept-warm prefix, output (a probe
-/// asks for none, yet an answer can carry some), the five-minute write (an answer reporting its write in aggregate
-/// alone is priced as one) and the one-hour write when the TTL in force (`ttl_ms`) or any marker of the recipe
-/// (`longest_ttl_ms`) is above five minutes, since a probe that finds the prefix cold writes each marked part at its
-/// own TTL. Known before the probe runs, so the gate and the settlement decide on the same usage.
-pub(crate) fn probe_types(ttl_ms: i64, longest_ttl_ms: i64) -> PinUsage {
-    PinUsage {
-        input: 1,
-        cache_read: 1,
-        write_5m: 1,
-        write_1h: u64::from(ttl_ms.max(longest_ttl_ms) > FIVE_MINUTES_MS),
-        output: 1,
+/// `row` when the model has no weight on the 5-hour window, else `tier`: the only two reasons left, since the loader
+/// refuses an anchor tier without a capacity on either window and a weighted model prices every type.
+pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'static str {
+    if !tables.priced(
+        FIVE_HOUR,
+        &tables.costs.unit.defined_by.tier,
+        canonical_model,
+    ) {
+        "row"
+    } else {
+        "tier"
     }
 }
 
-/// `probe_types` for the body the relay dispatches. While the pool's cache TTL `policy` is on, `Relay::dispatch_to`
-/// rewrites every marker of a probe to the TTL its agent's branch takes in the set the account's funding selects
-/// (`metered` for an api_key account or one in overage), and adds one at that TTL to a body without any where the
-/// policy says so; that TTL then replaces both the one in force and the recipe's own. A body left without a marker
-/// writes nothing.
-pub(crate) fn dispatched_types(
-    policy: &CacheTtlPolicy,
-    canonical_model: &str,
-    metered: bool,
-    agent_id: &str,
-    ttl_ms: i64,
-    longest_ttl_ms: i64,
-) -> PinUsage {
-    let branch = if agent_id == MAIN_AGENT {
-        TtlBranch::Main
-    } else {
-        TtlBranch::Subagent
-    };
-    let Some(ttl) = policy.ttl_for(canonical_model, branch, metered) else {
-        return probe_types(ttl_ms, longest_ttl_ms);
-    };
-    let marked = longest_ttl_ms > 0 || policy.inject_when_absent;
-    let dispatched_ms = if marked && ttl == CacheTtl::OneHour {
-        ONE_HOUR_MS
-    } else {
-        FIVE_MINUTES_MS
-    };
-    probe_types(dispatched_ms, dispatched_ms)
-}
-
-/// The first token type `usage` carries that the model's 5-hour row leaves unmeasured, for a log line: `row` when
-/// the table lists no row for the model and `tier` when the row prices and the tier's factor does not.
-pub(crate) fn unpriced_type(
-    tables: &PlanTables,
-    canonical_model: &str,
-    usage: ProbeUsage,
-) -> &'static str {
-    let Some(cells) = tables.cost.cells(FIVE_HOUR, canonical_model) else {
-        return "row";
-    };
-    let typed = typed(usage);
-    [
-        (typed.input, cells.input, "input"),
-        (typed.cache_read, cells.cache_read, "cache_read"),
-        (typed.write_5m, cells.cache_write_5m, "cache_write_5m"),
-        (typed.write_1h, cells.cache_write_1h, "cache_write_1h"),
-        (typed.output, cells.output, "output"),
-    ]
-    .into_iter()
-    .find(|(tokens, cell, _)| *tokens > 0 && cell.is_none())
-    .map_or("tier", |(_, _, name)| name)
-}
-
 /// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
-/// and the table cannot price `types` on the account's tier (no row, a `null` cell under a carried type, no tier or a
-/// `null` factor), in which case dollars. One decision for the three, so the stop and the caps read the balance the
-/// probes move.
+/// and the model cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which
+/// case dollars. One decision for the three, so the stop and the caps read the balance the probes move.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
     tier: Option<&str>,
     canonical_model: &str,
-    types: PinUsage,
 ) -> SavingsUnit {
-    let priced = tier.is_some_and(|tier| {
-        tables
-            .share(FIVE_HOUR, tier, canonical_model, types)
-            .is_some()
-    });
+    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, tier, canonical_model));
     if default_unit == SavingsUnit::WindowShare && !priced {
         SavingsUnit::Usd
     } else {
@@ -497,18 +435,33 @@ mod tests {
         const SATURDAY_AFTERNOON: i64 = 1_790_431_200_000;
         let saved = gross_saving(
             SavingsUnit::WindowShare,
-            &PriceTable::shipped(),
-            &PlanTables::shipped(),
+            &phoebis_ledger::test_tables::api_prices(),
+            &phoebis_ledger::test_tables::subscription_costs(),
             Some("default_claude_max_20x"),
             "claude-opus-5-5",
-            1_000_000,
+            1,
             SATURDAY_AFTERNOON,
             Speed::Standard,
         )
         .expect("a priced model on a known tier");
-        // The shipped table's Opus 5.5 cells on Max 20x's 5-hour window, per million tokens: input 0.01461, cache
-        // read 0.000365.
-        assert!((saved - (0.01461 - 0.000365)).abs() < 1e-12, "{saved}");
+        // The test table: Opus 5.5 weighs 2, an input token multiplies by 1 and a cache read by 0.1, and the Max
+        // 20x 5-hour window holds 100 units.
+        let want = 2.0 * 1.0 / 100.0 - 2.0 * 0.1 / 100.0;
+        assert!((saved - want).abs() < 1e-12, "{saved} against {want}");
+    }
+
+    #[test]
+    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
+        // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9.
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        assert_eq!(unpriced_reason(&tables, "claude-opus-5"), "row");
+        assert_eq!(unpriced_reason(&tables, "claude-opus-9"), "row");
+        assert_eq!(unpriced_reason(&tables, "claude-opus-5-5"), "tier");
+        assert_eq!(
+            unpriced_reason(&tables, "claude-opus-5-5-20260401"),
+            "tier",
+            "a dated id reads its undated weight"
+        );
     }
 
     #[test]
@@ -516,25 +469,25 @@ mod tests {
         let saved = |speed| {
             gross_saving(
                 SavingsUnit::Usd,
-                &PriceTable::shipped(),
-                &PlanTables::shipped(),
+                &phoebis_ledger::test_tables::api_prices(),
+                &phoebis_ledger::test_tables::subscription_costs(),
                 None,
-                "claude-opus-5",
+                "claude-opus-5-5",
                 1_000_000,
                 0,
                 speed,
             )
             .expect("a priced model")
         };
-        // The shipped Opus 5 row, per million tokens: input 10 and cache read 1 at the fast cells, 5 and 0.5
-        // at the standard ones.
+        // The test price table's Opus 5.5 row, per million tokens: input 20 and cache read 2 at the fast cells, 10
+        // and 1 at the standard ones.
         assert!(
-            (saved(Speed::Fast) - (10.0 - 1.0)).abs() < 1e-12,
+            (saved(Speed::Fast) - (20.0 - 2.0)).abs() < 1e-12,
             "{:?}",
             saved(Speed::Fast)
         );
         assert!(
-            (saved(Speed::Standard) - (5.0 - 0.5)).abs() < 1e-12,
+            (saved(Speed::Standard) - (10.0 - 1.0)).abs() < 1e-12,
             "{:?}",
             saved(Speed::Standard)
         );
