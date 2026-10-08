@@ -69,8 +69,8 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791268384988,
-        "updated_at": 1791268384988,
+        "created_at": 1791454949068,
+        "updated_at": 1791454949068,
         "members": [
           {
             "account_id": "business",
@@ -109,13 +109,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "HnZ0xSv5",
+            "prefix": "llPKB0ST",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 6,
-        "cost_24h": 0.0252,
+        "cost_24h": 0.0249,
         "active_pins": 1,
         "traffic_24h": [
           {
@@ -277,14 +277,14 @@
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0144
+            "cost_usd": 0.0142
           },
           {
             "at": 0,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0108
+            "cost_usd": 0.0107
           }
         ]
       }
