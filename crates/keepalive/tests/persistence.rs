@@ -15,6 +15,8 @@ use phoebis_keepalive::{
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
 
+const DAY: i64 = 86_400_000;
+
 fn on_disk() -> RigSpec {
     RigSpec {
         on_disk: true,
@@ -118,7 +120,27 @@ fn on_own_thread(
 #[tokio::test]
 async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_loads_them_silent() {
     let mut r = rig(on_disk()).await;
+    // The day's counts and the presence ride the payload too: a probe and a credit just before a UTC midnight, then a
+    // presence report just after it, so the day the counts are for is not the day of the agent's last activity.
+    let start = DAY - 400_000;
+    let now = r.now();
+    r.advance(start - now);
+    r.reregister();
     r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(40_000);
+    r.observe("main").await;
+    r.advance_attended(120_000);
+    let presence = Event {
+        event: "activity".into(),
+        agent_id: Some("main".into()),
+        kind: Some("presence".into()),
+        request_generation: Some(r.agent("main").request_generation),
+        ..Default::default()
+    };
+    r.event(presence).unwrap();
+    let seen = r.now();
     let deadline = r.now() + 2 * 3_600_000;
     r.event(parked_until(&r, deadline)).unwrap();
     r.advance(MINUTE);
@@ -153,6 +175,17 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
             Some(deadline),
             Some(r.now() - MINUTE)
         )
+    );
+    assert_eq!(
+        (
+            payload["probes_today"].as_u64(),
+            payload["credited_today"].as_u64(),
+            payload["counters_day"].as_i64(),
+            payload["last_probe_at"].as_i64(),
+            payload["last_presence_at"].as_i64(),
+        ),
+        (Some(1), Some(1), Some(0), Some(start + 270_000), Some(seen)),
+        "the counts are the day before the last activity's"
     );
     assert!(main.body.as_ref().is_some_and(|body| !body.is_empty()));
     assert_eq!(

@@ -120,7 +120,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   request_limit: 'The engine was following as many open requests as its agent limit allows, so this one was not kept.',
   request_rejected: "The router rejected the agent's request, so it left nothing to keep.",
   request_too_large: 'The request body was larger than a recipe may hold, so it was not kept.',
-  reset: 'The keepalive engine shut down and dropped this recipe.',
+  reset: 'The router could not open the prompt it saved for this recipe when it restarted, so the recipe was dropped. The next real request starts a new one.',
   retryable_probe_error: 'The last probe failed with a retryable error. The next attempt is scheduled with backoff.',
   scheduled: 'The next probe is scheduled before the cache entry expires.',
   session_ended: 'The session ended, by the mod reporting it or by its key being deleted, so its recipes were dropped.',

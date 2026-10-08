@@ -424,8 +424,10 @@ function SessionRows({
   // The kind gave its badge's width to the fit; the description keeps it within reach of a reader that never hovers.
   const kind = useDescription(visible.has('account') && account ? KIND_HINT[account.kind] : undefined);
   const summary = stateSummary(agents);
-  const otherModels = agents.filter((a) => a.model !== session.model);
-  const otherAccounts = agents.filter((a) => a.accountId !== session.accountId);
+  // A pin exists only with an account: a request refused before any account served it leaves a row without one.
+  const pinned = agents.filter((a) => a.accountId !== null);
+  const otherModels = pinned.filter((a) => a.model !== session.model);
+  const otherAccounts = pinned.filter((a) => a.accountId !== session.accountId);
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
   const pendingProbe = agents.some((a) => a.state === 'retained' && a.nextProbeAt === null);
@@ -622,7 +624,7 @@ function SessionRows({
                     <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
                       {undatedModel(a.model)}
                     </span>
-                    <span className="mono">{a.accountId}</span>
+                    {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
                     <span className="agents__probe" title={a.lastProbeAt ? fmtAbsolute(a.lastProbeAt) : undefined}>

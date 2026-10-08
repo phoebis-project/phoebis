@@ -9047,8 +9047,8 @@ m.unmount();
   });
 }
 {
-  // A recipe that lapsed or was evicted leaves the route's list, so the mock holds none under either reason; the
-  // stub hands the page one held under `expired` for its label and hint to be read.
+  // A lapsed recipe keeps its row, read `ended` under `expired`. The stub makes the story's first recipe one, so its
+  // label and hint are read on a row the check knows.
   const { listKeepaliveRecipes } = api;
   api.listKeepaliveRecipes = async () => {
     const [first, ...rest] = await listKeepaliveRecipes();
@@ -9066,6 +9066,30 @@ m.unmount();
     name: '/sessions a recipe ended under expired reads entry expired with its hint',
     ok: hint === 'The cache entry expired before its probe was due, so no probe was sent. The next real request starts a new recipe.',
     missing: [hint ?? 'no entry expired badge'],
+  });
+}
+{
+  // A request refused before any account served it leaves an agent row with no account, which is no pin: neither "+N"
+  // badge of its session counts it, and its line reads none under Account.
+  const { listKeepaliveRecipes } = api;
+  api.listKeepaliveRecipes = async () => {
+    const [first, ...rest] = await listKeepaliveRecipes();
+    return [first, { ...first, accountId: null, agentId: 'zz01', cause: 'forced_tool', model: 'claude-haiku-4-5', nextProbeAt: null, state: 'not_retained' }, ...rest];
+  };
+  const page = await mount('/sessions');
+  await page.settle();
+  const row = page.container.querySelector('tbody tr.srow');
+  const pins = ['Model', 'Account'].flatMap((header) => [...(sessionCell(page, row, header)?.querySelectorAll('.badge') ?? [])].map((b) => b.getAttribute('title') ?? ''));
+  row?.click();
+  await page.settle(200);
+  const line = [...page.container.querySelectorAll('.agents__row')].find((l) => l.children[0]?.textContent?.trim() === 'zz01');
+  const account = line?.children[2]?.textContent?.trim() ?? null;
+  page.unmount();
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: '/sessions a row with no account raises no pinned-elsewhere badge and reads none under Account',
+    ok: line !== undefined && account === 'none' && pins.every((title) => !title.includes('zz01') && !title.includes('null')),
+    missing: [account ?? 'no zz01 line', ...pins],
   });
 }
 {

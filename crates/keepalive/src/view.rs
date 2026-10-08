@@ -160,7 +160,14 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
         pool_id: agent.pool_id.clone(),
         probes_today,
         session_id: session_id.into(),
-        state: recipe_state(agent.reason, agent.paused),
+        state: match recipe_state(agent.reason, agent.paused) {
+            // A refusal at the selection leaves a held word behind with nothing kept, and a held or retained state
+            // says the prompt is kept. A request still awaiting its selection or its evidence keeps its observation.
+            RecipeState::Held | RecipeState::Retained if agent.current.is_none() => {
+                RecipeState::NotRetained
+            }
+            state => state,
+        },
         ttl_seconds: agent.ttl_ms / 1_000,
         wake_at: agent.wake_at,
     }

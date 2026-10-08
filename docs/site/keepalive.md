@@ -9,9 +9,9 @@ may run, the policy's four fields and the ceilings they set, and what the ledger
 
 With keepalive enabled on a pool, the router keeps a replayable copy of every eligible request a session sends: a
 request whose thinking is adaptive or disabled, whose tool choice is not forced, and whose output is neither
-structured nor bound to a strict tool. A request that fails one of those checks is never retained; the Sessions
-view shows it as `unsupported shape`, or as `storage limit` when the body or a header block ran over its size
-limit.
+structured nor bound to a strict tool. A request that fails one of those checks, or whose body or header block runs
+over its size limit, is never retained, and the Sessions view reads it `not_retained` with the check it failed as the
+cause (see [The five states](#the-five-states)).
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it through the same
 failover loop a real request takes: the same body with `max_tokens` set to `0`, `stream` set to `false` and the client's

@@ -2383,14 +2383,24 @@ impl Engine {
                     if inner.lapse(&key, &agent_id, now, &mut lapsed) {
                         continue;
                     }
-                    inner.hold(&key, &agent_id, reason, now);
+                    // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
+                    // withholds every probe until the next real request.
+                    if !inner.sessions[&key].agents[&agent_id].paused {
+                        inner.hold(&key, &agent_id, reason, now);
+                    }
                     continue;
                 }
                 // The refresh's own hold ends at the first tick that finds the pool enabled again, as the probe verdict
                 // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
-                // would read held with no next probe.
+                // would read held with no next probe. A recipe whose request has not brought its evidence yet goes
+                // back to waiting for it.
                 if inner.sessions[&key].agents[&agent_id].reason == Reason::PoolDisabled {
-                    inner.set_reason(&key, &agent_id, Reason::Scheduled);
+                    let resumed = if ready {
+                        Reason::Scheduled
+                    } else {
+                        Reason::AwaitingCacheEvidence
+                    };
+                    inner.set_reason(&key, &agent_id, resumed);
                 }
                 let verdict = {
                     let session = &inner.sessions[&key];

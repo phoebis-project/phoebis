@@ -228,8 +228,10 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const cause: RecipeCause = held ?? (mainState === 'busy' && j === 0 ? 'probing' : 'scheduled');
     const state = STATE_OF[cause] ?? 'retained';
     const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
-    // A subagent spawned in the last turn may not have sent a request yet.
-    const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
+    // The engine lists an agent once it has sent a request. The roll is drawn whatever it gives, so the rows after this
+    // one keep theirs, and a subagent it leaves without one sent its request three minutes ago.
+    const rolled = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
+    const lastRequestAt = rolled ?? ago(3 * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
     // Main reads its session's lifecycle word, a subagent whose park ran out is still parked, and the others are busy.
@@ -240,7 +242,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const deadline = agentState === 'parked' && j === 0 && cause !== 'horizon' ? ahead(72 * MINUTE + 30_000) : null;
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
     // An agent whose request still awaits its evidence has not been probed since, and the rest were, minutes ago.
-    const lastProbeAt = lastRequestAt === null || cause === 'awaiting_cache_evidence' ? null : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     return {
       ...RECIPE_SAMPLE,
@@ -257,7 +259,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastProbeAt,
       lastRequestAt,
       model,
-      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : null,
+      // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
+      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(20_000) : null,
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,

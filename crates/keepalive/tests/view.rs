@@ -423,3 +423,85 @@ async fn an_ended_recipe_keeps_its_row_with_the_cause() {
         "{ended:?}"
     );
 }
+
+#[tokio::test]
+async fn a_request_refused_at_selection_reads_not_retained_and_one_awaiting_its_selection_reads_retained(
+) {
+    let mut r = rig(RigSpec {
+        policy: phoebis_keepalive::KeepalivePolicy {
+            enabled: false,
+            ..phoebis_keepalive::KeepalivePolicy::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    let refused = row(&r, "main");
+    assert_eq!(
+        (refused.state, refused.cause, refused.next_probe_at),
+        (RecipeState::NotRetained, Reason::KeepaliveOff, None),
+        "nothing was kept, so the held word reads not_retained: {refused:?}"
+    );
+    // A request the engine follows still holds its observation before any selection, so it reads retained.
+    let r = rig(RigSpec::default()).await;
+    let pending = r.observed("pending", "main", BODY);
+    r.engine.observe(pending);
+    let awaiting = row(&r, "main");
+    assert_eq!(
+        (awaiting.state, awaiting.cause),
+        (RecipeState::Retained, Reason::AwaitingSelection),
+        "{awaiting:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_disabled_hold_on_a_recipe_awaiting_its_evidence_ends_awaiting_it() {
+    let mut r = rig(RigSpec::default()).await;
+    let observed = r.observed("r1", "main", BODY);
+    r.engine.observe(observed);
+    let selected = r.selected("r1", "a");
+    r.engine.observe(selected);
+    assert_eq!(r.status("main").reason, Reason::AwaitingCacheEvidence);
+    edit_pool(&r, |pool| pool.enabled = false).await;
+    r.advance_attended(10_000);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    edit_pool(&r, |pool| pool.enabled = true).await;
+    r.advance_attended(10_000);
+    r.step().await;
+    let awaiting = row(&r, "main");
+    assert_eq!(
+        (awaiting.state, awaiting.cause, awaiting.next_probe_at),
+        (RecipeState::Retained, Reason::AwaitingCacheEvidence, None),
+        "the request's evidence has not come, so nothing is scheduled yet: {awaiting:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    exhaust_both(&r);
+    r.advance_attended(270_000);
+    r.step().await;
+    edit_pool(&r, |pool| pool.enabled = false).await;
+    r.advance_attended(1_000);
+    r.step().await;
+    let disabled = row(&r, "main");
+    assert_eq!(
+        (disabled.state, disabled.cause),
+        (RecipeState::Paused, Reason::ProbeQuotaExhausted),
+        "the pause already withholds every probe, so the disabled pool leaves its cause: {disabled:?}"
+    );
+    // Enabled again, the paused recipe is never cleared to scheduled. The accounts' cooldown still holds it, as a
+    // gate's hold lands on a paused recipe.
+    edit_pool(&r, |pool| pool.enabled = true).await;
+    r.advance_attended(1_000);
+    r.step().await;
+    let enabled = row(&r, "main");
+    assert_eq!(
+        (enabled.state, enabled.cause, r.status("main").paused),
+        (RecipeState::Paused, Reason::Cooled, true),
+        "{enabled:?}"
+    );
+}
