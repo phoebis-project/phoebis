@@ -429,13 +429,16 @@ impl Inner {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    agent.last_activity = now;
                     // A person at the terminal says nothing about the agent's work, so presence moves the idle
                     // clock alone. Only the decoder requires the kind, so one a direct caller left out is a prompt.
-                    if ev.kind.as_deref() == Some("presence") {
-                        // Presence restarts the window, so the one counted so far ends with no return.
+                    let presence = ev.kind.as_deref() == Some("presence");
+                    if presence {
+                        // Presence restarts the window, so the one counted so far ends with no return, closed
+                        // before the start moves so the new start clears the floor.
                         agent.close_idle_episode();
-                    } else {
+                    }
+                    agent.last_activity = now;
+                    if !presence {
                         // The request this prompt announces is judged at the window's age now, however many ticks
                         // pass before it arrives. The window's start stays where it is.
                         if let Some(episode) = agent.idle_episode.as_mut() {
@@ -483,7 +486,10 @@ impl Inner {
                         // idle before or after the router's tick does: a park that ended without a request, which
                         // restarts the idle window. A request behind a busy report moves the window itself.
                         if was == AgentState::Parked && state == AgentState::Idle {
+                            agent.close_idle_episode();
                             agent.park_ended_at = Some(now);
+                        } else if state == AgentState::Released {
+                            // A released main is the end of its session's window, as `session_end` is.
                             agent.close_idle_episode();
                         } else if state == AgentState::Idle {
                             // A prompt that sent no request, such as a local command: the window goes on.

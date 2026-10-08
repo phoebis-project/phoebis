@@ -5,8 +5,8 @@ mod common;
 
 use common::*;
 use phoebis_keepalive::{
-    continues_prefix, idle_age_bucket, Event, Guard, IdleReturns, KeepalivePolicy, Reason,
-    IDLE_AGE_BOUNDS_SECONDS,
+    continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
+    Reason, IDLE_AGE_BOUNDS_SECONDS,
 };
 
 const OAUTH: &str = "sk-ant-oat01-OOOO";
@@ -136,6 +136,32 @@ fn activity(r: &mut Rig, kind: &str) {
     .unwrap();
 }
 
+/// A prompt a local command answered: the mod reports the prompt, then idle, and no request is sent.
+fn local_command(r: &mut Rig) {
+    activity(r, "prompt");
+    r.state("main", "idle");
+}
+
+/// Moves the rig's key into a new pool `warm`, with the router reloaded so the next tick reads it there.
+async fn move_key_to_warm(r: &Rig) {
+    r.h.store
+        .insert_pool(
+            &phoebis_store::PoolRow {
+                created_at: NOW,
+                updated_at: NOW,
+                ..phoebis_store::PoolRow::for_tests("warm")
+            },
+            "test",
+        )
+        .unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.pool_id = "warm".into();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+}
+
 /// A real request on main through the relay, naming `class` in the client's request class header.
 async fn observe_classed(r: &mut Rig, class: &str, body: &str) {
     let mut request = r.request_with("main", body);
@@ -171,11 +197,46 @@ async fn a_return_on_the_same_prefix_raises_returned_in_its_bucket() {
         before,
         "the ticks had raised the return's bucket already"
     );
-    tick_to(&mut r, start, 40).await;
+    // The turn ends and main is idle again: the next window opens from the return.
+    r.state("main", "idle");
+    tick_to(&mut r, start, 13).await;
     assert_eq!(
         (reached(&r), returned(&r)),
-        (before, [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
-        "the return closed the window, and main is busy with its turn"
+        (
+            [2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "a new window a minute old"
+    );
+}
+
+#[tokio::test]
+async fn a_clock_that_steps_back_counts_no_bucket_twice() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 5).await;
+    assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    // The wall clock steps back across the 5-minute bound, then forward past it again.
+    r.advance(-MINUTE);
+    r.step().await;
+    assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], "back");
+    r.advance(2 * MINUTE);
+    r.step().await;
+    assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], "forward");
+    r.advance(-2 * MINUTE);
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "a return read at 4 minutes counts in the bucket the window had reached"
+    );
+    assert_eq!(
+        r.status("main").state,
+        AgentState::Busy,
+        "the engine still answers"
     );
 }
 
@@ -203,9 +264,12 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     tick_to(&mut r, start, 40).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "restart");
     // A foreign request: neither the chain nor the static prefix. It leaves the recipe and the window's start alone,
-    // and no prompt moves the start, so the ticks after it open no window from the same start again.
+    // and no prompt moves the start, so the ticks after it open no window from the same start again. A local command
+    // earlier in the window moved the start to its prompt, and that start is the one in force at the close.
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 3).await;
+    local_command(&mut r);
     tick_to(&mut r, start, 12).await;
     let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
     r.engine.observe(r.observed_with(
@@ -249,6 +313,8 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     // moves it, and the next one counts from the prompt.
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 3).await;
+    local_command(&mut r);
     tick_to(&mut r, start, 12).await;
     tick_silent_to(&mut r, start, 40).await;
     r.event(Event {
@@ -266,6 +332,62 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
         ([2, 2, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
         "a window from the prompt at 45 minutes, 7 minutes old"
     );
+}
+
+#[tokio::test]
+async fn a_released_main_closes_its_window() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.state("main", "released");
+    let generation = r.status("main").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("main".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.state("main", "idle");
+    tick_to(&mut r, start, 20).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        ([2, 2, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
+        "the next window counts from the restart at 12 minutes"
+    );
+}
+
+#[tokio::test]
+async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
+    for keepalive in [true, false] {
+        let mut r = rig(RigSpec {
+            policy: KeepalivePolicy {
+                enabled: keepalive,
+                ..KeepalivePolicy::default()
+            },
+            ..RigSpec::default()
+        })
+        .await;
+        let start = idle_after_request(&mut r).await;
+        tick_to(&mut r, start, 6).await;
+        move_key_to_warm(&r).await;
+        tick_to(&mut r, start, 20).await;
+        assert_eq!(
+            (reached_in(&r, "main"), reached_in(&r, "warm")),
+            ([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
+            "the open window, keepalive {keepalive}"
+        );
+        activity(&mut r, "presence");
+        tick_to(&mut r, start, 21).await;
+        assert_eq!(
+            (reached_in(&r, "main"), reached_in(&r, "warm")),
+            (
+                [1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            ),
+            "the next window, keepalive {keepalive}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -364,22 +486,7 @@ async fn an_attended_session_without_a_recipe_still_reaches_buckets() {
     let mut r = rig(RigSpec::default()).await;
     // The session's key moves to a pool of another name before any request, so the counters can only find it
     // through the key.
-    r.h.store
-        .insert_pool(
-            &phoebis_store::PoolRow {
-                created_at: NOW,
-                updated_at: NOW,
-                ..phoebis_store::PoolRow::for_tests("warm")
-            },
-            "test",
-        )
-        .unwrap();
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
-    key.pool_id = "warm".into();
-    r.h.store
-        .update_api_key(&key, key.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
+    move_key_to_warm(&r).await;
     let start = r.now();
     r.state("main", "idle");
     tick_to(&mut r, start, 6).await;

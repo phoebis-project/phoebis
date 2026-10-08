@@ -282,14 +282,16 @@ pub struct IdleReturns {
 
 /// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix main's
 /// last admitted request carried when the window opened (kept apart from the recipe, so a return is judged against it
-/// after a ceiling discarded the recipe and on a pool that retains none), and the moment a prompt announced the
-/// return, when one has.
+/// after a ceiling discarded the recipe and on a pool that retains none), the moment a prompt announced the return,
+/// when one has, and the pool the window counts under, fixed at the open so a key that moves pools mid-window keeps
+/// the window's buckets in one pool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IdleEpisode {
     pub started: i64,
     pub bucket: Option<usize>,
     pub anchor: Option<(String, String)>,
     pub prompt_at: Option<i64>,
+    pub pool_key: String,
 }
 
 /// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's tail hash.
@@ -300,16 +302,19 @@ pub fn continues_prefix(anchor: Option<(&str, &str)>, boundaries: &[String]) -> 
 }
 
 /// Raises `reached` in the buckets after `counted` up to `bucket`. A tick and the request that ends a window both
-/// count through here, and `counted` is the fence that keeps them from raising one bucket twice for one window.
+/// count through here, and `counted` is the fence that keeps them from raising one bucket twice for one window. A
+/// bucket at or below the fence raises nothing: the wall clock can step back, and a tick can take the lock with a
+/// later `now` than a request or a report that read the clock before it.
 fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usize) {
-    for counter in &mut counters.buckets[counted.map_or(0, |c| c + 1)..=bucket] {
+    let from = counted.map_or(0, |c| c + 1);
+    for counter in counters.buckets.iter_mut().take(bucket + 1).skip(from) {
         counter.reached += 1;
     }
 }
 
-/// The counters' key for an agent no request or tick has given a pool yet: the pool of the session's key, read as
-/// `refresh_policy` reads it, else the pinned account's own id for an account outside every pool, so no window counts
-/// under the empty key, which no pool row reads.
+/// The counters' key for a window of an agent no admitted selection or retained recipe has given a pool: the pool of
+/// the session's key, read as `refresh_policy` reads it, else the pinned account's own id for an account outside every
+/// pool, so no window counts under the empty key, which no pool row reads.
 fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
     snapshot
         .key(&agent.key_id)
@@ -614,10 +619,18 @@ impl Agent {
         self.due_at()
     }
 
-    /// Every close of an idle window: its start becomes the floor the next window's start has to pass.
+    /// Where main's idle window starts now: the later of its last activity and a park's end without a request.
+    pub(crate) fn idle_window_start(&self) -> i64 {
+        self.park_ended_at
+            .map_or(self.last_activity, |ended| ended.max(self.last_activity))
+    }
+
+    /// Every close of an idle window: the window start in force at the close becomes the floor the next window's start
+    /// has to pass. A prompt answered by a local command moves the start without closing the window, so the
+    /// episode's own `started` can lie behind it. A closer that moves the start calls this first.
     pub(crate) fn close_idle_episode(&mut self) -> Option<IdleEpisode> {
         let episode = self.idle_episode.take()?;
-        self.idle_window_floor = Some(episode.started);
+        self.idle_window_floor = Some(episode.started.max(self.idle_window_start()));
         Some(episode)
     }
 
@@ -1205,9 +1218,9 @@ impl Inner {
         if !agent.pass_park(now) {
             return;
         }
-        agent.park_ended_at = Some(now);
-        // The window restarts here, so the one counted so far ends with no return.
+        // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
         agent.close_idle_episode();
+        agent.park_ended_at = Some(now);
         if agent.id != MAIN_AGENT {
             agent.park_began = None;
             return;
@@ -1237,24 +1250,27 @@ impl Inner {
             ) {
                 continue;
             }
-            if main.pool_id.is_empty() {
-                let Some(pool) = idle_returns_key(snapshot, main) else {
-                    continue;
-                };
-                main.pool_id = pool;
-            }
             if main.idle_episode.is_none() {
-                let start = main
-                    .park_ended_at
-                    .map_or(main.last_activity, |ended| ended.max(main.last_activity));
+                let start = main.idle_window_start();
                 if main.idle_window_floor.is_some_and(|floor| start <= floor) {
                     continue;
                 }
+                // One lookup per window, and only for an agent no admitted selection or retained recipe has given
+                // a pool: a session on a pool with keepalive off counts under the pool its key is in at each open.
+                let pool_key = if main.pool_id.is_empty() {
+                    let Some(pool) = idle_returns_key(snapshot, main) else {
+                        continue;
+                    };
+                    pool
+                } else {
+                    main.pool_id.clone()
+                };
                 main.idle_episode = Some(IdleEpisode {
                     started: start,
                     bucket: None,
                     anchor: main.last_prefix.clone(),
                     prompt_at: None,
+                    pool_key,
                 });
             }
             let Some(episode) = main.idle_episode.as_mut() else {
@@ -1265,11 +1281,13 @@ impl Inner {
             }
             let bucket = idle_age_bucket(now - episode.started);
             raise_reached(
-                self.idle_returns.entry(main.pool_id.clone()).or_default(),
+                self.idle_returns
+                    .entry(episode.pool_key.clone())
+                    .or_default(),
                 episode.bucket,
                 bucket,
             );
-            episode.bucket = Some(bucket);
+            episode.bucket = Some(episode.bucket.map_or(bucket, |counted| counted.max(bucket)));
         }
     }
 
@@ -1288,11 +1306,10 @@ impl Inner {
         let Some(episode) = main.close_idle_episode() else {
             return;
         };
-        if main.pool_id.is_empty() {
-            return;
-        }
-        let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started);
-        let counters = self.idle_returns.entry(main.pool_id.clone()).or_default();
+        // Never below the fence: the window already counted as reaching it, so its return is read there.
+        let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
+            .max(episode.bucket.unwrap_or(0));
+        let counters = self.idle_returns.entry(episode.pool_key).or_default();
         raise_reached(counters, episode.bucket, bucket);
         let anchor = episode
             .anchor
