@@ -79,6 +79,8 @@ bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachabl
 
 ## What this build does not do
 
+- The upstream is Anthropic's API. The bootstrap file's `upstream` block adds only a lab's trust anchor and resolver
+  override, never another host.
 - Claude Code's Remote Control is unavailable behind the router.
 
 ## Status
