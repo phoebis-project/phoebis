@@ -55,6 +55,10 @@ function dialog(unsaved) {
 /** The discard question, an open dialog of its own, or null while none is asked. */
 const question = () => [...document.querySelectorAll('dialog[open]')].find((d) => d.textContent.includes('Discard changes?')) ?? null;
 const buttonIn = (el, label) => [...el.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
+// A node compared through assert.equal is serialized whole on a mismatch, which never finishes on a jsdom tree, so
+// the focus is asserted by identity with a short name of the element in the message.
+const describe = (el) => (el ? `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(' ').join('.')}` : ''}` : 'none');
+const focusedIs = (el, what) => assert.ok(document.activeElement === el, `${what}, not ${describe(document.activeElement)}`);
 /** A click whose target is the dialog element itself, which is where a click on the backdrop lands. */
 const clickOn = (el) => act(() => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
 /** The cancel event the Escape key raises; answers whether a listener prevented it. */
@@ -75,6 +79,8 @@ test('an unchanged dialog closes on a click on its own element', () => {
 
 test('an unsaved dialog asks on the outside click and keeps editing', () => {
   const { closes, element } = dialog(true);
+  const close = element.querySelector('.dialog__close');
+  act(() => close.focus());
   clickOn(element);
   const q = question();
   assert.ok(q, 'a second open dialog carries the question');
@@ -85,7 +91,15 @@ test('an unsaved dialog asks on the outside click and keeps editing', () => {
   assert.equal(question(), null, 'Keep editing closes the question alone');
   assert.equal(closes.count, 0);
   assert.equal(element.hasAttribute('open'), true);
-  assert.ok(element.contains(document.activeElement), 'the focus is back inside the dialog');
+  focusedIs(close, 'the focus is back on the control that held it');
+});
+
+test('Keep editing focuses the first control of the dialog when none held the focus', () => {
+  const { element } = dialog(true);
+  focusedIs(document.body, 'nothing holds the focus before the click');
+  clickOn(element);
+  act(() => buttonIn(question(), 'Keep editing').click());
+  focusedIs(element.querySelector('.dialog__close'), 'the first control a Tab reaches has the focus');
 });
 
 test('Discard closes the dialog', () => {

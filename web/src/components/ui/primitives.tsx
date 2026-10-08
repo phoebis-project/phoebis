@@ -282,7 +282,8 @@ function copyByCommand(text: string, button: HTMLElement): boolean {
   // a control appended to the body could take neither the focus nor the selection the command copies.
   const host = button.closest('dialog[open]') ?? document.body;
   const selection = document.getSelection();
-  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i)) : [];
+  // Copies of the page's ranges, so a selection that moves its own range into the control leaves them whole.
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
   host.appendChild(area);
   area.focus();
   area.select();
@@ -293,11 +294,13 @@ function copyByCommand(text: string, button: HTMLElement): boolean {
     copied = false;
   }
   area.remove();
+  // The button first: a focus can move the selection to the element that takes it, so the page's ranges go back
+  // after the button has the focus.
+  button.focus();
   if (selection) {
     selection.removeAllRanges();
     for (const range of ranges) selection.addRange(range);
   }
-  button.focus();
   return copied;
 }
 
@@ -317,9 +320,9 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
       onClick={(e) => {
         // React resets the synthetic event's currentTarget once the handler returns, so the button is read first.
         const button = e.currentTarget;
-        // The secret dialog is the one place this matters: saying Copied without a write lets the operator
-        // close the only display of a secret they never received. The command runs inside the click, the user
-        // gesture it honors, and after a rejected write the click's transient activation still covers it.
+        // Saying Copied without a write matters most in the secret dialog: the operator could close the only
+        // display of a secret they never received. The command runs inside the click, the user gesture it honors,
+        // and after a rejected write the click's transient activation still covers it.
         if (!navigator.clipboard) {
           setState(copyByCommand(text, button) ? 'copied' : 'failed');
           return;
@@ -335,6 +338,10 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
   );
 }
 
+// What takes the focus back after Keep editing: the control that held it, or else the first one a Tab reaches.
+const HELD_FOCUS = 'a[href], button, input, select, textarea, [tabindex]';
+const TABBABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /**
  * The outside path of a modal dialog: a backdrop click or the Escape key's `cancel`. While `unsaved` holds, both
  * ask before closing. The X button and a footer's Cancel never pass through here.
@@ -346,12 +353,19 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   // element and never reads a stale prop.
   const latest = useRef({ onClose, unsaved });
   latest.current = { onClose, unsaved };
+  // The control inside the dialog that held the focus as the question opened, so Keep editing can hand it back.
+  const held = useRef<HTMLElement | null>(null);
   const request = useCallback(() => {
-    if (latest.current.unsaved) setAsking(true);
-    else latest.current.onClose();
+    if (!latest.current.unsaved) {
+      latest.current.onClose();
+      return;
+    }
+    const active = document.activeElement;
+    held.current = active instanceof HTMLElement && ref.current?.contains(active) ? active : null;
+    setAsking(true);
   }, []);
-  // Keep editing hands the focus back to the dialog once the question is gone, not before: the question's modal
-  // leaves the dialog under it inert, and a question that unmounts rather than closing restores nothing on its own.
+  // Keep editing hands the focus back once the question is gone, not before: the question's modal leaves the dialog
+  // under it inert, and a question that unmounts rather than closing restores nothing on its own.
   const refocus = useRef(false);
   const keep = useCallback(() => {
     refocus.current = true;
@@ -370,7 +384,11 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     if (asking || !refocus.current) return;
     refocus.current = false;
     const el = ref.current;
-    if (el?.open) el.focus();
+    if (!el?.open) return;
+    const was = held.current;
+    held.current = null;
+    const target = was?.isConnected && el.contains(was) && was.matches(HELD_FOCUS) && !was.matches(':disabled') ? was : el.querySelector<HTMLElement>(TABBABLE);
+    target?.focus();
   }, [asking]);
   useEffect(() => {
     const el = ref.current;
@@ -411,8 +429,6 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
         ref={ref}
         className={className ? `dialog ${className}` : 'dialog'}
         aria-labelledby={titleId}
-        // Focusable, so Keep editing can hand the focus back to the dialog and a Tab from there enters its controls.
-        tabIndex={-1}
         style={{ width: `min(${width}px, calc(100vw - 32px))` }}
         onClick={(e) => {
           if (e.target === ref.current) request();
@@ -709,8 +725,6 @@ export function GroupedDialog({
         ref={ref}
         className="dialog dialog--grouped"
         aria-labelledby={titleId}
-        // Focusable, so Keep editing can hand the focus back to the dialog and a Tab from there enters its controls.
-        tabIndex={-1}
         style={{ '--dialog-w': `${width}px` } as CSSProperties}
         onClick={(e) => {
           if (e.target === ref.current) request();

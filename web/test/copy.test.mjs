@@ -98,6 +98,24 @@ test('a clipboard whose write rejects copies through the command', async () => {
   assert.equal(calls.recorded, 'secret-123');
 });
 
+test('the selection the page had before the click is back after the command', async () => {
+  const note = document.createElement('p');
+  note.textContent = 'keep this selected';
+  document.body.append(note);
+  const range = document.createRange();
+  range.selectNodeContents(note);
+  const selection = document.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  assert.equal(selection.toString(), 'keep this selected');
+  const calls = command(true, selected);
+  const button = render('secret-123');
+  await click(button);
+  assert.equal(button.textContent.trim(), 'Copied');
+  assert.equal(calls.recorded, 'secret-123', 'the command copied from its own control');
+  assert.equal(document.getSelection().toString(), 'keep this selected', 'the selection the page had is restored');
+});
+
 test("the command's textarea is appended inside the button's open dialog, and the focus returns to the button", async () => {
   // jsdom has no showModal, so the open attribute is set by hand.
   const dialog = document.createElement('dialog');
@@ -107,6 +125,7 @@ test("the command's textarea is appended inside the button's open dialog, and th
   const button = render('secret-123', dialog);
   await click(button);
   assert.equal(button.textContent.trim(), 'Copied');
-  assert.equal(calls.recorded, dialog, 'the textarea sat inside the open dialog at the copy instant');
-  assert.equal(document.activeElement, button, 'the focus is back on the button');
+  // Nodes are compared by identity: a mismatch serialized through assert.equal never finishes on a jsdom tree.
+  assert.ok(calls.recorded === dialog, 'the textarea sat inside the open dialog at the copy instant');
+  assert.ok(document.activeElement === button, 'the focus is back on the button');
 });

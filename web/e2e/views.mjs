@@ -3589,17 +3589,12 @@ async function forkLink(theme) {
 }
 
 /**
- * The Copy button on a console served over plain HTTP, where `navigator.clipboard` is undefined: the accessor lives
- * on the prototype, so it is deleted there, and a copy listener records what the page had selected at the copy
- * instant. On the Keys view a key is created and the Key created dialog's Copy, inside a modal, copies the secret;
- * on the Settings view Copy snippet copies the client block beside it, and a reload after it brings the accessor
- * back for the views that follow. The Keys case runs in the mock pass alone: the mock's story is rebuilt at the next
- * load, where the router's registry would keep the key and refuse its second creation. A failure names lengths, so
- * no secret reaches the output.
+ * A console served over plain HTTP has no `navigator.clipboard`: the accessor lives on the prototype, so it is
+ * deleted there, and a copy listener records what the page had selected at each copy instant, for the measures that
+ * read the copy command.
  */
-async function copyFallback(theme, path) {
-  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
-  await page.evaluate(() => {
+const withoutClipboard = () =>
+  page.evaluate(() => {
     delete Navigator.prototype.clipboard;
     window.__e2eCopied = null;
     document.addEventListener('copy', () => {
@@ -3607,48 +3602,71 @@ async function copyFallback(theme, path) {
       window.__e2eCopied = active instanceof HTMLTextAreaElement ? active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0) : (document.getSelection()?.toString() ?? '');
     });
   });
-  // `button` is an element handle: the button's accessible name changes with its state, so a locator by name would
-  // lose it at the click.
-  const copied = async (button, expected, where) => {
-    await button.click();
-    try {
-      await page.waitForFunction((el) => el.textContent?.trim() === 'Copied', button, { timeout: 1_000 });
-    } catch {
-      say(`${where}: Copy reads ${JSON.stringify(((await button.textContent()) ?? '').trim())} a second after the click, not Copied`);
-      return;
-    }
-    const recorded = await page.evaluate(() => window.__e2eCopied);
-    const lengths = JSON.stringify({ expected: expected.length, recorded: recorded === null ? null : recorded.length });
-    measurements.push(`${theme} ${path} copy by command ${lengths}`);
-    if (recorded !== expected) say(`${where}: the copy command took other text than the one beside the button ${lengths}`);
-  };
-  if (path === '/keys') {
-    const dialog = page.locator('dialog[open]');
-    const created = page.getByRole('dialog', { name: 'Key created' });
-    try {
-      await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
-      await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-      await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('copy check');
-      await dialog.getByRole('button', { name: 'Create', exact: true }).click();
-      // The mock answers the creation on a timer of its own, which the paused clock holds until it is advanced.
-      await advance(600);
-      await created.waitFor({ state: 'visible', timeout: 15_000 });
-    } catch (error) {
-      say(`the Key created dialog never opened (${error instanceof Error ? error.message : String(error)})`);
-      return;
-    }
-    const secret = ((await created.locator('.secret code').textContent()) ?? '').trim();
-    await copied(await created.locator('.secret button').elementHandle(), secret, 'the Key created dialog');
-    await created.getByRole('button', { name: 'Done' }).click();
-    await advance(CLOCK_STEP_MS);
-    await created.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => say('the Key created dialog stayed open after Done'));
+
+/**
+ * Clicks a Copy `button` (an element handle: the button's accessible name changes with its state, so a locator by
+ * name would lose it at the click) and reads Copied within a second with the recorded text equal to `expected`.
+ * Lengths alone reach the output, so no secret does.
+ */
+async function copiedByCommand(button, expected, label, say) {
+  await button.click();
+  try {
+    await page.waitForFunction((el) => el.textContent?.trim() === 'Copied', button, { timeout: 1_000 });
+  } catch {
+    say(`Copy reads ${JSON.stringify(((await button.textContent()) ?? '').trim())} a second after the click, not Copied`);
     return;
   }
+  const recorded = await page.evaluate(() => window.__e2eCopied);
+  const lengths = JSON.stringify({ expected: expected.length, recorded: recorded === null ? null : recorded.length });
+  measurements.push(`${label} copy by command ${lengths}`);
+  if (recorded !== expected) say(`the copy command took other text than the one beside the button ${lengths}`);
+}
+
+/**
+ * The Settings view's Copy snippet without a clipboard copies the client block beside it. A reload after it brings
+ * the accessor back, and the clock stands, so the views after it draw the instants they drew without the measure.
+ */
+async function copyFallback(theme) {
+  const say = (what) => failures.push(`${theme} /settings: ${what}`);
+  await withoutClipboard();
   const expected = (await page.locator('pre.snippet').first().textContent()) ?? '';
-  await copied(await page.getByRole('button', { name: 'Copy snippet' }).elementHandle(), expected, 'the client block');
+  await copiedByCommand(await page.getByRole('button', { name: 'Copy snippet' }).elementHandle(), expected, `${theme} /settings`, say);
   await page.reload();
   await booted();
+}
+
+/**
+ * The Key created dialog's Copy without a clipboard, inside a modal: a key is created on the Keys view and its
+ * secret copied by the command. The creation moves the page clock, so it runs after every shot on a load of its own,
+ * and in the mock pass alone: the mock's story is rebuilt at the next load, where the router's registry would keep
+ * the key and refuse its second creation.
+ */
+async function copyFallbackModal(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  await page.goto(`${base}/keys`);
+  await booted();
   await advance(LOAD_MS);
+  await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
+  await withoutClipboard();
+  const dialog = page.locator('dialog[open]');
+  const created = page.getByRole('dialog', { name: 'Key created' });
+  try {
+    await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('copy check');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    // The mock answers the creation on a timer of its own, which the paused clock holds until it is advanced.
+    await advance(600);
+    await created.waitFor({ state: 'visible', timeout: 15_000 });
+  } catch (error) {
+    say(`the Key created dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const secret = ((await created.locator('.secret code').textContent()) ?? '').trim();
+  await copiedByCommand(await created.locator('.secret button').elementHandle(), secret, `${theme} /keys`, say);
+  await created.getByRole('button', { name: 'Done' }).click();
+  await advance(CLOCK_STEP_MS);
+  await created.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => say('the Key created dialog stayed open after Done'));
 }
 
 /**
@@ -3770,11 +3788,10 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/keys' && mock) await copyFallback(theme, view.path);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
-      if (view.path === '/settings') await copyFallback(theme, view.path);
+      if (view.path === '/settings') await copyFallback(theme);
     }
   }
   // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
@@ -3796,6 +3813,15 @@ try {
     at = `${theme} /requests default pages`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await requestPageWidths(theme);
+  }
+  // The Key created dialog's Copy creates a key and moves the page clock, so it runs after every shot, in the mock
+  // pass alone.
+  if (mock) {
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /keys copy by command`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await copyFallbackModal(theme);
+    }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a
   // right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's
