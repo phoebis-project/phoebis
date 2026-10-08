@@ -18,9 +18,10 @@ tar -xzf phoebis-<version>-x86_64-unknown-linux-musl.tar.gz
 sudo install -m 0755 phoebis-<version>-x86_64-unknown-linux-musl/phoebis /usr/local/bin/phoebis
 ```
 
-While the repository is private, downloading a release asset needs a token with `repo` scope, passed as `curl -H
-"Authorization: Bearer <token>"` on each line above, as the [operations page](operations.md#releasing) says for the
-image.
+While the repository is private, downloading a release asset needs a token with `repo` scope, as the [operations
+page](operations.md#releasing) says of `read:packages` for the image. The `curl -LO` lines above cannot carry the token,
+so fetch the archive and `SHA256SUMS` with `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs/phoebis
+--pattern 'phoebis-<version>-x86_64-unknown-linux-musl.tar.gz' --pattern SHA256SUMS` in their place.
 
 On an `aarch64` host the archive is `phoebis-<version>-aarch64-unknown-linux-musl.tar.gz`. Each archive holds `phoebis`
 and `LICENSE`, and `SHA256SUMS` lists both, so `--ignore-missing` checks the one you downloaded. An operator who builds
