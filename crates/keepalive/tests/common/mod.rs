@@ -88,6 +88,9 @@ pub struct RigSpec {
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
+    /// The price table the rig prices dollars through, the shipped one by default. A case on a row priced by
+    /// prompt length hands in the test table.
+    pub pricing: PriceTable,
     /// The registry's file, `None` to keep the registry in memory: a case that breaks a read from a second
     /// connection needs a file to open.
     pub registry: Option<std::path::PathBuf>,
@@ -119,6 +122,7 @@ impl Default for RigSpec {
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
+            pricing: PriceTable::shipped(),
             registry: None,
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
@@ -177,7 +181,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         Arc::new(move || c.load(Ordering::SeqCst))
     };
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(spec.pricing.clone()));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),
