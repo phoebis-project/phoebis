@@ -21,7 +21,7 @@ pub use config::{
 };
 pub use engine::{
     continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,
-    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, Net, ParkKind, Reason,
+    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, ParkKind, Reason,
     SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
 pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};

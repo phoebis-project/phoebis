@@ -1266,15 +1266,6 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct Savings {
-    pub gross_usd: f64,
-    pub probe_cost_usd: f64,
-    pub wasted_probes: u64,
-    pub wasted_probe_usd: f64,
-    pub wasted_probe_reasons: BTreeMap<String, u64>,
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct GroupRow {
     pub key: String,
@@ -1301,7 +1292,10 @@ pub struct GroupRow {
     pub percentiles: Percentiles,
     pub kept_warm: KeptWarm,
     pub probes: ProbeCounts,
-    pub savings: Savings,
+    pub probe_cost_usd: f64,
+    pub wasted_probes: u64,
+    pub wasted_probe_usd: f64,
+    pub wasted_probe_reasons: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1331,7 +1325,8 @@ pub struct RollupFilter {
 
 impl RollupFilter {
     /// Whether a probe row counts as a request: the flag, or a kind filter that asked for probes outright.
-    /// The probe side of a group is summed either way, so the savings panel reads the same under both.
+    /// The probe side of a group is summed either way, so the probe cost and the wasted probes read the same under
+    /// both.
     pub fn probes_counted(&self) -> bool {
         self.include_probes || self.kinds.iter().any(|k| k == "probe")
     }
@@ -1521,7 +1516,7 @@ fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
 
 /// The rows of a read the fixed filters already narrowed (`RollupFilter::rollup_select`) that the pattern filters
 /// keep, probe rows among them: whether those count as requests is `probes_counted`, which the sums take, so a
-/// probe's cost reaches the savings panel under every filter.
+/// probe's cost reaches the group under every filter.
 #[cfg(any(test, feature = "test-support"))]
 pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
@@ -1598,21 +1593,17 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
             ok: probes.succeeded,
             skipped: probes.probes_skipped,
         },
-        // The gross saving rides on the inference rows and the rest on the probe rows, so the probe side
-        // comes from the probe sum: what the cache cost to keep warm is not a request the filter can drop.
-        savings: Savings {
-            gross_usd: sum.saved_usd_gross,
-            probe_cost_usd: probes.probe_cost_usd,
-            wasted_probes: probes.wasted_probes,
-            wasted_probe_usd: probes.wasted_probe_usd,
-            wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
-        },
+        // From the probe sum: what the cache cost to keep warm is not a request the filter can drop.
+        probe_cost_usd: probes.probe_cost_usd,
+        wasted_probes: probes.wasted_probes,
+        wasted_probe_usd: probes.wasted_probe_usd,
+        wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
     }
 }
 
 /// Two sums per group, and whether a non-probe row ever joined it: the request side, which a probe row joins only
-/// when probes count as requests; the probe rows on their own, which the derived probe counts and the probe side of
-/// the savings read; and the flag a keepalive credit needs, since it carries a real kind but never adds to
+/// when probes count as requests; the probe rows on their own, which the derived probe counts, the probe cost and the
+/// wasted probes read; and the flag a keepalive credit needs, since it carries a real kind but never adds to
 /// `requests`. Rows join one at a time, so a paged read folds each page in as it arrives.
 #[derive(Default)]
 struct GroupSums(BTreeMap<String, (RollupRow, RollupRow, bool)>);

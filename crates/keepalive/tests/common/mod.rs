@@ -16,9 +16,8 @@ use axum::http::Request;
 use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::{
-    AccountSelected, Bus, Delivery, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
-    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber,
-    Usage,
+    AccountSelected, Bus, Delivery, Event as BusEvent, Kind, Origin, Outcome, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
@@ -121,7 +120,6 @@ pub struct RigSpec {
     pub accounts: Vec<TestAccount>,
     /// What the catalog fake answers; nothing by default, so a spelling never resolves to a dated id mid-test.
     pub catalog: Vec<Rule>,
-    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     /// The registry in a file of its own rather than in memory, for a test that reaches it past the store. The
     /// relay's harness then answers the catalog from its default fake, and the ledger's standing is not read.
@@ -146,7 +144,6 @@ impl Default for RigSpec {
             accounting: None,
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
             catalog: Vec::new(),
-            lifecycle: None,
             limits: KeepaliveLimits::default(),
             on_disk: false,
             policy: KeepalivePolicy {
@@ -244,7 +241,6 @@ pub async fn rig(spec: RigSpec) -> Rig {
         clock,
         cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
-        lifecycle: spec.lifecycle,
         limits: spec.limits.clone(),
         max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
@@ -352,7 +348,6 @@ impl Rig {
             clock,
             cooldown_fallback: Duration::from_secs(60),
             ledger: self.ledger.clone(),
-            lifecycle: None,
             limits,
             max_request_bytes: 32 << 20,
             metrics: Arc::new(Metrics::new()),

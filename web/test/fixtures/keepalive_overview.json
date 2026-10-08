@@ -8,7 +8,6 @@
     },
     "bus_gaps": 0,
     "expired_between_turns_24h": 0,
-    "net_saved_7d_usd": 0.0,
     "probes_24h": {
       "failed": 0,
       "migrated": 0,

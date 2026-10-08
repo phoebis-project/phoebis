@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming};
 use crate::engine::{
-    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Net, Observation,
+    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
     ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
@@ -99,7 +99,6 @@ pub(crate) struct PersistedAgent {
     pub probes: u64,
     pub migrations: u64,
     pub usage: PersistedUsage,
-    pub net: PersistedNet,
     #[serde(with = "exact_list")]
     pub unanswered: Vec<f64>,
     pub left_fast: Option<bool>,
@@ -172,14 +171,6 @@ pub(crate) struct PersistedUsage {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct PersistedNet {
-    #[serde(with = "exact")]
-    pub five_hour_share: f64,
-    #[serde(with = "exact")]
-    pub usd: f64,
-}
-
-#[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedKept {
     pub key_generation: i64,
     pub pool_id: String,
@@ -192,8 +183,8 @@ pub(crate) struct PersistedKept {
 }
 
 /// A float as the text `f64`'s `Display` writes, which `str::parse` reads back to the same bits. serde_json's own float
-/// parser can land a unit in the last place off, and a jitter or a balance that moves across a restart is not the
-/// one that was saved.
+/// parser can land a unit in the last place off, and a jitter that moves across a restart is not the one that was
+/// saved.
 mod exact {
     use serde::{de::Error, Deserialize, Deserializer, Serializer};
 
@@ -378,10 +369,6 @@ impl PersistedAgent {
                     .to_string()
                 }),
             },
-            net: PersistedNet {
-                five_hour_share: agent.net.five_hour_share,
-                usd: agent.net.usd,
-            },
             unanswered: agent.unanswered.clone(),
             left_fast: agent.left_fast,
             kept: agent
@@ -466,10 +453,6 @@ impl PersistedAgent {
                 .speed
                 .as_deref()
                 .map(|word| Speed::of(Some(word))),
-        };
-        agent.net = Net {
-            five_hour_share: self.net.five_hour_share,
-            usd: self.net.usd,
         };
         agent.unanswered = self.unanswered;
         agent.left_fast = self.left_fast;
@@ -1223,16 +1206,13 @@ mod tests {
 
     #[test]
     fn a_float_in_the_payload_reads_back_to_the_bits_it_was_saved_with() {
-        let net = PersistedNet {
-            five_hour_share: DRIFTS,
-            usd: -DRIFTS,
-        };
-        let back: PersistedNet =
-            serde_json::from_str(&serde_json::to_string(&net).unwrap()).unwrap();
-        assert_eq!(
-            (back.five_hour_share.to_bits(), back.usd.to_bits()),
-            (DRIFTS.to_bits(), (-DRIFTS).to_bits())
-        );
+        #[derive(Serialize, Deserialize)]
+        struct Jitter(#[serde(with = "exact")] f64);
+        for value in [DRIFTS, -DRIFTS] {
+            let back: Jitter =
+                serde_json::from_str(&serde_json::to_string(&Jitter(value)).unwrap()).unwrap();
+            assert_eq!(back.0.to_bits(), value.to_bits());
+        }
         let kept = PersistedKept {
             key_generation: 1,
             pool_id: "main".into(),

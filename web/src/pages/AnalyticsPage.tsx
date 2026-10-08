@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
@@ -367,7 +367,8 @@ export function AnalyticsPage() {
   }, [groups]);
   // A session fold has no cost split and no warming facts; those figures read unavailable rather than zero.
   const split = knownSplit(totals.cost);
-  const { keptWarm, savings } = totals;
+  const { keptWarm } = totals;
+  const probesUnmeasured = totals.fromRequests === true;
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
   // The burn, rewrite and fit routes read the range alone, so every filter of the bar passes them by.
   const unfiltered = otherFilters || filters.accountId.length > 0;
@@ -753,60 +754,25 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Gross saved" value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd)} note="cache writes avoided by kept-warm reads" />
-            <Tile label="Probe cost" value={loading ? null : savings === null ? '-' : fmtUsd(savings.probeCostUsd)} note={savings === null ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
-            <Tile
-              label="Net saved"
-              value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd - savings.probeCostUsd)}
-              note="gross saved minus probe cost"
-              tone={savings !== null && savings.grossUsd - savings.probeCostUsd < 0 ? 'critical' : undefined}
-            />
+            <Tile label="Probe cost" value={loading ? null : probesUnmeasured ? '-' : fmtUsd(totals.probeCostUsd)} note={probesUnmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
           </div>
           <div className="grid-2">
-            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(totals.probes[s.key]) }))}>
+            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
                 <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(p.probes[s.key]) })))} />
-                {savings !== null &&
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
+                {!probesUnmeasured &&
                   PROBE_SERIES.map((s, i) => (
                     <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
                   ))}
               </BarChart>
             </ChartCard>
 
-            <ChartCard
-              title="Savings"
-              subtitle="Gross saved and probe cost per bucket; the line is the net"
-              loading={loading}
-              legend={[
-                { color: ink.series[2], label: 'Gross saved', value: savings === null ? '-' : fmtUsd(savings.grossUsd) },
-                { color: ink.series[3], label: 'Probe cost', value: savings === null ? '-' : fmtUsd(savings.probeCostUsd) },
-                { color: ink.ink2, label: 'Net saved', shape: 'line', value: savings === null ? '-' : <NetValue value={savings.grossUsd - savings.probeCostUsd} /> },
-              ]}
-            >
-              <ComposedChart data={buckets.map((b) => ({ ...b, net: b.savings === null ? null : b.savings.grossUsd - b.savings.probeCostUsd }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-                <YAxis {...usdAxis(buckets.flatMap((b) => (b.savings === null ? [] : [b.savings.grossUsd, b.savings.probeCostUsd, b.savings.grossUsd - b.savings.probeCostUsd])))} tickLine={false} axisLine={false} />
-                <Tooltip
-                  cursor={{ fill: ink.grid, opacity: 0.6 }}
-                  content={timeTip<Bucket & { net: number | null }>((p) => [
-                    { color: ink.series[2], label: 'gross saved', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.grossUsd) },
-                    { color: ink.series[3], label: 'probe cost', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.probeCostUsd) },
-                    { color: ink.ink2, label: 'net', value: savings === null || p.net === null ? '-' : <NetValue value={p.net} /> },
-                  ])}
-                />
-                {savings !== null && <Bar dataKey="savings.grossUsd" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                {savings !== null && <Bar dataKey="savings.probeCostUsd" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                {savings !== null && <Line type="monotone" dataKey="net" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />}
-              </ComposedChart>
-            </ChartCard>
-
             <Card title="Wasted probes" subtitle={WASTED_PROBE_BLURB}>
-              {loading ? <Skeleton height={190} /> : savings === null ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes savings={savings} probes={probesOf(totals)} />}
+              {loading ? <Skeleton height={190} /> : probesUnmeasured ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes group={totals} probes={probesOf(totals)} />}
             </Card>
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
@@ -940,10 +906,6 @@ function ChartCard({
       )}
     </Card>
   );
-}
-
-function NetValue({ value }: { value: number }) {
-  return <span className={`num ${value < 0 ? 'is-negative' : ''}`}>{fmtUsd(value)}</span>;
 }
 
 function PctLabel({ text }: { text: string }) {
@@ -1083,19 +1045,19 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used; a high parked-limit or horizon share says the parked ceilings do.";
 
-function WastedProbes({ savings, probes }: { probes: number; savings: NonNullable<AnalyticsGroup['savings']> }) {
+function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number }) {
   const ink = useChartInk();
-  const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: savings.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
+  const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: group.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
-  if (savings.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
+  if (group.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
   return (
     <>
       <div className="tiles-row tiles-row--panel">
-        <Tile label="Wasted probes" value={fmtInt(savings.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
-        <Tile label="Wasted cost" value={fmtUsd(savings.wastedProbeUsd)} note="at list prices" />
-        <Tile label="Share of probe cost" value={fmtPct(savings.probeCostUsd ? savings.wastedProbeUsd / savings.probeCostUsd : 0, 1)} note={`of ${fmtUsd(savings.probeCostUsd)} on probes`} />
+        <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
+        <Tile label="Wasted cost" value={fmtUsd(group.wastedProbeUsd)} note="at list prices" />
+        <Tile label="Share of probe cost" value={fmtPct(group.probeCostUsd ? group.wastedProbeUsd / group.probeCostUsd : 0, 1)} note={`of ${fmtUsd(group.probeCostUsd)} on probes`} />
       </div>
       <ul className="hbars hbars--reasons">
         {rows.map((r) => (
@@ -1106,7 +1068,7 @@ function WastedProbes({ savings, probes }: { probes: number; savings: NonNullabl
               <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: r.reason === 'idle_limit' ? ink.series[3] : ink.muted }} />
             </div>
             <span className="num">
-              {fmtInt(r.count)} <span className="muted">{fmtPct(savings.wastedProbes ? r.count / savings.wastedProbes : 0, 1)}</span>
+              {fmtInt(r.count)} <span className="muted">{fmtPct(group.wastedProbes ? r.count / group.wastedProbes : 0, 1)}</span>
             </span>
           </li>
         ))}
@@ -1210,14 +1172,14 @@ function CacheByModel({ groups, error, loading }: { error: string | null; groups
 }
 
 function KeepaliveByPool({ groups, error, loading }: { error: string | null; groups: AnalyticsGroup[]; loading: boolean }) {
-  const rows = useMemo(() => [...groups].sort((a, b) => (b.savings?.grossUsd ?? 0) - (a.savings?.grossUsd ?? 0)), [groups]);
+  const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm?.tokens ?? 0) - (a.keptWarm?.tokens ?? 0)), [groups]);
   return (
     <BreakdownTable
       title="Cache warming by pool"
       error={error}
       loading={loading}
       groupLabel="Pool"
-      columns={['Probes OK', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
+      columns={['Probes OK', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost']}
       rows={rows.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1228,9 +1190,7 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
           g.fromRequests ? '-' : fmtInt(g.probes.failed),
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(g.keptWarm.tokens),
-          g.savings === null ? '-' : fmtUsd(g.savings.grossUsd),
-          g.savings === null ? '-' : fmtUsd(g.savings.probeCostUsd),
-          g.savings === null ? '-' : <NetValue key="net" value={g.savings.grossUsd - g.savings.probeCostUsd} />,
+          g.fromRequests ? '-' : fmtUsd(g.probeCostUsd),
         ],
       }))}
     />

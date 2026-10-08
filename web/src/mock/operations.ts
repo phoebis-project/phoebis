@@ -1,5 +1,5 @@
 import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, RecipeReason, Session } from '@/api/types';
-import { anchorTier, ratesOf, shareOf } from '@/lib/costs';
+import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
@@ -12,8 +12,8 @@ const rng = createRng(2_024);
 
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
 // out and `codex` keeps no caches warm.
-// `companion` is independent of that: it says whether a cc-cache-keepalive
-// companion ever registered for the session and is still reporting. A silent
+// `companion` is independent of that: it says whether the keepalive mod ever
+// registered for the session and is still reporting. A silent
 // companion changes neither, because the retained prompts stay and are probed
 // under the pool's idle limits. `subagents` pins the agents below main, which may run another
 // model and, with that, land on another account. `idleMinutes` overrides the
@@ -65,12 +65,6 @@ for (const r of REQUESTS) {
   if (!seen) ledgered.set(id, { last: r.at, requests: 1 });
   else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
-
-// Sunday 13 September 2026 at 20:00 UTC, 13:00 in Los Angeles: a weekend day at an hour outside 5 to 11, so the
-// instant is outside the peak band whatever the band's weekday rule.
-const OUT_OF_BAND = Date.UTC(2026, 8, 13, 20, 0);
-/** A 20k-token prefix read back on Fable 5.1, the share of the anchor tier's 5-hour window it spends out of band. */
-const PROBE_SHARE = shareOf(TABLES, 'five_hour', anchorTier(TABLES), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, OUT_OF_BAND) ?? 0;
 
 /** Whether the cost model weighs `model` on the 5-hour window (a dated id reads its undated name): a weighted model
  *  prices every type, and one without a weight has no share for any usage. */
@@ -136,8 +130,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
       lastGuard: null,
-      netFiveHourShare: null,
-      netUsd: null,
       nextProbeAt: null,
     },
   };
@@ -156,7 +148,7 @@ SESSIONS.push({
   forkDepth: null,
   forkedFrom: null,
   historical: false,
-  keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -172,7 +164,7 @@ SESSIONS.push({
 // scheduled.
 const RECIPE_REASONS: (RecipeReason | null)[] = [
   'awaiting_cache_evidence',
-  'net_negative',
+  'expired',
   null,
   null,
   'overage',
@@ -200,7 +192,7 @@ const SUBAGENT_HOLDS = new Map<number, RecipeReason>([
 ]);
 
 // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
-// session's agent is the one probe settled in a share of the 5-hour window, so it stays armed.
+// session's agent stays armed.
 const PARKED_HOLDS = new Map<number, RecipeReason>([[3, 'horizon']]);
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
@@ -219,16 +211,6 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
-    // The unit a probe settles in follows the serving account's own funding: a share of the 5-hour window on a
-    // subscription account whose model the cost model weighs, since a weighted model prices every type a probe
-    // spends, dollars on an api_key one or on a model the cost model cannot price, the same decision the engine
-    // makes. A probe replays a prefix of about 20k tokens at the cache-read rate: `PROBE_SHARE` of the window, or
-    // $0.004.
-    const probes = state === 'armed' && reason === null ? j + 1 : 0;
-    const inShare = accountById.get(accountId ?? '')?.kind === 'oauth' && sharePrices(model);
-    // Held for overage after probing, so an agent on plan quota settled in both units and carries a balance in each;
-    // one whose probes the share could not price carries its dollar balance alone.
-    const crossed = reason === 'overage';
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -239,10 +221,6 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastGuard: 'rearm',
       lastRequestAt,
       model,
-      // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
-      // nothing further since its last hold began.
-      netFiveHourShare: inShare ? (crossed ? 3 * PROBE_SHARE : -PROBE_SHARE * probes) : 0,
-      netUsd: crossed ? -0.012 : inShare ? 0 : -0.004 * probes,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       reason,
@@ -261,11 +239,9 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
-  // The session's own summary reads the main agent's guard note and balances, the way the admin route does.
+  // The session's own summary reads the main agent's guard note, the way the admin route does.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
-  pin.keepalive.netFiveHourShare = main?.netFiveHourShare ?? null;
-  pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...
@@ -292,7 +268,7 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     forkDepth: null,
     forkedFrom: null,
     historical: true,
-    keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
+    keepalive: { lastGuard: null, nextProbeAt: null, state: null },
     keyGeneration: DELETED_HOLDER_GENERATION,
     keyId: 'desktop',
     lastInputTokens: null,
@@ -327,7 +303,6 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   // warm; `codex` has warming off and contributes none. Hand-set at a busier
   // scale than the logged rows.
   probes24h: { ok: 225, migrated: 18, skipped: 45, failed: 3 },
-  netSaved7dUsd: 41.8,
 };
 
 const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;

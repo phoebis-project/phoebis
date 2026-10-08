@@ -867,7 +867,6 @@ async fn build_app(
         clock: clock.clone(),
         cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
-        lifecycle: None,
         limits: KeepaliveLimits::default(),
         max_request_bytes: 32 << 20,
         metrics: metrics.clone(),

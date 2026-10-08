@@ -80,7 +80,7 @@ export const PROBE_SERIES: { hint?: string; key: 'failed' | 'migrated' | 'ok' | 
     key: 'migrated',
     label: 'Migrated',
     slot: 2,
-    hint: "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.",
+    hint: "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count.",
   },
   { key: 'skipped', label: 'Skipped', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },

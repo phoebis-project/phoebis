@@ -185,7 +185,6 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
   expiredBetweenTurns24h: 0,
-  netSaved7dUsd: 0,
   probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
 };
 

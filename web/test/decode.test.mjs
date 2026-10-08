@@ -666,7 +666,8 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 5);
   assert.equal(desktop.tokens.thinking, 200);
-  assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
+  assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
+  assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
   assert.ok(points.length >= 24 && isIso(points[0].at));
@@ -1013,26 +1014,24 @@ test('a session fold marks what request rows cannot supply and a sum carries the
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const [folded] = d.foldGroups(rows, 'all');
   assert.equal(folded.fromRequests, true);
-  assert.equal(folded.savings, null);
   assert.equal(folded.keptWarm, null);
   assert.equal(folded.cost.cacheRead, null);
   assert.equal(folded.cost.cacheWrite, null);
-  const route = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
+  const route = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], probe_cost_usd: 0.25, wasted_probe_usd: 0.125, wasted_probes: 1 });
   assert.equal(route.fromRequests, undefined, 'a route group carries every figure');
   const mixed = d.sumGroups([route, folded]);
   assert.equal(mixed.cost.cacheRead, null, 'a null source makes the sum unavailable, never NaN');
   assert.equal(mixed.cost.cacheWrite, null);
-  assert.equal(mixed.savings, null);
   assert.equal(mixed.keptWarm, null);
   assert.equal(mixed.fromRequests, true);
   assert.equal(mixed.costUsd, route.costUsd + folded.costUsd, 'the figures the rows do carry still sum');
   const routeOnly = d.sumGroups([route, route]);
   assert.equal(routeOnly.cost.cacheRead, route.cost.cacheRead * 2);
-  assert.equal(routeOnly.savings.grossUsd, route.savings.grossUsd * 2);
+  assert.deepEqual([routeOnly.probeCostUsd, routeOnly.wastedProbeUsd, routeOnly.wastedProbes], [0.5, 0.25, 2], 'the probe figures sum');
   assert.equal(routeOnly.keptWarm.requests, route.keptWarm.requests * 2);
   assert.equal(routeOnly.fromRequests, undefined);
   const [bucket] = d.foldRequests(rows, 3_600_000, rows[rows.length - 1].at, rows[0].at);
-  assert.ok(bucket.groups.every((g) => g.savings === null && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
+  assert.ok(bucket.groups.every((g) => g.fromRequests === true && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
 });
 
 test('a recipe evicted at the byte cap or lapsed past its entry keeps that reason, and the wasted probes their labels', () => {
@@ -1042,8 +1041,8 @@ test('a recipe evicted at the byte cap or lapsed past its entry keeps that reaso
     assert.equal(recipe.reason, reason);
   }
   const row = fixture('analytics_breakdown').rows[0];
-  const group = d.decodeAnalyticsGroup({ ...row, savings: { ...row.savings, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 } });
-  assert.deepEqual([group.savings.wastedProbeReasons.cold_return, group.savings.wastedProbeReasons.evicted, group.savings.wastedProbeReasons.expired], [3, 2, 1]);
+  const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 });
+  assert.deepEqual([group.wastedProbeReasons.cold_return, group.wastedProbeReasons.evicted, group.wastedProbeReasons.expired], [3, 2, 1]);
 });
 
 test('a recipe held because every account of its pool was exhausted keeps that reason', () => {
@@ -1059,8 +1058,8 @@ test('a recipe held under the horizon or ended at the parked limit keeps that re
     assert.equal(d.decodeRecipe({ ...wire, reason, state: 'held' }).reason, reason);
   }
   const row = fixture('analytics_breakdown').rows[0];
-  const group = d.decodeAnalyticsGroup({ ...row, savings: { ...row.savings, wasted_probe_reasons: { horizon: 2, parked_limit: 1 }, wasted_probes: 3 } });
-  assert.deepEqual([group.savings.wastedProbeReasons.horizon, group.savings.wastedProbeReasons.parked_limit], [2, 1]);
+  const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { horizon: 2, parked_limit: 1 }, wasted_probes: 3 });
+  assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
 test('the downstream snippet is the six recommended lines with the public URL left to the operator', () => {
@@ -1197,9 +1196,8 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.equal(recipe.state, 'armed');
   assert.equal(recipe.reason, null);
-  assert.equal(recipe.netFiveHourShare, 0, 'no probe has settled into the recipe yet');
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
-  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
+  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
@@ -1535,7 +1533,7 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
   assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
-test('a session decodes its burn unit and both net balances, and a pin the cost model cannot price reads no burn', () => {
+test('a session decodes its burn unit, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
   assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
@@ -1543,10 +1541,8 @@ test('a session decodes its burn unit and both net balances, and a pin the cost 
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
-  const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_usd: 0.25 } }).keepalive;
-  assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);
-  const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002 });
-  assert.equal(recipe.netFiveHourShare, -0.0002);
+  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
+  assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'nor does a recipe');
 });
 
 test("an attention item decodes the route's shape, its start an instant and its detail passed through", () => {

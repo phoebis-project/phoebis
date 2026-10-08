@@ -1,7 +1,5 @@
-//! The savings accounting: what a kept-warm request saved, what a probe cost, and what a stopped recipe wasted,
-//! as the ledger's rollup rows carry them. The accounting this feeds is an estimate in money for an API key and
-//! a proxy for quota on a subscription account, which is why it is kept apart from the ledger's own measured
-//! spend.
+//! The keepalive's rows in the ledger: what a probe cost, which request a probe kept warm, what a stopped recipe
+//! wasted and which due probe went unsent, as the rollup rows carry them, and the pricing a probe's cost reads.
 
 use std::collections::BTreeMap;
 
@@ -11,50 +9,6 @@ use phoebis_routing::{PinUsage, FIVE_HOUR};
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
-
-/// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
-/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` on the share side alone, for a model the
-/// subscription cost model has no weight for, or a tier it has no capacity for on the window.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn gross_saving(
-    unit: SavingsUnit,
-    table: &PriceTable,
-    tables: &PlanTables,
-    tier: Option<&str>,
-    canonical_model: &str,
-    cache_read_tokens: u64,
-    at: i64,
-    speed: Speed,
-) -> Option<f64> {
-    match unit {
-        SavingsUnit::Usd => {
-            let per_token = match table.price_at(canonical_model, speed) {
-                Some(price) => (price.input - price.cache_read) / 1_000_000.0,
-                // The dearest cells `probe_dollars` prices this model's probes at: both sides of the net read one
-                // rate table, so a cache that saves more than its probes cost keeps the recipe net positive.
-                None => {
-                    let dearest = table.rate_table().fallback;
-                    dearest.input.unwrap_or(0.0) - dearest.cache_read.unwrap_or(0.0)
-                }
-            };
-            Some(cache_read_tokens as f64 * per_token)
-        }
-        SavingsUnit::WindowShare => {
-            let tier = tier?;
-            let priced = |usage| tables.share_at(FIVE_HOUR, tier, canonical_model, usage, at);
-            let as_input = priced(PinUsage {
-                input: cache_read_tokens,
-                ..PinUsage::default()
-            })?;
-            let as_read = priced(PinUsage {
-                cache_read: cache_read_tokens,
-                ..PinUsage::default()
-            })?;
-            Some(as_input - as_read)
-        }
-    }
-}
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
 /// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
@@ -78,7 +32,7 @@ pub(crate) fn probe_cost(
 
 /// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
 /// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
-/// dollar burn: the net reads this figure, and a zero would let a probe that consumed quota pass it.
+/// dollar burn: the ledger's probe cost reads this figure, and a zero would book a probe that consumed quota as free.
 pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
     let typed = typed(usage);
     if let Some((total, _)) = table.estimate(
@@ -132,9 +86,8 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'s
     }
 }
 
-/// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
-/// and the model cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which
-/// case dollars. One decision for the three, so the stop reads the balance the probes move.
+/// The unit a probe settles in: `default_unit`, unless that is the window share and the model cannot price the
+/// account's tier and model on the 5-hour window (no weight, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
@@ -213,7 +166,6 @@ impl Engine {
         canonical_model: &str,
         request_id: &str,
         tokens: u64,
-        saving: f64,
         fast: bool,
     ) {
         let mut d = delta(
@@ -229,7 +181,6 @@ impl Engine {
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         d.kept_warm_tokens = tokens;
-        d.saved_usd_gross = saving;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -357,27 +308,6 @@ mod tests {
     }
 
     #[test]
-    fn a_window_share_saving_is_the_input_share_less_the_read_share() {
-        // 2026-09-26, a Saturday: outside the peak band's weekdays, so the band weighs nothing.
-        const SATURDAY_AFTERNOON: i64 = 1_790_431_200_000;
-        let saved = gross_saving(
-            SavingsUnit::WindowShare,
-            &phoebis_ledger::test_tables::api_prices(),
-            &phoebis_ledger::test_tables::subscription_costs(),
-            Some("default_claude_max_20x"),
-            "claude-opus-5-5",
-            1,
-            SATURDAY_AFTERNOON,
-            Speed::Standard,
-        )
-        .expect("a priced model on a known tier");
-        // The test table: Opus 5.5 weighs 2, an input token multiplies by 1 and a cache read by 0.1, and the Max
-        // 20x 5-hour window holds 100 units.
-        let want = 2.0 * 1.0 / 100.0 - 2.0 * 0.1 / 100.0;
-        assert!((saved - want).abs() < 1e-12, "{saved} against {want}");
-    }
-
-    #[test]
     fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
         // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9.
         let tables = phoebis_ledger::test_tables::subscription_costs();
@@ -388,35 +318,6 @@ mod tests {
             unpriced_reason(&tables, "claude-opus-5-5-20260401"),
             "tier",
             "a dated id reads its undated weight"
-        );
-    }
-
-    #[test]
-    fn a_fast_recipes_saving_reads_the_fast_input_less_the_fast_cache_read() {
-        let saved = |speed| {
-            gross_saving(
-                SavingsUnit::Usd,
-                &phoebis_ledger::test_tables::api_prices(),
-                &phoebis_ledger::test_tables::subscription_costs(),
-                None,
-                "claude-opus-5-5",
-                1_000_000,
-                0,
-                speed,
-            )
-            .expect("a priced model")
-        };
-        // The test price table's Opus 5.5 row, per million tokens: input 20 and cache read 2 at the fast cells, 10
-        // and 1 at the standard ones.
-        assert!(
-            (saved(Speed::Fast) - (20.0 - 2.0)).abs() < 1e-12,
-            "{:?}",
-            saved(Speed::Fast)
-        );
-        assert!(
-            (saved(Speed::Standard) - (10.0 - 1.0)).abs() < 1e-12,
-            "{:?}",
-            saved(Speed::Standard)
         );
     }
 

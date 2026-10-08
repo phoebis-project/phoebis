@@ -180,12 +180,6 @@ export function costOf(model: string, u: Usage, fast = false): number {
 
 const sumSplit = (parts: CostSplit[]): CostSplit => parts.reduce((s, c) => ({ cacheRead: s.cacheRead + c.cacheRead, cacheWrite: s.cacheWrite + c.cacheWrite, input: s.input + c.input, output: s.output + c.output }), { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 });
 
-/** What the cache read would have cost as a 5-minute write had the probe not kept it warm. */
-function keptWarmSaving(model: string, cacheReadTokens: number): number {
-  const p = priceFor(model);
-  return (cacheReadTokens * Math.max(0, p.cacheWrite5mPerM - p.cacheReadPerM)) / 1_000_000;
-}
-
 // Its own stream, so these draws leave the fixtures the main stream feeds alone.
 const missRng = createRng(1_517);
 
@@ -1507,7 +1501,7 @@ function rollups(): HourlyRollup[] {
       keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
       probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, skipped: h.int(0, 2) } : { ok: 0, failed: 0, skipped: 0 },
       probeMigrated: isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0,
-      savings: { grossUsd: kept.reduce((s, r) => s + keptWarmSaving(r.model, r.usage.cacheRead), 0), probeCostUsd },
+      probeCostUsd,
       ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
     });
   }
@@ -1641,7 +1635,7 @@ function historicalRollups(): HourlyRollup[] {
         keptWarm: { requests: keptRequests, tokens: keptTokens },
         probes: { ok: 0, failed: 0, skipped: 0 },
         probeMigrated: 0,
-        savings: { grossUsd: keptWarmSaving(model, keptTokens), probeCostUsd: 0 },
+        probeCostUsd: 0,
         ...ZERO_WASTE,
       };
       if (unknownReasonOwed && lane.keyId === 'desktop' && t >= startOfHour(NOW) - 12 * DAY && inference.cacheMissReasons.none > inference.expiredBetweenTurns) {
@@ -1684,7 +1678,7 @@ function historicalRollups(): HourlyRollup[] {
           keptWarm: { requests: 0, tokens: 0 },
           probes: { ok: probes, failed, skipped: h.int(0, 2) },
           probeMigrated: h.chance(0.3) ? 1 : 0,
-          savings: { grossUsd: 0, probeCostUsd: probeCost },
+          probeCostUsd: probeCost,
           ...wastedProbes(h, probes, probeCost),
         });
       }

@@ -725,8 +725,18 @@ async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_th
         ..RigSpec::default()
     })
     .await;
+    assert_eq!(
+        r.engine.sessions().len(),
+        1,
+        "the registered session is live before its expiry"
+    );
     r.advance(2);
     r.engine.expire();
+    assert!(
+        r.engine.sessions().is_empty(),
+        "the expiry ends the silent session: {:?}",
+        r.engine.sessions()
+    );
     assert_eq!((r.engine.stats().sessions, r.engine.stats().agents), (0, 0));
     assert_eq!(
         r.engine

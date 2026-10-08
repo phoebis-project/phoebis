@@ -715,7 +715,12 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         .find(|g| g.key == UNATTRIBUTED)
         .expect("a group of keepalive credits alone stays in the default breakdown");
     assert_eq!(group.kept_warm.requests, 1);
-    assert!(group.savings.gross_usd > 0.0);
+    // The row's saving stays in the rollups, unread: the group a route answers carries no savings figure.
+    let answered = serde_json::to_value(group).unwrap();
+    assert!(
+        answered.get("savings").is_none() && !answered.to_string().contains("gross"),
+        "{answered}"
+    );
 }
 
 #[test]

@@ -8,9 +8,6 @@ import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
 
-const OPTIONAL_SNIPPET = `CC_KEEPALIVE_OWNER_ID=$(uuidgen)
-ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"`;
-
 const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
@@ -35,14 +32,6 @@ const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
     body: 'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-  },
-  {
-    term: 'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
-    body: "Optional hardening. The router already fences cache warming by the companion's session registration; these bind each model request to the process that registered, so a second process resuming the same session id cannot inherit its recipes. They need a wrapper script, since the env block of Claude Code's settings file holds static values.",
-  },
-  {
-    term: 'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
-    body: 'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',
   },
   {
     term: 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
@@ -79,13 +68,6 @@ export function SettingsPage() {
             a port mapping or another host name can stand between Claude Code and the listener.
           </p>
         )}
-        <div className="snippet-group">
-          <div className="snippet-group__head">
-            <h3 className="section-title">Optional</h3>
-            <CopyButton text={OPTIONAL_SNIPPET} label="Copy" />
-          </div>
-          <pre className="snippet snippet--sm">{OPTIONAL_SNIPPET}</pre>
-        </div>
         <dl className="envdl">
           {ENV_TERMS.map((t) => (
             <div className="envdl__row" key={t.term}>

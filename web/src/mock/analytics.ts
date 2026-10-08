@@ -51,13 +51,13 @@ export interface HourlyRollup {
   migrations: number;
   model: string;
   poolId: string;
-  /** Probes served by another account than the recipe's; they count for neither the cold streak nor the net. */
+  probeCostUsd: number;
+  /** Probes served by another account than the recipe's; they do not count toward the cold streak. */
   probeMigrated: number;
   probes: { failed: number; ok: number; skipped: number };
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
   requests: { incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
-  savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
   /** The speed the hour's answers reported, else `fast` where its requests asked for it, else `standard`. */
@@ -123,7 +123,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
 
 /**
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
- * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read.
+ * count as requests, and the probe rows alone, which the probe counts, the probe cost and the wasted probes read.
  */
 function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
@@ -172,24 +172,20 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     key,
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
+    probeCostUsd: sum(probeRows, (r) => r.probeCostUsd),
     probes: { failed: sum(probeRows, (r) => r.probes.failed), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     rateLimited,
     rejected: 0,
     requests,
-    savings: {
-      // The gross saving rides on the inference rows and what the cache cost to keep warm on the probe rows.
-      grossUsd: sum(counted, (r) => r.savings.grossUsd),
-      probeCostUsd: sum(probeRows, (r) => r.savings.probeCostUsd),
-      wastedProbeReasons,
-      wastedProbeUsd: sum(probeRows, (r) => r.wastedProbeUsd),
-      wastedProbes: sum(probeRows, (r) => r.wastedProbes),
-    },
     succeeded,
     tokens: {
       cacheRead: sum(counted, (r) => r.tokens.cacheRead), cacheWrite1h: sum(counted, (r) => r.tokens.cacheWrite1h), cacheWrite5m: sum(counted, (r) => r.tokens.cacheWrite5m), output: sum(counted, (r) => r.tokens.output),
       thinking: sum(counted, (r) => r.tokens.thinking), uncachedInput: sum(counted, (r) => r.tokens.uncachedInput), webFetch: sum(counted, (r) => r.tokens.webFetch), webSearch: sum(counted, (r) => r.tokens.webSearch),
     },
     uncached: sum(counted, (r) => r.uncached),
+    wastedProbeReasons,
+    wastedProbeUsd: sum(probeRows, (r) => r.wastedProbeUsd),
+    wastedProbes: sum(probeRows, (r) => r.wastedProbes),
   };
 }
 

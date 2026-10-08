@@ -1,5 +1,5 @@
-//! Savings accounting: a kept-warm request's gross saving, a probe's cost, a migrated probe's price, the wasted
-//! count settled when a recipe stops or the request after a probe returns cold, and the net that can go negative.
+//! The keepalive's ledger rows: a kept-warm request's credit, a probe's cost, a migrated probe's price, and the wasted
+//! count settled when a recipe stops or the request after a probe returns cold.
 mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -8,10 +8,9 @@ use common::*;
 use fake_upstream::Respond;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
-use phoebis_routing::{PinUsage, FIVE_HOUR};
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
-/// rather than the rig's own hour: a test that moves the clock to the next UTC day writes past it.
+/// rather than the rig's own hour: a test that crosses into the next hour writes past it.
 async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow> {
     wait_for(Duration::from_secs(5), || {
         let rows =
@@ -41,8 +40,8 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
 }
 
 // claude-sonnet-4-5 is not in the shipped price table; the harness serves it under that id alone. Every test
-// here serves and requests claude-sonnet-5, which the table prices, so the saving and the cost are numbers the
-// assertions can name.
+// here serves and requests claude-sonnet-5, which the table prices, so the cost is a number the assertions can
+// name.
 const PRICED: &str = "claude-sonnet-5";
 
 fn priced_body() -> String {
@@ -55,13 +54,6 @@ fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::Model
         .price_at(model, speed)
         .expect("the rig's table prices the model")
         .clone()
-}
-
-/// What 2,000 cached tokens of `PRICED` save, its input less its cache read per million, in the table the rig
-/// prices through.
-fn saving_2000() -> f64 {
-    let price = rig_cells(PRICED, phoebis_ledger::Speed::Standard);
-    2_000.0 * (price.input - price.cache_read) / 1_000_000.0
 }
 
 /// A real request answered with a five-minute write of 2,000 tokens (the cache was cold) or a read of 2,000
@@ -80,7 +72,6 @@ async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
 
 #[tokio::test]
 async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
-    let saving = saving_2000();
     let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -88,11 +79,6 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let cost = r.status("main").net_usd;
-    assert!(
-        cost < 0.0,
-        "the probe's cost counts against the net: {cost}"
-    );
     // Past the five-minute TTL of the first request, a real request reads the cache the probe kept.
     r.advance(60_000);
     let second = r.observe_with("main", &body).await;
@@ -102,16 +88,11 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
         (credit.kept_warm_requests, credit.kept_warm_tokens),
         (1, 2_000)
     );
-    assert!(
-        (credit.saved_usd_gross - saving).abs() < 1e-12,
-        "{}",
-        credit.saved_usd_gross
+    assert_eq!(
+        credit.saved_usd_gross, 0.0,
+        "the credit counts the request and its tokens and prices no saving"
     );
-    let probe = probe_rows(&rows);
-    assert!(
-        probe.probe_cost_usd > 0.0
-            && (r.status("main").net_usd - (saving - probe.probe_cost_usd)).abs() < 1e-12
-    );
+    assert!(probe_rows(&rows).probe_cost_usd > 0.0);
     assert!(row(&r, &second).await.kept_warm);
     // The same gap without a probe, or with a cold probe, credits nothing.
     let third = r.observe_with("main", &body).await;
@@ -146,15 +127,6 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     );
     let rows = rollups(&r, |rows| probe_rows(rows).requests >= 3).await;
     assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
-    let text = r
-        .metrics
-        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
-    assert!(
-        text.contains(&format!(
-            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {saving}"#
-        )),
-        "{text}"
-    );
 }
 
 #[tokio::test]
@@ -346,10 +318,6 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
     let rows = rollups(&r, |rows| probe_rows(rows).probe_migrated == 1).await;
     let cost = probe_rows(&rows).probe_cost_usd;
     assert!(cost > 0.0, "a migrated probe is priced from its usage");
-    assert!(
-        (status.net_usd + cost).abs() < 1e-12,
-        "and its price counts against the net: {status:?}"
-    );
     r.advance(60_000);
     let second = r.observe_with("main", &body).await;
     assert_eq!(
@@ -1193,86 +1161,6 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_
     );
 }
 
-/// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an
-/// Anthropic-key pool, where the agent's dollar net moves by the price its ledger row carries, and the 5-hour share on
-/// a subscription pool, where the agent's share moves by the share of the serving account's window.
-#[tokio::test]
-async fn a_migrated_probe_settles_at_its_cost_under_dollar_and_under_plan_funding() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    let body = priced_body();
-    r.observe_with("main", &body).await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(status.migrations, 1, "{status:?}");
-    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
-    let spent = probe_rows(&rows).probe_cost_usd;
-    assert!(
-        (status.net_usd + spent).abs() < 1e-12,
-        "the dollar net moves by the price the ledger's probe row carries: {status:?} against {spent}"
-    );
-    assert_eq!(status.net_five_hour_share, 0.0);
-
-    const OTHER_SECRET: &str = "sk-ant-oat01-PPPP";
-    let mut r = rig(RigSpec {
-        accounts: vec![oauth("o", OAUTH_SECRET, 0), oauth("p", OTHER_SECRET, 0)],
-        ..subscription_spec()
-    })
-    .await;
-    r.observe_with("main", &body).await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other, other_id) = if first == "o" {
-        (OAUTH_SECRET, OTHER_SECRET, "p")
-    } else {
-        (OTHER_SECRET, OAUTH_SECRET, "o")
-    };
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(status.migrations, 1, "{status:?}");
-    assert_eq!(status.account_id.as_deref(), Some(other_id), "{status:?}");
-    // The answer's five-minute write of 2,000 tokens, on the tier every account of the rig names.
-    let share = r
-        .tables
-        .share_at(
-            FIVE_HOUR,
-            "default_claude_max_20x",
-            PRICED,
-            PinUsage {
-                input: 0,
-                cache_read: 0,
-                write_5m: 2_000,
-                write_1h: 0,
-                output: 0,
-            },
-            r.now(),
-        )
-        .unwrap();
-    assert!(
-        share > 0.0 && (status.net_five_hour_share + share).abs() < 1e-12,
-        "the share net moves by the probe's share of the serving account's window: {status:?} against {share}"
-    );
-    assert_eq!(status.net_usd, 0.0);
-}
-
 /// A session that lapses is swept by the expiry the next observation runs, and nothing after it on that path
 /// reports: no selection, no completion, no tick. The settlement the sweep leaves has to reach the ledger from
 /// the observation itself, stamped when the sweep happened rather than whenever the next caller drains.
@@ -1447,11 +1335,10 @@ fn fast_read_back() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"output_tokens":0,"speed":"fast"}}"#.to_vec() }
 }
 
-/// A fast session's cache lives on the fast lane, so a fast probe keeps a fast request warm at the fast cells and
-/// nothing on the standard lane.
+/// A fast session's cache lives on the fast lane, so a fast probe keeps a fast request warm and nothing on the
+/// standard lane.
 #[tokio::test]
-async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_of_speed_earns_nothing(
-) {
+async fn a_fast_probe_keeps_a_fast_request_warm_and_a_switch_of_speed_earns_nothing() {
     let mut r = rig(RigSpec::default()).await;
     let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -1471,18 +1358,10 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
     {
         on_fast.add(row);
     }
-    // Opus 5.5's fast input less its fast cache read.
-    let fast_cells = rig_cells(OPUS, phoebis_ledger::Speed::Fast);
-    let saving = 2_000.0 * (fast_cells.input - fast_cells.cache_read) / 1_000_000.0;
     assert_eq!(
         (on_fast.kept_warm_requests, on_fast.kept_warm_tokens),
         (1, 2_000),
         "the credit files under speed fast"
-    );
-    assert!(
-        (on_fast.saved_usd_gross - saving).abs() < 1e-12,
-        "{}",
-        on_fast.saved_usd_gross
     );
     let probe_speeds: Vec<&str> = rows
         .iter()
@@ -1511,30 +1390,6 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
         "a standard request reads no cache the fast probe kept, whatever it reads back"
     );
     assert!(!row(&r, &switched).await.kept_warm);
-}
-
-/// The upstream may serve a request asked fast at standard speed: its saving is what the served speed's cells
-/// would have charged for the prefix, never the fast cells the recipe asked for.
-#[tokio::test]
-async fn a_request_asked_fast_and_served_standard_credits_the_standard_cells() {
-    let mut r = rig(RigSpec::default()).await;
-    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &fast).await;
-    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    r.advance(60_000);
-    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
-    let kept = r.observe_with("main", &fast).await;
-    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    // Opus 5.5's standard input less its standard cache read.
-    let standard = rig_cells(OPUS, phoebis_ledger::Speed::Standard);
-    let saving = 2_000.0 * (standard.input - standard.cache_read) / 1_000_000.0;
-    let credited = inference_rows(&rows).saved_usd_gross;
-    assert!((credited - saving).abs() < 1e-12, "{credited}");
-    assert!(row(&r, &kept).await.kept_warm);
 }
 
 #[tokio::test]
@@ -1566,12 +1421,10 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
         "priced as the canonical model: {}",
         row.probe_cost_usd
     );
-    assert!((r.status("main").net_usd + expected).abs() < 1e-12);
 }
 
 #[tokio::test]
-async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and_its_recipe_keeps_probing(
-) {
+async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_probing() {
     // claude-sonnet-4-5 is BODY's own model and stays out of the shipped price table for this test, unlike
     // the priced tests above.
     let mut r = rig(RigSpec::default()).await;
@@ -1580,8 +1433,6 @@ async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let before = r.status("main").net_usd;
-    assert!((before + dearest_read_2000()).abs() < 1e-12, "{before}");
     r.advance(60_000);
     let second = r.observe_with("main", BODY).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
@@ -1591,34 +1442,13 @@ async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and
         (1, 2_000),
         "the mark and the tokens count on a model the price table does not know"
     );
-    // The dearest input the rig's price table lists less its dearest cache read: the cells the probe's own cost
-    // reads.
-    let dearest = phoebis_ledger::PriceTable::shipped().rate_table().fallback;
-    let saved = 2_000.0
-        * (dearest.input.expect("the fallback prices every type")
-            - dearest.cache_read.expect("the fallback prices every type"));
-    assert!(
-        (credit.saved_usd_gross - saved).abs() < 1e-12,
-        "{}",
-        credit.saved_usd_gross
-    );
-    assert!(
-        (r.status("main").net_usd - (before + saved)).abs() < 1e-12,
-        "the saving lands on the net the probe's cost left: {:?}",
-        r.status("main")
-    );
     assert!(row(&r, &second).await.kept_warm);
-    // Four more probes cost less than the one read saved, so the net stays positive and the stop never holds.
     for _ in 0..4 {
         r.advance(270_000);
         r.step().await;
     }
     let status = r.status("main");
     assert_eq!(status.probes, 5, "{status:?}");
-    assert!(
-        status.net_usd > 0.0 && status.reason != Reason::NetNegative,
-        "{status:?}"
-    );
 }
 
 /// The standing answer's 2,000 cached tokens read back at the dearest cache read of the table the rig prices
@@ -1634,101 +1464,13 @@ async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row()
     r.observe("main").await;
     r.advance(270_000);
     r.step().await;
-    assert!(
-        (r.status("main").net_usd + dearest_read_2000()).abs() < 1e-12,
-        "claude-sonnet-4-5 is not in the shipped table, so its probe prices at the dearest cells: {:?}",
-        r.status("main")
-    );
     let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
     assert!(
         (probe_rows(&rows).probe_cost_usd - dearest_read_2000()).abs() < 1e-12,
-        "the ledger's probe cost reads the same figure: {}",
+        "claude-sonnet-4-5 is not in the shipped table, so its probe row prices at the dearest cells: {}",
         probe_rows(&rows).probe_cost_usd
     );
     assert_eq!(r.status("main").unanswered, 1);
-}
-
-/// The test cost model with every weight and override cleared, so "claude-haiku-4-5-20251001" (which the shipped
-/// dollar table prices) is unlisted on purpose rather than by a coincidence of a table's date-suffix fall-back.
-fn plan_pricing_no_model() -> phoebis_ledger::PlanTables {
-    let mut tables = phoebis_ledger::test_tables::subscription_costs();
-    tables.costs.model_weight.clear();
-    tables.costs.overrides.clear();
-    tables
-}
-
-/// The test cost model with a weight inserted for Sonnet 5, at Sonnet 5.5's 1: the subscription tests settle
-/// `PRICED`'s probes in the share, while the price table keeps pricing it in dollars for the credit.
-fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
-    let mut tables = phoebis_ledger::test_tables::subscription_costs();
-    tables
-        .costs
-        .model_weight
-        .insert(PRICED.to_string(), Some(1.0));
-    tables
-}
-
-/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars, as a model
-/// the cost model lacks does.
-#[tokio::test]
-async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars() {
-    let mut r = rig(subscription_spec()).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body_on("claude-opus-5")).await;
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(status.probes, 1, "{status:?}");
-    assert!(
-        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "{status:?}"
-    );
-}
-
-/// A model neither table prices (Sonnet 4.6: no cost row, no dollar row) settles a plan-funded probe in
-/// dollars at the price table's dearest cells, never at zero.
-#[tokio::test]
-async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_cells_in_dollars() {
-    let mut r = rig(subscription_spec()).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body_on("claude-sonnet-4-6")).await;
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(status.probes, 1, "{status:?}");
-    assert!(
-        (status.net_usd + dearest_read_2000()).abs() < 1e-12 && status.net_five_hour_share == 0.0,
-        "{status:?}"
-    );
-}
-
-/// The credit for a probe that settled in dollars on the unlisted-model fall-back must land in dollars too, in
-/// the unit `covered_unit` actually captured rather than the account's own nominal funding.
-#[tokio::test]
-async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
-    let mut r = rig(RigSpec {
-        tables: plan_pricing_no_model(),
-        ..subscription_spec()
-    })
-    .await;
-    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert!(
-        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "the cost model has no weight for this model, so the probe settles in dollars: {status:?}"
-    );
-    r.advance(60_000);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    r.observe_with("main", &body).await;
-    let credited = r.status("main");
-    assert!(
-        credited.net_usd > status.net_usd && credited.net_five_hour_share == 0.0,
-        "the credit for a probe settled in dollars lands in dollars too, the share balance untouched: {credited:?}"
-    );
 }
 
 /// A key moved to another pool takes its probes with it: the cost the probe's ledger row carries belongs to the pool
@@ -1799,9 +1541,9 @@ async fn a_key_moved_to_another_pool_is_charged_there() {
 }
 
 /// A probe the upstream served and charged for is on the recipe's own books before any branch that pauses
-/// it: the agent's net and the settlement a release leaves would otherwise disagree with the ledger.
+/// it: the settlement a release leaves would otherwise disagree with the ledger.
 #[tokio::test]
-async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
+async fn a_probe_answered_with_output_is_settled_as_wasted() {
     let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -1818,10 +1560,6 @@ async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
     );
     let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
     let cost = probe_rows(&rows).probe_cost_usd;
-    assert!(
-        (status.net_usd + cost).abs() < 1e-12,
-        "the net carries what the ledger charged: {status:?}"
-    );
     r.state("main", "released");
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     let probe = probe_rows(&rows);
@@ -1895,13 +1633,11 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     );
     r.up.push_credential_rule(B, "/v1/messages", warm_answer());
     let elsewhere = r.observe_with("main", &body).await;
-    let status = r.status("main");
-    assert_eq!(status.account_id.as_deref(), Some("b"));
+    assert_eq!(r.status("main").account_id.as_deref(), Some("b"));
     assert!(
-        status.net_usd < 0.0,
-        "no probe of this recipe warmed b, so nothing rose the net: {status:?}"
+        !row(&r, &elsewhere).await.kept_warm,
+        "no probe of this recipe warmed b"
     );
-    assert!(!row(&r, &elsewhere).await.kept_warm);
     // The same gap and the same covering probe, with the request served by the account the probe warmed.
     let mut r = rig(RigSpec::default()).await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -1911,12 +1647,7 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
     r.advance(60_000);
     r.up.push_credential_rule(A, "/v1/messages", warm_answer());
     let here = r.observe_with("main", &body).await;
-    let status = r.status("main");
-    assert_eq!(status.account_id.as_deref(), Some("a"));
-    assert!(
-        status.net_usd > 0.0,
-        "the account the probe warmed served it: {status:?}"
-    );
+    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
     assert!(row(&r, &here).await.kept_warm);
@@ -1945,21 +1676,6 @@ async fn an_aggregate_only_cache_write_is_charged_as_a_five_minute_write() {
     );
 }
 
-const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
-
-fn subscription_spec() -> RigSpec {
-    RigSpec {
-        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
-        pool: PoolSpec {
-            overage_policy: phoebis_store::OveragePolicy::Allow,
-            ..PoolSpec::default()
-        },
-        tables: plan_pricing_sonnet(),
-        tier: Some("default_claude_max_20x"),
-        ..RigSpec::default()
-    }
-}
-
 /// A title or a summary reads the cache but never re-armed the recipe, so it earns nothing; the next request
 /// that continues the conversation reads the same cache and earns the credit the auxiliary one could not.
 #[tokio::test]
@@ -1972,7 +1688,6 @@ async fn the_credit_follows_only_a_re_arming_request() {
     r.step().await;
     assert_eq!(r.status("main").probes, 1, "one covering probe");
     r.advance(60_000);
-    let before = r.status("main").net_usd;
     r.up.push_credential_rule(A, "/v1/messages", warm_answer());
     let mut auxiliary = r.request_with("main", &body);
     relay_common::set_header(&mut auxiliary, "x-claude-code-request-class", "title");
@@ -1981,159 +1696,16 @@ async fn the_credit_follows_only_a_re_arming_request() {
     let aux_id = relay_common::outcome(&resp).request_id;
     let _ = resp.into_body().collect().await.unwrap();
     r.pump(Some(&aux_id)).await;
-    assert_eq!(
-        r.status("main").net_usd,
-        before,
+    assert!(
+        !row(&r, &aux_id).await.kept_warm,
         "an auxiliary request never re-armed, so it earns nothing"
     );
-    assert!(!row(&r, &aux_id).await.kept_warm);
     r.up.push_credential_rule(A, "/v1/messages", warm_answer());
     let credited = r.observe_with("main", &body).await;
+    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
     assert!(
-        r.status("main").net_usd > before,
+        row(&r, &credited).await.kept_warm,
         "the next continuing request earns the credit the auxiliary one left behind"
-    );
-    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert!(row(&r, &credited).await.kept_warm);
-}
-
-/// A subscription account's probes and credits are a proxy for quota, priced as a share of its 5-hour window;
-/// an api_key account's stay in dollars.
-#[tokio::test]
-async fn a_subscription_accounts_net_is_in_five_hour_share_and_an_api_key_accounts_in_dollars() {
-    let mut r = rig(subscription_spec()).await;
-    let body = priced_body();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    let after_probe = r.status("main");
-    assert_eq!(
-        after_probe.net_usd, 0.0,
-        "a plan-funded probe costs no dollars"
-    );
-    assert!(after_probe.net_five_hour_share < 0.0, "{after_probe:?}");
-    r.advance(60_000);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    let credited = r.observe_with("main", &body).await;
-    let after_credit = r.status("main");
-    assert!(
-        after_credit.net_five_hour_share > after_probe.net_five_hour_share,
-        "{after_credit:?}"
-    );
-    assert_eq!(after_credit.net_usd, 0.0);
-    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    assert!(row(&r, &credited).await.kept_warm);
-
-    let mut r = rig(RigSpec::default()).await;
-    let body = priced_body();
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert!(status.net_usd < 0.0, "{status:?}");
-    assert_eq!(
-        status.net_five_hour_share, 0.0,
-        "an api_key account never touches the share balance"
-    );
-}
-
-/// The funding a probe settles under is the one its own serving attempt captured, whatever the router's
-/// evidence says by the time the result is processed.
-#[tokio::test]
-async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
-    // Dispatched on plan; overage evidence lands before the gated response is released: still the share.
-    let mut r = rig(subscription_spec()).await;
-    let body = priced_body();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.up.push_credential_rule(
-        OAUTH_SECRET,
-        "/v1/messages",
-        Respond::Gated(Box::new(probe_answer(2_000, 0))),
-    );
-    r.advance(270_000);
-    r.engine.step().await;
-    wait_for(Duration::from_secs(5), || {
-        (r.up.requests().len() == 2).then_some(())
-    })
-    .await;
-    r.enter_overage("o", r.now() + 10_000_000).await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.in_use)
-    })
-    .await;
-    r.up.release();
-    r.engine.wait_idle().await;
-    r.pump(None).await;
-    let status = r.status("main");
-    assert!(
-        status.net_five_hour_share < 0.0 && status.net_usd == 0.0,
-        "dispatched before the flip, so it settles in the unit it was dispatched under: {status:?}"
-    );
-    r.advance(60_000);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    r.observe_with("main", &body).await;
-    let credited = r.status("main");
-    assert!(
-        credited.net_five_hour_share > status.net_five_hour_share && credited.net_usd == 0.0,
-        "the credit for a probe settled on plan lands in the share too, whatever the account is now: {credited:?}"
-    );
-
-    // The reverse: dispatched in overage; the reset passes before the gated response is released.
-    let mut r = rig(subscription_spec()).await;
-    r.enter_overage("o", r.now() + 10_000_000).await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.in_use)
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.up.push_credential_rule(
-        OAUTH_SECRET,
-        "/v1/messages",
-        Respond::Gated(Box::new(probe_answer(2_000, 0))),
-    );
-    r.advance(270_000);
-    r.engine.step().await;
-    wait_for(Duration::from_secs(5), || {
-        (r.up.requests().len() == 2).then_some(())
-    })
-    .await;
-    r.leave_overage("o").await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.reset.unwrap() < r.now())
-    })
-    .await;
-    r.up.release();
-    r.engine.wait_idle().await;
-    r.pump(None).await;
-    let status = r.status("main");
-    assert!(
-        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "dispatched in overage, so it settles in dollars whatever the reset does meanwhile: {status:?}"
-    );
-    r.advance(60_000);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    r.observe_with("main", &body).await;
-    let credited = r.status("main");
-    assert!(
-        credited.net_usd > status.net_usd && credited.net_five_hour_share == 0.0,
-        "the credit for a probe settled in dollars lands in dollars too, whatever the reset did meanwhile: {credited:?}"
     );
 }
 
@@ -2145,100 +1717,4 @@ fn opus_body() -> String {
 
 fn body_on(model: &str) -> String {
     BODY.replace("claude-sonnet-4-5", model)
-}
-
-/// A probe answer that reads the 2,000-token prefix back and bills a million input tokens beside it, so the
-/// probe stays covered while its cost is the cost model's price of a million input tokens.
-fn million_input_answer() -> Respond {
-    Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
-}
-
-/// One such probe on account `o` settled at `at`, and the share of the window it settled at, which the agent's share
-/// balance carries.
-async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
-    let mut r = rig(spec).await;
-    r.clock.store(at, std::sync::atomic::Ordering::SeqCst);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &opus_body()).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", million_input_answer());
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    let spent = -r.status("main").net_five_hour_share;
-    (r, spent)
-}
-
-/// A subscription account's probes count as the share of its own 5-hour window they consumed, weighed by the
-/// band at each probe's settlement.
-#[tokio::test]
-async fn a_probe_in_the_band_counts_more_of_the_window_share() {
-    // The shipped model, since the test table's small capacities put a million-token probe far past a whole
-    // window. Every figure below is read from the model loaded here.
-    fn shipped_subscription_spec() -> RigSpec {
-        RigSpec {
-            tables: phoebis_ledger::PlanTables::shipped(),
-            ..subscription_spec()
-        }
-    }
-    let tables = phoebis_ledger::PlanTables::shipped();
-    let hour_ms = 3_600_000i64;
-    let week: Vec<i64> = (0..7 * 24).map(|h| NOW + h as i64 * hour_ms).collect();
-    // The probe settles 270 s after the observation, so both instants are checked there.
-    let band_at = |at: i64| tables.band_factor(FIVE_HOUR, at + 270_000);
-    let in_band = *week
-        .iter()
-        .find(|&&at| band_at(at) > 1.0)
-        .expect("the shipped model names a peak band");
-    let out_of_band = *week
-        .iter()
-        .find(|&&at| band_at(at) == 1.0)
-        .expect("the shipped model leaves most hours at par");
-    // The probe's usage: the million input tokens and the 2,000 cache reads `million_input_answer` bills.
-    let opus_probe_share = tables
-        .share_at(
-            FIVE_HOUR,
-            "default_claude_max_20x",
-            OPUS,
-            PinUsage {
-                input: 1_000_000,
-                cache_read: 2_000,
-                write_5m: 0,
-                write_1h: 0,
-                output: 0,
-            },
-            out_of_band + 270_000,
-        )
-        .unwrap();
-
-    let (r, outside) = one_opus_probe(shipped_subscription_spec(), out_of_band).await;
-    assert!(
-        (outside - opus_probe_share).abs() < 1e-12,
-        "a million Opus 5.5 input tokens on Max 20x outside the band: {outside} against {opus_probe_share}"
-    );
-    let status = r.status("main");
-    assert!(
-        (status.net_five_hour_share + opus_probe_share).abs() < 1e-12 && status.net_usd == 0.0,
-        "the probe's cost is the agent's share balance: {status:?}"
-    );
-
-    let (_, inside) = one_opus_probe(shipped_subscription_spec(), in_band).await;
-    let banded = opus_probe_share * tables.band_factor(FIVE_HOUR, in_band + 270_000);
-    assert!(
-        (inside - banded).abs() < 1e-12,
-        "the same probe inside the band counts the band's weight more: {inside} against {banded}"
-    );
-
-    let (_, on_pro) = one_opus_probe(
-        RigSpec {
-            tier: Some("default_claude_ai"),
-            ..shipped_subscription_spec()
-        },
-        out_of_band,
-    )
-    .await;
-    let pro = opus_probe_share / tables.tier_factor("default_claude_ai", FIVE_HOUR).unwrap();
-    assert!(
-        (on_pro - pro).abs() < 1e-12,
-        "on Pro the same tokens are that share over Pro's capacity ratio: {on_pro} against {pro}"
-    );
 }

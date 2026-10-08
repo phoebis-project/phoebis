@@ -123,8 +123,7 @@ start.
 `init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
 The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
-the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the
-companion.
+the digest every downstream key authenticates against: the secrets the admin API mints and hands to the clients.
 
 There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
 so recovering means discarding the registry's secrets while keeping everything else. Stop the service
@@ -162,7 +161,7 @@ untouched. The next start under the new key finds nothing sealed and seals a new
 - Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
   stored against the old key stops matching a client's presented secret, and every existing downstream key starts
   answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new secrets
-  to the clients and the companion.
+  to the clients.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.

@@ -178,14 +178,6 @@ impl Metrics {
         );
     }
 
-    pub fn observe_saving(&self, pool: &str, usd: f64) {
-        self.add(
-            "phoebis_keepalive_saved_usd_total",
-            vec![("pool", pool.into())],
-            usd,
-        );
-    }
-
     pub fn render(
         &self,
         gauges: &RoutingGauges,
@@ -199,7 +191,6 @@ impl Metrics {
             match name {
                 "phoebis_attempts_total"
                 | "phoebis_keepalive_probes_total"
-                | "phoebis_keepalive_saved_usd_total"
                 | "phoebis_ledger_dropped_total"
                 | "phoebis_requests_total"
                 | "phoebis_tokens_total" => {
@@ -426,7 +417,6 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_bus_subscriber_panics_total", "counter"),
     ("phoebis_keepalive_agents", "gauge"),
     ("phoebis_keepalive_probes_total", "counter"),
-    ("phoebis_keepalive_saved_usd_total", "counter"),
     ("phoebis_ledger_behind_refusals_total", "counter"),
     ("phoebis_ledger_degraded", "gauge"),
     ("phoebis_ledger_dropped_total", "counter"),

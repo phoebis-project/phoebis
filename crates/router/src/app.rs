@@ -319,7 +319,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock: clock.clone(),
         cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
         ledger: ledger.clone(),
-        lifecycle: None,
         limits: config.keepalive.clone(),
         max_request_bytes: config.proxy.max_request_bytes,
         metrics: metrics.clone(),

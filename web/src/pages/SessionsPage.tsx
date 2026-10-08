@@ -8,7 +8,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId, shortModel, undatedModel } from '@/lib/format';
+import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -62,17 +62,8 @@ const COMPANION_HINT: Record<CompanionState, string> = {
     "The companion stopped reporting at the time shown. The retained prompts stay and are probed under the pool's idle limits, counted from the last real request, until the companion registers again or the limits run out.",
 };
 const MIGRATED_PROBE_HINT =
-  "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
+  "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
-const NET_HINT =
-  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an Anthropic key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
-
-/** Each balance that is not zero, so an agent that settled in one unit shows that unit alone. */
-const netOf = (agent: Pick<KeepaliveRecipe, 'netFiveHourShare' | 'netUsd'>): { text: string }[] => [
-  ...(agent.netFiveHourShare !== 0 ? [{ text: `${fmtShare(agent.netFiveHourShare)} of the 5-hour window` }] : []),
-  ...(agent.netUsd !== 0 ? [{ text: fmtUsd(agent.netUsd) }] : []),
-];
-
 interface Row {
   account: Account | null;
   agents: KeepaliveRecipe[];
@@ -263,7 +254,6 @@ export function SessionsPage() {
           tone={o && o.busGaps > 0 ? 'warning' : undefined}
           error={overviewError}
         />
-        <Tile label="Net saved, 7d" value={o ? fmtUsd(o.netSaved7dUsd) : null} note="gross saved minus probe cost" tone={o && o.netSaved7dUsd < 0 ? 'critical' : undefined} error={overviewError} />
       </div>
       {overviewError !== null && (
         <p className="sessions__notice" role="status">
@@ -605,7 +595,6 @@ function SessionRows({
                   <span>Next probe</span>
                   <span>Last request</span>
                   <span>State</span>
-                  <span title={NET_HINT}>Net</span>
                 </div>
                 {agents.map((a) => (
                   <div className="agents__row" key={a.agentId}>
@@ -627,13 +616,6 @@ function SessionRows({
                         <Badge tone={WARNING_REASONS.includes(a.reason) ? 'warning' : 'neutral'} title={REASON_HINT[a.reason]}>
                           {REASON_LABEL[a.reason]}
                         </Badge>
-                      )}
-                    </span>
-                    <span className="num agents__net" title={NET_HINT}>
-                      {netOf(a).length ? (
-                        netOf(a).map((part) => <span key={part.text}>{part.text}</span>)
-                      ) : (
-                        <span className="muted">0</span>
                       )}
                     </span>
                   </div>

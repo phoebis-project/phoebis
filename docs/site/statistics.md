@@ -254,7 +254,6 @@ rendered:
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
 | `phoebis_keepalive_probes_total` | counter | `account`, `outcome` |
-| `phoebis_keepalive_saved_usd_total` | counter | `pool` |
 | `phoebis_ledger_behind_refusals_total` | counter | none |
 | `phoebis_ledger_degraded` | gauge | none |
 | `phoebis_ledger_dropped_total` | counter | `table` |
@@ -575,9 +574,8 @@ none when the browser cannot read the band's zone, and its note opens the cost r
 tab. Latency reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that
 expired between turns, the share of input served from cache, and the output split into thinking and plain output; Cost
 reports the estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage
-credits; Cache warming reports what probes cost against what they saved, where a fast-mode session's probes and credits
-read as dollars and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per
-account.
+credits; Cache warming reports what probes cost, the requests they kept warm and the probes wasted, a fast-mode
+session's under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

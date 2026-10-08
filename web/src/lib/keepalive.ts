@@ -11,7 +11,6 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
   horizon: 'held: wake too far',
   idle_limit: 'idle limit',
   ledger_behind: 'ledger behind',
-  net_negative: 'net negative',
   overage: 'overage',
   parked_limit: 'parked limit',
   paused: 'paused',
@@ -35,7 +34,6 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   horizon: "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes.",
   idle_limit: "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   ledger_behind: "The router refused the probe while its ledger was catching up; the probe is sent again after the answer's wait.",
-  net_negative: "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",
   overage: 'The account is on extra usage and the pool policy skips probes there.',
   parked_limit: "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe.",
   paused: 'The account is paused, the pool is disabled, or the key opted out, so nothing probes this session.',
@@ -48,4 +46,4 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   unsupported_shape: 'The last request had no cacheable prefix the probe could replay.',
 };
 
-export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'evicted', 'expired', 'idle_limit', 'net_negative', 'parked_limit', 'storage_limit', 'unsupported_shape'];
+export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'evicted', 'expired', 'idle_limit', 'parked_limit', 'storage_limit', 'unsupported_shape'];

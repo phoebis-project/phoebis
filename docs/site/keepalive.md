@@ -3,8 +3,7 @@
 A prompt cache entry expires five minutes, or one hour, after its last use. With keepalive enabled on a pool, the
 router keeps a replayable copy of every eligible request a session sends and, shortly before the entry would
 expire, sends a probe that reads it. This page covers how the engine learns which sessions are alive, when a probe
-may run, the policy's four fields and the ceilings they set, and how the ledger accounts what a probe cost against what
-it saved.
+may run, the policy's four fields and the ceilings they set, and what the ledger records for every probe.
 
 ## How a probe works
 
@@ -27,16 +26,14 @@ was deleted is held as `paused` before it is sent, as one on a disabled account 
 credits block, overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as
 they move a real request.
 
-A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
-against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
-can go negative when probes outspend what they save.
+A probe costs a cache read at list price, which its own row in the request ledger carries. A later request that read
+the entry a probe kept is counted as kept warm, per pool and per hour.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
 fast rates and settles in dollars whatever the account's funding. A probe the upstream served at standard speed is
-priced at the standard cells. A request it kept warm saves the input cell less the cache-read cell of the speed its own
-answer was served at, the fast cells when it was served fast and the standard cells when the upstream answered it at
-standard speed. The upstream shares no cached prefix across speeds, so a probe keeps a request of its own speed warm
-alone: a session that switches between fast mode and standard requests earns no credit from the other speed's probe.
+priced at the standard cells. The upstream shares no cached prefix across speeds, so a probe keeps a request of its own
+speed warm alone: a session that switches between fast mode and standard requests earns no credit from the other speed's
+probe.
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
@@ -55,10 +52,9 @@ request's diagnostics latch; the next real request re-sends the item, takes its 
 
 ## The companion
 
-The engine learns which sessions are alive from `cc-cache-keepalive`, a Claude Code hook plugin that reports the
-session lifecycle to two routes on the proxy listener, `GET /v0/resource/plugins/cache-keepalive/events` and
-`GET /v0/resource/plugins/cache-keepalive/snapshot`, under the same key the client sends for model traffic. A
-session is scoped to the key that reports it, and to the generation that key was created under: an id deleted
+The engine learns which sessions are alive from `cc-cache-keepalive`, a Claude Code plugin that reports the session
+lifecycle to one route on the proxy listener, `POST /v0/keepalive/events`, under the same key the client sends for model
+traffic. A session is scoped to the key that reports it, and to the generation that key was created under: an id deleted
 and created again reads and drives none of the previous holder's sessions.
 
 The companion holds a lease over the session, 90 seconds long. Once the lease lapses, the session keeps being probed
@@ -253,19 +249,13 @@ others under the divider. The dialog's footer names each table's date and source
 the path that set or would replace it in the title.
 
 API prices carries the caption "USD per million tokens at list price. An Anthropic-key account pays these. A
-subscription account pays them in overage and for fast-mode answers." A recipe's own net follows the same split: the
-share of the account's 5-hour window, the band inside each probe's price, on a subscription account outside overage, and
-dollars on an api_key account or one in overage; a plan-funded probe the cost model cannot price on the account's tier
-(no weight on the 5-hour window, or a tier with no capacity on it), or on an account whose tier the model does not size,
-settles in dollars too. A probe goes out for an hour when the pool's cache TTL policy is on and the rule set the
-account's funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the probe to that
-TTL (and adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks
-any part of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the
-table's dearest cell of each type, never at zero, so the net still bounds it. A request such a probe kept warm saves at
-the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the account's
-funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of the Sessions
-view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose account changed funding while
-it was warmed.
+subscription account pays them in overage and for fast-mode answers." A probe's own row in the request ledger is priced
+from it in dollars, whatever the account's funding, and a probe on a model the price table does not list prices at the
+table's dearest cell of each type, never at zero. The two tables also set a recipe's break-even, which the pool's
+ceilings resolve to (see [The four fields](#the-four-fields)). A probe goes out for an hour when the pool's cache TTL
+policy is on and the rule set the account's funding selects holds `1h` for the probe's agent, since the relay rewrites
+every marker of the probe to that TTL (and adds one where `inject_when_absent` is on). With the policy off, it goes out
+for an hour when the recipe keeps an hour's cache or marks any part of its prefix for an hour.
 
 The eight shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
 (the three Opus models' fast cells are twice each figure):
@@ -287,7 +277,7 @@ over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5`
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight, or `held`, with no probe scheduled and one of twenty-two reasons attached.
+`probing`, with a probe in flight, or `held`, with no probe scheduled and one of twenty reasons attached.
 
 ### The guard field
 
@@ -295,8 +285,8 @@ Every request the recipe observes also updates `last_guard`, `null` before the f
 for a request that continued or restarted the conversation, `auxiliary` or `foreign` for one the guard set aside
 (see [Which requests re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by
 itself; an auxiliary or a foreign request leaves `state` and the reason below exactly as they were, so a recipe
-`held` under `net_negative` with `last_guard: rearm` is a real request that re-armed it, followed later by a
-probe that made its net negative, not a contradiction.
+`held` under `cooled` with `last_guard: rearm` is a real request that re-armed it, followed later by a cooldown on its
+account, not a contradiction.
 
 | Reason | Console label | What it means |
 | --- | --- | --- |
@@ -310,7 +300,6 @@ probe that made its net negative, not a contradiction.
 | `horizon` | held: wake too far | Parked on a wakeup past the pool's horizon: held while the entry lasts. |
 | `idle_limit` | idle limit | The idle window ran out (see [The ceilings](#the-ceilings)). |
 | `ledger_behind` | ledger behind | The router's ledger was behind; the probe is sent again after the answer's wait. |
-| `net_negative` | net negative | Probes cost more than they saved; a real request grants the grace probes again. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
 | `parked_limit` | parked limit | The parked ceiling ran out, or a subagent's park ended by deadline, wake or `idle`. |
 | `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
@@ -329,14 +318,14 @@ that `keepalive.enabled` asks of the pool when it is saved stays the one refusal
 
 An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
 settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
-held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cooled`, `net_negative`,
-`overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new
-one. A recipe held under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while
-its entry is warm probes on. While the request a recipe follows is still open, the lapse waits for its completion. At
-the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first,
-then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves
-the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter. A lapse
-also shows in that log line.
+held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cooled`, `overage`, `paused` or
+`reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new one. A recipe held
+under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while its entry is warm
+probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
+cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
+sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves the recipe list,
+as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter. A lapse also shows in that
+log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it
@@ -368,24 +357,23 @@ kept:
 | `replaced` | A replacement registration arrived for the same agent. |
 | `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |
 
-The analytics view puts it plainly: "a high idle-limit share means the pool's max idle time is set too high for
-how these sessions are used."
+The analytics view puts it plainly: a high idle-limit share says the pool's idle window outlasts how these sessions are
+used, and a high parked-limit or horizon share says the parked ceilings do.
 
 ## What the ledger records
 
-Per pool and per hour, the ledger's rollup carries the keepalive fields the console reads: `kept_warm_requests` and
-`kept_warm_tokens`, the requests and tokens a probe kept off a cache miss on any model the request named;
-`saved_usd_gross`, what those kept-warm tokens saved against paying them as uncached input every turn; `probe_cost_usd`,
-what sending the probes cost; both at the dearest listed cells for a model the price table does not know;
-`probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`,
-probes settled wasted by one of the reasons above, and what they cost; `wasted_probe_reasons`, those wasted probes
-counted by the reason; and `probes_skipped`, a due probe a gate or a lapsed entry withheld rather than sending, for
-example because a cooldown already held the recipe.
+Every probe is a row of the request ledger, of kind `probe`, priced as any request is. Per pool and per hour, the
+ledger's rollup carries the keepalive fields the console reads. `kept_warm_requests` and `kept_warm_tokens` count the
+requests and tokens a probe kept off a cache miss on any model the request named. `probe_cost_usd` is what sending the
+probes cost, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe
+that landed on a different account than the recipe's. `wasted_probes` and `wasted_probe_usd` are the probes settled
+wasted by one of the reasons above and what they cost, and `wasted_probe_reasons` counts those wasted probes by the
+reason. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
+cooldown already held the recipe.
 
-`GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost) and
-`probes_24h` (`ok`, `failed`, `migrated`, `skipped`). Its `bus_gaps` counts the times the engine found it had missed bus
-events; each gap discarded every observation still open, so those agents wait for their next request while an armed
-recipe keeps its schedule.
+`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `migrated`,
+`skipped`). Its `bus_gaps` counts the times the engine found it had missed bus events; each gap discarded every
+observation still open, so those agents wait for their next request while an armed recipe keeps its schedule.
 
 ## In the console
 
@@ -395,17 +383,17 @@ session's fork badge](assets/sessions-light.png#only-light)
 session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
-hours by outcome, sessions whose cache expired between turns, the keepalive engine's bus gaps, and net savings over 7
-days. A tile whose read failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as
-a line above the table does for a failed account read. Its table lists one row per session, led by the row's menu, and
-offers eleven columns, eight shown by default (last request, agents and next probe start hidden, and the
-Columns control turns any on): key, session, model, account, last used, requests, last request, agents,
-companion, cache warming, and next probe. The model column reads the family and version, with the whole id on hover, and
-the account cell names the account's kind on hover and to a screen reader. Opening a row expands into the recipe each of
-its agents carries. A session's menu offers "View in analytics" and "View in observe" once it has ledgered traffic,
-"View in routing log", which opens the log on that session's decisions, and
-Release. The analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions
-again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
+hours by outcome, sessions whose cache expired between turns, and the keepalive engine's bus gaps. A tile whose read
+failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as a line above the table
+does for a failed account read. Its table lists one row per session, led by the row's menu, and offers eleven columns,
+eight shown by default (last request, agents and next probe start hidden, and the Columns control turns
+any on): key, session, model, account, last used, requests, last request, agents, companion, cache
+warming, and next probe. The model column reads the family and version, with the whole id on hover, and the account cell
+names the account's kind on hover and to a screen reader. Opening a row expands into the recipe each of its agents
+carries. A session's menu offers "View in analytics" and "View in observe" once it has ledgered traffic, "View in
+routing log", which opens the log on that session's decisions, and Release. The
+analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions again every 15
+seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session
 whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth
@@ -417,7 +405,6 @@ requests](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
 requests](assets/analytics-cache-warming-dark.png#only-dark)
 
-The Analytics view's Cache warming section draws probes by outcome, savings (the gross saved and the probe cost
-per bucket, with their difference as the line), wasted probes by reason, kept-warm requests and tokens, and cache
-warming by pool. Prometheus carries `phoebis_keepalive_agents`, `phoebis_keepalive_probes_total`, and
-`phoebis_keepalive_saved_usd_total`; see [Statistics](statistics.md).
+The Analytics view's Cache warming section draws the probe cost and the kept-warm count, probes by outcome, wasted
+probes by reason, kept-warm requests and tokens, and cache warming by pool. Prometheus carries
+`phoebis_keepalive_agents` and `phoebis_keepalive_probes_total` (see [Statistics](statistics.md)).

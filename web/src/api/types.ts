@@ -1089,8 +1089,8 @@ export interface AnalyticsGroup {
   failed: number;
   failovers: number;
   /**
-   * Set on a group folded from request rows, the session view's source: the rows carry no cost split, no
-   * savings and no kept-warm mark, so those figures are null and the probe counts are not measured.
+   * Set on a group folded from request rows, the session view's source: the rows carry no cost split and no
+   * kept-warm mark, so those figures are null and the probe figures are not measured.
    */
   fromRequests?: true;
   histograms: LatencyHistograms;
@@ -1099,16 +1099,19 @@ export interface AnalyticsGroup {
   key: string;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
+  probeCostUsd: number;
   probes: { failed: number; migrated: number; ok: number; skipped: number };
   rateLimited: number;
   rejected: number;
   requests: number;
-  savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number } | null;
   succeeded: number;
   /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
+  wastedProbeReasons: Record<WastedProbeReason, number>;
+  wastedProbeUsd: number;
+  wastedProbes: number;
 }
 
 export interface AnalyticsPoint {
@@ -1211,11 +1214,9 @@ export interface Session {
   forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** `state` is null when the session carries no cache-warming recipe at all; the other three are null with it. */
+  /** `state` is null when the session carries no cache-warming recipe at all; the other two are null with it. */
   keepalive: {
     lastGuard: GuardVerdict | null;
-    netFiveHourShare: number | null;
-    netUsd: number | null;
     nextProbeAt: string | null;
     state: KeepaliveState | null;
   };
@@ -1253,7 +1254,6 @@ export type RecipeReason =
   | 'horizon'
   | 'idle_limit'
   | 'ledger_behind'
-  | 'net_negative'
   | 'overage'
   | 'parked_limit'
   | 'paused'
@@ -1279,9 +1279,6 @@ export interface KeepaliveRecipe {
   /** This agent's last real request; null for an agent that has not sent one yet. */
   lastRequestAt: string | null;
   model: string;
-  /** The share of the account's 5-hour window the agent's probes saved minus what they cost. */
-  netFiveHourShare: number;
-  netUsd: number;
   nextProbeAt: string | null;
   poolId: string;
   reason: RecipeReason | null;
@@ -1296,7 +1293,6 @@ export interface KeepaliveOverview {
   busGaps: number;
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
-  netSaved7dUsd: number;
   probes24h: { failed: number; migrated: number; ok: number; skipped: number };
 }
 

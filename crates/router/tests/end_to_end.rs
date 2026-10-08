@@ -3543,7 +3543,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|r| r["savings"]["wasted_probes"].as_u64().unwrap_or(0) >= 1)
+                .any(|r| r["wasted_probes"].as_u64().unwrap_or(0) >= 1)
         },
     )
     .await;

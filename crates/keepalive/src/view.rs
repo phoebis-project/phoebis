@@ -20,7 +20,6 @@ pub enum ViewReason {
     Horizon,
     IdleLimit,
     LedgerBehind,
-    NetNegative,
     Overage,
     ParkedLimit,
     Paused,
@@ -50,7 +49,6 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         Horizon => ViewReason::Horizon,
         IdleLimit => ViewReason::IdleLimit,
         LedgerBehind => ViewReason::LedgerBehind,
-        NetNegative => ViewReason::NetNegative,
         Overage => ViewReason::Overage,
         ParkedLimit => ViewReason::ParkedLimit,
         Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential => {
@@ -104,8 +102,6 @@ pub struct RecipeView {
     pub last_guard: Option<Guard>,
     pub last_request_at: Option<i64>,
     pub model: String,
-    pub net_five_hour_share: f64,
-    pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub pool_id: String,
     pub reason: Option<ViewReason>,
@@ -117,8 +113,6 @@ pub struct RecipeView {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
     pub last_guard: Option<Guard>,
-    pub net_five_hour_share: Option<f64>,
-    pub net_usd: Option<f64>,
     pub next_probe_at: Option<i64>,
     pub state: Option<AgentState>,
 }
@@ -154,8 +148,6 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str) -> RecipeView {
         last_guard: agent.last_guard,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
-        net_five_hour_share: agent.net.five_hour_share,
-        net_usd: agent.net.usd,
         next_probe_at: agent.next_probe_at(),
         pool_id: agent.pool_id.clone(),
         reason,
@@ -201,8 +193,6 @@ impl Engine {
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
                         last_guard: main.and_then(|a| a.last_guard),
-                        net_five_hour_share: main.map(|a| a.net.five_hour_share),
-                        net_usd: main.map(|a| a.net.usd),
                         next_probe_at: s.agents.values().filter_map(|a| a.next_probe_at()).min(),
                         state: main.map(|a| a.state),
                     },

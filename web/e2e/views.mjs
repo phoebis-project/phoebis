@@ -1590,8 +1590,8 @@ async function keysPageMenus(theme) {
 
 /**
  * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
- * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
- * sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
+ * listener hint spaced from the variable list at least as the block is spaced from the hint, so the list's first term
+ * never sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
  * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
  * limits and the admin secret's badge read as lines of the same list.
  */
@@ -1603,11 +1603,11 @@ async function settingsOrder(theme) {
     const cards = [...document.querySelectorAll('.settings > .card')];
     const pre = document.querySelector('pre.snippet');
     const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
-    const group = hint?.nextElementSibling?.matches('.snippet-group') ? hint.nextElementSibling : null;
+    const list = hint?.nextElementSibling?.matches('.envdl') ? hint.nextElementSibling : null;
     const subtitle = cards[0]?.querySelector('.card__subtitle');
     return {
       above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
-      below: hint && group ? Math.round((group.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
+      below: hint && list ? Math.round((list.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
       blockFirst: Boolean(pre && cards[0]?.contains(pre)),
       hintLines: hint ? Math.round(hint.getBoundingClientRect().height / parseFloat(getComputedStyle(hint).lineHeight)) : null,
       hintSize: hint ? getComputedStyle(hint).fontSize : null,
@@ -1641,8 +1641,8 @@ async function settingsOrder(theme) {
   if (offType.length > 0) say(`About's ${offType.join(', ')} read at another type than Storage path's ${storage}`);
   if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
   if (!read.blockFirst) say("the client block's snippet is not in the first card");
-  if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
-  else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);
+  if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
+  else if (read.above < 8 || read.below < read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, closer to the list than to the block`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
 }
 
@@ -3408,8 +3408,8 @@ async function sessionRowMenu(theme) {
 
 /**
  * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, and
- * Net closes the line after State. A reason badge wraps inside its own State cell, its left and right edges within the
- * cell's box; its right edge against the table's visible edge is logged beside them.
+ * State closes the line. A reason badge wraps inside its own State cell, its left and right edges within the cell's
+ * box; its right edge against the table's visible edge is logged beside them.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -3438,7 +3438,7 @@ async function agentLines(theme) {
   });
   const reasons = read.lines.filter((l) => l.reason !== null);
   measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: reasons.filter((l) => l.reason.right > read.edge).map((l) => l.agent), wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]) })}`);
-  if (read.lines.length > 0 && read.head.slice(-2).join(',') !== 'State,Net') say(`the agent lines end ${JSON.stringify(read.head.slice(-2))}, not State then Net`);
+  if (read.lines.length > 0 && read.head[read.head.length - 1] !== 'State') say(`the agent lines end ${JSON.stringify(read.head.slice(-1))}, not State`);
   if (mock && read.lines.length === 0) say('Expand all opened no agent line');
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);

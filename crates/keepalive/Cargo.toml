@@ -15,7 +15,6 @@ debug-hooks = []
 axum = { workspace = true }
 bytes = { workspace = true }
 http-body-util = { workspace = true }
-jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-ledger = { path = "../ledger" }
@@ -30,7 +29,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 boring = { workspace = true }

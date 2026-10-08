@@ -401,8 +401,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "last_guard",
             "last_request_at",
             "model",
-            "net_five_hour_share",
-            "net_usd",
             "next_probe_at",
             "pool_id",
             "reason",
@@ -418,8 +416,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             recipe["reason"].is_null(),
             recipe["last_request_at"].as_i64(),
             recipe["ttl_seconds"].as_i64(),
-            recipe["net_usd"].as_f64(),
-            recipe["net_five_hour_share"].as_f64(),
             recipe["last_guard"].as_str()
         ),
         (
@@ -428,11 +424,9 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             true,
             Some(now),
             Some(300),
-            Some(0.0),
-            Some(0.0),
             Some("rearm")
         ),
-        "no probe has landed yet, so both balances still read zero; the first request re-armed a fresh recipe"
+        "the first request re-armed a fresh recipe"
     );
     // An auxiliary request never re-arms, but the guard's own verdict still reaches the view.
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved {
@@ -492,15 +486,14 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         recipe["next_probe_at"].as_i64()
     );
     assert_eq!(
-        (
-            row["keepalive"]["net_usd"].as_f64(),
-            row["keepalive"]["net_five_hour_share"].as_f64()
-        ),
-        (
-            recipe["net_usd"].as_f64(),
-            recipe["net_five_hour_share"].as_f64()
-        ),
-        "the session's keepalive summary reads the same main-agent balances the recipe view does"
+        row["keepalive"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        ["last_guard", "next_probe_at", "state"],
+        "the session's keepalive summary carries no balance"
     );
     // Silent after the lease lapses: the recipe stays and the row says since when.
     parts
@@ -531,7 +524,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "agents",
             "bus_gaps",
             "expired_between_turns_24h",
-            "net_saved_7d_usd",
             "probes_24h"
         ]
     );
@@ -817,6 +809,17 @@ async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_
         .status(),
         404,
         "the console cannot release a historical row by naming it directly"
+    );
+    let held =
+        |engine: &phoebis_keepalive::Engine| engine.sessions().iter().any(|s| s.session_id == "s1");
+    assert!(
+        held(&parts.keepalive),
+        "the engine holds the session until its next tick"
+    );
+    parts.keepalive.step().await;
+    assert!(
+        !held(&parts.keepalive),
+        "the next tick ends the deleted key's session in the engine"
     );
 }
 

@@ -2824,22 +2824,13 @@
   border-left: 2px solid var(--accent);
 }
 
-/* The table fits its card collapsed, which leaves State no room of its own once a row opens; the floor gives a reason
-   badge a cell to wrap in, and the open row scrolls sideways for Net instead. */
+/* The floor gives a reason badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(140px, 1fr) 210px;
+  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(140px, 1fr);
   gap: 12px;
   align-items: center;
   padding: 6px 12px;
-}
-
-/* Net closes the line so State keeps its place in a 1280px window. The track holds the common shares of the 5-hour
-   window; the longest, such as -0.000123%, run into the row's padding unclipped, and two balances stack rather than
-   widen it further. */
-.agents__net {
-  display: flex;
-  flex-direction: column;
 }
 
 .agents__row + .agents__row {
@@ -3485,10 +3476,6 @@
 .hbars--reasons li.hbars__row--top {
   align-items: start;
   padding: 3px 0;
-}
-
-.num.is-negative {
-  color: var(--critical-ink);
 }
 
 /* Observe */

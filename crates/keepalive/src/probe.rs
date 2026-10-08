@@ -261,9 +261,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let now = engine.now();
     let table = engine.parts.pricing.current();
     let tables = engine.parts.tables.clone();
-    // The serving account's kind decides the unit this probe's cost and any later credit settle in; read from
-    // the snapshot taken here, after the response, so a registry write mid-exchange never changes which account
-    // this probe is charged against.
+    // The serving account's kind decides the unit this probe's cost settles in. It is read from the snapshot taken
+    // here, after the response, so a registry write mid-exchange never changes which account this probe is charged
+    // against.
     let snapshot = engine.parts.router.snapshot();
     let (record, applied) = {
         let mut inner = engine.lock();
@@ -291,7 +291,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             })
             .flatten()
             .and_then(|s| s.tier);
-        let (unit, cost) = settled_cost(
+        let (unit, _) = settled_cost(
             default_unit,
             &table,
             &tables,
@@ -302,7 +302,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             now,
         );
         let covered_unit = funding.map(|_| unit);
-        let applied = inner.apply_probe(&job, exchange, &record, covered_unit, unit, cost, now);
+        let applied = inner.apply_probe(&job, exchange, &record, covered_unit, now);
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
@@ -361,9 +361,9 @@ impl Inner {
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
             // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
-            // through the price table, at the cells the answer's own `usage.speed` selects; the funding-unit
-            // cost the agent's own net deducts is a second figure computed once the serving account's kind is
-            // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
+            // through the price table, at the cells the answer's own `usage.speed` selects. The funding unit is
+            // decided once the serving account's kind is known, back in `run_job`. Dollars read neither a tier nor
+            // the settlement instant.
             record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
         }
         if result
@@ -386,8 +386,6 @@ impl Inner {
         exchange: Exchange,
         record: &ProbeRecord,
         covered_unit: Option<SavingsUnit>,
-        unit: SavingsUnit,
-        cost: f64,
         now: i64,
     ) -> Applied {
         let key = &job.key;
@@ -417,17 +415,6 @@ impl Inner {
             })
             && self.live(key, agent_id);
         if !fenced {
-            // The job's ledger row carries the probe's cost, and the agent's net takes the same debit so an orphaned
-            // probe is not free. A probe the upstream did not serve is debited nowhere, as on the fenced path.
-            let served = matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated);
-            if let Some(agent) = self
-                .sessions
-                .get_mut(key)
-                .and_then(|s| s.agents.get_mut(agent_id))
-                .filter(|agent| served && agent.incarnation == job.incarnation)
-            {
-                debit(agent, unit, cost);
-            }
             // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
             // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
             // not wasted. A record that is gone leaves no label to read, so what removed it is what labels the
@@ -493,9 +480,9 @@ impl Inner {
             return Applied::Landed { covered: false };
         }
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
-        // here, before any branch below pauses the recipe over what the answer said: the agent's net and the
-        // settlement a stop leaves would otherwise disagree with the ledger. Every probe since the last real
-        // request is unanswered until one arrives, a migrated one at its price like any other.
+        // here, before any branch below pauses the recipe over what the answer said: the settlement a stop leaves
+        // would otherwise disagree with the ledger. Every probe since the last real request is unanswered until one
+        // arrives, a migrated one at its price like any other.
         let migrated = record.outcome == ProbeOutcome::Migrated;
         let agent = self
             .sessions
@@ -505,7 +492,6 @@ impl Inner {
             .get_mut(agent_id)
             .unwrap();
         agent.unanswered.push(record.cost_usd);
-        debit(agent, unit, cost);
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
             self.pause(key, agent_id);
@@ -824,10 +810,6 @@ pub(crate) fn ceiling(
     }
 }
 
-fn debit(agent: &mut Agent, unit: SavingsUnit, cost: f64) {
-    agent.net.add(unit, -cost);
-}
-
 pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
     match reason {
         Reason::Horizon => Some(Wasted::Horizon),
@@ -855,7 +837,7 @@ mod tests {
             "main".to_string(),
             Agent::new("main", "k", 1, 0, KeepaliveTiming::default()),
         );
-        let mut inner = Inner::empty(None, KeepaliveTiming::default());
+        let mut inner = Inner::empty(KeepaliveTiming::default());
         inner.agents = 1;
         inner.sessions.insert(
             key.clone(),

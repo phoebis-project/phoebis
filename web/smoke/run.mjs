@@ -7921,7 +7921,12 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used; a high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+{
+  const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
+  const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
+  results.push({ name: '/analytics cache warming draws no savings figure: no saved tile or column and no Savings chart', ok: left.length === 0 && !titles.includes('Savings'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : ''].filter(Boolean) });
+}
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
@@ -8483,7 +8488,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     {
       const coldRow = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Returned cold');
       const drawn = Number(coldRow?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? -1);
-      const mocked = weekGroups.reduce((n, g) => n + (g.savings?.wastedProbeReasons.cold_return ?? 0), 0);
+      const mocked = weekGroups.reduce((n, g) => n + g.wastedProbeReasons.cold_return, 0);
       results.push({ name: "/analytics wasted probes draws the cold return row with the mock's count", ok: coldRow !== undefined && weekGroups.length > 0 && drawn === mocked, missing: [`drawn ${drawn}`, `mock ${mocked}`, `groups ${weekGroups.length}`] });
     }
     const idleShare = Number([...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
@@ -8582,7 +8587,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
     results.push({
       name: '/analytics probes by outcome carries a migrated slice with its hint',
-      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net"),
+      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count"),
       missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
     });
   }
@@ -8996,7 +9001,7 @@ m.unmount();
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
-      fed.length === 5 &&
+      fed.length === 4 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
       sessionsTile?.value !== '-' &&
       companions > 0 &&
@@ -9165,7 +9170,7 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
@@ -9507,7 +9512,12 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   rows()[0]?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
-  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'Net', 'State', 'main']);
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'State', 'main']);
+  {
+    const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
+    const want = ['Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'State'];
+    results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
+  }
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
@@ -9534,16 +9544,9 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const open = m.container.querySelectorAll('.srow__detail').length;
   results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
-  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
+  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'paused: cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
-  {
-    const netNegative = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'net negative');
-    results.push({
-      name: '/sessions net negative explains the grace probes',
-      ok: (netNegative?.getAttribute('title') ?? '').includes("The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again."),
-      missing: [netNegative?.getAttribute('title') ?? 'absent'],
-    });
-  }
+  results.push({ name: '/sessions no reason reads net negative', ok: !m.text().includes('net negative'), missing: [m.text().includes('net negative') ? 'still there' : ''] });
   {
     const chips = [...m.container.querySelectorAll('.agents__row .badge')].map((b) => b.textContent?.trim());
     results.push({ name: '/sessions no recipe chip reads waiting any more', ok: !chips.includes('waiting'), missing: chips.filter((c) => c === 'waiting') });
@@ -9592,31 +9595,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions cold probe reason names the limit', ok: (cold?.getAttribute('title') ?? '').includes("cold probe limit"), missing: [cold?.getAttribute('title')] });
   }
   expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
-  {
-    const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
-    // The story's probe replays a 20k-token Fable 5.1 prefix out of band, on a Sunday evening in Los Angeles; an
-    // agent that probed once is down one probe's share, and one held for overage up three.
-    const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
-    const probe = shareOf(costs, 'five_hour', anchorTier(costs), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, Date.UTC(2026, 8, 13, 20, 0));
-    results.push({
-      name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: probe !== null && nets.includes(`${fmtShare(-probe)} of the 5-hour window`) && nets.includes(`${fmtShare(3 * probe)} of the 5-hour window | -$0.01`) && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
-      missing: [...new Set(nets)],
-    });
-    // The cost model has no weight for the story's Opus 5 and Sonnet 5, so a probe on either settles in dollars on a
-    // subscription too.
-    const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
-      account: row.children[2]?.textContent?.trim(),
-      model: row.children[1]?.textContent?.trim(),
-      net: [...(row.querySelector('.agents__net')?.children ?? [])].map((part) => part.textContent?.trim()).join(' | '),
-    }));
-    const unlisted = agentRows.filter((r) => ['primary', 'nightly'].includes(r.account) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
-    results.push({
-      name: '/sessions an agent on a subscription account whose model the cost model cannot price settles its probes in dollars',
-      ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
-      missing: unlisted.map((r) => `${r.account} ${r.model}: ${r.net}`),
-    });
-  }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
   collapseAll?.click();
@@ -9641,7 +9619,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
       name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
-      ok: tiles.length === 4 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
+      ok: tiles.length === 2 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
       missing: [...tiles, ...costLegend],
     });
   }
@@ -10465,7 +10443,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   });
 }
 
-// The downstream client configuration card: two snippets and one definition per variable.
+// The downstream client configuration card: one snippet and one definition per variable.
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
@@ -10474,13 +10452,13 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
-    name: '/settings optional snippet carries the owner id pair',
-    ok: (snippets[1] ?? '').includes('CC_KEEPALIVE_OWNER_ID=$(uuidgen)') && (snippets[1] ?? '').includes('ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"'),
-    missing: [snippets[1] ?? 'absent'],
+    name: '/settings carries one snippet and no owner wrapper, since the mod fences every session itself',
+    ok: snippets.length === 1 && !m.text().includes('X-Keepalive-Owner-Id') && !m.text().includes('Optional hardening'),
+    missing: snippets.slice(1),
   });
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.textContent?.includes('Downstream client configuration'));
   const copies = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim()).filter((t) => t === 'Copy' || t === 'Copy snippet');
-  results.push({ name: '/settings each snippet has its own copy button', ok: copies.length === 2, missing: copies });
+  results.push({ name: '/settings the snippet has its own copy button', ok: copies.length === 1, missing: copies });
   const terms = [...m.container.querySelectorAll('.envdl dt')].map((dt) => dt.textContent?.trim());
   const want = [
     'ANTHROPIC_BASE_URL',
@@ -10489,8 +10467,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
     'DISABLE_TELEMETRY=1',
     'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
-    'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
-    'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
@@ -10503,9 +10479,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
     "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
     'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-    'Optional hardening.',
-    'They need a wrapper script, since the env block of Claude Code',
-    'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',
     'Worth setting for Fable 5.1 sessions in a pool with cache warming on',
     'Leave it unset without warming.',
   ]);

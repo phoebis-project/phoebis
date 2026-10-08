@@ -519,13 +519,6 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
                 (Some("a"), None, 0),
                 "{action}: the late result touched no recipe state: {status:?}"
             );
-            // The upstream served it and the ledger's probe row carries its cost, so the record it outlived carries
-            // it too.
-            let charged = ledger_probe_cost(&r).await;
-            assert!(
-                (status.net_usd + charged).abs() < 1e-12,
-                "{action}: the net moved by the probe's cost: {status:?} against {charged}"
-            );
             assert!(
                 !status.in_flight,
                 "{action}: the orphaned result gave the record's slot back"
@@ -553,10 +546,10 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     }
 }
 
-/// A probe whose record a replacement registration of the same agent superseded while it was in flight was still
-/// served and its ledger row carries its cost, so the record that survives it carries that cost in the net.
+/// A probe whose recipe a release stopped while it was in flight was still served and its ledger row carries its
+/// cost, so with the released record still in the session it settles as wasted at that cost under the release.
 #[tokio::test]
-async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
+async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -574,16 +567,7 @@ async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    // The companion releases the agent and registers it again: the same record under a new generation.
     r.state("main", "released");
-    let generation = r.agent("main").request_generation;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some(MAIN_AGENT.into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
-    .unwrap();
     r.up.release();
     r.engine.wait_idle().await;
     r.pump(None).await;
@@ -592,11 +576,41 @@ async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
     assert_eq!(
         (status.in_flight, status.next_probe_at, status.unanswered),
         (false, None, 0),
-        "{status:?}"
+        "the late result touched no recipe state: {status:?}"
+    );
+    let (wasted, wasted_usd, reasons) = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let mut sum = (0, 0.0, std::collections::BTreeMap::new());
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            sum.0 += row.wasted_probes;
+            sum.1 += row.wasted_probe_usd;
+            for (reason, n) in &row.wasted_probe_reasons {
+                *sum.2.entry(reason.clone()).or_insert(0) += n;
+            }
+        }
+        (sum.0 > 0).then_some(sum)
+    })
+    .await;
+    assert_eq!(
+        (wasted, reasons),
+        (
+            1,
+            std::collections::BTreeMap::from([("released".to_string(), 1)])
+        ),
+        "the orphaned probe settles under the release that left it"
     );
     assert!(
-        (status.net_usd + charged).abs() < 1e-12,
-        "the surviving record's net carries the probe's cost: {status:?} against {charged}"
+        (wasted_usd - charged).abs() < 1e-12,
+        "at the cost its ledger row carries: {wasted_usd} against {charged}"
     );
 }
 
@@ -1379,8 +1393,8 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 }
 
 /// A fast-mode request draws usage credits and no plan window, and its probe replays the body as sent, so the
-/// probe does too: it settles in dollars at the fast cells on an account whose standard traffic spends plan
-/// quota, and the account's window share is untouched.
+/// probe does too: its ledger row prices it in dollars at the fast cells on an account whose standard traffic spends
+/// plan quota.
 #[tokio::test]
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
@@ -1399,14 +1413,10 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
         fast > standard,
         "the fast cells are dearer: {fast} against {standard}"
     );
-    let status = r.status("main");
+    let charged = ledger_probe_cost(&r).await;
     assert!(
-        (status.net_usd + fast).abs() < 1e-12,
-        "the probe settled in dollars at the fast cells: {status:?}"
-    );
-    assert_eq!(
-        status.net_five_hour_share, 0.0,
-        "the account's share balance is unchanged"
+        (charged - fast).abs() < 1e-12,
+        "the probe's row carries dollars at the fast cells: {charged} against {fast}"
     );
 }
 
@@ -1415,9 +1425,9 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
 #[tokio::test]
 async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
     let (r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
-    let status = r.status("main");
+    let charged = ledger_probe_cost(&r).await;
     assert!(
-        (status.net_usd + standard).abs() < 1e-12 && status.net_five_hour_share == 0.0,
-        "dollars at the standard cells: {status:?}"
+        (charged - standard).abs() < 1e-12,
+        "dollars at the standard cells: {charged} against {standard}"
     );
 }

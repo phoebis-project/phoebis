@@ -584,8 +584,6 @@ fn every_registered_family_renders_and_nothing_else_does() {
     metrics.observe_probe("a", "ok");
     metrics.observe_probe("a", "migrated");
     metrics.observe_probe("b", "failed");
-    metrics.observe_saving("main", 0.25);
-    metrics.observe_saving("main", 0.5);
     let gauges = RoutingGauges {
         keepalive_agents: phoebis_ledger::KeepaliveAgents {
             busy: 2,
@@ -619,7 +617,6 @@ fn every_registered_family_renders_and_nothing_else_does() {
         r#"phoebis_keepalive_probes_total{account="a",outcome="migrated"} 1"#,
         r#"phoebis_keepalive_probes_total{account="a",outcome="ok"} 1"#,
         r#"phoebis_keepalive_probes_total{account="b",outcome="failed"} 1"#,
-        r#"phoebis_keepalive_saved_usd_total{pool="main"} 0.75"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }

@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, LifecycleSender, Outcome,
-    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
+    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
+use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
@@ -27,7 +27,6 @@ use crate::config::{
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::gross_saving;
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -176,7 +175,6 @@ reasons! {
     LeaseExpired => "lease_expired",
     LedgerBehind => "ledger_behind",
     MissingAccount => "missing_account",
-    NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",
     NoProbeCacheEvidence => "no_probe_cache_evidence",
     OptedOut => "opted_out",
@@ -358,30 +356,6 @@ impl Funding {
     }
 }
 
-/// The two balances of an agent; a settlement lands in the unit of the attempt it settles, the plan side as the
-/// share of the account's 5-hour window.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Net {
-    pub five_hour_share: f64,
-    pub usd: f64,
-}
-
-impl Net {
-    pub fn in_unit(&self, unit: SavingsUnit) -> f64 {
-        match unit {
-            SavingsUnit::Usd => self.usd,
-            SavingsUnit::WindowShare => self.five_hour_share,
-        }
-    }
-
-    pub(crate) fn add(&mut self, unit: SavingsUnit, delta: f64) {
-        match unit {
-            SavingsUnit::Usd => self.usd += delta,
-            SavingsUnit::WindowShare => self.five_hour_share += delta,
-        }
-    }
-}
-
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
@@ -389,8 +363,6 @@ pub struct EngineParts {
     /// same value the relay's `Limits` gets, so the probe gate and the selector read one account the same way.
     pub cooldown_fallback: Duration,
     pub ledger: Ledger,
-    /// Where the companion's reports go when a consumer is wired; `None` when nothing is listening, as in the binary.
-    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     /// The relay's per-body bound: the largest body a recipe may retain, so every request the relay accepts is
     /// retainable.
@@ -400,10 +372,10 @@ pub struct EngineParts {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
-    /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
-    /// saving is a share of, and the sessions and recipes a restart resumes.
+    /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe is a share
+    /// of, and the sessions and recipes a restart resumes.
     pub store: Arc<Store>,
-    /// The subscription cost model, for a probe or a kept-warm saving on a plan-funded attempt.
+    /// The subscription cost model, for a probe on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
     /// The schedule's leads, jitters and retry limits: `KeepaliveTiming::for_start()` in the binary, and a test's
     /// own numbers where it asserts exact times.
@@ -512,9 +484,7 @@ pub(crate) struct Agent {
     pub probes: u64,
     pub migrations: u64,
     pub usage: ProbeUsage,
-    /// The savings ledger of this agent: the running net, the cost of every probe since the last real request
-    /// (settled as wasted when the recipe stops), and whether a probe with full coverage ran since that request.
-    pub net: Net,
+    /// The cost of every probe since the last real request, settled as wasted when the recipe stops.
     pub unanswered: Vec<f64>,
     /// The speed of the recipe a bus gap or a failed request left `unanswered` under: the recipe is gone by the time
     /// the next request batches them, and its speed is what a warm return on them is read against.
@@ -527,8 +497,8 @@ pub(crate) struct Agent {
     /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
     pub covered_account: Option<String>,
-    /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
-    /// a probe the cost model cannot price falls the unit back to dollars along with the cost, so the two never split.
+    /// The unit the covering probe's own cost settled in, `None` when the account it served on left the registry
+    /// before it landed, which earns the later request no credit.
     pub covered_unit: Option<SavingsUnit>,
     /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
     /// reads, and the reverse.
@@ -588,7 +558,6 @@ impl Agent {
             probes: 0,
             migrations: 0,
             usage: ProbeUsage::default(),
-            net: Net::default(),
             unanswered: Vec::new(),
             left_fast: None,
             kept: Vec::new(),
@@ -813,7 +782,6 @@ pub(crate) enum Unanswered {
 }
 
 pub(crate) struct Inner {
-    pub lifecycle: Option<LifecycleSender>,
     pub sessions: BTreeMap<SessionKey, Session>,
     /// Request id to the agent following it.
     pub pending: HashMap<String, (SessionKey, String)>,
@@ -870,9 +838,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(mut parts: EngineParts) -> Arc<Engine> {
-        // `Inner` holds the only sender, so `close` dropping it is the channel ending for the consumer.
-        let lifecycle = parts.lifecycle.take();
+    pub fn new(parts: EngineParts) -> Arc<Engine> {
         // Every read of a stored policy the bounds now refuse answers keepalive off; the operator learns which pool
         // and why once, here, rather than from a tick that reads it every second.
         for pool in parts.router.snapshot().pools() {
@@ -885,7 +851,7 @@ impl Engine {
             }
         }
         Arc::new(Engine {
-            inner: Mutex::new(Inner::empty(lifecycle, parts.timing)),
+            inner: Mutex::new(Inner::empty(parts.timing)),
             parts,
             cancel: CancellationToken::new(),
             idle: Notify::new(),
@@ -956,18 +922,7 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
-            // A session ends once on the channel, so one already announced by the companion gets none here; the
-            // rest end now, as they would at the expiry, since nothing will report for them again.
-            if !inner.sessions[&key].ended {
-                inner.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
         }
-        // The ends above are the channel's last messages: with the sender gone a consumer's `recv()` returns `None`
-        // once it has drained them, which is what its shutdown can join on.
-        inner.lifecycle = None;
         inner.sessions.clear();
         inner.pending.clear();
         inner.agents = 0;
@@ -979,9 +934,8 @@ impl Engine {
 impl Inner {
     /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
     /// is named, so a field this struct gains needs no second literal to keep in step.
-    pub(crate) fn empty(lifecycle: Option<LifecycleSender>, timing: KeepaliveTiming) -> Inner {
+    pub(crate) fn empty(timing: KeepaliveTiming) -> Inner {
         Inner {
-            lifecycle,
             sessions: BTreeMap::new(),
             pending: HashMap::new(),
             reasons: BTreeMap::new(),
@@ -1000,14 +954,6 @@ impl Inner {
             revision: 0,
             persist_failing: false,
             late_updates: 0,
-        }
-    }
-
-    /// A send never blocks and a closed receiver is a consumer that shut down first, which loses nothing worth a log
-    /// line.
-    pub(crate) fn emit(&self, event: SessionLifecycle) {
-        if let Some(tx) = &self.lifecycle {
-            let _ = tx.send(event);
         }
     }
 
@@ -1269,10 +1215,6 @@ impl Inner {
         }
         agent.set_state(AgentState::Idle);
         self.touch_agent(key, agent_id);
-        self.emit(SessionLifecycle::MainResumed {
-            key_id: key.0.clone(),
-            session_id: key.1.clone(),
-        });
     }
 
     /// Opens main's idle window on every attended session and raises `reached` up to the window's current bucket.
@@ -1547,15 +1489,7 @@ impl Inner {
             }
             self.agents -= agents.len();
             self.forget_session(&key);
-            // A session whose companion reported its end was announced then; the entry outlives the report
-            // only so a result still in flight finds it, and the channel carries one end, not two.
-            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
-            if !announced {
-                self.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
+            self.sessions.remove(&key);
         }
     }
 
@@ -1583,13 +1517,7 @@ impl Inner {
             }
             self.agents -= agents.len();
             self.forget_session(&key);
-            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
-            if !announced {
-                self.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
+            self.sessions.remove(&key);
         }
     }
 }
@@ -1607,8 +1535,6 @@ pub struct AgentStatus {
     pub in_flight: bool,
     pub last_activity: i64,
     pub migrations: u64,
-    pub net_five_hour_share: f64,
-    pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub park_kind: Option<ParkKind>,
     pub paused: bool,
@@ -1716,8 +1642,6 @@ impl Engine {
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
-            net_five_hour_share: agent.net.five_hour_share,
-            net_usd: agent.net.usd,
             next_probe_at: agent.next_probe_at(),
             park_kind: agent.park_kind,
             paused: agent.paused,
@@ -1890,7 +1814,6 @@ impl Engine {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
         }
-        let was = agent.state;
         agent.set_state(AgentState::Busy);
         agent.last_activity = now;
         // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
@@ -1905,14 +1828,6 @@ impl Engine {
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
-        // The engine's own transition out of parked, which no report will repeat: the companion's next busy
-        // report finds the agent already working and says nothing.
-        if agent_id == MAIN_AGENT && was == AgentState::Parked {
-            inner.emit(SessionLifecycle::MainResumed {
-                key_id: key.0.clone(),
-                session_id: key.1.clone(),
-            });
-        }
         if inner.pending.len() >= limits.max_agents {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
@@ -2137,10 +2052,9 @@ impl Engine {
             return;
         }
         inner.pending.remove(&complete.request_id);
-        let mut credited = None;
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
-        let credit = {
+        let credited = {
             let agent = &inner.sessions[&key].agents[&agent_id];
             agent
                 .current
@@ -2162,8 +2076,8 @@ impl Engine {
                     // nothing this request read.
                     let same_speed = prior.fast == fast;
                     // The account that served this request, after any failover, has to be the one the
-                    // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
-                    // saving to claim.
+                    // covering probe warmed. A prefix cached elsewhere by ordinary traffic is no probe's to
+                    // credit.
                     let same_account = prior.account == agent.account;
                     // The probe that covered this recipe may have served on an account the registry has
                     // since dropped, which earns no credit: `same_account` would already exclude it once a
@@ -2184,78 +2098,12 @@ impl Engine {
                             agent.pool_id.clone(),
                             agent.account.clone(),
                             agent.canonical_model.clone(),
-                            unit.unwrap(),
                             fast,
                         )
                     })
                 })
         };
         inner.decide_unanswered(&key, &agent_id, read);
-        if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
-            // The mark says a probe kept this request warm, which is true whatever the tables know; a model the
-            // price table does not list saves dollars at its dearest cells, as its probes cost, and the share is
-            // what the cost model can put a number on, zero where it cannot. The agent's own net settles in the
-            // covering probe's unit, a share of the tier the store names now, priced at this settlement; the
-            // ledger's kept-warm column stays dollars whatever that unit was.
-            let tables = &self.parts.tables;
-            let table = self.parts.pricing.current();
-            let tier = match (unit, account.as_deref()) {
-                (SavingsUnit::WindowShare, Some(account)) => self
-                    .parts
-                    .store
-                    .subscription(account)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.tier),
-                _ => None,
-            };
-            // The request that read the prefix would have paid it as input at the cells of the speed it was
-            // served at, which the answer reports and which can fall short of the speed the recipe asked for.
-            let speed = Speed::of(complete.response.speed.as_deref());
-            let saving_net = gross_saving(
-                unit,
-                &table,
-                tables,
-                tier.as_deref(),
-                &model,
-                read,
-                now,
-                speed,
-            );
-            let saving_ledger = if unit == SavingsUnit::Usd {
-                saving_net.unwrap_or(0.0)
-            } else {
-                gross_saving(
-                    SavingsUnit::Usd,
-                    &table,
-                    tables,
-                    None,
-                    &model,
-                    read,
-                    now,
-                    speed,
-                )
-                .unwrap_or(0.0)
-            };
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
-                .net
-                .add(unit, saving_net.unwrap_or(0.0));
-            credited = Some((
-                read,
-                key_generation,
-                pool_id,
-                account,
-                model,
-                saving_ledger,
-                fast,
-            ));
-        }
         let (ready, armed) = inner.sessions[&key]
             .agents
             .get(&agent_id)
@@ -2300,7 +2148,7 @@ impl Engine {
             }
         }
         drop(inner);
-        if let Some((read, key_generation, pool_id, account, model, saving, fast)) = credited {
+        if let Some((read, key_generation, pool_id, account, model, fast)) = credited {
             self.record_kept_warm(
                 now,
                 &key,
@@ -2310,10 +2158,8 @@ impl Engine {
                 &model,
                 &complete.request_id,
                 read,
-                saving,
                 fast,
             );
-            self.parts.metrics.observe_saving(&pool_id, saving);
         }
     }
 }

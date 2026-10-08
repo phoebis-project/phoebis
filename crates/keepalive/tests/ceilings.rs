@@ -305,34 +305,23 @@ async fn a_zero_idle_window_resolves_to_the_break_even() {
 
 #[tokio::test]
 async fn presence_restarts_the_window_and_marks_nothing_busy() {
-    let (tx, mut rx) = phoebis_bus::lifecycle_channel();
-    let mut r = rig(RigSpec {
-        lifecycle: Some(tx),
-        ..plan(policy(|_| {}))
-    })
-    .await;
+    let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
     r.state("main", "idle");
     tick_to(&mut r, start + 50 * MINUTE).await;
-    while rx.try_recv().is_ok() {}
     presence(&mut r);
-    assert_eq!(r.status("main").state, AgentState::Idle);
+    let status = r.status("main");
+    assert_eq!(
+        (status.state, status.last_activity),
+        (AgentState::Idle, r.now()),
+        "presence moves the idle clock and resumes nothing"
+    );
     tick_to(&mut r, start + 110 * MINUTE - 1).await;
     assert_eq!(
         (r.status("main").state, retained(&r, "main")),
         (AgentState::Idle, true),
-        "probed past the hour the window would have ended at without the presence"
-    );
-    let mut events = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-        events.push(event);
-    }
-    assert!(
-        events
-            .iter()
-            .all(|e| matches!(e, phoebis_bus::SessionLifecycle::Heartbeat { .. })),
-        "presence resumes nothing and parks nothing: {events:?}"
+        "probed past the hour the window would have ended at without the presence, and parked by nothing"
     );
     ends_at(
         &mut r,

@@ -1,6 +1,5 @@
-//! A due probe waits while its account is cooled, in overage, paused, or reauth-marked, while the pool's cap is
-//! reached, or while the recipe's net is negative past its grace, and runs once the condition clears; the due
-//! time and the idle limits come from the pool's tuning.
+//! A due probe waits while its account is cooled, in overage, paused, or reauth-marked, and runs once the condition
+//! clears. The due time follows the entry's expiry, and the idle limits follow the pool's policy.
 mod common;
 use common::*;
 use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
@@ -140,7 +139,8 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
         1,
         "the lapse counts the probe it withheld, with no hold behind it"
     );
-    // A fast recipe's skip files under the speed it was retained with, read before the lapse drops the recipe.
+    // A fast recipe's skip files under the account, the pool and the speed it was retained with, read before the
+    // lapse drops the recipe, never under an empty id.
     let mut r = rig(RigSpec::default()).await;
     let fast = BODY.replacen('{', r#"{"speed":"fast","#, 1);
     r.engine.observe(r.observed("fast", "main", &fast));
@@ -162,12 +162,19 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
             read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
         })
         .unwrap();
-    let skipped: Vec<(&str, u64)> = rows
+    let skipped: Vec<(&str, &str, &str, u64)> = rows
         .iter()
         .filter(|row| row.probes_skipped > 0)
-        .map(|row| (row.speed.as_str(), row.probes_skipped))
+        .map(|row| {
+            (
+                row.account_id.as_str(),
+                row.pool_id.as_str(),
+                row.speed.as_str(),
+                row.probes_skipped,
+            )
+        })
         .collect();
-    assert_eq!(skipped, [("fast", 1)]);
+    assert_eq!(skipped, [("a", "main", "fast", 1)]);
 }
 
 /// A hold that outlasts the entry never ends in a probe: once the entry has expired the recipe is held under

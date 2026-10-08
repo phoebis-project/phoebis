@@ -4,7 +4,7 @@
     "sessions": [
       {
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791445351671,
         "session_id": "s-fixture",
         "agent_id": "main",
         "model": "claude-sonnet-5",
@@ -28,8 +28,6 @@
         "agents": 1,
         "keepalive": {
           "last_guard": null,
-          "net_five_hour_share": null,
-          "net_usd": null,
           "next_probe_at": null,
           "state": null
         },
@@ -38,7 +36,7 @@
       },
       {
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791445351671,
         "session_id": "s3",
         "agent_id": null,
         "model": "claude-sonnet-5",
@@ -62,8 +60,6 @@
         "agents": 0,
         "keepalive": {
           "last_guard": null,
-          "net_five_hour_share": null,
-          "net_usd": null,
           "next_probe_at": null,
           "state": null
         },
@@ -72,7 +68,7 @@
       },
       {
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791445351671,
         "session_id": "s1",
         "agent_id": null,
         "model": "claude-sonnet-5-5",
@@ -95,9 +91,7 @@
         "agents": 1,
         "keepalive": {
           "last_guard": "rearm",
-          "net_five_hour_share": 0.0,
-          "net_usd": 0.0,
-          "next_probe_at": 1238725,
+          "next_probe_at": 1239220,
           "state": "busy"
         },
         "historical": false,
@@ -106,7 +100,7 @@
       },
       {
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791445351671,
         "session_id": "s2",
         "agent_id": null,
         "model": "claude-sonnet-5-5",
@@ -130,8 +124,6 @@
         "agents": 0,
         "keepalive": {
           "last_guard": null,
-          "net_five_hour_share": null,
-          "net_usd": null,
           "next_probe_at": null,
           "state": null
         },
@@ -164,8 +156,6 @@
         "agents": 0,
         "keepalive": {
           "last_guard": null,
-          "net_five_hour_share": null,
-          "net_usd": null,
           "next_probe_at": null,
           "state": null
         },

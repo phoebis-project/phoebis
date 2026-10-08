@@ -5,8 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_bus::SessionLifecycle;
-
 use crate::config::LEASE_MS;
 use crate::engine::{
     Agent, AgentState, Engine, Inner, ParkKind, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
@@ -326,12 +324,7 @@ impl Inner {
         // report the agent, not the companion's own liveness, so they leave it alone.
         let renews_lease = ev.event == "heartbeat";
         match ev.event.as_str() {
-            // One per session per lease interval, and the only sign of life a session that just waits for
-            // its user gives: without it nothing tells a consumer of the channel the session is still attended.
-            "heartbeat" => self.emit(SessionLifecycle::Heartbeat {
-                key_id: key.0.clone(),
-                session_id: key.1.clone(),
-            }),
+            "heartbeat" => {}
             "session_end" => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
                 for agent in &agents {
@@ -358,12 +351,7 @@ impl Inner {
                 session.last_report_at = now;
                 self.touch_session(&key);
                 let session = &self.sessions[&key];
-                let ack = acknowledge(session, session.agents.get(&agent_id), None);
-                self.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-                return Ok(ack);
+                return Ok(acknowledge(session, session.agents.get(&agent_id), None));
             }
             "agent_start" => {
                 let existing = self.sessions[&key]
@@ -401,13 +389,6 @@ impl Inner {
                         self.agents += 1;
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                     }
-                }
-                if agent_id != MAIN_AGENT {
-                    self.emit(SessionLifecycle::AgentStarted {
-                        key_id: key.0.clone(),
-                        session_id: key.1.clone(),
-                        agent_id: agent_id.clone(),
-                    });
                 }
             }
             "activity" | "state" => {
@@ -449,12 +430,6 @@ impl Inner {
                         }
                         agent.idle_ticks = 0;
                         agent.set_state(AgentState::Busy);
-                        if agent_id == MAIN_AGENT && was == AgentState::Parked {
-                            self.emit(SessionLifecycle::MainResumed {
-                                key_id: key.0.clone(),
-                                session_id: key.1.clone(),
-                            });
-                        }
                     }
                 } else {
                     let state = ev
@@ -513,29 +488,6 @@ impl Inner {
                             self.discard(&key, &agent_id, Reason::AgentUnknown, None)
                         }
                         _ => {}
-                    }
-                    // The main agent's park and its leaving parked in any direction are the session's, and a
-                    // subagent's release is the end of that agent; a report of the state it already held is
-                    // no transition.
-                    let transition = match (agent_id == MAIN_AGENT, was, state) {
-                        (true, AgentState::Parked, AgentState::Parked) => None,
-                        (true, AgentState::Parked, _) => Some(SessionLifecycle::MainResumed {
-                            key_id: key.0.clone(),
-                            session_id: key.1.clone(),
-                        }),
-                        (true, _, AgentState::Parked) => Some(SessionLifecycle::MainParked {
-                            key_id: key.0.clone(),
-                            session_id: key.1.clone(),
-                        }),
-                        (false, _, AgentState::Released) => Some(SessionLifecycle::AgentReleased {
-                            key_id: key.0.clone(),
-                            session_id: key.1.clone(),
-                            agent_id: agent_id.clone(),
-                        }),
-                        _ => None,
-                    };
-                    if let Some(transition) = transition {
-                        self.emit(transition);
                     }
                 }
             }
@@ -638,10 +590,6 @@ impl Inner {
             return Err(err("agent_limit", 429));
         }
         if let Some(previous) = self.sessions.get(&key) {
-            let parked = previous
-                .agents
-                .get(MAIN_AGENT)
-                .is_some_and(|a| a.state == AgentState::Parked);
             let agents: Vec<String> = previous.agents.keys().cloned().collect();
             for agent in &agents {
                 self.discard(
@@ -650,23 +598,6 @@ impl Inner {
                     Reason::InstanceReplaced,
                     Some(Wasted::Replaced),
                 );
-                // The replaced instance takes its subagents with it, and nothing else would say so: the new
-                // instance reports the agents it starts, never the ones it replaced.
-                if agent != MAIN_AGENT {
-                    self.emit(SessionLifecycle::AgentReleased {
-                        key_id: key.0.clone(),
-                        session_id: key.1.clone(),
-                        agent_id: agent.clone(),
-                    });
-                }
-            }
-            // The replaced instance's main agent goes with it, and the new one starts busy, so whatever it
-            // reported parked is over.
-            if parked {
-                self.emit(SessionLifecycle::MainResumed {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
             }
             self.agents -= agents.len();
             // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
@@ -706,10 +637,6 @@ impl Inner {
         self.agents += 1;
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
-        self.emit(SessionLifecycle::SessionStarted {
-            key_id: key.0.clone(),
-            session_id: key.1.clone(),
-        });
         let session = &self.sessions[&key];
         Ok(acknowledge(
             session,

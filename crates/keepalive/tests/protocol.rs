@@ -5,7 +5,6 @@ use axum::body::Body;
 use axum::http::Request;
 use common::*;
 use http_body_util::BodyExt;
-use phoebis_bus::{lifecycle_channel, LifecycleReceiver, SessionLifecycle};
 use phoebis_keepalive::{keepalive_router, AgentState, CompanionState, ParkKind, EVENTS_PATH};
 use phoebis_store::{ApiKeyRow, RulesMode};
 use serde_json::{json, Value};
@@ -113,10 +112,6 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
         retired_secret_last_used_at: None,
         auto_mode_server: None,
     }
-}
-
-fn drain(rx: &mut LifecycleReceiver) -> Vec<SessionLifecycle> {
-    std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
 #[tokio::test]
@@ -916,12 +911,7 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
 
 #[tokio::test]
 async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_the_clock_alone() {
-    let (tx, mut rx) = lifecycle_channel();
-    let mut r = rig(RigSpec {
-        lifecycle: Some(tx),
-        ..RigSpec::default()
-    })
-    .await;
+    let mut r = rig(RigSpec::default()).await;
     // An idle main probed once, so the presence below meets an idle tick count it must leave alone.
     r.observe("main").await;
     r.state("main", "idle");
@@ -930,7 +920,6 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     assert_eq!(r.status("main").idle_ticks, 1);
     let generation = r.status("main").request_generation;
     let base = r.sequence;
-    drain(&mut rx);
     let app = keepalive_router(r.engine.clone());
     let deadline = r.now() + 600_000;
     let wake = r.now() + 300_000;
@@ -1019,7 +1008,6 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         json!({"state": "parked", "park_kind": "scheduled", "wake_at": wake}),
     );
     assert_eq!(post(&app, scheduled, Some(KEY)).await.status, 200);
-    drain(&mut rx);
     r.advance(5_000);
     let presence = report(
         "activity",
@@ -1045,9 +1033,8 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
             Some(wake),
             1
         ),
-        "presence moves the idle clock and nothing else"
+        "presence moves the idle clock and nothing else: the agent stays parked"
     );
-    assert_eq!(drain(&mut rx), [], "presence resumes nothing");
     let prompt = report(
         "activity",
         "session",
@@ -1056,13 +1043,9 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         json!({"agent_id": "main", "kind": "prompt", "request_generation": generation}),
     );
     assert_eq!(post(&app, prompt, Some(KEY)).await.status, 200);
-    assert_eq!(r.status("main").state, AgentState::Busy);
     assert_eq!(
-        drain(&mut rx),
-        [SessionLifecycle::MainResumed {
-            key_id: "desktop".into(),
-            session_id: "session".into(),
-        }],
+        r.status("main").state,
+        AgentState::Busy,
         "a prompt resumes the parked main agent"
     );
 }

@@ -861,13 +861,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          }
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {}
         },
         {
           "key": "desktop@940000",
@@ -1208,13 +1205,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          }
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {}
         }
       ]
     }
@@ -1565,13 +1559,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          }
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {}
         },
         {
           "key": "standard",
@@ -1915,13 +1906,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          }
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {}
         }
       ]
     }
@@ -3086,13 +3074,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              }
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {}
             },
             {
               "key": "desktop@940000",
@@ -3433,13 +3418,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              }
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {}
             }
           ]
         },
@@ -3787,13 +3769,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              }
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {}
             }
           ]
         }
@@ -5439,7 +5418,6 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "bus_gaps": 0,
       "expired_between_turns_24h": 0,
-      "net_saved_7d_usd": 0,
       "probes_24h": {
         "failed": 0,
         "migrated": 0,
@@ -5459,9 +5437,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_guard": "rearm",
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "net_five_hour_share": 0,
-          "net_usd": 0,
-          "next_probe_at": 1238725,
+          "next_probe_at": 1239220,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -9319,7 +9295,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1791413157235,
+          "key_generation": 1791445351671,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -9343,8 +9319,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 1,
           "keepalive": {
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
@@ -9353,7 +9327,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791413157235,
+          "key_generation": 1791445351671,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -9377,8 +9351,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
@@ -9387,7 +9359,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791413157235,
+          "key_generation": 1791445351671,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -9410,9 +9382,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 1,
           "keepalive": {
             "last_guard": "rearm",
-            "net_five_hour_share": 0,
-            "net_usd": 0,
-            "next_probe_at": 1238725,
+            "next_probe_at": 1239220,
             "state": "busy"
           },
           "historical": false,
@@ -9421,7 +9391,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791413157235,
+          "key_generation": 1791445351671,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -9445,8 +9415,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
@@ -9479,8 +9447,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
