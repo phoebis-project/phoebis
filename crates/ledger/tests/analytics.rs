@@ -2241,6 +2241,7 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
             output: rate,
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),
@@ -2264,6 +2265,7 @@ fn priced_table_distinct(model: &str) -> PriceTable {
             output: per_m(5.0),
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),

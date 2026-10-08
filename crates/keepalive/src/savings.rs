@@ -30,7 +30,9 @@ pub(crate) fn gross_saving(
 ) -> Option<f64> {
     match unit {
         SavingsUnit::Usd => {
-            let per_token = match table.price_at(canonical_model, speed) {
+            // The kept-warm read's prompt length is not threaded to the saving yet, so the saving prices at the
+            // cells the answer's speed alone selects.
+            let per_token = match table.price_at(canonical_model, speed, 0) {
                 Some(price) => (price.input - price.cache_read) / 1_000_000.0,
                 // The dearest cells `probe_dollars` prices this model's probes at: both sides of the net read one
                 // rate table, so a cache that saves more than its probes cost keeps the recipe net positive.

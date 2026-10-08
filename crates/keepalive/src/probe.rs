@@ -1164,6 +1164,7 @@ mod tests {
                         output: 10.0,
                     },
                     fast: None,
+                    long_context: None,
                 },
             )]
             .into_iter()

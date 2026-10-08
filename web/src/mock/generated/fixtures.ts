@@ -10173,6 +10173,21 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_read": 0.3,
               "output": 15
             },
+            "claude-haiku-5-5": {
+              "input": 1,
+              "cache_write_5m": 1.25,
+              "cache_write_1h": 2,
+              "cache_read": 0.1,
+              "output": 5,
+              "long_context": {
+                "over": 1000,
+                "input": 5,
+                "cache_write_5m": 6.25,
+                "cache_write_1h": 10,
+                "cache_read": 0.5,
+                "output": 25
+              }
+            },
             "claude-haiku-4-5": {
               "input": 1,
               "cache_write_5m": 1.25,

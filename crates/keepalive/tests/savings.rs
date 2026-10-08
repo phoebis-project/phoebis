@@ -50,10 +50,11 @@ fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
 }
 
-/// The cells `model` prices at for an answer served at `speed`, in the table the rig prices through.
+/// The cells `model` prices at for an answer served at `speed` on a prompt under any threshold, in the table the
+/// rig prices through.
 fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::ModelPrice {
     phoebis_ledger::PriceTable::shipped()
-        .price_at(model, speed)
+        .price_at(model, speed, 0)
         .expect("the rig's table prices the model")
         .clone()
 }

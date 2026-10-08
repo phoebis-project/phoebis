@@ -1619,7 +1619,7 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         .unwrap();
     // A million tokens at the fast cell's price per million read that price in dollars.
     let fast_input = phoebis_ledger::PriceTable::shipped()
-        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast)
+        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast, 1_000_000)
         .unwrap()
         .input;
     assert!(
