@@ -4,11 +4,15 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use phoebis_bus::{Outcome, Usage};
-use phoebis_keepalive::{Ack, CompanionState, Event, EventError, KeepaliveLimits, Reason};
+use phoebis_bus::{Event as BusEvent, Outcome, Usage};
+use phoebis_keepalive::{
+    Ack, CompanionState, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
+};
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
 
 fn on_disk() -> RigSpec {
@@ -100,19 +104,15 @@ fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
     }
 }
 
-/// Waits on the test's own thread until `count` flushes have read their batch, so a change the test makes next is
-/// one that save missed. A save held in the store's busy wait keeps the store's connection, and a runtime task that
-/// reads the store (the relay's catalog refresh does every few milliseconds) blocks its worker behind it. The workers
-/// drive the runtime's timer, so a wait on that timer would stall until the save gave up.
-fn snapshots_reach(r: &Rig, count: u64) {
-    let give_up = std::time::Instant::now() + Duration::from_secs(5);
-    while r.engine.persist_snapshots() < count {
-        assert!(
-            std::time::Instant::now() < give_up,
-            "the save never read its batch"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
+/// Runs `work` to its end on a thread of its own. A save held in the store's busy wait keeps the store's connection,
+/// and a runtime task that reads the store (the relay's catalog refresh does every few milliseconds) blocks the
+/// worker it runs on behind it, so a flush or a shutdown left to the workers might never get to run while the test
+/// holds the registry.
+fn on_own_thread(
+    work: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let runtime = tokio::runtime::Handle::current();
+    std::thread::spawn(move || runtime.block_on(work))
 }
 
 #[tokio::test]
@@ -322,18 +322,30 @@ async fn an_ended_session_and_an_expired_recipe_are_dropped_at_the_load_under_ex
 
 #[tokio::test]
 async fn the_idle_age_counters_round_trip() {
-    let mut r = rig(on_disk()).await;
+    // Keepalive off, so no recipe is retained and the ticks probe nothing: the counters count all the same.
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy::default(),
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
     r.state("main", "idle");
     r.advance_attended(6 * MINUTE);
     r.step().await;
+    // The next turn of the same conversation, six minutes into the window.
+    let next_turn = BODY.replace(
+        r#"{"role":"user","content":"hello"}]"#,
+        r#"{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"and then"}]"#,
+    );
+    r.observe_with("main", &next_turn).await;
     let counters = r.engine.idle_returns();
     assert_eq!(
         counters["main"].buckets[..2]
             .iter()
-            .map(|b| b.reached)
+            .map(|b| (b.reached, b.returned))
             .collect::<Vec<_>>(),
-        vec![1, 1],
-        "a window six minutes old reached the first two buckets"
+        vec![(1, 0), (1, 1)],
+        "a window six minutes old reached the first two buckets and returned in the second"
     );
     r.engine.flush_persisted().await;
     let second = r.restart().await;
@@ -408,6 +420,12 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
     r.engine.observe(r.selected("late", "a"));
     let (_, agents) = r.engine.persist_rows();
     r.engine.quiesce();
+    // A failover onto the other account, which the quiesced state never saw.
+    let BusEvent::AccountSelected(mut failover) = r.selected("late", "b") else {
+        unreachable!("the rig builds a selection")
+    };
+    failover.attempt = 2;
+    r.bus.publish(BusEvent::AccountSelected(failover));
     r.bus.publish(r.complete(
         "late",
         Outcome::Succeeded,
@@ -420,22 +438,27 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
     r.engine.flush_persisted().await;
     r.engine.close();
 
-    assert_eq!(r.engine.stats().late_updates, 1);
+    assert_eq!(
+        r.engine.stats().late_updates,
+        2,
+        "the selection and the completion are both refused and counted"
+    );
     assert_eq!(
         saved_agents(&r),
         agents,
-        "the saved agent is the quiesced one: the completion armed nothing and credited nothing"
+        "the saved agent is the quiesced one: the selection moved no account, and the completion armed nothing and \
+         credited nothing"
     );
     assert_eq!(
         saved_field(&r, "session", "main", "reason"),
         "awaiting_cache_evidence"
     );
     assert_eq!(r.event(heartbeat()).unwrap_err().code, "quiesced");
-    assert_eq!(r.engine.stats().late_updates, 2);
+    assert_eq!(r.engine.stats().late_updates, 3);
 }
 
-// From the hold to its release the test awaits nothing: it runs on a thread apart from the runtime's workers, which a
-// held save can leave blocked behind the store's connection (see `snapshots_reach`).
+// The test's body runs on a thread apart from the workers, which a held save can leave blocked behind the store's
+// connection (see `on_own_thread`), and it waits on the engine's flush counts, which need no timer the workers drive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     let mut r = rig(on_disk()).await;
@@ -454,18 +477,20 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     let held = registry(&r);
     held.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
-    let first = tokio::spawn(async move { engine.flush_persisted().await });
-    snapshots_reach(&r, 2);
+    let first = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(2, 2).await;
     // After the held save read its batch: only a later save carries this.
     r.advance(MINUTE);
     let parked = state_of(&r, "main", "parked");
     report(&mut r, generation, parked).unwrap();
     let engine = r.engine.clone();
-    let shutdown = tokio::spawn(async move { engine.shutdown().await });
+    let shutdown = on_own_thread(async move { engine.shutdown().await });
+    // The shutdown's flush has entered and waits on the flush lock the held save holds.
+    r.engine.persist_reached(3, 2).await;
     // Released well inside the store's own busy wait, which the case never waits out.
     held.execute_batch("COMMIT").unwrap();
-    first.await.unwrap();
-    shutdown.await.unwrap();
+    first.join().unwrap();
+    shutdown.join().unwrap();
 
     let saved = |agent: &str| {
         saved_agents(&r)
@@ -489,7 +514,7 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     );
 }
 
-// Apart from the workers, as the case above explains.
+// Apart from the workers, and waiting on the flush counts, as the case above explains.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_flush_writes_them()
 {
@@ -513,8 +538,8 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     let conn = registry(&r);
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
-    let failed = tokio::spawn(async move { engine.flush_persisted().await });
-    snapshots_reach(&r, 2);
+    let failed = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(2, 2).await;
     // Between the failed save's snapshot and its outcome.
     let parked = state_of(&r, "main", "parked");
     report(&mut r, generation, parked).unwrap();
@@ -524,7 +549,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
          COMMIT;",
     )
     .unwrap();
-    failed.await.unwrap();
+    failed.join().unwrap();
     assert_eq!(
         (
             saved_field(&r, "session", "main", "state"),
@@ -540,8 +565,8 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     let last_activity = saved_field(&r, "session", "main", "last_activity");
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
-    let next = tokio::spawn(async move { engine.flush_persisted().await });
-    snapshots_reach(&r, 3);
+    let next = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(3, 3).await;
     r.advance(MINUTE);
     // Between this save's snapshot and its acknowledgment: a presence report moves the idle clock alone.
     let presence = Event {
@@ -553,7 +578,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     };
     report(&mut r, generation, presence).unwrap();
     conn.execute_batch("COMMIT").unwrap();
-    next.await.unwrap();
+    next.join().unwrap();
     assert_eq!(
         (
             saved_field(&r, "session", "main", "state"),
@@ -573,12 +598,35 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     );
 }
 
-/// Two sessions under the default limits: `session` with its main agent and a recipe, saved first, and `newer`,
-/// saved a minute later, with its main agent's recipe and a subagent that retains nothing. Answers the two recipes'
-/// sizes, the older first.
+/// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
+async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
+    wait_for(Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let mut reasons: BTreeMap<String, u64> = BTreeMap::new();
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            for (reason, count) in &row.wasted_probe_reasons {
+                *reasons.entry(reason.clone()).or_default() += count;
+            }
+        }
+        (reasons.values().sum::<u64>() == probes).then_some(reasons)
+    })
+    .await
+}
+
+/// Two sessions under the default limits: `session` with its main agent and a recipe probed once, saved first, and
+/// `newer`, saved a minute later, with its main agent's recipe and a subagent that retains nothing. Answers the two
+/// recipes' sizes, the older first.
 async fn two_sessions() -> (Rig, usize, usize) {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
+    // One probe the next request has not answered yet, which a disposal settles as wasted.
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
     let older = r.engine.stats().retained_bytes;
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
@@ -633,6 +681,11 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
             "{limits:?}"
         );
         assert_eq!(
+            wasted(&r, 1).await,
+            BTreeMap::from([("evicted".to_string(), 1)]),
+            "the disposed recipe's probe is wasted under the eviction: {limits:?}"
+        );
+        assert_eq!(
             rows(&r),
             vec![row("newer", "main", true), row("newer", "sub", false)],
             "{limits:?}"
@@ -660,6 +713,10 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
         (2, 3, newer)
     );
     assert_eq!(second.reasons().get(&Reason::Evicted).copied(), Some(1));
+    assert_eq!(
+        wasted(&r, 1).await,
+        BTreeMap::from([("evicted".to_string(), 1)])
+    );
     assert_eq!(
         second.recipes_for("desktop", "newer"),
         vec!["main".to_string()]
@@ -756,5 +813,57 @@ async fn an_expired_session_leaves_the_registry_at_the_next_flush() {
     assert!(
         saved_agents(&r).is_empty(),
         "the session's agents and its recipe went with it"
+    );
+}
+
+#[tokio::test]
+async fn a_second_load_leaves_the_sessions_the_engine_holds_and_their_rows() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    second.load_persisted().await;
+    second.flush_persisted().await;
+    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(
+        (saved_sessions(&r).len(), saved_agents(&r).len()),
+        (1, 1),
+        "the second load filed no removal of a row the engine holds"
+    );
+}
+
+#[tokio::test]
+async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.observe("sub").await;
+    r.engine.flush_persisted().await;
+    let damaged = registry(&r)
+        .execute(
+            "UPDATE keepalive_agents SET payload = 'unreadable' WHERE agent_id = 'main'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(damaged, 1);
+    let second = r.restart().await;
+    second.load_persisted().await;
+
+    let stats = second.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents, stats.retained_bytes),
+        (0, 0, 0),
+        "no session comes back without the main agent its reports name"
+    );
+    assert_eq!(
+        (saved_sessions(&r).len(), saved_agents(&r).len()),
+        (0, 0),
+        "and its rows, the subagent's with it, are gone"
     );
 }

@@ -198,9 +198,10 @@ pool dialog shows them by bucket.
 
 The engine writes its state to the registry every 30 seconds and at shutdown: the sessions, every agent with its state
 and its park, the retained recipes and the idle-age counters. A recipe's prompt is sealed under the storage key, as the
-credentials are. A probe in flight is not saved. The shutdown stops taking reports and request completions before its
-last save, so that save holds the state the engine had when it stopped, and a report that arrives later is answered
-`quiesced`. A save that fails is logged once and retried at every flush, and the engine keeps running from memory.
+credentials are. A probe in flight is not saved. The shutdown stops taking reports and the events of requests in flight
+before its last save, so that save holds the state the engine had when it stopped, and a report that arrives later is
+answered `quiesced`. A save that fails is logged once and retried at every flush, and the engine keeps running from
+memory.
 
 At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and
 its sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the

@@ -608,6 +608,17 @@ type Loaded = (
     Vec<IdleReturnsRow>,
 );
 
+/// An agent row read back: the agent, and its observation's fields when it carried a recipe.
+type Decoded = (Agent, Option<PersistedObservation>);
+
+/// The agent a row describes, `None` when its version or a word in its payload is one this build does not read.
+fn decode_agent(row: &KeepaliveAgentRow, timing: KeepaliveTiming) -> Option<Decoded> {
+    (row.record_version == RECORD_VERSION)
+        .then(|| serde_json::from_str::<PersistedAgent>(&row.payload).ok())
+        .flatten()
+        .and_then(|payload| payload.restore(timing))
+}
+
 /// What the load left out to stay within the limits the file sets now, for the one line each limit logs.
 #[derive(Default)]
 struct Disposed {
@@ -779,6 +790,35 @@ impl Inner {
         retire(&mut self.dirty.pools, &snapshot.pools);
     }
 
+    /// An agent row a limit leaves out of the load. Its recipe counts as evicted, and the probes it left unanswered and
+    /// the batches a request kept settle under `evicted`, as they do when the retained bytes evict a recipe through
+    /// `discard`. The row itself goes with its session's removal or the caller's.
+    fn dispose_loaded(
+        &mut self,
+        key: &SessionKey,
+        row: &KeepaliveAgentRow,
+        decoded: Option<Decoded>,
+        tally: &mut Disposed,
+    ) {
+        tally.agents += 1;
+        if row.body_size > 0 {
+            tally.recipes += 1;
+            *self.reasons.entry(Reason::Evicted).or_default() += 1;
+        }
+        let Some((mut agent, _)) = decoded else {
+            return;
+        };
+        let fast = agent.left_fast.take().unwrap_or(row.fast);
+        let costs = std::mem::take(&mut agent.unanswered);
+        if !costs.is_empty() {
+            self.settlements
+                .push(Kept::of(&agent, fast, costs).settle(key, Wasted::Evicted));
+        }
+        for kept in std::mem::take(&mut agent.kept) {
+            self.settlements.push(kept.settle(key, Wasted::Evicted));
+        }
+    }
+
     /// `discard` for a recipe the load does not keep. The generation stays: nothing from before the restart can
     /// land, so no late result needs fencing off, and a kept generation keeps the mod's next report from a 409.
     fn discard_at_load(
@@ -841,8 +881,6 @@ impl Inner {
                 ))
             })
         });
-        let recipes_in =
-            |rows: &[KeepaliveAgentRow]| rows.iter().filter(|row| row.body_size > 0).count();
         let mut by_sessions = Disposed::default();
         let mut by_agents = Disposed::default();
         let mut by_bytes = 0usize;
@@ -854,7 +892,7 @@ impl Inner {
                 row.key_generation,
                 row.session_id.clone(),
             );
-            let mut agent_rows = by_session.remove(&stored).unwrap_or_default();
+            let agent_rows = by_session.remove(&stored).unwrap_or_default();
             let payload = (row.record_version == RECORD_VERSION)
                 .then(|| serde_json::from_str::<PersistedSession>(&row.payload).ok())
                 .flatten();
@@ -870,48 +908,64 @@ impl Inner {
                 self.file_removed_session(stored);
                 continue;
             }
-            let has_main = agent_rows.iter().any(|a| a.agent_id == MAIN_AGENT);
-            if self.sessions.len() >= limits.max_sessions
-                || (has_main && self.agents >= limits.max_agents)
+            // Read before any limit, so a main agent this build cannot read counts as none.
+            let mut agents: Vec<(KeepaliveAgentRow, Option<Decoded>)> = agent_rows
+                .into_iter()
+                .map(|agent_row| {
+                    let decoded = decode_agent(&agent_row, timing);
+                    if decoded.is_none() {
+                        tracing::warn!(key = %row.key_id, session = %row.session_id, agent = %agent_row.agent_id, "a saved keepalive agent could not be read and is dropped");
+                    }
+                    (agent_row, decoded)
+                })
+                .collect();
+            // Every report the mod sends names the main agent, so a session restored without one could never be
+            // re-adopted.
+            if !agents
+                .iter()
+                .any(|(agent_row, decoded)| agent_row.agent_id == MAIN_AGENT && decoded.is_some())
             {
-                let tally = if self.sessions.len() >= limits.max_sessions {
-                    &mut by_sessions
-                } else {
-                    &mut by_agents
-                };
-                tally.sessions += 1;
-                tally.agents += agent_rows.len();
-                tally.recipes += recipes_in(&agent_rows);
-                *self.reasons.entry(Reason::Evicted).or_default() += recipes_in(&agent_rows) as u64;
+                tracing::warn!(key = %row.key_id, session = %row.session_id, "a saved keepalive session without a readable main agent is dropped");
                 self.file_removed_session(stored);
                 continue;
             }
-            agent_rows.sort_by(|a, b| {
+            let over = if self.sessions.len() >= limits.max_sessions {
+                Some(&mut by_sessions)
+            } else if self.agents >= limits.max_agents {
+                Some(&mut by_agents)
+            } else {
+                None
+            };
+            if let Some(tally) = over {
+                tally.sessions += 1;
+                for (agent_row, decoded) in agents {
+                    self.dispose_loaded(&key, &agent_row, decoded, tally);
+                }
+                self.file_removed_session(stored);
+                continue;
+            }
+            agents.sort_by(|(a, _), (b, _)| {
                 (b.agent_id == MAIN_AGENT)
                     .cmp(&(a.agent_id == MAIN_AGENT))
                     .then_with(|| b.updated_at.cmp(&a.updated_at))
                     .then_with(|| a.agent_id.cmp(&b.agent_id))
             });
             let mut session = payload.restore();
-            for agent_row in agent_rows {
-                if self.agents >= limits.max_agents {
-                    by_agents.agents += 1;
-                    if agent_row.body_size > 0 {
-                        by_agents.recipes += 1;
-                        *self.reasons.entry(Reason::Evicted).or_default() += 1;
-                    }
-                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
-                    continue;
-                }
-                let decoded = (agent_row.record_version == RECORD_VERSION)
-                    .then(|| serde_json::from_str::<PersistedAgent>(&agent_row.payload).ok())
-                    .flatten()
-                    .and_then(|payload| payload.restore(timing));
+            for (agent_row, decoded) in agents {
                 let Some((agent, observation)) = decoded else {
-                    tracing::warn!(key = %row.key_id, session = %row.session_id, agent = %agent_row.agent_id, "a saved keepalive agent could not be read and is dropped");
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
+                if self.agents >= limits.max_agents {
+                    self.dispose_loaded(
+                        &key,
+                        &agent_row,
+                        Some((agent, observation)),
+                        &mut by_agents,
+                    );
+                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
+                    continue;
+                }
                 self.next_incarnation = self.next_incarnation.max(agent.incarnation);
                 let agent_id = agent_row.agent_id.clone();
                 match (observation, agent_row.body.clone()) {
@@ -1004,6 +1058,10 @@ impl Engine {
     /// Reads back what the last process saved, at start and before the scheduler ticks, bounded by the current limits.
     /// The rows the load drops or rewrites are saved before it returns, so the store and the map agree from here.
     pub async fn load_persisted(self: &Arc<Self>) {
+        if !self.lock().sessions.is_empty() {
+            tracing::warn!("the keepalive's saved state is read once, at start, and this engine already holds sessions");
+            return;
+        }
         let store = self.parts.store.clone();
         let loaded = match tokio::task::spawn_blocking(move || store.load_keepalive()).await {
             Ok(Ok(loaded)) => loaded,
@@ -1017,8 +1075,14 @@ impl Engine {
             }
         };
         let now = self.now();
-        self.lock()
-            .restore_persisted(loaded, now, &self.parts.limits, self.parts.timing);
+        {
+            let mut inner = self.lock();
+            // A load over sessions already held would file the removal of rows the engine holds live.
+            if !inner.sessions.is_empty() {
+                return;
+            }
+            inner.restore_persisted(loaded, now, &self.parts.limits, self.parts.timing);
+        }
         // The settlements of the recipes the load ended.
         self.flush();
         self.flush_persisted().await;
@@ -1035,6 +1099,8 @@ impl Engine {
     }
 
     fn flush_blocking(&self) {
+        self.persist_entries.fetch_add(1, Ordering::SeqCst);
+        self.persist_progress.notify_waiters();
         // A panic inside a flush poisons the lock, which orders flushes and guards no invariant of its own.
         let _flushing = self
             .flush_lock
@@ -1043,6 +1109,7 @@ impl Engine {
         let now = self.now();
         let snapshot = self.lock().persist_snapshot(now);
         self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
+        self.persist_progress.notify_waiters();
         if snapshot.is_empty() {
             return;
         }
@@ -1077,17 +1144,19 @@ impl Engine {
             // The first tick completes at once, before anything could have changed.
             tick.tick().await;
             loop {
+                // The token first, so a tick that is due when it fires starts no further flush.
                 tokio::select! {
-                    _ = tick.tick() => self.flush_persisted().await,
+                    biased;
                     _ = self.cancel.cancelled() => return,
+                    _ = tick.tick() => self.flush_persisted().await,
                 }
             }
         })
     }
 
     /// The shutdown's first step: the scheduler, the flusher and the probes in flight are cancelled, and the intake
-    /// closes, so a completion or a report that lands later is refused and counted rather than applied after the last
-    /// save. Taking the lock is the drain: an update that already holds it finishes before the flag is set.
+    /// closes, so a request's event or a report that lands later is refused and counted rather than applied after the
+    /// last save. Taking the lock is the drain: an update that already holds it finishes before the flag is set.
     pub fn quiesce(&self) {
         self.cancel.cancel();
         self.lock().closed = true;
@@ -1097,6 +1166,29 @@ impl Engine {
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn persist_snapshots(&self) -> u64 {
         self.persist_snapshots.load(Ordering::SeqCst)
+    }
+
+    /// How many flushes have entered, counted before the flush lock. Compiled only under `debug-hooks`.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub fn persist_entries(&self) -> u64 {
+        self.persist_entries.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once `entries` flushes have entered and `snapshots` have read their batch. A flush raises the counts
+    /// on its own thread, so this needs no timer, which a runtime whose workers wait behind a held save would not
+    /// drive. Compiled only under `debug-hooks`.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub async fn persist_reached(&self, entries: u64, snapshots: u64) {
+        loop {
+            let notified = self.persist_progress.notified();
+            tokio::pin!(notified);
+            // Registered before the counts are read, so a flush that raises one between the two wakes this waiter.
+            notified.as_mut().enable();
+            if self.persist_entries() >= entries && self.persist_snapshots() >= snapshots {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Every session and agent as the next save would write it, dirty or not, for a test that holds what a restart

@@ -415,8 +415,8 @@ pub struct EngineParts {
 pub struct EngineStats {
     pub agents: usize,
     pub bus_gaps: u64,
-    /// The request completions and reports refused because they arrived after the shutdown's quiesce, so the state
-    /// the last save holds is the state at the quiesce.
+    /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
+    /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
     pub late_updates: u64,
     pub retained_bytes: usize,
     pub running_probes: usize,
@@ -774,7 +774,7 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    fn of(agent: &Agent, fast: bool, costs: Vec<f64>) -> Kept {
+    pub(crate) fn of(agent: &Agent, fast: bool, costs: Vec<f64>) -> Kept {
         Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
@@ -786,7 +786,7 @@ impl Kept {
         }
     }
 
-    fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
+    pub(crate) fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
         Settlement {
             key: key.clone(),
             key_generation: self.key_generation,
@@ -849,7 +849,7 @@ pub(crate) struct Inner {
     pub revision: u64,
     /// Whether the last save failed, so a failing registry is logged once per streak rather than every flush.
     pub persist_failing: bool,
-    /// The completions and reports refused after the quiesce.
+    /// The request events and reports refused after the quiesce.
     pub late_updates: u64,
 }
 
@@ -866,9 +866,14 @@ pub struct Engine {
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
     pub(crate) flush_lock: Mutex<()>,
+    /// How many flushes have entered, counted before the flush lock, so a test can hold a save and know a second
+    /// flush is queued behind it. Cheap enough to keep in every build, so only the reader is gated.
+    pub(crate) persist_entries: AtomicU64,
     /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
     /// Cheap enough to keep in every build, so only the reader is gated.
     pub(crate) persist_snapshots: AtomicU64,
+    /// Woken as either count rises, which is what a test's wait on them waits on.
+    pub(crate) persist_progress: Notify,
 }
 
 impl Engine {
@@ -894,7 +899,9 @@ impl Engine {
             workers: TaskTracker::new(),
             router_view_calls: AtomicU64::new(0),
             flush_lock: Mutex::new(()),
+            persist_entries: AtomicU64::new(0),
             persist_snapshots: AtomicU64::new(0),
+            persist_progress: Notify::new(),
         })
     }
 
@@ -1987,6 +1994,11 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
             return;
         };
+        // Refused after the quiesce as the completion is, and counted: `live` would refuse it uncounted.
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -2061,6 +2073,10 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&head.request_id).cloned() else {
             return;
         };
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -2092,6 +2108,10 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&chunk.request_id).cloned() else {
             return;
         };
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
