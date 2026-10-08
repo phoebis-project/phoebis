@@ -317,9 +317,11 @@ capacity is left: each subscription account is weighed by its tier's capacity on
 model, in Max 20x windows, and listed with its own remaining share, and the line under the ring reads the windows left
 against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading
 since counts as a full allowance. An account whose tier the model does not size, or whose tier has no capacity on the
-window, is named under the ring instead, with the reason. The 5-hour ring's subtitle opens the cost reference on its
-Tiers and peak band tab. The page ends with the most recent requests and a sessions card that leads with the router's
-live pins and the accounts they sit on.
+window, is named under the ring instead, with the reason. Each account keeps one color across the Dashboard, the Quota
+view and the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the
+registry no longer lists draws muted. The 5-hour ring's subtitle opens the cost reference on its Tiers and peak band
+tab. The page ends with the most recent requests and a sessions card that leads with the router's live pins and the
+accounts they sit on.
 
 ### Observe
 

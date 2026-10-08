@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
-import { accountColor } from '@/components/charts/theme';
+import { accountColor, accountSlots } from '@/components/charts/theme';
 import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
@@ -40,6 +40,8 @@ export function QuotaPage() {
 
   // An API-key account carries no quota window, so the page reads the subscription accounts alone.
   const subscriptions = useMemo(() => (accounts.data ?? []).filter(isSubscription), [accounts.data]);
+  // The slot map reads the whole registry, so a lane keeps the color its account has on the Dashboard.
+  const slotOf = useMemo(() => accountSlots((accounts.data ?? []).map((a) => a.id)), [accounts.data]);
   // Each subscription row carries its poll block, so the list read is the one read of every card's standing.
   const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
@@ -109,7 +111,7 @@ export function QuotaPage() {
         </section>
       ) : (
         <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
-          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} />)}
+          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} slotOf={slotOf} />)}
         </section>
       )}
     </div>
@@ -358,7 +360,7 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
   );
 }
 
-function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) {
+function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: number; slotOf: (id: string) => number | null }) {
   const ink = useChartInk();
   const [mode, setMode] = useState<Mode>('weekly');
   const [offset, setOffset] = useState(0);
@@ -471,7 +473,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
               bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
             }
             return (
-              <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, account.id) }}>
+              <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, slotOf(account.id)) }}>
                 <div className="lane__head">
                   <div className="lane__id">
                     <span className="lane__dot" />

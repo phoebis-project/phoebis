@@ -5,6 +5,8 @@ import { test } from 'node:test';
 // the host's zone; `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
+const { accountSlots } = await import('./dist/api.js');
+
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const startOfHour = (ms) => Math.floor(ms / HOUR) * HOUR;
@@ -187,6 +189,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     ];
     const reached = [...new Set(names.filter((n) => RETIRED.includes(n)))];
     assert.deepEqual(reached, [], 'a retired name reaches a row');
+  });
+
+  test(`every account of the story draws in a color of its own, at ${at}`, async () => {
+    const s = await story;
+    const slotOf = accountSlots(s.accounts.map((a) => a.id));
+    const slots = s.accounts.map((a) => slotOf(a.id));
+    assert.equal(new Set(slots).size, Math.min(8, s.accounts.length), 'the eight series colors give every account its own until a ninth cycles');
+    assert.ok(slots.every((slot) => slot !== null), 'every listed account has a slot');
   });
 
   test(`the accounts read as one operator's, every email an alias of one mailbox and no plan a Team plan, at ${at}`, async () => {

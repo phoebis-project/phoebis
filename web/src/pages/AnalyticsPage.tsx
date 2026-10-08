@@ -5,7 +5,7 @@ import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
-import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, type ChartInk } from '@/components/charts/theme';
+import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -298,6 +298,10 @@ export function AnalyticsPage() {
     const readAt = clock.now();
     return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
   }, [fromIso, toIso, burnGroup, tab, generation]);
+  // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
+  // differs from the Dashboard's, and one account keeps one color across the views.
+  const registry = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
@@ -374,12 +378,12 @@ export function AnalyticsPage() {
   const unfiltered = otherFilters || filters.accountId.length > 0;
 
   const groupSlot = useMemo(() => {
-    // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
-    // option list of its own falls back to the keys the breakdown answered.
+    // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
+    // registry's. A dimension with no option list of its own falls back to the keys the breakdown answered.
     const listed = groupBy === 'account' ? options.accountId : groupBy === 'key' ? options.keyId : groupBy === 'model' ? options.model : groupBy === 'pool' ? options.poolId : [];
     const keys = listed.length ? listed.map((o) => o.value) : groups.map((g) => g.key);
-    return (key: string) => (groupBy === 'account' ? accountColor(ink, key) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
-  }, [options, groups, groupBy, ink]);
+    return (key: string) => (groupBy === 'account' ? accountColor(ink, slotOf(key)) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
+  }, [options, groups, groupBy, ink, slotOf]);
 
   const axis = timeAxis(bucketMs, ink);
   // A failed read shows its error alone: a skeleton beside it would say a load is still running, and an empty
@@ -587,6 +591,7 @@ export function AnalyticsPage() {
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
             sized={sized}
+            slotOf={slotOf}
           />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
@@ -841,6 +846,7 @@ export function AnalyticsPage() {
             loading={accountRollups.data === null || accountRollups.stale}
             otherFilters={otherFilters}
             rollups={accountRollups.stale ? null : accountRollups.data}
+            slotOf={slotOf}
             span={span}
             axis={axis}
           />
@@ -1426,6 +1432,7 @@ function BurnCharts({
   rangeEndMs,
   readAt,
   sized,
+  slotOf,
 }: {
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
   costs: SubscriptionCosts | null;
@@ -1435,6 +1442,7 @@ function BurnCharts({
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   sized: ReadonlySet<string> | null;
+  slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
   const { lines, rows } = useMemo(
@@ -1442,7 +1450,7 @@ function BurnCharts({
     [answer, groupBy, rangeEndMs, readAt, sized],
   );
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
-  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
+  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
@@ -1743,6 +1751,7 @@ function AccountsSection({
   loading,
   otherFilters,
   rollups: all,
+  slotOf,
   span,
 }: {
   accountIds: string[];
@@ -1752,6 +1761,7 @@ function AccountsSection({
   loading: boolean;
   otherFilters: boolean;
   rollups: AccountRollup[] | null;
+  slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
 }) {
   const ink = useChartInk();
@@ -1795,14 +1805,14 @@ function AccountsSection({
   }, [rollups, accounts, span, bucketMs]);
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
+      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}>
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, a), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
           {accounts.map((a) => (
-            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>

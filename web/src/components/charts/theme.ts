@@ -44,17 +44,21 @@ export function readChartInk(): ChartInk {
   };
 }
 
-/** Color follows the entity: each account keeps its slot regardless of which accounts are on screen. */
-export const ACCOUNT_SLOT: Record<string, number> = {
-  business: 0,
-  mail: 1,
-  personal: 2,
-  console: 3,
-  evals: 4,
-  team: 6,
-};
+/** The series slots an account can take: every entry of SERIES_VARS but the muted ninth. */
+const ACCOUNT_SLOTS = SERIES_VARS.length - 1;
 
-export const accountColor = (ink: ChartInk, accountId: string) => ink.series[ACCOUNT_SLOT[accountId] ?? 7];
+/**
+ * Color follows the entity: an account's slot is its index in the registry's order (every account sorted by id, as
+ * `GET /admin/accounts` answers) modulo the eight series colors, so one account keeps one color across the
+ * Dashboard, the Quota view and the Analytics whatever each view filters. An id outside the list answers `null`.
+ */
+export function accountSlots(ids: readonly string[]): (id: string) => number | null {
+  const slots = new Map([...ids].sort().map((id, index) => [id, index % ACCOUNT_SLOTS] as const));
+  return (id) => slots.get(id) ?? null;
+}
+
+/** The slot's series ink, or the muted ink for an account the registry no longer lists. */
+export const accountColor = (ink: ChartInk, slot: number | null) => (slot === null ? ink.muted : ink.series[slot]);
 
 /** Ordered by how an outcome degrades rather than alphabetically, like the token and probe stacks below. */
 export const OUTCOME_SERIES = [
