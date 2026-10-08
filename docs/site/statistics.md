@@ -117,7 +117,7 @@ cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date; an attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
-without them at the standard cells.
+without them at the cells its prompt selects.
 
 A model priced by prompt length carries a `long_context` block, a threshold `over` in tokens and a second set of the
 five cells. An attempt whose prompt is longer than the threshold is priced at that set for all five counts, the output

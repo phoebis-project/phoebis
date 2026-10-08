@@ -472,10 +472,11 @@ the pin and leaves its cache TTL as it was.
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
 renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
-while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a
-subscription account in overage, so leaving overage switches the reading without a reset and a session that moves
-between tiers reads the right share on both. A keepalive probe's usage never counts. A burn the model cannot price, for
-a model it has no weight for or a tier it has no capacity for, reads as none.
+while a subscription account runs on its plan, and the plain copy in dollars, at the set the pin's last prompt selects
+on a model priced by prompt length, on an API-key account or a subscription account in overage, so leaving overage
+switches the reading without a reset and a session that moves between tiers reads the right share on both. A keepalive
+probe's usage never counts. A burn the model cannot price, for a model it has no weight for or a tier it has no capacity
+for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
