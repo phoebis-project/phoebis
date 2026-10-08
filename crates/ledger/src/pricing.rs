@@ -182,6 +182,13 @@ impl PriceTable {
         })
     }
 
+    /// Whether the row `entry` finds for `canonical_model` carries a `long_context` set: such a model's attempts
+    /// cannot be re-priced from a period's token sums, which carry no per-attempt prompt.
+    pub fn priced_by_prompt_length(&self, canonical_model: &str) -> bool {
+        self.entry(canonical_model)
+            .is_some_and(|(_, row)| row.long_context.is_some())
+    }
+
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
     /// so a caller cannot grow the label set by naming models.
     pub fn model_label(&self, canonical_model: &str) -> &str {
@@ -1058,5 +1065,15 @@ mod tests {
             matches!(behind_a_locked_parent, Err(LedgerError::Io(_))),
             "a file whose parent grants no search permission"
         );
+    }
+
+    /// A dated id reads its undated row, so it answers as that row does.
+    #[test]
+    fn a_model_is_priced_by_prompt_length_when_its_row_carries_the_block() {
+        let table = crate::test_tables::api_prices();
+        assert!(table.priced_by_prompt_length("claude-haiku-5-5"));
+        assert!(table.priced_by_prompt_length("claude-haiku-5-5-20260101"));
+        assert!(!table.priced_by_prompt_length("claude-sonnet-5-5"));
+        assert!(!table.priced_by_prompt_length("gpt-5"));
     }
 }

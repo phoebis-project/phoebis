@@ -63,8 +63,10 @@ A budgeted pool member's spend sums the priced hourly rollups over each period i
 day and the current month, an API-key member's rows whole, a subscription member's metered rows alone (`overage`
 and `fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an
 API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
-waits for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
-traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
+waits for the period to end or its budget to be raised, rather than for a price correction. A member's rows on a model
+priced by prompt length are summed at the dollars they were booked at, since an hour's sums carry no per-attempt prompt.
+The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the
+response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
