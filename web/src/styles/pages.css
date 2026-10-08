@@ -2476,13 +2476,14 @@
   background: var(--series-3);
 }
 
-/* The muted tone mixed toward the ink, so it reads apart from the skipped segment beside it. */
+/* Matches the held slice of the analytics probe chart, --series-muted. */
 .probe-bar__seg--held {
-  background: color-mix(in srgb, var(--series-muted) 60%, var(--ink));
+  background: var(--series-muted);
 }
 
+/* Matches the skipped slice of the analytics probe chart, --series-4. */
 .probe-bar__seg--skipped {
-  background: var(--series-muted);
+  background: var(--series-4);
 }
 
 .probe-bar__seg--failed {

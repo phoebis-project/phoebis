@@ -1,8 +1,9 @@
 import type { AttentionItem } from '@/api/types';
 import { accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
+import { REQUESTS } from './requests';
 import { ATTENTION_ITEM_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
 
 const ms = (at: string | null | undefined) => (at ? Date.parse(at) : null);
 
@@ -16,22 +17,42 @@ const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'
 const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 
 /**
+ * A pool's exhaustion as the reader dates it from the rows: the first exhausted answer after the pool's last success,
+ * under that request's key, since a success clears the condition. Null when no request since the last success was
+ * answered exhausted.
+ */
+function exhaustion(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
+  // The rows run newest first.
+  const rows = REQUESTS.filter((r) => r.poolId === poolId);
+  const lastSuccess = rows.findIndex((r) => r.outcome === 'succeeded');
+  const exhausted = (lastSuccess < 0 ? rows : rows.slice(0, lastSuccess)).filter((r) => r.outcome === 'exhausted');
+  const first = exhausted[exhausted.length - 1];
+  return first ? { detail: { key: first.keyId, pool: poolId }, since: iso(Date.parse(first.at) + (first.durationMs ?? 0)) } : null;
+}
+
+const jobsExhausted = exhaustion('jobs');
+
+/**
  * One item per kind but a failed certificate reload, on the story's accounts, pools, keys and proxy listener, in the
- * route's order: codex exhausted since the runner's key last asked it, a client build refused on the laptop key, the
- * routing state writer keeping its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding
- * as its account reads, legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced
- * record of codex's one member parked in the ledger file, and the backoff secondary's poll is in.
+ * route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a client
+ * build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed credential,
+ * the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy listener's
+ * certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file, and the
+ * backoff secondary's poll is in.
  */
 export const ATTENTION: AttentionItem[] = [
-  {
-    ...ATTENTION_ITEM_SAMPLE,
-    detail: { key: 'ci', pool: 'codex' },
-    kind: 'pool_exhausted',
-    link: { id: 'codex', page: 'pools' },
-    pools: ['codex'],
-    since: ago(2 * DAY),
-    subject: { id: 'codex', label: 'codex', type: 'pool' },
-  },
+  ...(jobsExhausted
+    ? [
+        {
+          ...ATTENTION_ITEM_SAMPLE,
+          ...jobsExhausted,
+          kind: 'pool_exhausted' as const,
+          link: { id: 'jobs', page: 'pools' as const },
+          pools: ['jobs'],
+          subject: { id: 'jobs', label: 'jobs', type: 'pool' as const },
+        },
+      ]
+    : []),
   {
     ...ATTENTION_ITEM_SAMPLE,
     detail: { client_version: '2.1.271', key: 'laptop', trigger: 'hash' },
@@ -82,12 +103,12 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    detail: { accounts: ['research'], count: 1, pool: 'codex' },
+    detail: { accounts: ['research'], count: 1, pool: 'jobs' },
     kind: 'ledger_record_parked',
-    link: { id: 'codex', page: 'pools' },
-    pools: ['codex'],
+    link: { id: 'jobs', page: 'pools' },
+    pools: ['jobs'],
     since: ago(HOUR),
-    subject: { id: 'codex', label: 'codex', type: 'pool' },
+    subject: { id: 'jobs', label: 'jobs', type: 'pool' },
   },
   {
     ...ATTENTION_ITEM_SAMPLE,

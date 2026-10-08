@@ -93,7 +93,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
@@ -124,7 +124,7 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: true,
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
     // the day's requests are drawn. The raise stands in until then.
@@ -195,7 +195,7 @@ export const ACCOUNTS: Account[] = ([
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
-    // The codex pool's one member, so its lifetime holds what both of that pool's keys sent.
+    // The jobs pool's one member, so its lifetime holds what both of that pool's keys sent.
     requests: { last24h: 0, last7d: 0, lifetime: 3_400 },
     cooldowns: [],
   },
@@ -209,7 +209,8 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: false,
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
-    extraUsage: { disabledReason: null, enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
+    // Off since the provider stopped funding it, as the last clean poll read it.
+    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
     fastLane: null,
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),

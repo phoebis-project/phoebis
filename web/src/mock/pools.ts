@@ -87,8 +87,8 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    id: 'codex',
-    name: 'codex',
+    id: 'jobs',
+    name: 'jobs',
     // Its one member has spent its daily budget, which leaves the pool nothing to route to until the day ends.
     status: 'exhausted',
     strategy: 'round_robin',
@@ -217,7 +217,7 @@ export const KEYS: ApiKey[] = [
     autoModeServer: null,
     name: 'batch',
     prefix: 'phoebis-5b70',
-    poolId: 'codex',
+    poolId: 'jobs',
     modelRules: [],
     modelRulesMode: 'extend',
     longContextTwins: true,
@@ -242,7 +242,7 @@ export const KEYS: ApiKey[] = [
     autoModeServer: null,
     name: 'ci',
     prefix: 'phoebis-19e7',
-    poolId: 'codex',
+    poolId: 'jobs',
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
       { not: true, pattern: '*' },
@@ -256,7 +256,8 @@ export const KEYS: ApiKey[] = [
     // Its revocation, after the last request it reached selection with at 14:16:40.
     updatedAt: iso(KEY_REVOKED_AT),
     expiresAt: null,
-    lastUsedAt: iso(NOW - (13 * MINUTE + 20_000)),
+    // The request log's newest row the key was let through with sets the last use, since the rows are drawn.
+    lastUsedAt: null,
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,
     notes: 'Rotated out after the runner image moved to its own key.',

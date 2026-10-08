@@ -262,7 +262,7 @@ test('a key keeps its enabled flag beside the status the flag folds into', () =>
 });
 
 test('a key edit sends enabled every time and expires_at only when the dialog changed it', () => {
-  const input = { bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'codex' };
+  const input = { bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'jobs' };
   const kept = d.encodeKey({ ...input, expiresAt: undefined });
   assert.equal(kept.enabled, false);
   assert.equal('expires_at' in kept, false, 'an absent expiry leaves the stored one alone');

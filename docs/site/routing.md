@@ -138,10 +138,10 @@ own exhausted row opens the [routing log](statistics.md#routing-log) on the pool
 condition began. The card's other rows keep their targets, and a row that points at the pool's own card stays unlinked.
 
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+the status means, what needs attention and a table of who serves next; the jobs pool reads exhausted because its one
 member is at its daily budget][pl]
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+the status means, what needs attention and a table of who serves next; the jobs pool reads exhausted because its one
 member is at its daily budget][pd]
 
 [pl]: assets/pools-light.png#only-light

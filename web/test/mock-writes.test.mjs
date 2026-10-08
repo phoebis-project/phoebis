@@ -154,11 +154,11 @@ test('the story reads a member at its budget as the route does, and a member hal
   } finally {
     seed.status = flagged;
   }
-  const spent = member('codex', 'research');
+  const spent = member('jobs', 'research');
   const [day] = spent.spends;
   assert.ok(day.spentUsd >= spent.budgetDailyUsd && Date.parse(day.periodEnd) > Date.now(), 'the story spends one member past its daily budget inside the day');
   assert.deepEqual([spent.budgetUntil, spent.eligible], [day.periodEnd, 'budget'], 'the route holds it to the day\'s end, the one budget it reached');
-  assert.equal(pools.find((p) => p.id === 'codex').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
+  assert.equal(pools.find((p) => p.id === 'jobs').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
 });
 
 test('a pool answers its keys from the key registry', async () => {

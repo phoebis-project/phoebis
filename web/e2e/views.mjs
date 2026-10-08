@@ -3536,6 +3536,37 @@ async function sessionForkMark(theme) {
  * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
  * that shot shows the list at rest.
  */
+/**
+ * The Sessions tile's probe bar draws the outcomes the Analytics probe chart also draws in that chart's slots
+ * (`PROBE_SERIES` in `web/src/components/charts/theme.ts`), so one color reads one outcome on both pages. The ok and
+ * failed segments keep the status colors.
+ */
+async function probeBarSlots(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: the probe bar ${what}`);
+  const read = await page.evaluate((slots) => {
+    const bar = document.querySelector('.probe-bar');
+    if (!bar) return null;
+    // A computed color holds the value, never the token's name, so each token is resolved on a probe of its own.
+    const resolve = (token) => {
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.style.backgroundColor = `var(${token})`;
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    return Object.entries(slots).map(([outcome, token]) => {
+      const segment = bar.querySelector(`.probe-bar__seg--${outcome}`);
+      return { drawn: segment ? getComputedStyle(segment).backgroundColor : null, outcome, slot: resolve(token) };
+    });
+  }, { held: '--series-muted', migrated: '--series-3', skipped: '--series-4' });
+  measurements.push(`${theme} /sessions probe bar slots ${JSON.stringify(read)}`);
+  if (read === null) {
+    if (mock) say('is missing, though the story counts probes');
+    return;
+  }
+  for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
+}
+
 async function forkLink(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
   const link = page.locator('.sessions-table a.srow__fork').first();
@@ -3621,6 +3652,7 @@ try {
         await sessionRowMenu(theme);
         await agentLines(theme);
         await sessionForkMark(theme);
+        await probeBarSlots(theme);
       }
       if (view.path === '/pools') {
         await expertRow(theme);

@@ -364,8 +364,10 @@ The fast-mode reading is on the account page's Usage card: a Fast mode line with
 output buckets used, as the last answer reported them, with the reset, a bucket past its reset reading as refilled, and
 a chip while the account's fast lane cools, naming the reason (rate limited, or credits unavailable) and when it lifts.
 
-![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
-![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)
+![The Quota view's Accounts section: the cards per account](assets/quota-light.png#only-light)
+![The Quota view's Accounts section: the cards per account](assets/quota-dark.png#only-dark)
+![The Quota view's Quota windows section: the reset timeline](assets/quota-windows-light.png#only-light)
+![The Quota view's Quota windows section: the reset timeline](assets/quota-windows-dark.png#only-dark)
 
 ### Models
 
@@ -465,7 +467,7 @@ Every row opens. A click anywhere on a row but a link opens it beneath itself on
 and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
 probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
 the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
-secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in codex") and chips for the tier, the rule or
+secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
 the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
 router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool
 reading and the cap filter after a fired rule, the renewal, the three rungs, the partitions, the pick, and a hold or an

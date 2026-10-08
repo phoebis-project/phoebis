@@ -17,7 +17,7 @@ const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
-const RETIRED = ['business', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
+const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
 /**
  * The story as every view reads it, loaded at `at`: the mock draws its story from the clock it loads at, so each
@@ -152,6 +152,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const a of s.accounts) assert.deepEqual(a.pool, holder.get(a.id) ?? null, `account ${a.id} answers the pool whose members name it`);
   });
 
+  test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
+    const s = await story;
+    // A row covers its whole hour, so one whose hour ends after the plan started can hold the plan's first requests.
+    for (const a of s.accounts.filter((x) => x.subscription?.since)) {
+      const since = Date.parse(a.subscription.since);
+      const early = s.allRollups.filter((r) => r.accountId === a.id && Date.parse(r.hour) + HOUR <= since);
+      assert.equal(early.length, 0, `${a.id}'s plan started at ${a.subscription.since}, after ${early.length} of its rollup rows from ${early[0]?.hour}`);
+    }
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [
@@ -182,6 +192,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const pairing = await s.api.startPairing('legacy');
     const preview = await s.api.completePairing(pairing.id, { code: 'code', state: pairing.state });
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
+  });
+
+  test(`no account bills overage beside the provider's reason for no longer funding it, at ${at}`, async () => {
+    const s = await story;
+    for (const a of s.accounts) {
+      const billing = a.extraUsage?.inUse === true || a.overage?.inUse === true;
+      assert.ok(!billing || !a.extraUsage?.disabledReason, `${a.id} reads its overage in use beside "${a.extraUsage?.disabledReason}"`);
+    }
   });
 
   test(`each account's request counts are its rows' from the hour a day back and the rollups' over the week, at ${at}`, async () => {
@@ -235,8 +253,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {
     const s = await story;
-    const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
+    const desktop = s.keys.find((k) => k.id === 'desktop');
+    const created = Date.parse(desktop.createdAt);
     assert.equal(created % HOUR, 0, 'on the hour');
+    assert.equal(Math.floor(desktop.revision / 2 ** 42), 2, "the live key is its id's second incarnation");
     assert.ok(created >= s.now - 22 * HOUR && created <= s.now - 18 * HOUR, `created ${new Date(created).toISOString()}, not 18 to 22 hours back`);
     const rows = s.allRollups.filter((r) => r.keyId === 'desktop');
     const holder = rows.filter((r) => Date.parse(r.hour) < created);
@@ -287,6 +307,28 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const sent = sum(s.keys.filter((k) => k.poolId === p.id), (k) => k.lifetime.requests);
       assert.ok(member.requests.lifetime >= sent, `${member.id}'s lifetime reads ${member.requests.lifetime}, under the ${sent} its pool's keys sent`);
     }
+  });
+
+  test(`the ci key's last use is its newest admitted request, its revocation follows, and its pool's exhaustion starts at the first request the spent member could not take, at ${at}`, async () => {
+    const s = await story;
+    const ci = s.keys.find((k) => k.id === 'ci');
+    // The rows run newest first. A send on the key after its revocation is refused as an unknown key and uses nothing.
+    const rows = s.requests.filter((r) => r.keyId === 'ci');
+    const admitted = rows.filter((r) => r.errorCode !== 'auth_unknown');
+    const revokedAt = Date.parse(ci.updatedAt);
+    assert.equal(ci.status, 'revoked');
+    assert.ok(admitted.length > 0, 'the key has requests');
+    assert.ok(Date.parse(ci.lastUsedAt) >= Date.parse(admitted[0].at), `last used at ${ci.lastUsedAt}, before its request of ${admitted[0].at}`);
+    assert.ok(revokedAt > Date.parse(admitted[0].at), `revoked at ${ci.updatedAt}, before its request of ${admitted[0].at}`);
+    for (const r of rows.filter((x) => Date.parse(x.at) > revokedAt)) assert.deepEqual([r.status, r.errorCode], [401, 'auth_unknown'], `the send of ${r.at} after the revocation`);
+    // The attention reader dates an exhaustion from the first exhausted answer after the pool's last success, under
+    // that request's key, and a success clears it.
+    const pooled = s.requests.filter((r) => r.poolId === ci.poolId);
+    const lastSuccess = pooled.find((r) => r.outcome === 'succeeded');
+    const first = pooled.filter((r) => r.outcome === 'exhausted' && (lastSuccess === undefined || Date.parse(r.at) > Date.parse(lastSuccess.at))).at(-1);
+    const item = s.attention.find((i) => i.kind === 'pool_exhausted' && i.subject.id === ci.poolId);
+    assert.ok(first !== undefined && item !== undefined, `the ${ci.poolId} pool holds an exhausted answer after its last success and an exhaustion item`);
+    assert.deepEqual([item.since, item.detail.key], [iso(Date.parse(first.at) + (first.durationMs ?? 0)), first.keyId], `the ${ci.poolId} pool's exhaustion`);
   });
 
   test(`the key with one request in its life reads one, at ${at}`, async () => {

@@ -363,11 +363,12 @@ export class MockApi implements Api {
   /** The incarnation each deleted id reached, which its next account starts above. */
   private buried = new Map<string, number>();
   /** The incarnation each deleted key id reached, which its next key starts above. */
-  private buriedKeys = new Map<string, number>();
+  private buriedKeys = new Map<string, number>([['desktop', 1]]);
   /** The incarnation each deleted pool id reached, which its next pool starts above. */
   private buriedPools = new Map<string, number>();
-  // Every key of the story is its id's first.
-  private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken(1, k.updatedAt) }));
+  // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
+  // key of the story is its id's first.
+  private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
   private pairings = new Map<string, { accountId: string; state: string }>();
   /** Set by the first replay, which lands the story's parked records. */
   private parkedLanded = false;

@@ -363,8 +363,9 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
   const probeRows = d.ALL_ROLLUPS.filter((r) => r.kind === 'probe');
   const held = probeRows.reduce((n, r) => n + r.probes.held, 0);
   assert.ok(held > 0 && held < probeRows.reduce((n, r) => n + r.probes.ok, 0) / 20, `a small held count: ${held}`);
+  // The default range's first hour is the dashboard's, 23 hours before the current one, which is where the pick draws.
   const lastHour = Date.parse(d.ALL_ROLLUPS.at(-1).hour);
-  const lastDay = probeRows.filter((r) => Date.parse(r.hour) >= lastHour - 24 * HOUR);
+  const lastDay = probeRows.filter((r) => Date.parse(r.hour) >= lastHour - 23 * HOUR);
   assert.equal(lastDay.reduce((n, r) => n + r.probes.held, 0), 1, 'the last day holds one, so the default range draws the slice');
   const [all] = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'all', to: d.ALL_ROLLUPS.at(-1).hour });
   assert.equal(all.probes.held, held, 'the mock route sums the probe rows it groups');

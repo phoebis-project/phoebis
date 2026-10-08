@@ -69,7 +69,7 @@ export const LANES: Lane[] = [
   },
   {
     keyId: 'ci',
-    poolId: 'codex',
+    poolId: 'jobs',
     accountIds: ['research'],
     models: [
       { value: 'claude-haiku-4-5-20251001', weight: 6 },
@@ -736,7 +736,7 @@ export const STORY_IDS = new Set([
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
-/** The codex request whose completion crossed research's daily budget. */
+/** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
@@ -818,7 +818,7 @@ function storyRow(seed: StorySeed): RequestLog {
 
 /**
  * The story's requests at their clock times: the hour before the pinned instant written by hand so every card the
- * routing log draws is on the page, the morning's shedding round and its move, the codex request whose completion
+ * routing log draws is on the page, the morning's shedding round and its move, the jobs request whose completion
  * crossed the budget, and the four-attempt failover whose first account refused the model.
  */
 function storyRequests(): RequestLog[] {
@@ -950,6 +950,10 @@ function storyRequests(): RequestLog[] {
 
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
+
+// The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
+// unknown key and uses nothing.
+keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
@@ -1435,6 +1439,15 @@ function classOfHour(seed: string): string {
   return 'main';
 }
 
+/**
+ * The first hour the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total,
+ * and a pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven
+ * days back, as the routes total their rollups.
+ */
+export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
+const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
+const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
+
 // The probes the router held while its ledger caught up draw from a stream of their own, so they shift no other draw.
 const heldRng = createRng(6_133);
 
@@ -1514,8 +1527,9 @@ function rollups(): HourlyRollup[] {
       ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
     });
   }
-  // The day holds one probe the router held while its ledger caught up, so the default range draws the slice.
-  const probeRows = out.filter((r) => r.kind === 'probe');
+  // The day holds one probe the router held while its ledger caught up, from the default range's first hour on, so the
+  // default range draws the slice.
+  const probeRows = out.filter((r) => r.kind === 'probe' && Date.parse(r.hour) >= DAY_FROM);
   if (probeRows.length > 0) heldRng.pick(probeRows).probes.held = 1;
   return out.sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 }
@@ -1700,15 +1714,6 @@ function historicalRollups(): HourlyRollup[] {
 }
 
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
-
-/**
- * The first hour the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total,
- * and a pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven
- * days back, as the routes total their rollups.
- */
-export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
-const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
-const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 
 const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
 /** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */

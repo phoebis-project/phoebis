@@ -11,7 +11,7 @@ import { MINUTE, NOW, ago, ahead } from './time';
 const rng = createRng(2_024);
 
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
-// out and `codex` keeps no caches warm.
+// out and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether a cc-cache-keepalive
 // companion ever registered for the session and is still reporting. A silent
 // companion changes neither, because the retained prompts stay and are probed
@@ -318,12 +318,12 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   busGaps: 0,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
   // Router-wide, so every probe counted here belongs to a pool that keeps caches
-  // warm; `codex` has warming off and contributes none. Hand-set at a busier
+  // warm; `jobs` has warming off and contributes none. Hand-set at a busier
   // scale than the logged rows, at the same cost per probe as `costToday`.
   probes24h: { ok: 225, migrated: 18, held: 4, skipped: 45, failed: 3 },
   costToday: [
     { poolId: 'all', usd: 2.61, capUsd: 4 },
-    { poolId: 'codex', usd: 0, capUsd: null },
+    { poolId: 'jobs', usd: 0, capUsd: null },
   ],
   netSaved7dUsd: 41.8,
 };
