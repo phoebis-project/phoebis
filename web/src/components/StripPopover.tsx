@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/DecisionCard';
 import { HashChip } from '@/components/EntryChips';
 import { Badge, useDescription } from '@/components/ui/primitives';
+import type { StripLayout } from '@/lib/decisionStrip';
 import type { Chip } from '@/lib/routingLog';
 import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/lib/stripFacts';
 
@@ -204,7 +205,7 @@ function Block({ plan }: { plan: PopoverPlan }) {
  * with it. A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it. Tab
  * past its end moves on to the strip's next button and Shift+Tab before its start back to the anchor.
  */
-export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
+export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; layout: StripLayout; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const place = useCallback(() => {
     const el = ref.current;
@@ -214,11 +215,14 @@ export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan 
       return;
     }
     const card = bounds.getBoundingClientRect();
-    // The log's table scrolls a card wider than the window sideways, so the box keeps to the part of the card on screen.
+    // A classic scrollbar stands inside the window's inner width but outside the fixed box's containing block.
+    const view = document.documentElement.clientWidth;
+    // The log's table scrolls a card wider than the window sideways, so the box keeps to the part of the card on
+    // screen.
     const from = Math.max(card.left, 0) + GAP;
-    const to = Math.min(card.right, window.innerWidth) - GAP;
+    const to = Math.min(card.right, view) - GAP;
     // The bound is set before the box is read, so a card narrower than the window's bound narrows the box it measures.
-    el.style.maxWidth = `${Math.min(MAX_WIDTH, window.innerWidth - 2 * GAP, Math.max(0, card.width - 2 * GAP), Math.max(0, to - from))}px`;
+    el.style.maxWidth = `${Math.min(MAX_WIDTH, Math.max(0, view - 2 * GAP), Math.max(0, card.width - 2 * GAP), Math.max(0, to - from))}px`;
     // A fixed box shrinks to the room right of where it last stood, so it is measured from the window's corner.
     el.style.left = '0px';
     el.style.top = '0px';
@@ -228,8 +232,9 @@ export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan 
     const below = at.bottom + GAP;
     el.style.top = `${below + box.height > window.innerHeight - GAP ? Math.max(GAP, at.top - GAP - box.height) : below}px`;
   }, [anchor, bounds, onClose]);
-  // Every draw places it again, so a strip redrawn for a new width carries it along with its anchor.
-  useLayoutEffect(place, [place, plan]);
+  // A new plan places it again, and so does a strip redrawn for a new width or a measured label, which moves the
+  // anchor it stands under.
+  useLayoutEffect(place, [layout, place, plan]);
   // After the placement, so the box takes focus where it stands. A redraw for the same anchor leaves focus where Tab
   // has since put it.
   useEffect(() => {

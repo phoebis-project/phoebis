@@ -506,10 +506,10 @@ popover: a table of the members for the eligibility, the cool reading, the cap f
 the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round,
 destinations), a rung's entry (the boundary's hash as its first eight characters with the whole hash on hover, its
 depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's place, account, slot and
-bound, a candidate's plan, tier, slots, Pace and windows, the outcome's rows on the terminus the decision reached, and
-for a rule a fired rule cut short the names of the rules that did not run. Every list row is a label with its chips, and
-a step that did not run says so. Tab walks the stations, the candidates and the termini in the record's order, Enter or
-Space opens the focused one's popover and moves into it, and Escape closes it and returns.
+bound, a candidate's plan, tier, requests in flight, Pace and windows, the outcome's rows on the terminus the decision
+reached, and, for a rule that a fired rule cut short, the names of the rules that did not run. Every list row is a label
+with its chips, and a step that did not run says so. Tab walks the stations, the candidates and the termini in the
+record's order, Enter or Space opens the focused one's popover and moves into it, and Escape closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines

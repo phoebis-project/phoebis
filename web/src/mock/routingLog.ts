@@ -489,7 +489,9 @@ function pickOf(candidates: RecordCandidate[], chosen: string | null, strategy: 
 /** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
 const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
 
-/** The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads. */
+/**
+ * The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads.
+ */
 function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { facts: WalkFact[]; left: RecordCandidate[] } {
   const facts: WalkFact[] = [];
   let left = set;
@@ -902,8 +904,9 @@ function derivedSpecs(r: RequestLog): Spec[] {
       holds.push({ accountId: waitedOn, attempt, cohort: null, heldMs: bound });
     }
     // Past the bound the relay passes each account it could hold on over and selects again, so the selection that
-    // answers finds every one of them attempted and nothing eligible. A Fable request's spent member drops before the
-    // cap, so it takes no hold and is never passed over. The windows are the ones the answering record reads.
+    // answers finds every one of them attempted and nothing left to place on. A Fable request's spent member drops
+    // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
+    // reads.
     const fast = r.shape.requestedSpeed === 'fast';
     const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, onAt + bound, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null && !spent(id));

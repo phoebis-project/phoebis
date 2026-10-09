@@ -258,6 +258,47 @@ test('a move the cap cancels renews in place on the line', async () => {
   assert.deepEqual(terminiOf(m), PINNED_TERMINI('renewed'));
 });
 
+/**
+ * The spent move as the engine records it when the content rung matches on the continuation: the rung's entry facts,
+ * and the two later rungs `not_run`. No story record carries this walk, so these cases are its guard.
+ */
+const contentMove = async () => {
+  const base = await recordOf('req_da52d141-a5a/1');
+  const entry = base.walk.find((s) => s.step === 'rung:static').facts;
+  const walk = base.walk.map((s) => (s.step === 'rung:content' ? step(s.step, 'match', entry) : s.step === 'rung:with_main' || s.step === 'rung:static' ? step(s.step, 'not_run') : s));
+  return modelOf({ ...base, walk });
+};
+
+test('a move whose continuation the content rung decides hangs the fan from that rung', async () => {
+  const m = await contentMove();
+  assert.deepEqual(read(m), ['Pin: match (taken)', 'Eligible: match (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: match (taken)', '^with main: not run (idle)', '^static: not run (idle)', 'Renew: not run (idle)']);
+  assert.deepEqual([m.shape, m.decisive, m.host, m.branch], ['pinned', 'rung:content', 'rung:content', { from: 'move:spent', kind: 'move' }]);
+  assert.deepEqual(terminiOf(m), PINNED_TERMINI('moved'));
+});
+
+test('a move whose continuation the content rung decides ends its taken track there and runs on past it idle', async () => {
+  const m = await contentMove();
+  const layout = d.layoutStrip(m, 958);
+  const { yu } = layout;
+  const at = (id) => layout.stations[id];
+  const track = layout.paths.filter((p) => p.kind === 'track');
+  assert.deepEqual(track.map((p) => p.state), ['taken', 'idle']);
+  const [taken, idle] = track.map((p) => p.d);
+  assert.equal(highestAt(taken, at('rung:content').x), yu, 'the taken track runs along the track to the decisive rung');
+  for (const id of ['rung:with_main', 'rung:static']) assert.ok(highestAt(taken, at(id).x) > yu + d.RADIUS, `the taken track passes under the idle ${id}`);
+  assert.deepEqual(pointsOf(taken).at(-1), [layout.termini.chosen.x, layout.termini.chosen.y], 'the taken track ends at Chosen');
+  assert.ok(idle.startsWith(`M${at('rung:content').x} ${yu} `), 'the idle track starts at the decisive rung');
+  for (const id of ['rung:with_main', 'rung:static']) assert.equal(highestAt(idle, at(id).x), yu, `the idle track runs through ${id}`);
+  assert.ok(idle.endsWith(`${layout.termini.chosen.x} ${layout.y0 - 8}`), 'the idle track comes down into Chosen');
+  const fan = layout.paths.find((p) => p.kind === 'fan');
+  assert.ok(fan.d.startsWith(`M${at('rung:content').x} ${yu + d.RADIUS} `), 'the fan drops from the decisive rung');
+  const tick = layout.paths.find((p) => p.kind === 'tick' && p.state === 'taken');
+  assert.ok(tick.d.startsWith(`M${at('rung:content').x} `), "the chosen leaf's taken tick hangs off the decisive rung");
+  const spread = ['move:overage', 'move:return_to_plan', 'move:drain', 'move:shed', 'renew'].map((id) => at(id).x);
+  assert.ok(spread.every((x, i) => x > (i === 0 ? at('move:spent').x : spread[i - 1]) && x < at('rung:content').x), 'the idle rules and Renew spread between the fired rule and the fan');
+  assert.deepEqual(layout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['idle']);
+});
+
 test('a step the table does not know is a plain station with its id and the chips renderer', async () => {
   const base = await recordOf('req_ef099b34-453/1');
   const walk = [...base.walk.slice(0, 2), step('a_word_added_later', 'seen', [fact('reason', 'later')]), ...base.walk.slice(2)];

@@ -2873,7 +2873,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
       const popover = open[0];
       const p = popover.getBoundingClientRect();
       const c = card.getBoundingClientRect();
-      const shown = { left: Math.max(c.left, 0), right: Math.min(c.right, window.innerWidth) };
+      const view = document.documentElement.clientWidth;
+      const shown = { left: Math.max(c.left, 0), right: Math.min(c.right, view) };
       // A head's lines are the distinct tops of its text's line boxes.
       const lines = (el) => {
         const range = document.createRange();
@@ -2882,7 +2883,7 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
       };
       const fill = (td) => (td ? getComputedStyle(td).backgroundColor : null);
       return {
-        bound: Math.min(720, window.innerWidth - 16, Math.max(0, c.width - 16), Math.max(0, shown.right - shown.left - 16)),
+        bound: Math.min(720, Math.max(0, view - 16), Math.max(0, c.width - 16), Math.max(0, shown.right - shown.left - 16)),
         card: { left: c.left, right: c.right, width: c.width },
         // The candidate table's first even row that is not tinted for the chosen member.
         evenRow: fill(card.querySelector('.decision-card__candidates tbody tr:nth-child(even):not(.is-chosen) td')),

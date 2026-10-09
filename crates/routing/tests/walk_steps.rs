@@ -46,7 +46,7 @@ fn the_fixture_lists_every_step_the_router_records_with_its_verdicts() {
     }
     let committed: Value =
         serde_json::from_str(&std::fs::read_to_string(path()).unwrap_or_else(|_| {
-            panic!("walk_steps.json is missing; run with PHOEBIS_WRITE_FIXTURES=1")
+            panic!("walk_steps.json is missing. Run with PHOEBIS_WRITE_FIXTURES=1.")
         }))
         .unwrap();
     assert_eq!(

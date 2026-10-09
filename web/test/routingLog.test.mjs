@@ -811,6 +811,9 @@ test("the Pace cell's title names the share, the hours, the deadline and the rat
     '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. The highest wins.',
   );
   assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  // Under an hour the hours read one decimal, and from an hour on the whole hours.
+  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 0.4 h to its reset at Sep 19 08:30: 19.05 %/h. The highest wins.');
+  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. The highest wins.');
   // A pace written without the field reads as the null window.
   assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. The highest wins.');
   const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };

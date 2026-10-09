@@ -7910,8 +7910,9 @@ m.unmount();
       const title = popover.querySelector('.strip-popover__title')?.textContent ?? null;
       const rows = [...popover.querySelectorAll('.kv__row')];
       const box = card?.getBoundingClientRect();
-      const shown = Math.max(0, Math.min(box?.right ?? 0, window.innerWidth) - Math.max(box?.left ?? 0, 0));
-      const bound = `${Math.min(720, window.innerWidth - 16, Math.max(0, (box?.width ?? 0) - 16), Math.max(0, shown - 16))}px`;
+      const view = document.documentElement.clientWidth;
+      const shown = Math.max(0, Math.min(box?.right ?? 0, view) - Math.max(box?.left ?? 0, 0));
+      const bound = `${Math.min(720, Math.max(0, view - 16), Math.max(0, (box?.width ?? 0) - 16), Math.max(0, shown - 16))}px`;
       if (!popover.classList.contains(`strip-popover--${renderer}`)) wrong.push(`${name}: ${popover.className}, not ${renderer}`);
       if (title === null || title !== headOf(model, button)) wrong.push(`${name}: the title reads ${title}, not ${headOf(model, button)}`);
       if (!rows.every((r) => (r.querySelector('dt')?.textContent ?? '') !== '' && r.querySelector('dd .chip') !== null)) wrong.push(`${name}: a row without its label or its chips: ${rowsRead(popover)}`);
@@ -8463,8 +8464,9 @@ m.unmount();
   {
     // Every hover on the strip and in a pinned popover is a description a reader hears: the titled element, or the
     // leaf button for its chip, names an entry of the log card's description host whose text is the title. The fresh
-    // placement's Pick holds the Pace cells, the static placement's rungs the hash chip and its outcome a titled row,
-    // and the fast failover a leaf whose chip says why the member was passed over.
+    // placement's Pick holds the Pace cells, the static placement's rungs the hash chip, its first leaf the Pace and
+    // prefix chips and its outcome a titled row, and the fast failover a leaf whose chip says why the member was
+    // passed over.
     const read = [];
     const wrong = [];
     const kinds = new Set();
@@ -8481,7 +8483,7 @@ m.unmount();
     };
     for (const [what, id, seq, pins] of [
       ['fresh placement', 'req_ef099b34-453', 1, (strip) => [strip?.querySelector('.strip-station[data-step="pick"]')]],
-      ['static placement', 'req_b2bed817-a58', 1, (strip) => [...(strip?.querySelectorAll('.strip-station[data-step^="rung:"], .strip-terminus.is-taken') ?? [])]],
+      ['static placement', 'req_b2bed817-a58', 1, (strip) => [...(strip?.querySelectorAll('.strip-station[data-step^="rung:"], .strip-candidate[data-leaf="0"], .strip-terminus.is-taken') ?? [])]],
       ['fast failover', 'req_4b0e9d17-c31', 2, () => []],
     ]) {
       const { card, page } = await story(id, seq);
@@ -8499,7 +8501,7 @@ m.unmount();
       }
       page.unmount();
     }
-    const wanted = ['dd', 'hash', 'leaf', 'td'];
+    const wanted = ['chip', 'dd', 'hash', 'leaf', 'td'];
     results.push({
       name: "/routing-log every hover on the strip and in its popovers is described through the log card's host",
       ok: wrong.length === 0 && wanted.every((k) => kinds.has(k)),

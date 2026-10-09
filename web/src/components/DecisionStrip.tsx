@@ -75,8 +75,9 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   const counted = useMemo(() => layoutStrip(model, width), [model, width]);
   const [measured, setMeasured] = useState<LabelHeights>({});
   const layout = useMemo(() => (Object.keys(measured).length > 0 ? layoutStrip(model, width, measured) : counted), [counted, measured, model, width]);
-  // A label whose words wrapped stands taller than the layout counts, which only the drawn box tells, so every draw reads
-  // the labels and lays the strip out once more with the heights that differ. jsdom's empty boxes read as no height.
+  // A label whose words wrapped stands taller than the layout counts, which only the drawn box tells, so every draw
+  // reads the labels and lays the strip out once more with the heights that differ. jsdom's empty boxes read as no
+  // height.
   useLayoutEffect(() => {
     const el = ref.current;
     if (el === null) return;
@@ -164,7 +165,12 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   });
   // A move's continuation leaves its terminus a narrower margin than a line does, so the word stacks over the badge.
   const stacked = model.branch?.kind === 'move';
-  const popover = open === null || anchorEl === undefined ? null : { anchor: anchorEl, at: open.anchor, focus: open.focus, pinned: open.pinned };
+  const opened = open?.anchor;
+  const openedKey = opened === undefined ? null : keyOf(opened);
+  // A hover and the click that pins it name one anchor by two objects, so the plan is kept by the anchor's key, and
+  // the popover places itself again for a new plan or a redrawn strip alone.
+  const plan = useMemo(() => (opened === undefined ? null : anchorPlan(opened, model, record, row, now)), [openedKey, model, record, row, now]);
+  const popover = open === null || anchorEl === undefined || plan === null ? null : { anchor: anchorEl, focus: open.focus, pinned: open.pinned, plan };
   return (
     <div className="decision-strip" ref={ref}>
       <div className="decision-strip__surface" style={{ height: layout.height, minWidth: MIN_WIDTH }} data-y0={layout.y0} data-leaves={model.leaves.length} data-stations={model.stations.length}>
@@ -278,7 +284,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           );
         })}
       </div>
-      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
+      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} layout={layout} onClose={close} pinned={popover.pinned} plan={popover.plan} />}
     </div>
   );
 }

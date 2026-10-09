@@ -54,7 +54,10 @@ export function stationWord(stepId: string): string {
 export type PathState = 'idle' | 'inferred' | 'taken';
 export type StripShape = 'fresh' | 'pinned' | 'short';
 export interface Station {
-  /** Unique in the strip: the step id, `partitions:<fact>` for a partition station on a fresh line, `move` for the Move station. */
+  /**
+   * Unique in the strip: the step id, `partitions:<fact>` for a partition station on a fresh line, `move` for the Move
+   * station.
+   */
   id: string;
   /** The engine's step id the popover's plan reads: `partitions` for a partition station, the fired rule's for Move. */
   step: string;
@@ -62,7 +65,10 @@ export interface Station {
   index: number | null;
   /** The label on the strip: the short word, lowercased under a bracket ("shed", "content", "At cap"). */
   word: string;
-  /** The popover head's word: `STEP_NAME[step]` for a step station ("Shed"), "Move" for the Move station, the partition's own word ("At cap") for a partition station on a fresh line. */
+  /**
+   * The popover head's word: `STEP_NAME[step]` for a step station ("Shed"), "Move" for the Move station, the
+   * partition's own word ("At cap") for a partition station on a fresh line.
+   */
   head: string;
   /**
    * The badge's text (`verdictWord`'s, a partition's "2 out", "off", "held", "fell through", "not recorded", "not run",
@@ -71,7 +77,10 @@ export interface Station {
   badge: string;
   tone: VerdictTone;
   verdict: string | null;
-  /** The second line of the fan's host, the slot and the Move station, one part per value so no part joins two (["Pace P0"], ["cohort", "bound 1 min"], ["timed"], ["shed rule"]). Empty elsewhere. */
+  /**
+   * The second line of the fan's host, the slot and the Move station, one part per value so no part joins two
+   * (["Pace P0"], ["cohort", "bound 1 min"], ["timed"], ["shed rule"]). Empty elsewhere.
+   */
   second: string[];
   group: StripGroup | null;
   stub: StubWord | null;
@@ -333,7 +342,8 @@ function hostOf(record: DecisionRecord, stations: Station[], shape: StripShape, 
   if (shape === 'fresh') return stations.find((s) => s.id === SLOT_OF[record.outcome.kind])?.id ?? null;
   if (shape === 'pinned' && record.walk[record.walk.length - 1]?.step === 'renew') return 'renew';
   const track = stations.filter((s) => s.level === 'track');
-  if (branch?.kind === 'move' && track.length > 0) return track[track.length - 1].id;
+  // A rung that matched before the continuation's last leaves the later rungs unrun, so it places the request itself.
+  if (branch?.kind === 'move' && track.length > 0) return (track.find((s) => s.decisive) ?? track[track.length - 1]).id;
   const recorded = stations.filter((s) => s.index !== null);
   return recorded.length > 0 ? recorded[recorded.length - 1].id : null;
 }
@@ -390,7 +400,10 @@ export function stationModel(record: DecisionRecord, row: DecisionSummary | unde
 
 const joined = (parts: (string | null | undefined)[]) => parts.filter((p): p is string => typeof p === 'string' && p !== '').join(', ');
 
-/** The accessible name of a station button, from `head`: "Pick, chosen, Pace P0", "Shed, fired", "Eligible, not recorded". */
+/**
+ * The accessible name of a station button, from `head`: "Pick, chosen, Pace P0", "Shed, fired", "Eligible, not
+ * recorded".
+ */
 export function stationName(s: Station): string {
   // A station under a bracket the record does not carry draws no badge, so its name says what the bracket says.
   return joined([s.head, s.verdict === null && s.badge === '' ? 'not recorded' : s.badge, ...s.second]);
@@ -683,7 +696,14 @@ function layoutMove(model: StripModel, width: number, fired: string, measured: L
   // renewed in place.
   const named = model.termini.find((t) => t.state === 'taken')?.kind ?? 'chosen';
   const end = renewed !== undefined ? down(points[renewed.id].x, y0) : named === 'chosen' ? down(xEnd, y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: yu }, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`;
-  paths.push({ d: `${rise} ${end}`, kind: 'track', state: 'taken' });
+  const decided = track.findIndex((s) => s.decisive);
+  if (decided >= 0 && decided < track.length - 1) {
+    // A rung that matched before the track's last leaves the later rungs unrun, so the taken path drops from it as from
+    // a line's decisive station, and the track runs on past it idle.
+    const from = points[track[decided].id];
+    paths.push({ d: `${rise} H${from.x} ${drop(from, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`, kind: 'track', state: 'taken' });
+    paths.push({ d: `M${from.x} ${yu} ${end}`, kind: 'track', state: 'idle' });
+  } else paths.push({ d: `${rise} ${end}`, kind: 'track', state: 'taken' });
   return finish(model, width, { descent: renewed?.id ?? null, into: renewed === undefined ? named : null, line, paths, points, unit, xEnd, y0, yu }, measured);
 }
 

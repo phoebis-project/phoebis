@@ -415,8 +415,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const records = await decisionsOf(s);
     assert.ok(records.length > 20);
-    // Two run-outs keep a member out on a cooldown or a credits block at the moment the bound ran out, which would name
-    // the exhaustion after that block, while the story's row reports the accounts at their cap, an untimed answer.
+    // Two run-outs keep a member out on a cooldown or a credits block at the moment the bound ran out, so the engine
+    // would name that block in the exhaustion, while the story's row reports the accounts at their cap, an untimed
+    // answer.
     const untimedBesideABlock = new Set(['req_48db1b37-495/3', 'req_151f3e2e-d99/2']);
     const seen = { exhausted: 0, held: 0, ranOut: 0 };
     for (const r of records) {
