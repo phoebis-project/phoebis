@@ -51,6 +51,9 @@ pub(crate) struct ProbeJob {
 
 pub(crate) struct ProbeResult {
     pub status: u16,
+    /// The relay's id of the exchange, which the probe's ledger request row carries; `None` for an answer the relay
+    /// never built.
+    pub request_id: Option<String>,
     pub account: Option<String>,
     /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
     /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
@@ -159,8 +162,8 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be priced.
-/// Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
+/// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
+/// priced. Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
 #[allow(clippy::too_many_arguments)]
 fn settled_unit(
     default_unit: SavingsUnit,
@@ -242,6 +245,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,
+            request_id: None,
             account: None,
             error_code: None,
             body: None,
@@ -266,6 +270,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 let body = read_bounded(response.into_body()).await;
                 ProbeResult {
                     status,
+                    request_id: outcome.as_ref().map(|o| o.request_id.clone()),
                     account: outcome
                         .as_ref()
                         .map(|o| o.account_id.clone())
@@ -552,6 +557,7 @@ impl Inner {
             result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
         );
         agent.unanswered.push(UnansweredProbe {
+            id: result.request_id.clone().unwrap_or_default(),
             cost: record.cost_usd,
             unit: covered_unit,
             account: Some(record.account.clone()),
@@ -921,6 +927,7 @@ mod tests {
                 owner_id: None,
                 last_report_at: 0,
                 last_real_at: Some(0),
+                restored_until: None,
                 agents,
             },
         );

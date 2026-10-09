@@ -307,7 +307,16 @@ pub(crate) async fn release(
             )
         }
     };
-    let recipes = state.keepalive.release(&key, &session);
+    let recipes = match state.keepalive.release(&key, &session) {
+        Ok(recipes) => recipes,
+        // The engine has quiesced for the shutdown, so its final save stays what the next process restores.
+        Err(_) => {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the keepalive engine is shutting down",
+            )
+        }
+    };
     if pins == 0 && recipes == 0 {
         return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
     }

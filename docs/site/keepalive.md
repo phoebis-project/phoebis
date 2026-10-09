@@ -275,14 +275,15 @@ Each state reads these causes:
 
 - `retained`: `awaiting_cache_evidence`, `awaiting_selection`, `lease_expired`, `probing`, `scheduled`.
 - `held`: `affinity_too_short`, `budget`, `cooled`, `horizon`, `ineligible_credential`, `keepalive_off`,
-  `ledger_behind`, `overage`, `paused`, `pool_disabled`, `reauth`, `retryable_probe_error`, `slow_probe`.
+  `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pool_disabled`, `reauth`,
+  `retryable_probe_error`, `slow_probe`.
 - `paused`: `invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
   `probe_pool_exhausted`, `probe_quota_exhausted`, `probe_retry_limit`, `probe_transport_error`,
   `repeated_cold_probe`, `request_canceled`, `request_failed`, `request_rejected`, `unexpected_output`,
   `unsupported_probe`.
 - `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
-  `invalid_model`, `invalid_request`, `no_cache_evidence`, `no_probe_cache_evidence`, `owner_mismatch`,
-  `request_limit`, `request_too_large`, `storage_limit`, `structured_output`, `unsupported_shape`.
+  `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`, `request_too_large`,
+  `storage_limit`, `structured_output`, `unsupported_shape`.
 - `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `evicted`, `expired`, `expired_at_restart`, `idle_limit`,
   `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
   `session_expired`.
@@ -513,10 +514,12 @@ before its last save, so that save holds the state the engine had when it stoppe
 answered `quiesced`. A save that fails is logged once and retried at every flush, and the engine keeps running from
 memory.
 
-At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and
-its sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the
-same instance again, and the session is re-adopted with its recipes, so its next probe lands warm. A recipe whose entry
-expired while the router was down ends with `expired_at_restart`, and a session the mod had ended is dropped. A prompt
-that no longer opens under the storage key is dropped too, and its agent keeps everything else. The bootstrap file's
-`keepalive` limits in force at the start bound what comes back: when they are lower than before, the newest sessions,
-agents and recipes are restored and the rest are evicted.
+At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and its
+sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the same
+instance again, and the session is re-adopted with its recipes, so its next probe lands warm. A recipe whose entry
+expired while the router was down ends with `expired_at_restart`, and a session the mod had ended is dropped. The probes
+such a recipe left unanswered settle as wasted once the registry holds its agent without them, so a crash between that
+save and the ledger's write leaves them uncounted rather than counted twice. A prompt that no longer opens under the
+storage key is dropped too, and its agent keeps everything else. The bootstrap file's `keepalive` limits in force at the
+start bound what comes back: when they are lower than before, the newest sessions, agents and recipes are restored and
+the rest are evicted.

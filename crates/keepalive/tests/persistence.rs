@@ -5,12 +5,14 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, CompanionState, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
+    Ack, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
+    LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
@@ -868,6 +870,11 @@ async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and
         ),
         "{probe}"
     );
+    // The probe's own request id, which its ledger row carries, so a settlement can be told from a repeat of it.
+    assert!(
+        probe["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "the probe names its request: {probe}"
+    );
 }
 
 #[tokio::test]
@@ -1002,5 +1009,205 @@ async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
         (saved_sessions(&r).len(), saved_agents(&r).len()),
         (0, 0),
         "and its rows, the subagent's with it, are gone"
+    );
+}
+
+/// The wasted probes the ledger holds right now, by reason, read once.
+fn wasted_now(r: &Rig) -> BTreeMap<String, u64> {
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let mut reasons: BTreeMap<String, u64> = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.kind == "probe") {
+        for (reason, count) in &row.wasted_probe_reasons {
+            *reasons.entry(reason.clone()).or_default() += count;
+        }
+    }
+    reasons
+}
+
+/// Ticks `engine` at every due probe and at least every half minute until `end`, the clock moved on the rig with no
+/// heartbeat: the engine is a restarted one, whose session the mod has not re-adopted.
+async fn tick_until(r: &Rig, engine: &Arc<Engine>, end: i64) {
+    while r.now() < end {
+        let now = r.now();
+        let due = engine
+            .sessions()
+            .iter()
+            .filter_map(|session| session.keepalive.next_probe_at)
+            .filter(|due| *due > now)
+            .min();
+        let next = due.unwrap_or(end).min(now + MINUTE / 2).min(end);
+        r.advance(next - now);
+        engine.step().await;
+        engine.wait_idle().await;
+    }
+}
+
+/// A restart must not end a park the mod is about to re-adopt. The save said the session was attended, and the ticks
+/// after the load read it so for one lease length, until the mod registers it again or the window ends. The session
+/// itself comes back silent, so the mod's heartbeat still answers `instance_ended` and the registration follows.
+#[tokio::test]
+async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends_at_the_windows_end_unregistered(
+) {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 600,
+            max_parked_seconds: Some(7_200),
+            ..KeepalivePolicy::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    let start = r.now();
+    r.event(parked_until(&r, start + 2 * 3_600_000)).unwrap();
+    // Fifteen minutes into the park, past the ten-minute idle window, probed at every due time under the parked
+    // ceiling with the lease renewed.
+    let end = start + 15 * MINUTE;
+    while r.now() < end {
+        let now = r.now();
+        let due = r
+            .engine
+            .sessions()
+            .iter()
+            .filter_map(|session| session.keepalive.next_probe_at)
+            .filter(|due| *due > now)
+            .min();
+        let next = due.unwrap_or(end).min(now + MINUTE / 2).min(end);
+        r.advance_attended(next - now);
+        r.step().await;
+    }
+    assert_eq!(
+        r.engine.recipes_for("desktop", "session"),
+        vec!["main".to_string()],
+        "the parked recipe is still probed before the restart"
+    );
+    r.engine.flush_persisted().await;
+
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let loaded = r.now();
+    second.step().await;
+    second.wait_idle().await;
+    let main = second.agent_status("desktop", "session", "main").unwrap();
+    assert_eq!(
+        (second.recipes_for("desktop", "session"), main.reason),
+        (vec!["main".to_string()], Reason::Scheduled),
+        "the first tick after the load keeps the park: {main:?}"
+    );
+    assert_eq!(
+        second.sessions()[0].companion,
+        CompanionState::Silent,
+        "the session itself comes back silent, for the mod's heartbeat to re-adopt it"
+    );
+    tick_until(&r, &second, loaded + LEASE_MS - 1).await;
+    assert_eq!(
+        second.recipes_for("desktop", "session"),
+        vec!["main".to_string()],
+        "still probed a millisecond before the window's end"
+    );
+    tick_until(&r, &second, loaded + LEASE_MS).await;
+    let main = second.agent_status("desktop", "session", "main").unwrap();
+    assert_eq!(
+        (second.recipes_for("desktop", "session"), main.reason),
+        (Vec::new(), Reason::IdleLimit),
+        "no registration came, so the silent session's idle window applies at the window's end: {main:?}"
+    );
+}
+
+// The test's body runs apart from the workers and waits on the flush counts, as `on_own_thread` explains.
+/// The settlements of the recipes a load ends reach the registry before the ledger: the cleared agent is saved first,
+/// so a crash between the two leaves the probe's wasted row unwritten rather than written twice by the next load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_cleared_agent() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    r.engine.flush_persisted().await;
+    // The router is down past the entry's expiry, so the load ends the recipe and settles its probe as expired.
+    r.advance(400_000);
+    let second = r.restart().await;
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = second.clone();
+    let load = on_own_thread(async move { engine.load_persisted().await });
+    // The load's save has read its batch and waits on the held registry.
+    second.persist_reached(1, 1).await;
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::new(),
+        "nothing reaches the ledger while the registry still holds the probe"
+    );
+    held.execute_batch("COMMIT").unwrap();
+    load.join().unwrap();
+    assert_eq!(
+        wasted(&r, 1).await,
+        BTreeMap::from([("expired".to_string(), 1)]),
+        "the settlement follows the landed save"
+    );
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "unanswered"),
+            saved_field(&r, "session", "main", "reason")
+        ),
+        (
+            serde_json::json!([]),
+            serde_json::json!("expired_at_restart")
+        )
+    );
+    // A later load finds the probe settled, so the row is counted once.
+    let third = r.restart().await;
+    third.load_persisted().await;
+    third.flush_persisted().await;
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(wasted_now(&r), BTreeMap::from([("expired".to_string(), 1)]));
+}
+
+// Apart from the workers, and waiting on the flush counts, as the case above explains.
+/// An operator's release that lands after the shutdown's snapshot is refused: the last save holds the recipe either
+/// way, and a success would tell the operator a recipe is gone that the next process restores and probes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_release_after_the_quiesce_is_refused_and_leaves_the_final_save_authoritative() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    r.state("main", "idle");
+    let retained = r.engine.stats().retained_bytes;
+    assert!(retained > 0);
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let shutdown = on_own_thread(async move { engine.shutdown().await });
+    // The shutdown's save has read its snapshot and waits on the held registry.
+    r.engine.persist_reached(2, 2).await;
+    let refused = r.engine.release("desktop", "session");
+    assert!(
+        refused.is_err(),
+        "a release after the quiesce answers unavailable: {refused:?}"
+    );
+    assert_eq!(
+        r.engine.stats().retained_bytes,
+        retained,
+        "the recipe stays as the snapshot read it"
+    );
+    held.execute_batch("COMMIT").unwrap();
+    shutdown.join().unwrap();
+    assert!(
+        saved_agents(&r)[0].body.is_some(),
+        "the final save carries the recipe"
+    );
+    assert_eq!(saved_field(&r, "session", "main", "reason"), "scheduled");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::new(),
+        "no probe settles under a release that never happened"
     );
 }

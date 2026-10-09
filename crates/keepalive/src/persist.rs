@@ -13,7 +13,7 @@ use phoebis_ledger::Speed;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming};
+use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
     ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, UnansweredProbe, Wasted,
@@ -42,7 +42,8 @@ pub(crate) struct Dirty {
     pub pools: BTreeMap<String, u64>,
 }
 
-/// Every field of `Session` but its agents, which have rows of their own.
+/// Every field of `Session` but its agents, which have rows of their own, and the restored standing, which the load
+/// derives from `attended`.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedSession {
     pub key_id: String,
@@ -171,6 +172,7 @@ pub(crate) struct PersistedUsage {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedUnanswered {
+    pub id: String,
     #[serde(with = "exact")]
     pub cost: f64,
     pub unit: Option<String>,
@@ -257,8 +259,9 @@ impl PersistedSession {
 
     /// Silent until the mod's next heartbeat or registration re-adopts it: the lease at zero, so the next report
     /// answers `instance_ended` and the same instance registers again, and the sequence and the owner kept, so that
-    /// registration is the one the mod would send next.
-    fn restore(self) -> Session {
+    /// registration is the one the mod would send next. A session saved attended keeps the attended reading of the
+    /// ceilings for one lease length from `now`, so the ticks before that registration discard no park as idle.
+    fn restore(self, now: i64) -> Session {
         Session {
             key_id: self.key_id,
             key_generation: self.key_generation,
@@ -271,6 +274,7 @@ impl PersistedSession {
             owner_id: self.owner_id,
             last_report_at: self.last_report_at,
             last_real_at: self.last_real_at,
+            restored_until: self.attended.then_some(now + LEASE_MS),
             agents: BTreeMap::new(),
         }
     }
@@ -364,6 +368,7 @@ impl PersistedAgent {
                 .unanswered
                 .iter()
                 .map(|probe| PersistedUnanswered {
+                    id: probe.id.clone(),
                     cost: probe.cost,
                     unit: probe.unit.map(unit_word),
                     account: probe.account.clone(),
@@ -461,6 +466,7 @@ impl PersistedAgent {
             .into_iter()
             .map(|probe| {
                 Some(UnansweredProbe {
+                    id: probe.id,
                     cost: probe.cost,
                     unit: optional_unit(probe.unit)?,
                     account: probe.account,
@@ -946,7 +952,7 @@ impl Inner {
                     .then_with(|| b.updated_at.cmp(&a.updated_at))
                     .then_with(|| a.agent_id.cmp(&b.agent_id))
             });
-            let mut session = payload.restore();
+            let mut session = payload.restore(now);
             for (agent_row, decoded) in agents {
                 let Some((agent, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
@@ -1079,9 +1085,11 @@ impl Engine {
             }
             inner.restore_persisted(loaded, now, &self.parts.limits, self.parts.timing);
         }
-        // The settlements of the recipes the load ended.
-        self.flush();
+        // The registry first, then the ledger: the save carries each ended recipe's agent without the probes the load
+        // settled, so a crash between the two leaves a wasted probe unwritten rather than written again by the next
+        // load, which would find it still unanswered.
         self.flush_persisted().await;
+        self.flush();
     }
 
     /// A snapshot, its save and its acknowledgment, on the blocking pool under the flush lock whole: two flushes never

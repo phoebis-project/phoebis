@@ -837,3 +837,48 @@ fn continues_prefix_needs_the_anchors_tail_hash() {
     ));
     assert!(!continues_prefix(None, &holding));
 }
+
+/// The window opens at the idle report itself, so a person who prompts inside the same second still ends a window:
+/// the first bucket counts the reach and the return.
+#[tokio::test]
+async fn an_idle_report_and_a_prompt_inside_the_same_second_count_the_first_bucket_and_the_return()
+{
+    let mut r = rig(RigSpec::default()).await;
+    idle_after_request(&mut r).await;
+    activity(&mut r, "prompt");
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "no tick ran between the idle report and the return"
+    );
+}
+
+/// A presence report starts the window over on purpose, so the floor the closed window left does not refuse a start
+/// that a backward clock step placed behind it. The park's end and a revival restart the window the same way.
+#[tokio::test]
+async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_counts_its_return() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 6).await;
+    assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    // The wall clock steps back to a second before the window began, and the person types.
+    r.advance(start - 1_000 - r.now());
+    activity(&mut r, "presence");
+    tick_to(&mut r, start, 12).await;
+    assert_eq!(
+        reached(&r),
+        [2, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+        "the window from the presence reaches its buckets"
+    );
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        returned(&r),
+        [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        "and its return counts at the window's age"
+    );
+    assert_eq!(r.status("main").state, AgentState::Busy);
+}

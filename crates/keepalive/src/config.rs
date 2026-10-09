@@ -225,8 +225,8 @@ pub struct KeepaliveTiming {
     pub failure_limit: u32,
     /// The first retry's wait, which each further failure doubles up to `retry_max_ms`.
     pub retry_ms: i64,
-    /// Caps the doubling and an `accounts_at_cap` answer's `Retry-After` at a five-minute entry's whole TTL, so a retry
-    /// never waits out the entry it is meant to keep.
+    /// Caps the doubling and an `accounts_at_cap` answer's `Retry-After` so one wait stays inside a one-hour entry's
+    /// six-minute lead.
     pub retry_max_ms: i64,
 }
 

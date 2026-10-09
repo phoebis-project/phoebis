@@ -5,9 +5,12 @@
 
 use std::collections::BTreeMap;
 
+use phoebis_routing::RegistrySnapshot;
+
 use crate::config::LEASE_MS;
 use crate::engine::{
-    Agent, AgentState, Engine, Inner, ParkKind, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
+    open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason, Session, SessionKey,
+    Wasted, MAIN_AGENT,
 };
 use crate::recipe::valid_id;
 
@@ -254,6 +257,8 @@ impl Engine {
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let lease = LEASE_MS;
         let limits = self.parts.limits.clone();
+        // The pool an idle window a report opens counts under, read as the tick reads it.
+        let snapshot = self.parts.router.snapshot();
         let acked = {
             let mut inner = self.lock();
             if inner.closed {
@@ -269,6 +274,7 @@ impl Engine {
                 lease,
                 limits.max_sessions,
                 limits.max_agents,
+                &snapshot,
             )
         };
         self.flush();
@@ -287,6 +293,7 @@ impl Inner {
         lease_ms: i64,
         max_sessions: usize,
         max_agents: usize,
+        snapshot: &RegistrySnapshot,
     ) -> Result<Ack, EventError> {
         let key: SessionKey = (key_id.to_string(), ev.session_id.clone());
         if ev.event == "session_start" {
@@ -378,6 +385,8 @@ impl Inner {
                         agent.set_state(AgentState::Busy);
                         agent.last_activity = now;
                         agent.idle_ticks = 0;
+                        // The restart moves the window's start on purpose, so the floor its release left goes.
+                        agent.idle_window_floor = None;
                     }
                     None => {
                         if self.agents >= max_agents {
@@ -420,8 +429,10 @@ impl Inner {
                     let presence = ev.kind.as_deref() == Some("presence");
                     if presence {
                         // Presence restarts the window, so the one counted so far ends with no return, closed
-                        // before the start moves so the new start clears the floor.
+                        // before the start moves. The person's restart outranks the floor the close leaves: a
+                        // clock that stepped back would otherwise place the new start behind it.
                         agent.close_idle_episode();
+                        agent.idle_window_floor = None;
                         agent.last_presence_at = Some(now);
                     }
                     agent.last_activity = now;
@@ -468,6 +479,7 @@ impl Inner {
                         // restarts the idle window. A request behind a busy report moves the window itself.
                         if was == AgentState::Parked && state == AgentState::Idle {
                             agent.close_idle_episode();
+                            agent.idle_window_floor = None;
                             agent.park_ended_at = Some(now);
                         } else if state == AgentState::Released {
                             // A released main is the end of its session's window, as `session_end` is.
@@ -507,6 +519,17 @@ impl Inner {
         // A heartbeat moves the session alone, so it rewrites no agent's sealed prompt.
         if !renews_lease {
             self.touch_agent(&key, &agent_id);
+        }
+        // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
+        // still ends a window the tick would have opened later.
+        if ev.event == "state" && agent_id == MAIN_AGENT {
+            if let Some(main) = self
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(MAIN_AGENT))
+            {
+                open_idle_episode(main, snapshot);
+            }
         }
         Ok(acknowledge(
             &self.sessions[&key],
@@ -556,6 +579,8 @@ impl Inner {
                 session.sequence = ev.sequence;
                 session.lease = now + lease_ms;
                 session.attended = true;
+                // The registration's own standing outranks the one the load restored.
+                session.restored_until = None;
                 session.ended = false;
                 session.last_report_at = now;
                 if ev.owner_id.is_some() {
@@ -569,6 +594,8 @@ impl Inner {
                         main.set_state(AgentState::Busy);
                         main.last_activity = now;
                         main.idle_ticks = 0;
+                        // The revival moves the window's start on purpose, so the floor the end left goes.
+                        main.idle_window_floor = None;
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }
@@ -633,6 +660,7 @@ impl Inner {
                 owner_id: ev.owner_id.clone(),
                 last_report_at: now,
                 last_real_at,
+                restored_until: None,
                 agents,
             },
         );

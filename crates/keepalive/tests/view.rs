@@ -259,7 +259,9 @@ async fn the_five_states_follow_the_table() {
         read(&r, "main"),
         (RecipeState::Paused, Reason::ProbeQuotaExhausted)
     );
-    r.engine.release("desktop", "session");
+    r.engine
+        .release("desktop", "session")
+        .expect("a release before any quiesce");
     assert_eq!(read(&r, "main"), (RecipeState::Ended, Reason::Released));
     assert_eq!(
         read(&r, "worker"),

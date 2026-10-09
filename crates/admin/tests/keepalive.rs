@@ -1446,3 +1446,28 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         "a probe must not move the key's last_used_at"
     );
 }
+
+/// The engine refuses an operator's release once the shutdown has quiesced it, so the final save stays what the next
+/// process restores: the route answers 503 rather than reporting a release that changed nothing.
+#[tokio::test]
+async fn a_release_after_the_engines_quiesce_answers_503() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    parts.keepalive.quiesce();
+    let released = post(
+        &parts.app,
+        "/admin/sessions/desktop/s1/release",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(released.status(), 503);
+}

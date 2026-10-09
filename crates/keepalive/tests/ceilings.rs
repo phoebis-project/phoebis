@@ -47,6 +47,21 @@ model_windows: {}
 overrides: {}
 "#;
 
+/// The same model with fast cells that are no multiple of its standard ones: a read of 0.4 against a five-minute write
+/// of 2.5, so a fast recipe's break-even in dollars is 1,260,000 ms (21 min) on a five-minute entry where the
+/// standard cells give 46 min.
+const PRICES_WITH_FAST: &str = r#"
+effective: 2026-01-01
+models:
+  claude-sonnet-4-5:
+    input: 1
+    cache_write_5m: 1.25
+    cache_write_1h: 2.0
+    cache_read: 0.1
+    output: 5
+    fast: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 10}
+"#;
+
 /// The production leads and jitters, so each figure below is the one the console shows. The parity cases of the
 /// other files keep the rig's 30-second lead.
 fn timing() -> KeepaliveTiming {
@@ -980,4 +995,31 @@ async fn funding_and_ttl_pick_the_break_even() {
             "{name}"
         );
     }
+}
+
+/// The rig's body sent in fast mode.
+fn fast_body() -> String {
+    BODY.replacen('{', r#"{"speed":"fast","#, 1)
+}
+
+/// A fast recipe draws usage credits at the fast cells, so its break-even reads them: 21 minutes here, where the
+/// standard cells of the same row give 46.
+#[tokio::test]
+async fn a_fast_recipes_ceilings_read_the_fast_cells() {
+    let mut r = rig(RigSpec {
+        pricing: PriceTable::from_yaml(PRICES_WITH_FAST, "test").unwrap(),
+        ..plan(policy(|p| p.max_idle_seconds = 0))
+    })
+    .await;
+    r.observe_with("main", &fast_body()).await;
+    let start = r.now();
+    r.state("main", "idle");
+    ends_at(
+        &mut r,
+        "main",
+        start + 1_260_000,
+        Reason::IdleLimit,
+        "idle_limit",
+    )
+    .await;
 }

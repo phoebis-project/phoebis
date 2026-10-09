@@ -358,6 +358,36 @@ fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String
         .or_else(|| agent.account.clone())
 }
 
+/// Opens main's idle window when none is counted and main is idle or parked, from a start past the floor. The report
+/// that moves main there opens it, so a prompt inside the same second still ends a window, and the tick opens the
+/// ones a presence, a park's end or a load left unopened. True when a window opened.
+pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -> bool {
+    if main.idle_episode.is_some()
+        || matches!(
+            main.state,
+            AgentState::Busy | AgentState::Released | AgentState::Unknown
+        )
+    {
+        return false;
+    }
+    let start = main.idle_window_start();
+    if main.idle_window_floor.is_some_and(|floor| start <= floor) {
+        return false;
+    }
+    // One lookup per window, so a key that moves pools takes its next window with it.
+    let Some(pool_key) = idle_returns_key(snapshot, main) else {
+        return false;
+    };
+    main.idle_episode = Some(IdleEpisode {
+        started: start,
+        bucket: None,
+        anchor: main.last_prefix.clone(),
+        prompt_at: None,
+        pool_key,
+    });
+    true
+}
+
 /// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
 pub type SavingsUnit = phoebis_routing::BurnUnit;
 
@@ -445,7 +475,19 @@ pub(crate) struct Session {
     pub owner_id: Option<String>,
     pub last_report_at: i64,
     pub last_real_at: Option<i64>,
+    /// A session the load restored from a save that held it attended keeps the attended reading of the ceilings until
+    /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
+    /// within its lease, and a parked recipe must not be discarded as idle before it can.
+    pub restored_until: Option<i64>,
     pub agents: BTreeMap<String, Agent>,
+}
+
+impl Session {
+    /// Whether the ceilings read the session as attended at `now`: as the mod's lease says, or as the save said for
+    /// one lease length after a load.
+    pub(crate) fn attended_at(&self, now: i64) -> bool {
+        self.attended || self.restored_until.is_some_and(|until| now < until)
+    }
 }
 
 pub(crate) struct Agent {
@@ -475,6 +517,8 @@ pub(crate) struct Agent {
     pub idle_episode: Option<IdleEpisode>,
     /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
     /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
+    /// A close that restarts the window on purpose (a request, presence, a park's end, a revival) clears it: the
+    /// floor orders starts, and a clock that stepped back before the restart is no ordering.
     pub idle_window_floor: Option<i64>,
     /// The static and tail hash of main's last admitted request, retained or not, which the next idle window judges a
     /// return against.
@@ -788,6 +832,9 @@ struct Skipped {
 /// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UnansweredProbe {
+    /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
+    /// settlement of this probe can be told from a repeat of it.
+    pub id: String,
     pub cost: f64,
     pub unit: Option<SavingsUnit>,
     pub account: Option<String>,
@@ -1349,6 +1396,7 @@ impl Inner {
         }
         // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
         agent.close_idle_episode();
+        agent.idle_window_floor = None;
         agent.park_ended_at = Some(now);
         if agent.id != MAIN_AGENT {
             agent.park_began = None;
@@ -1359,10 +1407,10 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
-    /// Opens main's idle window on every attended session and raises `reached` up to the window's current bucket.
-    /// It reads the sessions, never the retained recipes, so a session whose recipe a ceiling discarded, or that never
-    /// sent a request, still reaches the later buckets. A busy main keeps its window and counts nothing, and a window
-    /// whose return a prompt announced waits for the request.
+    /// Advances main's idle window on every attended session: opens one where none is counted and raises `reached`
+    /// up to the window's current bucket. It reads the sessions, never the retained recipes, so a session whose
+    /// recipe a ceiling discarded, or that never sent a request, still reaches the later buckets. A busy main keeps
+    /// its window and counts nothing, and a window whose return a prompt announced waits for the request.
     pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
         let mut opened: Vec<SessionKey> = Vec::new();
         let mut raised: Vec<(SessionKey, String)> = Vec::new();
@@ -1379,22 +1427,7 @@ impl Inner {
             ) {
                 continue;
             }
-            if main.idle_episode.is_none() {
-                let start = main.idle_window_start();
-                if main.idle_window_floor.is_some_and(|floor| start <= floor) {
-                    continue;
-                }
-                // One lookup per window, so a key that moves pools takes its next window with it.
-                let Some(pool_key) = idle_returns_key(snapshot, main) else {
-                    continue;
-                };
-                main.idle_episode = Some(IdleEpisode {
-                    started: start,
-                    bucket: None,
-                    anchor: main.last_prefix.clone(),
-                    prompt_at: None,
-                    pool_key,
-                });
+            if open_idle_episode(main, snapshot) {
                 opened.push(key.clone());
             }
             let Some(episode) = main.idle_episode.as_mut() else {
@@ -2492,7 +2525,7 @@ impl Engine {
                     let ceilings = ceilings_for(agent, &view, &rows, &self.parts.timing);
                     ceiling(
                         agent,
-                        session.attended,
+                        session.attended_at(now),
                         session.last_real_at,
                         &ceilings,
                         now,
@@ -2835,9 +2868,10 @@ pub(crate) fn refresh_policy(view: &RouterView, agent: &mut Agent) -> Result<(),
 }
 
 /// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
-/// for a fast recipe or an account the view lacks) from the tick's rows, its TTL and the engine's timing. Tables that
-/// give no break-even (no priced row, or a free read) fall back to the shipped price table's tightest row, so a
-/// ceiling is never unbounded. A timing whose lead is the whole TTL leaves no probe interval, and nothing is probed.
+/// at the fast cells for a fast recipe, dollars for an account the view lacks) from the tick's rows, its TTL and the
+/// engine's timing. Tables that give no break-even (no priced row, or a free read) fall back to the shipped price
+/// table's tightest row at the recipe's speed, so a ceiling is never unbounded. A timing whose lead is the whole TTL
+/// leaves no probe interval, and nothing is probed.
 pub(crate) fn ceilings_for(
     agent: &Agent,
     view: &RouterView,
@@ -2856,11 +2890,11 @@ pub(crate) fn ceilings_for(
     let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
     resolve(
         &agent.policy,
-        rows.factors(funding, &agent.canonical_model),
+        rows.factors(funding, &agent.canonical_model, fast),
         ttl_ms,
         timing,
     )
-    .or_else(|| resolve(&agent.policy, shipped_tightest(), ttl_ms, timing))
+    .or_else(|| resolve(&agent.policy, shipped_tightest(fast), ttl_ms, timing))
     .unwrap_or(Ceilings {
         idle_ms: 0,
         parked_ms: 0,

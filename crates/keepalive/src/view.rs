@@ -6,6 +6,7 @@ use std::sync::Arc;
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
 use crate::engine::{Agent, AgentState, Engine, Guard, ParkKind, Reason, Wasted, MAIN_AGENT};
+use crate::events::{err, EventError};
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -43,12 +44,14 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
             RecipeState::Retained
         }
         AwaitingRequest | FixedThinking | ForcedTool | HeadersTooLarge | InvalidCacheControl
-        | InvalidModel | InvalidRequest | NoCacheEvidence | NoProbeCacheEvidence
-        | OwnerMismatch | RequestLimit | RequestTooLarge | StorageLimit | StructuredOutput
-        | UnsupportedShape => RecipeState::NotRetained,
+        | InvalidModel | InvalidRequest | NoCacheEvidence | OwnerMismatch | RequestLimit
+        | RequestTooLarge | StorageLimit | StructuredOutput | UnsupportedShape => {
+            RecipeState::NotRetained
+        }
+        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
         AffinityTooShort | Budget | Cooled | Horizon | IneligibleCredential | KeepaliveOff
-        | LedgerBehind | Overage | Paused | PoolDisabled | Reauth | RetryableProbeError
-        | SlowProbe => RecipeState::Held,
+        | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PoolDisabled | Reauth
+        | RetryableProbeError | SlowProbe => RecipeState::Held,
         InvalidProbeUsage
         | MissingAccount
         | PartialCacheCoverage
@@ -257,11 +260,16 @@ impl Engine {
     }
 
     /// The operator's release: every recipe of the session goes, labeled `released`, and the session stays
-    /// registered so its companion keeps reporting.
-    pub fn release(&self, key_id: &str, session_id: &str) -> usize {
+    /// registered so its companion keeps reporting. Refused as `quiesced` once the shutdown has quiesced the engine,
+    /// before any state changes: the final save has read its snapshot by then, and a release it does not carry would
+    /// tell the operator a recipe is gone that the next process restores and probes.
+    pub fn release(&self, key_id: &str, session_id: &str) -> Result<usize, EventError> {
         let key = (key_id.to_string(), session_id.to_string());
         let released = {
             let mut inner = self.lock();
+            if inner.closed {
+                return Err(err("quiesced", 503));
+            }
             let agents: Vec<String> = inner
                 .sessions
                 .get(&key)
@@ -277,7 +285,7 @@ impl Engine {
             held
         };
         self.flush();
-        released
+        Ok(released)
     }
 
     /// A closure the metrics renderer can call on every scrape without the ledger crate depending on this
@@ -324,11 +332,16 @@ mod tests {
             counts.into_iter().collect::<Vec<_>>(),
             [
                 ("ended", 15),
-                ("held", 13),
-                ("not_retained", 15),
+                ("held", 14),
+                ("not_retained", 14),
                 ("paused", 14),
                 ("retained", 5)
             ]
+        );
+        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
+        assert_eq!(
+            recipe_state(Reason::NoProbeCacheEvidence, false),
+            RecipeState::Held
         );
         for state in [
             RecipeState::Ended,

@@ -59,35 +59,43 @@ pub fn break_even_ms(
     Some((exact + 1e-6).floor().max(0.0) as i64)
 }
 
-/// The factors for `canonical_model` under `funding`. Plan funding reads `tables.rate_table(FIVE_HOUR).rows`, and a
-/// model the cost model leaves unweighted or names nowhere reads its type multipliers, the model's own override where
-/// it has one. A token costs the model's weight times the type's multiplier, so the weight cancels from read over write
-/// and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, and a model the price table
-/// prices nowhere takes the tightest dollar row (the smallest break-even among the priced rows). Probe costs do not
-/// read these factors.
+/// The factors for `canonical_model` under `funding`, at the fast cells when `fast`. Plan funding reads
+/// `tables.rate_table(FIVE_HOUR).rows`, and a model the cost model leaves unweighted or names nowhere reads its type
+/// multipliers, the model's own override where it has one. A token costs the model's weight times the type's
+/// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike. Dollars read
+/// `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits
+/// at the fast cells, and a model the price table prices nowhere takes the tightest row of that table (the smallest
+/// break-even among the priced rows). Probe costs do not read these factors.
 pub fn factors_for(
     pricing: &PriceTable,
     tables: &PlanTables,
     funding: Funding,
     canonical_model: &str,
+    fast: bool,
 ) -> BreakEvenFactors {
-    FactorRows::of(pricing, tables).factors(funding, canonical_model)
+    FactorRows::of(pricing, tables).factors(funding, canonical_model, fast)
 }
 
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
-/// and the tightest row once rather than per recipe.
+/// and the tightest rows once rather than per recipe.
 pub(crate) struct FactorRows {
     dollars: HashMap<String, Rates>,
+    /// The dollar rows at the fast cells, a model without fast cells at its standard ones, as the price table lists
+    /// them.
+    fast: HashMap<String, Rates>,
     plan: HashMap<String, Rates>,
     /// The cost model's shared type multipliers, and the models that set their own.
     plan_multipliers: BreakEvenFactors,
     plan_overrides: HashMap<String, BreakEvenFactors>,
     tightest: BreakEvenFactors,
+    tightest_fast: BreakEvenFactors,
 }
 
 impl FactorRows {
     pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
         let dollars = pricing.rate_table().rows;
+        let fast = pricing.fast_rate_table().rows;
+        let tightest_fast = tightest(fast.values().filter_map(BreakEvenFactors::of));
         let tightest = tightest(dollars.values().filter_map(BreakEvenFactors::of));
         let shared = &tables.costs.type_multiplier;
         let plan_multipliers = BreakEvenFactors {
@@ -113,48 +121,74 @@ impl FactorRows {
             .collect();
         FactorRows {
             dollars,
+            fast,
             plan: tables.rate_table(FIVE_HOUR).rows,
             plan_multipliers,
             plan_overrides,
             tightest,
+            tightest_fast,
         }
     }
 
-    pub(crate) fn factors(&self, funding: Funding, canonical_model: &str) -> BreakEvenFactors {
+    /// The factors of `canonical_model` under `funding`, from the fast rows when `fast`: a fast recipe's probes draw
+    /// usage credits at the fast cells, whatever funds the account.
+    pub(crate) fn factors(
+        &self,
+        funding: Funding,
+        canonical_model: &str,
+        fast: bool,
+    ) -> BreakEvenFactors {
+        let dollars = if fast { &self.fast } else { &self.dollars };
         match funding {
             Funding::Plan => row_for(canonical_model, |k| self.plan.get(k))
                 .and_then(BreakEvenFactors::of)
                 .or_else(|| row_for(canonical_model, |k| self.plan_overrides.get(k)).copied()),
             Funding::ApiKey | Funding::Overage => {
-                row_for(canonical_model, |k| self.dollars.get(k)).and_then(BreakEvenFactors::of)
+                row_for(canonical_model, |k| dollars.get(k)).and_then(BreakEvenFactors::of)
             }
         }
-        .unwrap_or_else(|| self.priced_nowhere(funding))
+        .unwrap_or_else(|| self.priced_nowhere(funding, fast))
     }
 
-    /// A model no row and no override names: the plan's shared multipliers, or the tightest dollar row.
-    pub(crate) fn priced_nowhere(&self, funding: Funding) -> BreakEvenFactors {
+    /// A model no row and no override names: the plan's shared multipliers, or the tightest dollar row at the recipe's
+    /// speed.
+    pub(crate) fn priced_nowhere(&self, funding: Funding, fast: bool) -> BreakEvenFactors {
         match funding {
             Funding::Plan => self.plan_multipliers,
+            Funding::ApiKey | Funding::Overage if fast => self.tightest_fast,
             Funding::ApiKey | Funding::Overage => self.tightest,
         }
     }
 }
 
-/// The shipped price table's tightest row: what a recipe's ceilings fall back to when the tables in force give no
-/// break-even, since an operator's price file with no usable row must not leave a parked session probed until the
-/// session expires.
-pub(crate) fn shipped_tightest() -> BreakEvenFactors {
-    static SHIPPED: OnceLock<BreakEvenFactors> = OnceLock::new();
-    *SHIPPED.get_or_init(|| {
-        tightest(
-            PriceTable::shipped()
-                .rate_table()
-                .rows
-                .values()
-                .filter_map(BreakEvenFactors::of),
-        )
-    })
+/// The shipped price table's tightest row at the recipe's speed: what a recipe's ceilings fall back to when the tables
+/// in force give no break-even, since an operator's price file with no usable row must not leave a parked session
+/// probed until the session expires.
+pub(crate) fn shipped_tightest(fast: bool) -> BreakEvenFactors {
+    static STANDARD: OnceLock<BreakEvenFactors> = OnceLock::new();
+    static FAST: OnceLock<BreakEvenFactors> = OnceLock::new();
+    let shipped = PriceTable::shipped;
+    if fast {
+        *FAST.get_or_init(|| {
+            tightest(
+                shipped()
+                    .fast_rate_table()
+                    .rows
+                    .values()
+                    .filter_map(BreakEvenFactors::of),
+            )
+        })
+    } else {
+        *STANDARD.get_or_init(|| {
+            tightest(
+                shipped()
+                    .rate_table()
+                    .rows
+                    .values()
+                    .filter_map(BreakEvenFactors::of),
+            )
+        })
+    }
 }
 
 /// The smallest break-even any row gives at each TTL, as one set of factors in the ratio's own unit: a row
@@ -258,11 +292,12 @@ pub struct ResolvedCeilings {
 }
 
 /// `resolve` over every combination of `fundings`, the main agent's TTL for each under `cache_ttl` (both TTLs when
-/// the policy leaves the markers as sent) and the models `rules` allow. The models are the dollar table's rows and the
-/// ids the TTL sets and the rules' wildcard-free entries name, since those name the catalog's dated ids where a row is
-/// keyed undated, and each is folded, judged, priced and given its TTL as a request on it would be. Rules that allow
-/// none of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
-/// `ceilings_for` does. `None` with no funding.
+/// the policy leaves the markers as sent) and the models `rules` allow, each at standard speed, the one the dialog's
+/// figures describe. The models are the dollar table's rows and the ids the TTL sets and the rules' wildcard-free
+/// entries name, since those name the catalog's dated ids where a row is keyed undated, and each is folded, judged,
+/// priced and given its TTL as a request on it would be. Rules that allow none of them leave a model priced nowhere.
+/// Tables that give no break-even fall back to the shipped tightest row, as `ceilings_for` does. `None` with no
+/// funding.
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
     cache_ttl: &CacheTtlPolicy,
@@ -304,11 +339,11 @@ pub(crate) fn resolve_pool(
     for &funding in fundings {
         let metered = funding != Funding::Plan;
         let picks: Vec<(BreakEvenFactors, &str)> = if models.is_empty() {
-            vec![(rows.priced_nowhere(funding), "")]
+            vec![(rows.priced_nowhere(funding, false), "")]
         } else {
             models
                 .iter()
-                .map(|model| (rows.factors(funding, model), model.as_str()))
+                .map(|model| (rows.factors(funding, model, false), model.as_str()))
                 .collect()
         };
         for (factors, model) in picks {
@@ -318,7 +353,7 @@ pub(crate) fn resolve_pool(
             };
             for ttl in ttls {
                 let Some(ceilings) = resolve(policy, factors, ttl, timing)
-                    .or_else(|| resolve(policy, shipped_tightest(), ttl, timing))
+                    .or_else(|| resolve(policy, shipped_tightest(false), ttl, timing))
                 else {
                     continue;
                 };

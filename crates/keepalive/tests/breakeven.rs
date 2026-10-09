@@ -205,7 +205,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     };
     let timing = KeepaliveTiming::default();
     let both = |funding: Funding, model: &str| {
-        let factors = factors_for(&pricing, &tables, funding, model);
+        let factors = factors_for(&pricing, &tables, funding, model, false);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
@@ -222,7 +222,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
         "a dated id reads its undated row"
     );
     assert_eq!(
-        factors_for(&pricing, &tables, Funding::ApiKey, "claude-opus-5-5"),
+        factors_for(&pricing, &tables, Funding::ApiKey, "claude-opus-5-5", false),
         BreakEvenFactors {
             read: 0.2 / 1_000_000.0,
             write_5m: 5.0 / 1_000_000.0,
@@ -261,7 +261,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
 fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight() {
     let timing = KeepaliveTiming::default();
     let both = |pricing: &PriceTable, tables: &PlanTables, model: &str| {
-        let factors = factors_for(pricing, tables, Funding::Plan, model);
+        let factors = factors_for(pricing, tables, Funding::Plan, model, false);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
@@ -319,7 +319,7 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
     let timing = KeepaliveTiming::default();
     let at = |model: &str, ttl_ms: i64| {
         break_even_ms(
-            factors_for(&pricing, &tables, Funding::ApiKey, model),
+            factors_for(&pricing, &tables, Funding::ApiKey, model, false),
             ttl_ms,
             &timing,
         )
@@ -516,5 +516,55 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
             .resolve_pool_ceilings(&pool(rewritten, Vec::new()), &[]),
         None,
         "a pool with no member resolves nothing"
+    );
+}
+
+/// Fast cells that are no multiple of the standard ones, and a second model with no fast cells of its own.
+const FAST_PRICES: &str = r#"
+effective: 2026-01-01
+models:
+  claude-opus-5-5:
+    input: 4
+    cache_write_5m: 1.25
+    cache_write_1h: 2.0
+    cache_read: 0.1
+    output: 20
+    fast: {input: 8, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 40}
+  claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
+"#;
+
+#[test]
+fn a_fast_recipe_reads_the_fast_cells_and_a_model_without_them_its_standard_ones() {
+    let pricing = PriceTable::from_yaml(FAST_PRICES, "test").unwrap();
+    let tables = PlanTables {
+        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        path: None,
+        source: "test".to_string(),
+    };
+    let timing = KeepaliveTiming::default();
+    let at = |model: &str, fast: bool| {
+        break_even_ms(
+            factors_for(&pricing, &tables, Funding::ApiKey, model, fast),
+            FIVE_MINUTES_MS,
+            &timing,
+        )
+    };
+    assert_eq!(
+        (at("claude-opus-5-5", false), at("claude-opus-5-5", true)),
+        (Some(2_760_000), Some(1_260_000)),
+        "46 minutes at the standard cells, 21 at the fast ones"
+    );
+    assert_eq!(
+        at("claude-sonnet-5-5", true),
+        at("claude-sonnet-5-5", false),
+        "a model with no fast cells prices a fast recipe at its standard ones, as the price table lists it"
+    );
+    assert_eq!(
+        (
+            at("claude-unlisted-9", false),
+            at("claude-unlisted-9", true)
+        ),
+        (Some(2_760_000), Some(1_260_000)),
+        "a model priced nowhere takes the tightest row of the table its speed reads"
     );
 }
