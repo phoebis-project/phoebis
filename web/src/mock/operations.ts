@@ -299,10 +299,9 @@ for (const pin of SESSIONS) {
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
-// the session expiry, with that holder's
-// own requests and no pin or recipe. The holder's last request ran on the session the live key holds now, so the row
-// carries that id, and it joins the list after the probe times are filled in, which would otherwise hand it that
-// session's next probe.
+// the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
+// session the live key holds now, so the row carries that id, and it joins the list after the probe times are filled
+// in, which would otherwise hand it that session's next probe.
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {

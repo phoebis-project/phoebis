@@ -120,7 +120,10 @@ const columnsMarked = (name, table, fill) => {
     missing: [table ? JSON.stringify(read.heads) : 'no table', JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
   });
 };
-/** Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the hover. */
+/**
+ * Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the
+ * hover.
+ */
 const fillTitles = (name, table) => {
   const cells = [...(table?.querySelectorAll('tbody td.col-fill') ?? [])];
   const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '')).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
@@ -482,7 +485,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
 columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
-fillTitles('/ every Key cell of the recent requests table opens its title with its own text', m.container.querySelector('.dash__recent'));
+fillTitles('/ every Key cell of the recent requests table carries its own text as its title', m.container.querySelector('.dash__recent'));
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -6517,7 +6520,7 @@ m = await mount('/models');
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
   columnsMarked('/models the rules table marks Pattern as its fill column', rulesCard()?.querySelector('table'), ['Pattern']);
-  fillTitles('/models every Pattern cell of the rules table opens its title with its own text', rulesCard()?.querySelector('table'));
+  fillTitles('/models every Pattern cell of the rules table carries its own text as its title', rulesCard()?.querySelector('table'));
   const select = m.container.querySelector('select[aria-label="Key"]');
   if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
   else {
@@ -9352,7 +9355,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
     if (table) read += 1;
     columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
-    fillTitles(`/analytics every group cell of a breakdown table opens its title with its own text: ${title}`, table);
+    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title: ${title}`, table);
   }
   results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
@@ -9634,7 +9637,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   await tab(m, 'Cache');
   columnsMarked('/analytics the placements table marks Rung as its fill column', m.container.querySelector('.placements-table'), ['Rung']);
-  fillTitles('/analytics every Rung cell of the placements table opens its title with its own text', m.container.querySelector('.placements-table'));
+  fillTitles('/analytics every Rung cell of the placements table carries its own text as its title', m.container.querySelector('.placements-table'));
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -9655,7 +9658,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   await tab(m, 'Burn');
   columnsMarked('/analytics the budgets table marks Pool and Account as its fill columns', m.container.querySelector('.budgets-table'), ['Pool', 'Account']);
-  fillTitles('/analytics every Pool and Account cell of the budgets table opens its title with its own text', m.container.querySelector('.budgets-table'));
+  fillTitles('/analytics every Pool and Account cell of the budgets table carries its own text as its title', m.container.querySelector('.budgets-table'));
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
@@ -10948,7 +10951,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       });
     }
     const listed = await api.listSessions();
-    // The cell's id line, while the whole id rides the cell's title.
+    // The cell's id line, while the whole id rides the cell's
+    // title.
     const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
     // A row is its key, its holder and its session id, the three the route keys a session by.
     const sessionOf = (r) => listed.find((s) => s.sessionId === cellOf(r).title && s.keyId === cell(r, 'Key')?.firstChild?.textContent && s.historical === (cell(r, 'Key')?.querySelector('.sub') !== null));

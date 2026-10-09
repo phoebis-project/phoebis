@@ -1607,8 +1607,8 @@ async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_th
             body: b"{}".to_vec(),
         },
     );
-    // The profile is the one read the poll's path makes ahead of a usage reading, so its 429 is the first thing
-    // the account's entry records.
+    // The poll reads the usage first and the profile after it, so a profile 429 ahead of any usage reading comes
+    // through the profile read alone, the first thing the account's entry then records.
     assert!(
         h.usage.profile("business").await.is_err(),
         "the first read meets the profile 429"
