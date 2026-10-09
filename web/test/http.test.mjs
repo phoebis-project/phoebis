@@ -171,13 +171,14 @@ test('the request list encodes the outcome list', async () => {
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();
-  const q = { accountIds: ['business', 'direct'], clients: ['a', 'b'], from: '1970-01-01T00:00:00.000Z', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z', userAgentGroups: ['a', 'b'] };
+  const q = { accountIds: ['business', 'direct'], clients: ['a', 'b'], from: '1970-01-01T00:00:00.000Z', funding: 'plan', groupBy: 'key', includeProbes: true, keyIds: ['desktop'], models: ['claude-sonnet-5'], poolIds: ['all'], to: '1970-01-02T00:00:00.000Z', userAgentGroups: ['a', 'b'] };
   assert.deepEqual(await api.getAnalyticsSeries(q), []);
   const series = new URL(calls[0].url, 'http://x');
   assert.equal(series.pathname, '/admin/analytics/series');
   assert.equal(series.searchParams.get('range'), '0,86400000');
   assert.equal(series.searchParams.get('group_by'), 'key');
   assert.equal(series.searchParams.get('include_probes'), 'true');
+  assert.equal(series.searchParams.get('funding'), 'plan');
   assert.equal(series.searchParams.get('accounts'), 'business,direct');
   assert.equal(series.searchParams.get('keys'), 'desktop');
   assert.equal(series.searchParams.get('models'), 'claude-sonnet-5');
@@ -185,11 +186,11 @@ test('the analytics reads encode the range, the dimension, and every id list', a
   // One pattern per line, so a pattern holding a comma still names one group.
   assert.ok(String(calls[0].url).includes('user_agent_groups=a%0Ab'), String(calls[0].url));
   assert.ok(String(calls[0].url).includes('clients=a%0Ab'), String(calls[0].url));
-  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], clients: undefined, groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [], userAgentGroups: undefined }), []);
+  assert.deepEqual(await api.getAnalyticsBreakdown({ ...q, accountIds: [], clients: undefined, funding: undefined, groupBy: 'all', includeProbes: undefined, keyIds: [], models: [], poolIds: [], userAgentGroups: undefined }), []);
   const breakdown = new URL(calls[1].url, 'http://x');
   assert.equal(breakdown.pathname, '/admin/analytics/breakdown');
   assert.equal(breakdown.searchParams.get('group_by'), 'all');
-  assert.deepEqual([...breakdown.searchParams.keys()], ['group_by', 'range'], 'an empty list and an unset flag are left off the query');
+  assert.deepEqual([...breakdown.searchParams.keys()], ['group_by', 'range'], 'an empty list, an unset flag and an unset funding are left off the query');
 });
 
 test('the burn and rewrite reads send the range and the grouping and answer what the routes decode to', async () => {

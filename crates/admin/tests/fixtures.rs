@@ -1047,6 +1047,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "/admin/analytics/breakdown?range=24h&group_by=key",
         ),
         (
+            "analytics_breakdown_accounts",
+            "/admin/analytics/breakdown?range=24h&group_by=account",
+        ),
+        (
             "analytics_breakdown_speed",
             "/admin/analytics/breakdown?range=24h&group_by=speed",
         ),
@@ -1063,6 +1067,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_series",
             "/admin/analytics/series?range=24h&group_by=key",
+        ),
+        (
+            "analytics_series_accounts",
+            "/admin/analytics/series?range=24h&group_by=account",
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),

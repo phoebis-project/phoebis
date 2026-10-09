@@ -10,7 +10,8 @@ use axum::Json;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, moves_by_reason,
     parse_range, read_account_rollups, rewrite_series, series_paged, session_burn_series,
-    AccountRollupRow, LedgerError, LiveKeys, RollupFilter, SeriesFilter, Tiers, GROUP_BYS,
+    AccountRollupRow, FundingFilter, LedgerError, LiveKeys, RollupFilter, SeriesFilter,
+    SharePricing, Tiers, GROUP_BYS,
 };
 use phoebis_store::AccountKind;
 use serde_json::{json, Value};
@@ -61,12 +62,45 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
         user_agent_groups: agent_list(q, "user_agent_groups"),
         clients: agent_list(q, "clients"),
         include_probes: flag(q, "include_probes"),
+        // Read by `selection` alone: `placements` builds its filter here and never takes the parameter.
+        funding: None,
     }
 }
 
-/// The range in Unix milliseconds, the group-by, the filter, and the live keys' generations the key dimension is
-/// read against.
-type Selection = ((i64, i64), String, RollupFilter, LiveKeys);
+/// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
+/// against, the registry's account kinds and, under the account grouping, each oauth account's tier.
+type Selection = (
+    (i64, i64),
+    String,
+    RollupFilter,
+    LiveKeys,
+    HashMap<String, AccountKind>,
+    Tiers,
+);
+
+/// The registry's account kinds, which the funding filter pairs with a row's funding word, and under the account
+/// grouping alone each oauth account's tier, which the shares price under: no other grouping answers a share, so
+/// none reads a tier or fails on that read.
+#[allow(clippy::result_large_err)]
+fn kinds_and_tiers(
+    state: &AdminState,
+    group_by: &str,
+) -> Result<(HashMap<String, AccountKind>, Tiers), Response> {
+    let accounts = state.store.accounts().map_err(store_failure)?;
+    let kinds = accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
+    let mut tiers = Tiers::new();
+    if group_by == "account" {
+        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+            let tier = state
+                .store
+                .subscription(&account.id)
+                .map_err(store_failure)?
+                .and_then(|s| s.tier);
+            tiers.insert(account.id.clone(), tier);
+        }
+    }
+    Ok((kinds, tiers))
+}
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
@@ -82,7 +116,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             "group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
         ));
     }
-    let filter = filter_of(q);
+    let mut filter = filter_of(q);
     if !phoebis_ledger::patterns_within_bounds(&filter.user_agents)
         || !phoebis_ledger::patterns_within_bounds(&filter.user_agent_groups)
         || !phoebis_ledger::patterns_within_bounds(&filter.clients)
@@ -92,8 +126,20 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             phoebis_ledger::PATTERNS_TOO_LONG,
         ));
     }
+    filter.funding = match q.get("funding").map(String::as_str) {
+        None => None,
+        Some("billed") => Some(FundingFilter::Billed),
+        Some("plan") => Some(FundingFilter::Plan),
+        Some(_) => {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "funding is billed or plan",
+            ))
+        }
+    };
+    let (kinds, tiers) = kinds_and_tiers(state, &group_by)?;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    Ok(((from, to), group_by, filter, live))
+    Ok(((from, to), group_by, filter, live, kinds, tiers))
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -105,11 +151,16 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
+    let pricing = (group_by == "account").then(|| SharePricing {
+        tables: &state.tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    });
     let points = match series_paged(
         state.ledger.db(),
         &filter,
@@ -118,6 +169,8 @@ pub(crate) async fn series(
         to,
         bucket,
         &group_by,
+        &kinds,
+        pricing,
     )
     .await
     {
@@ -133,11 +186,27 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
-    let rows = match breakdown_paged(state.ledger.db(), &filter, &live, from, to, &group_by).await {
+    let pricing = (group_by == "account").then(|| SharePricing {
+        tables: &state.tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    });
+    let rows = match breakdown_paged(
+        state.ledger.db(),
+        &filter,
+        &live,
+        from,
+        to,
+        &group_by,
+        &kinds,
+        pricing,
+    )
+    .await
+    {
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
     };
@@ -288,23 +357,10 @@ pub(crate) async fn burn(
             "group_by is account, key, request_class, or session",
         );
     }
-    let accounts = match state.store.accounts() {
-        Ok(a) => a,
-        Err(e) => return store_failure(e),
+    let (kinds, tiers) = match kinds_and_tiers(&state, &group_by) {
+        Ok(x) => x,
+        Err(r) => return r,
     };
-    let kinds: HashMap<String, AccountKind> =
-        accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
-    let mut tiers = Tiers::new();
-    // Only the account grouping answers a share, so no other grouping reads a tier or fails on that read.
-    if group_by == "account" {
-        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-            let tier = match state.store.subscription(&account.id) {
-                Ok(row) => row.and_then(|s| s.tier),
-                Err(e) => return store_failure(e),
-            };
-            tiers.insert(account.id.clone(), tier);
-        }
-    }
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);
     let filter = SeriesFilter {

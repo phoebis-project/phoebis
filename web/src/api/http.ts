@@ -125,7 +125,7 @@ const qs = (params: Record<string, string | number | boolean | string[] | undefi
 };
 const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to)}`;
 // `qs` joins a list with commas, which a pattern may hold; every pattern list travels joined by newline instead.
-const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: q.clients?.join('\n'), group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
+const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: q.clients?.join('\n'), funding: q.funding, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: q.userAgentGroups?.join('\n'), user_agents: q.userAgents?.join('\n') });
 
 /** Each model once, the first catalog naming an id answering for it, in id order; a fetch that failed adds nothing. */
 export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[] => {

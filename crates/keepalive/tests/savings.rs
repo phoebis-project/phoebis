@@ -1162,6 +1162,75 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
     );
 }
 
+/// A probe's credit row files under the funding its selection stood under, the account's overage state when the
+/// probe was placed, since the answer's rate-limit headers never reach the engine. The probe's own request row
+/// reads the head's overage fact, so with the account in overage both rows file under `overage`.
+#[tokio::test]
+async fn an_overage_probe_s_request_and_credit_rows_file_under_overage_as_the_selection_s_state_decides(
+) {
+    let mut r = rig(subscription_spec()).await;
+    r.enter_overage("o", r.now() + 10_000_000).await;
+    settled(&r, |r| async move {
+        r.h.router
+            .overage("o")
+            .await
+            .unwrap()
+            .is_some_and(|e| e.in_use)
+    })
+    .await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // The probe's answer carries the unified overage header the ledger reads the request row's funding from.
+    let Respond::Json {
+        body: read_back, ..
+    } = probe_answer(2_000, 0)
+    else {
+        unreachable!("the standing probe answer is a JSON body")
+    };
+    r.up.push_credential_rule(
+        OAUTH_SECRET,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![(
+                "anthropic-ratelimit-unified-overage-in-use".into(),
+                "true".into(),
+            )],
+            body: read_back,
+        },
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one covering probe");
+    let probe_rows_of_o = |rows: &[RollupRow]| {
+        rows.iter()
+            .filter(|row| row.kind == "probe" && row.account_id == "o")
+            .map(|row| {
+                (
+                    if row.probe_cost_usd > 0.0 {
+                        "credit"
+                    } else {
+                        "request"
+                    },
+                    row.funding.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let rows = rollups(&r, |rows| probe_rows_of_o(rows).len() == 2).await;
+    let mut fundings = probe_rows_of_o(&rows);
+    fundings.sort();
+    assert_eq!(
+        fundings,
+        [
+            ("credit", "overage".to_string()),
+            ("request", "overage".to_string())
+        ],
+        "both rows of the probe file under the overage the selection stood in: {rows:?}"
+    );
+}
+
 /// The account check refuses a credit on its own. A probe warms the recipe's entry on `a`, and the next request on
 /// the same model and speed arrives past the TTL since the last real request, while that entry is still there, and is
 /// served on `b`: what it read there ordinary traffic cached, not the probe, so nothing is credited and the probe

@@ -756,10 +756,13 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         } else {
             STANDARD_SPEED
         },
-        // A credit carries no head of its own to read overage from; the probe's request row, folded through
-        // `fold_request`, files its spend under the overage its head reported.
+        // A credit carries no head of its own to read overage from: it files under the overage state the engine saw
+        // at the probe's selection, after the fast check, so a fast probe's credit files beside its request row,
+        // which `delta_of` keys `fast` whatever the overage flag.
         if delta.speed == Some(Speed::Fast) {
             FAST_FUNDING
+        } else if delta.overage_in_use == Some(true) {
+            OVERAGE_FUNDING
         } else {
             PLAN_FUNDING
         },

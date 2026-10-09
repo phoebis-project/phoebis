@@ -114,6 +114,9 @@ pub struct ProbeRecord {
     pub cost_usd: f64,
     /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
     pub fast: bool,
+    /// The account's overage state at the selection the probe dispatched under, which keys the credit row's
+    /// funding: the answer's rate-limit headers never reach the engine, so the selection's state decides.
+    pub in_overage: bool,
     pub key: SessionKey,
     pub key_generation: i64,
     /// The serving account's kind, looked up by `account` after the response; `None` when the account left the
@@ -276,7 +279,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         let rolled = inner.roll_day(now);
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
         // request either, so its probe settles in dollars like today and the credit path never matches it.
-        let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
+        let in_overage = record.in_overage;
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
         // A fast replay draws usage credits whatever the account's funding, so it settles in dollars: the pool's
         // dollar figure below carries it and the account's share figure never does.
@@ -380,6 +383,7 @@ impl Inner {
             canonical_model: job.canonical_model.clone(),
             cost_usd: 0.0,
             fast: job.recipe.fast,
+            in_overage: false,
             key: job.key.clone(),
             key_generation: job.key_generation,
             kind: None,
@@ -398,6 +402,7 @@ impl Inner {
             }
             Exchange::Answered(result) => result,
         };
+        record.in_overage = result.in_overage;
         if let Some(account) = &result.account {
             record.account = account.clone();
         }

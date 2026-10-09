@@ -196,6 +196,7 @@ impl Engine {
             record.fast,
         );
         d.probe_cost_usd = record.cost_usd;
+        d.overage_in_use = Some(record.in_overage);
         if record.outcome == ProbeOutcome::Migrated {
             d.probe_migrated = 1;
         }

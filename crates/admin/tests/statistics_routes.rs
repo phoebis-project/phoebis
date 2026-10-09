@@ -1392,6 +1392,318 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
     );
 }
 
+/// Waits until every named request row has landed, so a read that follows sees all of their rollups.
+async fn landed(parts: &common::Full, ids: &[&str]) {
+    for id in ids {
+        fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+            parts.db.request(id).await.unwrap()
+        })
+        .await;
+    }
+}
+
+/// A cached Sonnet 5.5 request and a probe on `business`, and a `direct` request, an hour ago.
+fn share_rows() -> Vec<Record> {
+    let at = common::NOW - HOUR;
+    let mut cached = record("share-cached", at, "claude-sonnet-5-5", "s1");
+    if let Record::Request { attempts, .. } = &mut cached {
+        attempts[0].cache_read_tokens = Some(10_000);
+    }
+    let mut probe = record("share-probe", at, "claude-sonnet-5-5", "s1");
+    if let Record::Request {
+        request, attempts, ..
+    } = &mut probe
+    {
+        request.kind = "probe".into();
+        attempts[0].input_tokens = None;
+        attempts[0].output_tokens = None;
+        attempts[0].cache_read_tokens = Some(2_000);
+    }
+    let mut direct = record("share-direct", at, "claude-sonnet-5-5", "s2");
+    if let Record::Request { attempts, .. } = &mut direct {
+        attempts[0].account_id = "direct".into();
+        attempts[0].account_kind = "api_key".into();
+    }
+    vec![cached, probe, direct]
+}
+
+/// An overage row, a fast row and a plan row on `business`, a `direct` row, and a plan row on an account the
+/// registry does not hold, an hour ago.
+fn funded_rows() -> Vec<Record> {
+    let at = common::NOW - HOUR;
+    let mut overage = record("fund-overage", at, "claude-sonnet-5-5", "s1");
+    if let Record::Request { attempts, .. } = &mut overage {
+        attempts[0].overage_in_use = Some(true);
+    }
+    let mut fast = record("fund-fast", at, "claude-sonnet-5-5", "s1");
+    if let Record::Request { attempts, .. } = &mut fast {
+        attempts[0].speed = Some("fast".into());
+    }
+    let mut direct = record("fund-direct", at, "claude-sonnet-5-5", "s2");
+    if let Record::Request { attempts, .. } = &mut direct {
+        attempts[0].account_id = "direct".into();
+        attempts[0].account_kind = "api_key".into();
+    }
+    let plan = record("fund-plan", at, "claude-sonnet-5-5", "s1");
+    let mut gone = record("fund-gone", at, "claude-sonnet-5-5", "s3");
+    if let Record::Request { attempts, .. } = &mut gone {
+        attempts[0].account_id = "gone".into();
+    }
+    vec![overage, fast, direct, plan, gone]
+}
+
+fn row_of<'a>(body: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == key)
+        .unwrap_or_else(|| panic!("a row for {key}: {body}"))
+}
+
+/// Each row's key and request count, in the route's order.
+fn request_counts(body: &serde_json::Value) -> Vec<(String, u64)> {
+    body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["key"].as_str().unwrap().to_string(),
+                r["requests"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+const SHARE_MEMBERS: [&str; 5] = [
+    "cache_shares",
+    "cost_shares",
+    "plan_output_tokens",
+    "plan_requests",
+    "probe_shares",
+];
+
+fn positive(v: &serde_json::Value) -> bool {
+    v.as_f64().is_some_and(|x| x > 0.0)
+}
+
+#[tokio::test]
+async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_grouping_and_null_elsewhere(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    set_max_20x(&parts.store);
+    for row in share_rows() {
+        parts.ledger.record(row);
+    }
+    landed(&parts, &["share-cached", "share-probe", "share-direct"]).await;
+    let url = "/admin/analytics/breakdown?range=24h&group_by=account";
+    let body = json(get(&parts.app, url, Some(&cookie)).await).await;
+    let business = row_of(&body, "business");
+    assert!(
+        positive(&business["cost_shares"]["five_hour"])
+            && positive(&business["cost_shares"]["seven_day"])
+            && business["cost_shares"]
+                .as_object()
+                .is_some_and(|m| m.len() == 2),
+        "a Sonnet account prices the two shared windows and no week of its own: {business}"
+    );
+    assert!(
+        positive(&business["cache_shares"]["five_hour"]["read"]),
+        "the cached row's read share: {business}"
+    );
+    assert!(
+        positive(&business["probe_shares"]["five_hour"]["cost"])
+            && business["probe_shares"]["five_hour"]["wasted"].is_null(),
+        "the probe's share with no waste recorded: {business}"
+    );
+    assert_eq!(
+        (&business["plan_requests"], &business["plan_output_tokens"]),
+        (&serde_json::json!(1), &serde_json::json!(100)),
+        "the probe row stays out of the request side by default: {business}"
+    );
+    let with_probes = json(
+        get(
+            &parts.app,
+            &format!("{url}&include_probes=true"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        row_of(&with_probes, "business")["plan_requests"],
+        2,
+        "and joins it under include_probes: {with_probes}"
+    );
+    let direct = row_of(&body, "direct");
+    for member in SHARE_MEMBERS {
+        assert!(
+            null_field(direct, member),
+            "an api_key group answers {member} null: {direct}"
+        );
+    }
+    let by_model = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    for row in by_model["rows"].as_array().unwrap() {
+        for member in SHARE_MEMBERS {
+            assert!(
+                null_field(row, member),
+                "no grouping but account answers {member}: {row}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_series_points_carry_the_same_shares_per_bucket() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    set_max_20x(&parts.store);
+    for row in share_rows() {
+        parts.ledger.record(row);
+    }
+    landed(&parts, &["share-cached", "share-probe", "share-direct"]).await;
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let series = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let point = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|p| {
+            p["groups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["key"] == "business")
+        })
+        .unwrap_or_else(|| panic!("a bucket carries the business group: {series}"));
+    let business = row_of(&breakdown, "business");
+    for member in SHARE_MEMBERS {
+        assert_eq!(
+            point[member], business[member],
+            "the bucket's {member} is the breakdown row's: {point} vs {business}"
+        );
+    }
+    assert!(
+        positive(&point["cost_shares"]["five_hour"]),
+        "and it is priced: {point}"
+    );
+}
+
+#[tokio::test]
+async fn funding_billed_keeps_the_overage_fast_and_api_key_rows_and_drops_the_plan_row() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for row in funded_rows() {
+        parts.ledger.record(row);
+    }
+    landed(
+        &parts,
+        &[
+            "fund-overage",
+            "fund-fast",
+            "fund-direct",
+            "fund-plan",
+            "fund-gone",
+        ],
+    )
+    .await;
+    let billed = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=account&funding=billed",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        request_counts(&billed),
+        [("business".to_string(), 2), ("direct".to_string(), 1)],
+        "the overage and fast rows and the api_key row, and neither plan row: {billed}"
+    );
+}
+
+#[tokio::test]
+async fn funding_plan_keeps_the_plan_row_and_one_of_an_account_the_registry_no_longer_holds() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for row in funded_rows() {
+        parts.ledger.record(row);
+    }
+    landed(
+        &parts,
+        &[
+            "fund-overage",
+            "fund-fast",
+            "fund-direct",
+            "fund-plan",
+            "fund-gone",
+        ],
+    )
+    .await;
+    let read = |funding: &str| {
+        let url = format!("/admin/analytics/breakdown?range=24h&group_by=account{funding}");
+        let (app, cookie) = (&parts.app, &cookie);
+        async move { request_counts(&json(get(app, &url, Some(cookie)).await).await) }
+    };
+    let plan = read("&funding=plan").await;
+    assert_eq!(
+        plan,
+        [("business".to_string(), 1), ("gone".to_string(), 1)],
+        "the plan row and the row of the account the registry does not hold"
+    );
+    let sum = |rows: &[(String, u64)]| rows.iter().map(|(_, n)| n).sum::<u64>();
+    let billed = read("&funding=billed").await;
+    let every = read("").await;
+    assert_eq!(
+        (sum(&billed) + sum(&plan), sum(&every)),
+        (5, 5),
+        "the two filtered sums add up to the unfiltered sum: {billed:?} and {plan:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_funding_value_is_refused() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for route in ["breakdown", "series"] {
+        let refused = get(
+            &parts.app,
+            &format!("/admin/analytics/{route}?range=24h&funding=credits"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{route}");
+        assert_eq!(json(refused).await["error"], "funding is billed or plan");
+    }
+}
+
 #[tokio::test]
 async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts_kind() {
     let parts = common::admin_parts_full().await;

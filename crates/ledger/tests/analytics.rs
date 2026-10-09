@@ -7,11 +7,11 @@ use phoebis_ledger::{
     burn_series_over, delta_of, fold_account, fold_event, fold_keepalive, hour_ceil, hour_of,
     key_request_totals, list_requests, member_spends, moves_by_reason, placements, price_shares,
     read_account_rollups, read_rollups, rewrite_series, run_retention_blocking, series,
-    series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram,
-    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
-    SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
-    PLAN_FUNDING, UNATTRIBUTED,
+    series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, FundingFilter,
+    GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
+    PlanTables, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect,
+    SeriesFilter, SharePricing, SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING, NO_CLASS,
+    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -421,6 +421,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
+        None,
     );
     assert_eq!(
         groups
@@ -447,6 +448,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
+        None,
     );
     let ops = agents
         .iter()
@@ -463,6 +465,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         true,
         &live,
         &[],
+        None,
     );
     assert_eq!(
         clients
@@ -614,11 +617,22 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 filter.probes_counted(),
                 &live,
                 &filter.user_agent_groups,
+                None,
             )
             .unwrap();
-            let paged = series_paged(&db, &filter, &live, from, to, bucket, group_by)
-                .await
-                .unwrap();
+            let paged = series_paged(
+                &db,
+                &filter,
+                &live,
+                from,
+                to,
+                bucket,
+                group_by,
+                &HashMap::new(),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
@@ -630,10 +644,20 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 filter.probes_counted(),
                 &live,
                 &filter.user_agent_groups,
+                None,
             );
-            let paged = breakdown_paged(&db, &filter, &live, from, to, group_by)
-                .await
-                .unwrap();
+            let paged = breakdown_paged(
+                &db,
+                &filter,
+                &live,
+                from,
+                to,
+                group_by,
+                &HashMap::new(),
+                None,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
@@ -668,12 +692,12 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
     let filtered = apply_filter(rows, &RollupFilter::default());
-    let default_groups = breakdown(&filtered, "key", false, &live, &[]);
+    let default_groups = breakdown(&filtered, "key", false, &live, &[], None);
     assert!(
         !default_groups.iter().any(|g| g.key == "k1"),
         "a group whose rows are all probes stays out of the default breakdown: {default_groups:?}"
     );
-    let with_probes = breakdown(&filtered, "key", true, &live, &[]);
+    let with_probes = breakdown(&filtered, "key", true, &live, &[], None);
     assert!(
         with_probes.iter().any(|g| g.key == "k1"),
         "the same group appears once probes count as requests: {with_probes:?}"
@@ -712,7 +736,7 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
     let filtered = apply_filter(rows, &RollupFilter::default());
     // A kept-warm credit never touches `requests`, so a group made only of credit rows never sees a probe
     // row either; it belongs in the default breakdown, not just the probe-counted one.
-    let default_groups = breakdown(&filtered, "user_agent", false, &live, &[]);
+    let default_groups = breakdown(&filtered, "user_agent", false, &live, &[], None);
     let group = default_groups
         .iter()
         .find(|g| g.key == UNATTRIBUTED)
@@ -897,7 +921,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
     let filtered = apply_filter(rows, &RollupFilter::default());
-    let groups = breakdown(&filtered, "request_class", false, &live, &[]);
+    let groups = breakdown(&filtered, "request_class", false, &live, &[], None);
     let keys: Vec<&str> = groups.iter().map(|g| g.key.as_str()).collect();
     assert!(
         keys.contains(&"main") && keys.contains(&"compaction") && keys.contains(&NO_CLASS),
@@ -987,7 +1011,7 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
         .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap();
     let filtered = apply_filter(rows, &RollupFilter::default());
-    let groups = breakdown(&filtered, "speed", false, &live, &[]);
+    let groups = breakdown(&filtered, "speed", false, &live, &[], None);
     assert_eq!(
         groups
             .iter()
@@ -1026,6 +1050,919 @@ fn the_speed_filter_reads_the_serving_attempts_speed() {
         listed(&["standard"]),
         vec!["r-plain"],
         "the 429 before it named no speed, which must not read as standard"
+    );
+}
+
+/// One request for the share cases, through `insert_request`: the attempt's five token counts as given, its head's
+/// overage flag and its answer's speed as named, and a client where a case needs the row keyed apart from a credit.
+struct ShareRow<'a> {
+    id: &'a str,
+    account: &'a str,
+    account_kind: &'a str,
+    kind: &'a str,
+    model: &'a str,
+    at: i64,
+    usage: PinUsage,
+    overage: Option<bool>,
+    speed: Option<&'a str>,
+    client: Option<&'a str>,
+    usd: f64,
+}
+
+impl Default for ShareRow<'_> {
+    fn default() -> Self {
+        ShareRow {
+            id: "r",
+            account: "a",
+            account_kind: "oauth",
+            kind: "inference",
+            model: "claude-fable-5-1",
+            at: WEEKDAY_OFF_PEAK,
+            usage: usage(1_000, 100),
+            overage: None,
+            speed: None,
+            client: None,
+            usd: 0.0,
+        }
+    }
+}
+
+fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
+    db.insert_request(
+        &RequestRecord {
+            id: row.id.into(),
+            received_at: row.at,
+            finished_at: Some(row.at + 500),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            session_id: Some("s".into()),
+            canonical_model: row.model.into(),
+            model: row.model.into(),
+            kind: row.kind.into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            client: row.client.map(String::from),
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: row.id.into(),
+            attempt: 1,
+            account_id: row.account.into(),
+            account_kind: row.account_kind.into(),
+            started_at: row.at,
+            finished_at: Some(row.at + 500),
+            outcome: "succeeded".into(),
+            input_tokens: Some(row.usage.input),
+            cache_read_tokens: Some(row.usage.cache_read),
+            cache_write_5m_tokens: Some(row.usage.write_5m),
+            cache_write_1h_tokens: Some(row.usage.write_1h),
+            output_tokens: Some(row.usage.output),
+            estimated_usd: Some(row.usd),
+            overage_in_use: row.overage,
+            speed: row.speed.map(String::from),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+/// The oauth account `a` and the api_key account `k` of the share cases.
+fn share_kinds() -> HashMap<String, AccountKind> {
+    HashMap::from([
+        ("a".to_string(), AccountKind::Oauth),
+        ("k".to_string(), AccountKind::ApiKey),
+    ])
+}
+
+fn share_tiers(tier: &str) -> Tiers {
+    HashMap::from([("a".to_string(), Some(tier.to_string()))])
+}
+
+/// The hour of `at` as `[from, to)` in milliseconds, `from` the instant every row of the hour is priced at.
+fn hour_range(at: i64) -> (i64, i64) {
+    let from = hour_of(at) * 1_000;
+    (from, from + 3_600_000)
+}
+
+/// The account-grouped breakdown of `[from, to)` under `filter`, priced where `pricing` is given.
+async fn account_groups(
+    db: &std::sync::Arc<LedgerDb>,
+    filter: &RollupFilter,
+    from: i64,
+    to: i64,
+    kinds: &HashMap<String, AccountKind>,
+    pricing: Option<SharePricing<'_>>,
+) -> Vec<GroupRow> {
+    breakdown_paged(
+        db,
+        filter,
+        &LiveKeys::default(),
+        from,
+        to,
+        "account",
+        kinds,
+        pricing,
+    )
+    .await
+    .unwrap()
+}
+
+fn group<'a>(groups: &'a [GroupRow], key: &str) -> &'a GroupRow {
+    groups
+        .iter()
+        .find(|g| g.key == key)
+        .unwrap_or_else(|| panic!("the group {key} is answered: {groups:?}"))
+}
+
+fn close(got: Option<&f64>, want: f64) -> bool {
+    got.is_some_and(|g| (g - want).abs() < 1e-12)
+}
+
+fn with_probes() -> RollupFilter {
+    RollupFilter {
+        include_probes: true,
+        ..RollupFilter::default()
+    }
+}
+
+/// A Fable share on `test_tier` at the off-band hour, the share cases' instant.
+fn fable_shares(tables: &PlanTables, usage: PinUsage) -> WindowShares {
+    price_shares(
+        tables,
+        "test_tier",
+        "claude-fable-5-1",
+        usage,
+        hour_range(WEEKDAY_OFF_PEAK).0,
+    )
+}
+
+#[tokio::test]
+async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares_and_a_cached_row_s_read_and_write(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let plain = usage(1_000, 100);
+    let cached = PinUsage {
+        input: 500,
+        cache_read: 2_000,
+        write_5m: 300,
+        output: 50,
+        ..PinUsage::default()
+    };
+    let probe = PinUsage {
+        cache_read: 2_000,
+        ..PinUsage::default()
+    };
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plain",
+            usage: plain,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-cached",
+            usage: cached,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            usage: probe,
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    let a = group(&groups, "a");
+    let cost = a
+        .cost_shares
+        .as_ref()
+        .expect("an oauth group with a tier prices its shares");
+    assert_eq!(
+        cost.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+        "a Fable account prices every window it carries: {cost:?}"
+    );
+    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        let want = fable_shares(&tables, plain)[window].unwrap()
+            + fable_shares(&tables, cached)[window].unwrap();
+        assert!(
+            close(cost.get(window), want),
+            "the two plan rows' shares sum on {window}: {cost:?} vs {want}"
+        );
+    }
+    let cache = a.cache_shares.as_ref().expect("the cache shares");
+    let read = fable_shares(
+        &tables,
+        PinUsage {
+            cache_read: 2_000,
+            ..PinUsage::default()
+        },
+    )[SEVEN_DAY]
+        .unwrap();
+    let write = fable_shares(
+        &tables,
+        PinUsage {
+            write_5m: 300,
+            ..PinUsage::default()
+        },
+    )[SEVEN_DAY]
+        .unwrap();
+    assert!(
+        read > 0.0
+            && cache.get(SEVEN_DAY).is_some_and(|s| {
+                (s.read - read).abs() < 1e-12 && (s.write - write).abs() < 1e-12
+            }),
+        "the cached row's read and write shares, the plain row adding nothing: {cache:?} vs {read} and {write}"
+    );
+    let probes = a.probe_shares.as_ref().expect("the probe shares");
+    let probe_cost = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
+    assert!(
+        probes
+            .get(FIVE_HOUR)
+            .is_some_and(|s| (s.cost - probe_cost).abs() < 1e-12 && s.wasted.is_none()),
+        "the probe row's share apart from the request side, and no probe dollars to read a waste from: \
+         {probes:?} vs {probe_cost}"
+    );
+    assert_eq!(
+        (a.plan_requests, a.plan_output_tokens),
+        (Some(2), Some(150)),
+        "the two plan rows and their output tokens: {a:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_other() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-narrow",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("narrow_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    let cost = group(&groups, "a")
+        .cost_shares
+        .as_ref()
+        .expect("the narrow tier still prices the 5-hour window");
+    let want = price_shares(
+        &tables,
+        "narrow_tier",
+        "claude-fable-5-1",
+        usage(1_000, 100),
+        from,
+    )[FIVE_HOUR]
+        .unwrap();
+    assert_eq!(
+        cost.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR],
+        "a tier sized on the 5-hour window alone answers neither week: {cost:?}"
+    );
+    assert!(close(cost.get(FIVE_HOUR), want), "{cost:?} vs {want}");
+}
+
+#[test]
+fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-fable",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-haiku",
+            model: "claude-haiku-4-5",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
+    let mut rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    assert_eq!(rows.len(), 2, "one rollup row per model");
+    let fable = fable_shares(&tables, usage(1_000, 100));
+    let haiku = price_shares(
+        &tables,
+        "test_tier",
+        "claude-haiku-4-5",
+        usage(1_000, 100),
+        from,
+    );
+    for order in ["as read", "reversed"] {
+        let groups = breakdown(
+            &rows,
+            "account",
+            false,
+            &LiveKeys::default(),
+            &[],
+            Some(pricing),
+        );
+        let cost = group(&groups, "a")
+            .cost_shares
+            .as_ref()
+            .expect("the shares are priced");
+        assert!(
+            close(cost.get(SEVEN_DAY_FABLE), fable[SEVEN_DAY_FABLE].unwrap()),
+            "the Fable week is the Fable row's alone, rows {order}: {cost:?} vs {fable:?}"
+        );
+        assert!(
+            close(
+                cost.get(FIVE_HOUR),
+                fable[FIVE_HOUR].unwrap() + haiku[FIVE_HOUR].unwrap()
+            ) && close(
+                cost.get(SEVEN_DAY),
+                fable[SEVEN_DAY].unwrap() + haiku[SEVEN_DAY].unwrap()
+            ),
+            "the shared windows sum both rows, rows {order}: {cost:?}"
+        );
+        rows.reverse();
+    }
+}
+
+#[tokio::test]
+async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-fable",
+            ..ShareRow::default()
+        },
+    );
+    // A Fable id the cost model gives no weight: the week applies to it and nothing prices it.
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-fable-unweighted",
+            model: "claude-fable-9-9",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    let a = group(&groups, "a");
+    assert!(
+        a.cost_shares.as_ref().is_some_and(|m| m.is_empty()),
+        "the weightless row prices on no window, so the week and the shared windows are absent alike: {a:?}"
+    );
+    assert_eq!(
+        a.plan_requests,
+        Some(2),
+        "both plan rows were summed over: {a:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_probe_inclusion_rule_governs_the_request_shares() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let inference = usage(1_000, 100);
+    let probe = PinUsage {
+        cache_read: 2_000,
+        ..PinUsage::default()
+    };
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-inference",
+            usage: inference,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            usage: probe,
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let inference_share = fable_shares(&tables, inference)[FIVE_HOUR].unwrap();
+    let probe_share = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
+    let read = |filter: RollupFilter| {
+        let (db, kinds) = (db.clone(), &kinds);
+        async move {
+            let groups = account_groups(&db, &filter, from, to, kinds, Some(pricing)).await;
+            let a = group(&groups, "a");
+            (
+                a.cost_shares
+                    .as_ref()
+                    .and_then(|m| m.get(FIVE_HOUR))
+                    .copied(),
+                a.plan_requests,
+                a.probe_shares
+                    .as_ref()
+                    .and_then(|m| m.get(FIVE_HOUR))
+                    .map(|s| s.cost),
+            )
+        }
+    };
+    let (cost, requests, probe_cost) = read(RollupFilter::default()).await;
+    assert!(
+        close(cost.as_ref(), inference_share) && requests == Some(1),
+        "with probes left out the request shares read the inference row alone: {cost:?}, {requests:?}"
+    );
+    assert!(
+        close(probe_cost.as_ref(), probe_share),
+        "while the probe share reads the probe row: {probe_cost:?} vs {probe_share}"
+    );
+    let (cost, requests, probe_cost) = read(with_probes()).await;
+    assert!(
+        close(cost.as_ref(), inference_share + probe_share) && requests == Some(2),
+        "with probes counted the probe row joins the request shares: {cost:?}, {requests:?}"
+    );
+    assert!(
+        close(probe_cost.as_ref(), probe_share),
+        "and the probe share stays the probe row's: {probe_cost:?}"
+    );
+    let (cost, requests, _) = read(RollupFilter {
+        kinds: vec!["probe".into()],
+        ..RollupFilter::default()
+    })
+    .await;
+    assert!(
+        close(cost.as_ref(), probe_share) && requests == Some(1),
+        "under a probe kind filter the request shares read the probe row: {cost:?}, {requests:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_wasted_probe_share_reads_the_group_s_dollar_ratio_over_its_separate_rows() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let probe = PinUsage {
+        cache_read: 2_000,
+        ..PinUsage::default()
+    };
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            usage: probe,
+            client: Some("claude-code/cli"),
+            ..ShareRow::default()
+        },
+    );
+    // The engine writes the probe's dollars and a settlement's waste as rows of their own, here in the next hour.
+    let next_hour = WEEKDAY_OFF_PEAK + 3_600_000;
+    let credit = |at: i64| KeepaliveDelta {
+        at,
+        key_id: "k".into(),
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        canonical_model: "claude-fable-5-1".into(),
+        kind: "probe".into(),
+        ..Default::default()
+    };
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                probe_cost_usd: 0.04,
+                ..credit(next_hour)
+            },
+        )?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                wasted_probes: 1,
+                wasted_probe_usd: 0.01,
+                ..credit(next_hour)
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
+    let (credits_from, credits_to) = hour_range(next_hour);
+    let groups = account_groups(&db, &with_probes(), from, credits_to, &kinds, Some(pricing)).await;
+    let probes = group(&groups, "a")
+        .probe_shares
+        .as_ref()
+        .expect("the probe shares");
+    let cost = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
+    assert!(
+        probes.get(FIVE_HOUR).is_some_and(|s| {
+            (s.cost - cost).abs() < 1e-12
+                && s.wasted
+                    .is_some_and(|w| w > 0.0 && (w - cost / 4.0).abs() < 1e-12)
+        }),
+        "the wasted part is the probe share times a cent over four cents: {probes:?} vs {cost}"
+    );
+    let credits = account_groups(
+        &db,
+        &with_probes(),
+        credits_from,
+        credits_to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    let probes = group(&credits, "a")
+        .probe_shares
+        .as_ref()
+        .expect("the credit rows' group still prices in shares");
+    assert!(
+        !probes.contains_key(FIVE_HOUR),
+        "no probe request row priced into the hour, so there is no share to read a waste off: {probes:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-overage",
+            usage: usage(2_000, 200),
+            overage: Some(true),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-api",
+            account: "k",
+            account_kind: "api_key",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    let a = group(&groups, "a");
+    let plan = fable_shares(&tables, usage(1_000, 100))[FIVE_HOUR].unwrap();
+    assert!(
+        close(a.cost_shares.as_ref().and_then(|m| m.get(FIVE_HOUR)), plan)
+            && (a.plan_requests, a.plan_output_tokens) == (Some(1), Some(100)),
+        "the overage row's tokens are absent from the sums and from the counts: {a:?} vs {plan}"
+    );
+    let k = group(&groups, "k");
+    assert!(
+        k.cost_shares.is_none()
+            && k.cache_shares.is_none()
+            && k.probe_shares.is_none()
+            && k.plan_requests.is_none()
+            && k.plan_output_tokens.is_none(),
+        "an api_key group answers no share: {k:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_series_bucket_prices_as_the_breakdown_does() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plain",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-cached",
+            usage: PinUsage {
+                input: 500,
+                cache_read: 2_000,
+                write_1h: 300,
+                output: 50,
+                ..PinUsage::default()
+            },
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            usage: PinUsage {
+                cache_read: 2_000,
+                ..PinUsage::default()
+            },
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let (kinds, tiers) = (share_kinds(), share_tiers("test_tier"));
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let filter = RollupFilter::default();
+    let breakdown = account_groups(&db, &filter, from, to, &kinds, Some(pricing)).await;
+    let points = series_paged(
+        &db,
+        &filter,
+        &LiveKeys::default(),
+        from,
+        to,
+        3_600,
+        "account",
+        &kinds,
+        Some(pricing),
+    )
+    .await
+    .unwrap();
+    let point = points
+        .iter()
+        .find(|p| p.at == from)
+        .expect("the planted hour's bucket");
+    let row = group(&breakdown, "a");
+    assert!(
+        row.cost_shares.as_ref().is_some_and(|m| !m.is_empty()),
+        "the breakdown prices the account: {row:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(group(&point.groups, "a")).unwrap(),
+        serde_json::to_value(row).unwrap(),
+        "the bucket's group carries the breakdown row's shares"
+    );
+}
+
+#[tokio::test]
+async fn the_funding_filter_partitions_the_rows() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-overage",
+            overage: Some(true),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-fast",
+            speed: Some("fast"),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-api",
+            account: "k",
+            account_kind: "api_key",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            ..ShareRow::default()
+        },
+    );
+    // An account the registry no longer holds: its rows file under `plan` and no kind is on file for it.
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-gone",
+            account: "gone",
+            ..ShareRow::default()
+        },
+    );
+    let kinds = share_kinds();
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let read = |funding: Option<FundingFilter>| {
+        let (db, kinds) = (db.clone(), &kinds);
+        async move {
+            let filter = RollupFilter {
+                funding,
+                ..RollupFilter::default()
+            };
+            account_groups(&db, &filter, from, to, kinds, None)
+                .await
+                .iter()
+                .map(|g| (g.key.clone(), g.requests))
+                .collect::<Vec<_>>()
+        }
+    };
+    let billed = read(Some(FundingFilter::Billed)).await;
+    let plan = read(Some(FundingFilter::Plan)).await;
+    let every = read(None).await;
+    assert_eq!(
+        billed,
+        [("a".to_string(), 2), ("k".to_string(), 1)],
+        "billed keeps the overage row, the fast row and the api_key row"
+    );
+    assert_eq!(
+        plan,
+        [("a".to_string(), 1), ("gone".to_string(), 1)],
+        "plan keeps the plan row and the row of the account the registry no longer holds"
+    );
+    let sum = |rows: &[(String, u64)]| rows.iter().map(|(_, n)| n).sum::<u64>();
+    assert_eq!(
+        (sum(&billed), sum(&plan), sum(&every)),
+        (3, 2, 5),
+        "the two subsets partition the rows"
+    );
+}
+
+#[tokio::test]
+async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_under_plan() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            usage: PinUsage {
+                cache_read: 2_000,
+                ..PinUsage::default()
+            },
+            overage: Some(true),
+            usd: 0.05,
+            ..ShareRow::default()
+        },
+    );
+    let delta = || KeepaliveDelta {
+        at: WEEKDAY_OFF_PEAK,
+        key_id: "k".into(),
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        canonical_model: "claude-fable-5-1".into(),
+        kind: "probe".into(),
+        ..Default::default()
+    };
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                overage_in_use: Some(true),
+                probe_cost_usd: 0.04,
+                ..delta()
+            },
+        )?;
+        // A settlement carries no funding of its own and files under the plan.
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                wasted_probes: 1,
+                wasted_probe_usd: 0.01,
+                ..delta()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let funding_of = |pick: fn(&RollupRow) -> bool| {
+        rows.iter()
+            .find(|r| pick(r))
+            .map(|r| r.funding.as_str())
+            .expect("the row is folded")
+    };
+    assert_eq!(
+        (
+            funding_of(|r| r.probe_cost_usd > 0.0),
+            funding_of(|r| r.wasted_probe_usd > 0.0)
+        ),
+        (OVERAGE_FUNDING, PLAN_FUNDING),
+        "the credit files under the probe's overage and the settlement under the plan: {rows:?}"
+    );
+    let kinds = share_kinds();
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let read = |funding: FundingFilter| {
+        let (db, kinds) = (db.clone(), &kinds);
+        async move {
+            let filter = RollupFilter {
+                funding: Some(funding),
+                ..with_probes()
+            };
+            let groups = account_groups(&db, &filter, from, to, kinds, None).await;
+            let a = group(&groups, "a");
+            (
+                a.cost_usd,
+                a.savings.probe_cost_usd,
+                a.savings.wasted_probe_usd,
+            )
+        }
+    };
+    let billed = read(FundingFilter::Billed).await;
+    assert!(
+        (billed.0 - 0.05).abs() < 1e-12 && (billed.1 - 0.04).abs() < 1e-12 && billed.2 == 0.0,
+        "billed keeps the probe's request dollars and its credit, and no waste: {billed:?}"
+    );
+    let plan = read(FundingFilter::Plan).await;
+    assert!(
+        plan.0 == 0.0 && plan.1 == 0.0 && (plan.2 - 0.01).abs() < 1e-12,
+        "plan keeps the settlement's waste alone: {plan:?}"
     );
 }
 

@@ -51,11 +51,11 @@ pub use query::{
     recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
     rewrite_series, series_paged,
     session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
-    CacheFacts, Dashboard, DecisionListRow, EventListRow, GroupRow, LiveKeys, ParkedSummary,
-    PlacementRow, ProbeCounts, RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter,
-    RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity,
-    Tiers, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
-    PROBE_KIND,
+    CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupRow,
+    LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeShare, RequestFilter, RollupFilter,
+    RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint,
+    SessionActivity, SessionIdentity, SharePricing, Tiers, Totals, TrafficBucket, DECISION_KINDS,
+    EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,

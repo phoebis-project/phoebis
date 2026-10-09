@@ -253,6 +253,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         with_probes.probes_counted(),
         &live,
         &[],
+        None,
     );
     let desktop = groups.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(
@@ -275,6 +276,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         default.probes_counted(),
         &live,
         &[],
+        None,
     );
     let desktop = without.iter().find(|g| g.key == "desktop").unwrap();
     assert_eq!(

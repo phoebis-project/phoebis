@@ -159,7 +159,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     cacheHits: sum(counted, (r) => r.cacheHits),
     cacheMisses: sum(counted, (r) => r.cacheMisses),
     cacheMissReasons,
+    // The story's rollups carry dollars alone, so the mock prices no share.
+    cacheShares: null,
     cost: { cacheRead: sum(counted, (r) => r.cost.cacheRead), cacheWrite: sum(counted, (r) => r.cost.cacheWrite), input: sum(counted, (r) => r.cost.input), output: sum(counted, (r) => r.cost.output) },
+    costShares: null,
     costUsd: sum(counted, (r) => r.costUsd),
     errors,
     // The fixture ledger records neither an exhausted pool nor a rejected request.
@@ -173,7 +176,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     key,
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
+    planOutputTokens: null,
+    planRequests: null,
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
+    probeShares: null,
     rateLimited,
     rejected: 0,
     requests,

@@ -166,10 +166,12 @@ export interface Api {
   disconnectAccount(accountId: string): Promise<void>;
   /** `refresh` reads the upstream again before answering rather than the cache. */
   getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog>;
+  /** `funding` keeps the billed or the plan-funded rows. Under the account grouping a subscription account's row carries its shares. */
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   /** The route reads the range and the grouping alone; no other filter of the query narrows it. */
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
+  /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */
   getAttention(): Promise<AttentionItem[]>;

@@ -8,13 +8,18 @@ import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, Requ
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });
 
-/** A group as the routes answer one, every figure present. */
+/**
+ * A group as the routes answer one, every figure present but the shares: a fold sums groups that may span accounts,
+ * whose windows do not add, so it prices none.
+ */
 const empty = (key: string, label = key): AnalyticsGroup => ({
   attempts: 0,
   cacheHits: 0,
   cacheMisses: 0,
   cacheMissReasons: emptyCacheMissReasons(),
+  cacheShares: null,
   cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+  costShares: null,
   costUsd: 0,
   errors: emptyCounts(),
   exhausted: 0,
@@ -27,7 +32,10 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   key,
   label,
   percentiles: { durationMs: quartet(emptyHistogram()), outputTps: quartet(emptyHistogram()), ttfbMs: quartet(emptyHistogram()), ttftMs: quartet(emptyHistogram()) },
+  planOutputTokens: null,
+  planRequests: null,
   probes: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
+  probeShares: null,
   rateLimited: 0,
   rejected: 0,
   requests: 0,

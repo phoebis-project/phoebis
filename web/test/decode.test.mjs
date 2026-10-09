@@ -729,6 +729,27 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.ok(rollups.every((r) => isIso(r.hour) && typeof r.peak['5h'] === 'number'));
 });
 
+test('an account-grouped breakdown row carries its shares keyed by window and a key-grouped one null', () => {
+  const business = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'business');
+  assert.equal(typeof business.costShares.five_hour, 'number');
+  assert.equal(typeof business.costShares.seven_day, 'number');
+  assert.equal(typeof business.cacheShares.five_hour.read, 'number');
+  assert.equal(typeof business.cacheShares.five_hour.write, 'number');
+  assert.equal(typeof business.planRequests, 'number');
+  assert.equal(typeof business.planOutputTokens, 'number');
+  // The capture seeds no probe on the account, so the map is answered with no window in it.
+  assert.deepEqual(business.probeShares, {});
+  const probed = d.decodeAnalyticsGroup({ probe_shares: { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } } });
+  assert.deepEqual(probed.probeShares, { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } }, 'a wasted null reads through');
+  const direct = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'direct');
+  assert.deepEqual([direct.cacheShares, direct.costShares, direct.planOutputTokens, direct.planRequests, direct.probeShares], [null, null, null, null, null], 'an api_key group');
+  for (const row of fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup)) {
+    assert.deepEqual([row.cacheShares, row.costShares, row.planOutputTokens, row.planRequests, row.probeShares], [null, null, null, null, null], `a key-grouped row: ${row.key}`);
+  }
+  const point = fixture('analytics_series_accounts').points.map(d.decodeAnalyticsPoint).find((p) => p.groups.some((g) => g.key === 'business'));
+  assert.equal(typeof point.groups.find((g) => g.key === 'business').costShares.five_hour, 'number', 'a series point carries the same shares');
+});
+
 test('the burn series decodes each point with its instant, both token sides, and both window shares only where the route has them', () => {
   const body = fixture('analytics_burn');
   const burn = d.decodeBurn(body);

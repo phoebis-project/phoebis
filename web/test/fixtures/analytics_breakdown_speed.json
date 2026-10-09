@@ -351,7 +351,12 @@
           "wasted_probes": 0,
           "wasted_probe_usd": 0.0,
           "wasted_probe_reasons": {}
-        }
+        },
+        "cost_shares": null,
+        "cache_shares": null,
+        "probe_shares": null,
+        "plan_requests": null,
+        "plan_output_tokens": null
       },
       {
         "key": "standard",
@@ -702,7 +707,12 @@
           "wasted_probes": 0,
           "wasted_probe_usd": 0.0,
           "wasted_probe_reasons": {}
-        }
+        },
+        "cost_shares": null,
+        "cache_shares": null,
+        "probe_shares": null,
+        "plan_requests": null,
+        "plan_output_tokens": null
       }
     ]
   }

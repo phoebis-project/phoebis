@@ -343,6 +343,10 @@ pub struct KeepaliveDelta {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
+    /// The account's overage state at the selection the probe was placed under, which keys a probe's credit row
+    /// beside its request row's head-reported funding. `None` for a kept-warm credit, a skip or a settlement, which
+    /// have no probe of their own and file under `plan`.
+    pub overage_in_use: Option<bool>,
     /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
     /// the derived `Default`'s `None` files standard.
     pub speed: Option<crate::pricing::Speed>,

@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
@@ -21,7 +22,7 @@ use crate::record::{
 use crate::rollup::read_rollups;
 use crate::rollup::{
     hour_of, read_account_rollups, read_rollups_paged, KeySelector, RollupRow, RollupSelect,
-    UNATTRIBUTED,
+    PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -1276,6 +1277,42 @@ pub struct Savings {
     pub wasted_probe_reasons: BTreeMap<String, u64>,
 }
 
+/// What prices a group's shares: the cost model, each account's kind and each oauth account's tier, read once per
+/// route call; `None` under a grouping other than account, where no share is answered.
+#[derive(Clone, Copy)]
+pub struct SharePricing<'a> {
+    pub tables: &'a PlanTables,
+    pub kinds: &'a HashMap<String, AccountKind>,
+    pub tiers: &'a Tiers,
+}
+
+impl SharePricing<'_> {
+    /// The tier `account` prices under: `None` for an api_key account, an oauth account with no tier on file and
+    /// an account the registry does not hold, none of which answers a share.
+    fn tier_of(&self, account: &str) -> Option<&str> {
+        match self.kinds.get(account)? {
+            AccountKind::Oauth => self.tiers.get(account)?.as_deref(),
+            AccountKind::ApiKey => None,
+        }
+    }
+}
+
+/// The read and write halves of a window's cache share, as fractions of the window.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CacheShare {
+    pub read: f64,
+    pub write: f64,
+}
+
+/// The probe rows' share of a window and the wasted probes' part of it: the group's probe share times the ratio of
+/// its wasted-probe dollars to its probe-cost dollars over its accounting rows, since the rollups keep no token
+/// counts for the wasted probes alone; `None` while the group's probe dollars are zero.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ProbeShare {
+    pub cost: f64,
+    pub wasted: Option<f64>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct GroupRow {
     pub key: String,
@@ -1303,12 +1340,33 @@ pub struct GroupRow {
     pub kept_warm: KeptWarm,
     pub probes: ProbeCounts,
     pub savings: Savings,
+    /// Keyed by window id, `five_hour`, `seven_day` and the model week; a window absent where a plan row a known
+    /// tier holds could not be priced on it, never for a row whose model the window does not apply to; `None` for
+    /// an api_key group, an oauth group with no tier on file, an account the registry does not hold, and under
+    /// every grouping but account.
+    pub cost_shares: Option<IndexMap<&'static str, f64>>,
+    pub cache_shares: Option<IndexMap<&'static str, CacheShare>>,
+    pub probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
+    /// The plan-funded requests and output tokens the shares were summed over, the denominators of a share per
+    /// request and per 1k output tokens; `None` where `cost_shares` is.
+    pub plan_requests: Option<u64>,
+    pub plan_output_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SeriesPoint {
     pub at: i64,
     pub groups: Vec<GroupRow>,
+}
+
+/// Which rows a read keeps by who paid for them: `Billed` the overage and fast rows and every row of an api_key
+/// account, `Plan` the plan rows of an oauth account or of one the registry no longer holds; the two partition the
+/// rows, so their sums add up to the unfiltered sum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingFilter {
+    Billed,
+    Plan,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1328,6 +1386,9 @@ pub struct RollupFilter {
     /// Patterns under the wildcard grammar; a row matches when any pattern matches its client in full.
     pub clients: Vec<String>,
     pub include_probes: bool,
+    /// Applied in memory beside the pattern filters, paired with the registry's account kinds; `None` keeps every
+    /// row.
+    pub funding: Option<FundingFilter>,
 }
 
 impl RollupFilter {
@@ -1520,6 +1581,20 @@ fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
                 .any(|p| crate::pattern::matches(p, &r.client)))
 }
 
+/// Whether a row passes the filter's funding predicate, which pairs the key's funding word with the account's kind
+/// as the registry holds it now, since an api_key account's rows file under `plan` in the key. `Billed` and `Plan`
+/// are complements, so the two reads partition the rows.
+fn passes_funding(r: &RollupRow, f: &RollupFilter, kinds: &HashMap<String, AccountKind>) -> bool {
+    let Some(funding) = f.funding else {
+        return true;
+    };
+    let api_key = kinds.get(&r.account_id) == Some(&AccountKind::ApiKey);
+    match funding {
+        FundingFilter::Billed => r.funding != PLAN_FUNDING || api_key,
+        FundingFilter::Plan => r.funding == PLAN_FUNDING && !api_key,
+    }
+}
+
 /// The rows of a read the fixed filters already narrowed (`RollupFilter::rollup_select`) that the pattern filters
 /// keep, probe rows among them: whether those count as requests is `probes_counted`, which the sums take, so a
 /// probe's cost reaches the savings panel under every filter.
@@ -1528,7 +1603,13 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
 
-fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> GroupRow {
+fn group_row(
+    key: &str,
+    sum: &RollupRow,
+    probes: &RollupRow,
+    label: String,
+    shares: GroupShares,
+) -> GroupRow {
     let expired = sum
         .cache_miss_reasons
         .get("expired_between_turns")
@@ -1609,15 +1690,186 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
             wasted_probe_usd: probes.wasted_probe_usd,
             wasted_probe_reasons: probes.wasted_probe_reasons.clone(),
         },
+        cost_shares: shares.cost_shares,
+        cache_shares: shares.cache_shares,
+        probe_shares: shares.probe_shares,
+        plan_requests: shares.plan_requests,
+        plan_output_tokens: shares.plan_output_tokens,
     }
 }
 
-/// Two sums per group, and whether a non-probe row ever joined it: the request side, which a probe row joins only
-/// when probes count as requests; the probe rows on their own, which the derived probe counts and the probe side of
-/// the savings read; and the flag a keepalive credit needs, since it carries a real kind but never adds to
-/// `requests`. Rows join one at a time, so a paged read folds each page in as it arrives.
+/// One window's running share and whether a row a known tier holds could not be priced on it: a latched window is
+/// absent from the answered map, as `price_usage` nulls a bucket's, so a partial sum never reads as the share.
 #[derive(Default)]
-struct GroupSums(BTreeMap<String, (RollupRow, RollupRow, bool)>);
+struct WindowSum {
+    sum: f64,
+    unpriced: bool,
+}
+
+impl WindowSum {
+    fn add(&mut self, share: Option<f64>) {
+        match share {
+            Some(share) => self.sum += share,
+            None => self.unpriced = true,
+        }
+    }
+}
+
+/// The read and write halves of one window's cache share, latched together: both are priced under the one tier,
+/// model and hour, so neither can be unpriced without the other.
+#[derive(Default)]
+struct CacheSum {
+    read: f64,
+    write: f64,
+    unpriced: bool,
+}
+
+/// The five share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
+#[derive(Default)]
+struct GroupShares {
+    cost_shares: Option<IndexMap<&'static str, f64>>,
+    cache_shares: Option<IndexMap<&'static str, CacheShare>>,
+    probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
+    plan_requests: Option<u64>,
+    plan_output_tokens: Option<u64>,
+}
+
+/// A group's shares, summed row by row as the rows arrive: the summed keys of `GroupSum` blank the account, the
+/// model and the hour a share is priced from, so the shares fold here from the incoming row. Keyed by window in the
+/// order the rows introduced them.
+#[derive(Default)]
+struct ShareSums {
+    cost: IndexMap<&'static str, WindowSum>,
+    cache: IndexMap<&'static str, CacheSum>,
+    probe_cost: IndexMap<&'static str, WindowSum>,
+    plan_requests: u64,
+    plan_output_tokens: u64,
+    /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio: an overage probe's
+    /// credit files under `overage` and enters neither.
+    plan_probe_cost_usd: f64,
+    plan_wasted_probe_usd: f64,
+}
+
+impl ShareSums {
+    /// Folds one plan-funded row in: the request side's shares and counts when `counted`, as the request dollars
+    /// take the row, and the probe cost when the row is a probe's, each window priced at the row's own hour.
+    fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
+        if counted {
+            self.plan_requests += row.requests;
+            self.plan_output_tokens += row.output_tokens;
+        }
+        if row.kind == "probe" {
+            self.plan_probe_cost_usd += row.probe_cost_usd;
+            self.plan_wasted_probe_usd += row.wasted_probe_usd;
+        }
+        let usage = PinUsage {
+            input: row.input_tokens,
+            cache_read: row.cache_read_tokens,
+            write_5m: row.cache_write_5m_tokens,
+            write_1h: row.cache_write_1h_tokens,
+            output: row.output_tokens,
+        };
+        // A failed request books a row with no token and an accounting row carries dollars alone, while the model
+        // refuses a model it has no weight for before it reads the usage: such a row would null a priced window
+        // for a charge of nothing.
+        if usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output == 0 {
+            return;
+        }
+        let price = |usage: PinUsage| {
+            price_shares(tables, tier, &row.canonical_model, usage, row.hour * 1_000)
+        };
+        if counted {
+            for (window, share) in price(usage) {
+                self.cost.entry(window).or_default().add(share);
+            }
+            let read = price(PinUsage {
+                cache_read: usage.cache_read,
+                ..PinUsage::default()
+            });
+            let write = price(PinUsage {
+                write_5m: usage.write_5m,
+                write_1h: usage.write_1h,
+                ..PinUsage::default()
+            });
+            for ((window, read), (_, write)) in read.into_iter().zip(write) {
+                let sum = self.cache.entry(window).or_default();
+                match (read, write) {
+                    (Some(read), Some(write)) => {
+                        sum.read += read;
+                        sum.write += write;
+                    }
+                    _ => sum.unpriced = true,
+                }
+            }
+        }
+        if row.kind == "probe" {
+            for (window, share) in price(usage) {
+                self.probe_cost.entry(window).or_default().add(share);
+            }
+        }
+    }
+
+    fn finish(self) -> GroupShares {
+        let ratio = (self.plan_probe_cost_usd > 0.0)
+            .then(|| self.plan_wasted_probe_usd / self.plan_probe_cost_usd);
+        GroupShares {
+            cost_shares: Some(
+                self.cost
+                    .into_iter()
+                    .filter(|(_, s)| !s.unpriced)
+                    .map(|(w, s)| (w, s.sum))
+                    .collect(),
+            ),
+            cache_shares: Some(
+                self.cache
+                    .into_iter()
+                    .filter(|(_, s)| !s.unpriced)
+                    .map(|(w, s)| {
+                        (
+                            w,
+                            CacheShare {
+                                read: s.read,
+                                write: s.write,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            probe_shares: Some(
+                self.probe_cost
+                    .into_iter()
+                    .filter(|(_, s)| !s.unpriced)
+                    .map(|(w, s)| {
+                        (
+                            w,
+                            ProbeShare {
+                                cost: s.sum,
+                                wasted: ratio.map(|r| s.sum * r),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            plan_requests: Some(self.plan_requests),
+            plan_output_tokens: Some(self.plan_output_tokens),
+        }
+    }
+}
+
+/// One group's running sums. Rows join one at a time, so a paged read folds each page in as it arrives.
+struct GroupSum {
+    /// The request side, which a probe row joins only when probes count as requests.
+    sum: RollupRow,
+    /// The probe rows on their own, which the derived probe counts and the probe side of the savings read.
+    probes: RollupRow,
+    /// Whether a non-probe row ever joined: a keepalive credit carries a real kind but never adds to `requests`.
+    saw_non_probe: bool,
+    /// The shares, for an oauth account with a tier under the account grouping.
+    shares: Option<ShareSums>,
+}
+
+#[derive(Default)]
+struct GroupSums(BTreeMap<String, GroupSum>);
 
 impl GroupSums {
     fn add(
@@ -1627,22 +1879,34 @@ impl GroupSums {
         probes_counted: bool,
         live: &LiveKeys,
         agent_groups: &[String],
+        pricing: Option<SharePricing<'_>>,
     ) {
         let key = group_of(row, group_by, live, agent_groups);
-        let entry = self.0.entry(key.clone()).or_insert_with(|| {
-            (
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
-                false,
-            )
+        let entry = self.0.entry(key.clone()).or_insert_with(|| GroupSum {
+            sum: RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
+            probes: RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
+            saw_non_probe: false,
+            shares: None,
         });
         if row.kind == "probe" {
-            entry.1.add(row);
+            entry.probes.add(row);
         } else {
-            entry.2 = true;
+            entry.saw_non_probe = true;
         }
-        if probes_counted || row.kind != "probe" {
-            entry.0.add(row);
+        let counted = probes_counted || row.kind != "probe";
+        if counted {
+            entry.sum.add(row);
+        }
+        // Under the account grouping alone, where the group is one account and its tier prices every row of it.
+        let Some(pricing) = pricing.filter(|_| group_by == "account") else {
+            return;
+        };
+        let Some(tier) = pricing.tier_of(&row.account_id) else {
+            return;
+        };
+        let shares = entry.shares.get_or_insert_with(ShareSums::default);
+        if Funding::of_rollup(AccountKind::Oauth, &row.funding) == Funding::Plan {
+            shares.add(row, tier, pricing.tables, counted);
         }
     }
 
@@ -1651,17 +1915,20 @@ impl GroupSums {
         // without this it would report zero requests rather than staying out of a breakdown that does not count
         // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
         self.0
-            .retain(|_, (_, _, saw_non_probe)| probes_counted || *saw_non_probe);
+            .retain(|_, group| probes_counted || group.saw_non_probe);
         let mut out: Vec<GroupRow> = self
             .0
-            .iter()
-            .map(|(k, (sum, probes, _))| {
+            .into_iter()
+            .map(|(k, group)| {
                 let label = if group_by == "key" {
-                    live.label_of(k)
+                    live.label_of(&k)
                 } else {
-                    label_of(k)
+                    label_of(&k)
                 };
-                group_row(k, sum, probes, label)
+                let shares = group
+                    .shares
+                    .map_or_else(GroupShares::default, ShareSums::finish);
+                group_row(&k, &group.sum, &group.probes, label, shares)
             })
             .collect();
         out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
@@ -1676,10 +1943,11 @@ fn sum_groups(
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
+    pricing: Option<SharePricing<'_>>,
 ) -> Vec<GroupRow> {
     let mut sums = GroupSums::default();
     for row in rows {
-        sums.add(row, group_by, probes_counted, live, agent_groups);
+        sums.add(row, group_by, probes_counted, live, agent_groups, pricing);
     }
     sums.finish(group_by, probes_counted, live)
 }
@@ -1695,6 +1963,7 @@ pub fn series(
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
+    pricing: Option<SharePricing<'_>>,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
@@ -1713,7 +1982,14 @@ pub fn series(
             .collect();
         points.push(SeriesPoint {
             at: at * 1_000,
-            groups: sum_groups(&in_bucket, group_by, probes_counted, live, agent_groups),
+            groups: sum_groups(
+                &in_bucket,
+                group_by,
+                probes_counted,
+                live,
+                agent_groups,
+                pricing,
+            ),
         });
         at += bucket_seconds;
     }
@@ -1727,6 +2003,7 @@ pub fn breakdown(
     probes_counted: bool,
     live: &LiveKeys,
     agent_groups: &[String],
+    pricing: Option<SharePricing<'_>>,
 ) -> Vec<GroupRow> {
     sum_groups(
         &rows.iter().collect::<Vec<_>>(),
@@ -1734,11 +2011,14 @@ pub fn breakdown(
         probes_counted,
         live,
         agent_groups,
+        pricing,
     )
 }
 
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
-/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time.
+/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. `kinds` pairs with the
+/// funding filter, `pricing` prices the groups' shares under the account grouping.
+#[allow(clippy::too_many_arguments)]
 pub async fn series_paged(
     db: &Arc<LedgerDb>,
     filter: &RollupFilter,
@@ -1747,6 +2027,8 @@ pub async fn series_paged(
     to: i64,
     bucket_seconds: i64,
     group_by: &str,
+    kinds: &HashMap<String, AccountKind>,
+    pricing: Option<SharePricing<'_>>,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     if bucket_seconds <= 0 {
         return Err(LedgerError::Yaml(
@@ -1769,7 +2051,10 @@ pub async fn series_paged(
     let probes_counted = filter.probes_counted();
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
-            if !passes_patterns(row, filter) || row.hour < first {
+            if !passes_patterns(row, filter)
+                || !passes_funding(row, filter, kinds)
+                || row.hour < first
+            {
                 return;
             }
             let index = ((row.hour - first) / bucket_seconds) as usize;
@@ -1780,6 +2065,7 @@ pub async fn series_paged(
                     probes_counted,
                     live,
                     &filter.user_agent_groups,
+                    pricing,
                 );
             }
         })
@@ -1796,7 +2082,9 @@ pub async fn series_paged(
 }
 
 /// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
-/// group sums as the pages arrive.
+/// group sums as the pages arrive. `kinds` pairs with the funding filter, `pricing` prices the groups' shares under
+/// the account grouping.
+#[allow(clippy::too_many_arguments)]
 pub async fn breakdown_paged(
     db: &Arc<LedgerDb>,
     filter: &RollupFilter,
@@ -1804,18 +2092,21 @@ pub async fn breakdown_paged(
     from: i64,
     to: i64,
     group_by: &str,
+    kinds: &HashMap<String, AccountKind>,
+    pricing: Option<SharePricing<'_>>,
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
     let probes_counted = filter.probes_counted();
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
-            if passes_patterns(row, filter) {
+            if passes_patterns(row, filter) && passes_funding(row, filter, kinds) {
                 sums.add(
                     row,
                     group_by,
                     probes_counted,
                     live,
                     &filter.user_agent_groups,
+                    pricing,
                 );
             }
         })

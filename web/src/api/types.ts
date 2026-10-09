@@ -1086,11 +1086,16 @@ export interface DecisionRecord {
 
 export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
 
+/** The rows a read keeps by who paid for them: `billed` the overage, fast and API key rows, `plan` the plan-funded rows. */
+export type FundingFilter = 'billed' | 'plan';
+
 export interface AnalyticsQuery {
   accountIds?: string[];
   /** Patterns, one per line; a row matches when any matches its client class in full. */
   clients?: string[];
   from: string;
+  /** Absent keeps every row; the two values partition them. */
+  funding?: FundingFilter;
   groupBy: AnalyticsGroupBy;
   includeProbes?: boolean;
   keyIds?: string[];
@@ -1137,8 +1142,16 @@ export interface AnalyticsGroup {
   cacheMisses: number;
   /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /**
+   * Keyed by the ledger's window ids; null for an api_key group, under a grouping other than account and on a
+   * group folded from request rows; a window absent where the group's models do not apply to it. The route answers
+   * a window a row could not be priced on as absent too, while a session fold of the request rows carries such a
+   * window as a key with null, so a reader treats the two alike. `costShares` and `probeShares` are keyed the same.
+   */
+  cacheShares: Record<string, { read: number; write: number }> | null;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
+  costShares: Record<string, number | null> | null;
   costUsd: number;
   errors: Record<string, number>;
   exhausted: number;
@@ -1156,7 +1169,12 @@ export interface AnalyticsGroup {
   key: string;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
+  /** The plan-funded requests and output tokens the shares were summed over; null where `costShares` is. */
+  planOutputTokens: number | null;
+  planRequests: number | null;
   probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
+  /** `wasted` null while the group's probe dollars are zero. */
+  probeShares: Record<string, { cost: number; wasted: number | null }> | null;
   rateLimited: number;
   rejected: number;
   requests: number;

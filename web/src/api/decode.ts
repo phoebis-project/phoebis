@@ -27,6 +27,9 @@ const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Obj
 /** A map the route keys by data whose value may be null (a window the cost model could not price), each value read
  *  through `numOrNull`, so an unpriced window decodes null rather than zero. */
 const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numOrNull(x)]));
+/** A map the route keys by window id, each entry read by `entry`, or null where the route answered null (an api_key
+ *  group, a grouping other than account). */
+const shareMap = <T>(v: unknown, entry: (e: Rec) => T): Record<string, T> | null => (v === null || v === undefined ? null : Object.fromEntries(Object.entries(rec(v)).map(([k, e]) => [k, entry(rec(e))])));
 
 /** The wire carries Unix milliseconds; every page formats ISO strings. */
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -630,12 +633,17 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const c = rec(g.cost);
   return {
     attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
+    cacheShares: shareMap(g.cache_shares, (e) => ({ read: num(e.read), write: num(e.write) })),
     cost: { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) }, costUsd: num(g.cost_usd),
+    costShares: g.cost_shares === null || g.cost_shares === undefined ? null : nullableNumberMap(g.cost_shares),
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
+    planOutputTokens: numOrNull(g.plan_output_tokens),
+    planRequests: numOrNull(g.plan_requests),
+    probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
     savings: { grossUsd: num(s.gross_usd), probeCostUsd: num(s.probe_cost_usd), wastedProbeReasons: record(WASTED_PROBE_REASONS, s.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(s.wasted_probe_usd), wastedProbes: num(s.wasted_probes) },
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
