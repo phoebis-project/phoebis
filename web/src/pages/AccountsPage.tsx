@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AccountStatus, PairingPreview, PairingSession, PairingStart, QuotaHistory } from '@/api/types';
+import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -28,7 +28,7 @@ export function AccountsPage() {
   const { accountId } = useParams();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
-  const [pairing, setPairing] = useState<{ start: PairingStart; label: string; repair: boolean } | null>(null);
+  const [pairing, setPairing] = useState<{ start: PairingTarget; label: string; repair: boolean } | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const accounts = useAsync(() => api.listAccounts(), [], { paused: addOpen || pairing !== null || detailBusy, refreshMs: 30_000 });
   const now = useNow();
@@ -151,7 +151,7 @@ export function AccountsPage() {
         onDone={(done) => {
           setAddOpen(false);
           // An OAuth account is written when its pairing confirms, so there is nothing to reload yet.
-          if (done.kind === 'oauth') setPairing({ start: done.start, label: done.start.label, repair: false });
+          if (done.kind === 'oauth') setPairing({ start: { id: done.id, session: done.session }, label: done.label, repair: false });
           else {
             accounts.reload();
             notify('API key added');
@@ -742,13 +742,16 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
   );
 }
 
-const ID_HINT = 'Lowercase letters, digits, and dashes. It names the account in every log and URL.';
+const ID_HINT = 'Lowercase letters, digits, and dashes, a letter or digit first, 64 at most. It names the account in every log and URL.';
+const ID_MALFORMED = 'not an id the router takes';
+// The route's rule on an id, mirrored so the common refusal is held here rather than answered after the start.
+const ID_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ID_TAKEN = 'taken, customize the id';
 const ID_UNNAMED = 'none yet, the label needs a letter or digit';
 // The id line reads a state after `Id:`, where the customized field's hint leads with it as a sentence of its own.
 const sentence = (fragment: string) => `${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`;
 
-function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds: ReadonlySet<string>; onClose: () => void; onDone: (done: { kind: 'api_key'; created: Account } | { kind: 'oauth'; start: { id: string; label: string } }) => void; open: boolean }) {
+function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds: ReadonlySet<string>; onClose: () => void; onDone: (done: { kind: 'api_key'; created: Account } | { id: string; kind: 'oauth'; label: string; session: PairingSession }) => void; open: boolean }) {
   const [kind, setKind] = useState<'api_key' | 'oauth'>('oauth');
   const [label, setLabel] = useState('');
   // Null while the id follows the label. A string once customize revealed the input, '' following the label again.
@@ -772,8 +775,9 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
   const unnamed = !custom && derived.unnamed;
   // Held before the route's 409, as the key and pool dialogs hold a taken derived id. The route stays the backstop.
   const taken = !unnamed && existingIds.has(id);
+  const malformed = !unnamed && !ID_SHAPE.test(id);
   const unsaved = label.trim() !== '' || (customId ?? '') !== '' || secret !== '';
-  const held = busy || !label.trim() || unnamed || taken || (kind === 'api_key' && !secret);
+  const held = busy || !label.trim() || unnamed || taken || malformed || (kind === 'api_key' && !secret);
 
   const create = async () => {
     setBusy(true);
@@ -787,9 +791,22 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
       setBusy(false);
     }
   };
-  // An OAuth account is written by the pairing's confirm, so its primary opens the pairing and makes no request.
+  // An OAuth account is written by the pairing's confirm. The start runs here rather than in the pairing dialog so a
+  // refused start leaves the typed draft in reach, with the route's sentence under it.
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await api.startPairing({ id, label: label.trim() });
+      onDone({ id, kind: 'oauth', label: label.trim(), session });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const proceed = () => {
-    if (kind === 'oauth') onDone({ kind: 'oauth', start: { id, label: label.trim() } });
+    if (kind === 'oauth') void start();
     else void create();
   };
 
@@ -837,8 +854,8 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
           {ID_HINT}
         </p>
       ) : (
-        <Field label="Id" hint={unnamed ? `${sentence(ID_UNNAMED)} ${ID_HINT}` : taken ? `${sentence(ID_TAKEN)} ${ID_HINT}` : ID_HINT}>
-          <Input value={customId} onChange={(e) => setCustomId(e.target.value)} placeholder={unnamed ? '' : derived.id} className="mono" aria-invalid={taken || undefined} />
+        <Field label="Id" hint={unnamed ? `${sentence(ID_UNNAMED)} ${ID_HINT}` : taken ? `${sentence(ID_TAKEN)} ${ID_HINT}` : malformed ? `${sentence(ID_MALFORMED)} ${ID_HINT}` : ID_HINT}>
+          <Input value={customId} onChange={(e) => setCustomId(e.target.value)} placeholder={unnamed ? '' : derived.id} className="mono" aria-invalid={taken || malformed || undefined} />
         </Field>
       )}
       {kind === 'api_key' && (
@@ -864,7 +881,13 @@ const PAIR_STEPS: { label: string; step: PairStep }[] = [
   { step: 2, label: 'Confirm' },
 ];
 
-function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean; start: PairingStart }) {
+/**
+ * What the dialog opens on: an OAuth row to start a pairing for, or a pairing Add account already started for the row
+ * its confirm creates under `id`.
+ */
+type PairingTarget = { accountId: string } | { id: string; session: PairingSession };
+
+function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean; start: PairingTarget }) {
   const [session, setSession] = useState<PairingSession | null>(null);
   const [step, setStep] = useState<PairStep>(1);
   const [callback, setCallback] = useState('');
@@ -878,11 +901,12 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    setSession(null);
+    setSession('session' in start ? start.session : null);
     setStep(1);
     setCallback('');
     setError(null);
     setPreview(null);
+    if ('session' in start) return;
     api.startPairing(start).then(
       (s) => {
         // A pairing that lands after the dialog closed would hold the account until its own deadline.

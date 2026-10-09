@@ -458,9 +458,11 @@ function SessionRows({
   // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   const trafficSession = session.sessionId;
-  // The base's row where the list holds it: the fork badge reads the account relation off the two listed rows.
+  // The base's row where the list holds it: the fork badge reads the account relation off the two listed rows, and
+  // only while both pins are live, since a released or expired pin leaves the last ledgered request's account on the
+  // row.
   const baseRow = forkBase === null ? null : (listedRows.get(forkBase) ?? null);
-  const baseAccountId = baseRow?.session.accountId ?? null;
+  const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   return (
     <>
       <tr
@@ -490,7 +492,7 @@ function SessionRows({
               depth={session.forkDepth}
               from={session.forkedFrom}
               onFollow={onFollowFork}
-              rowAccountId={session.accountId}
+              rowAccountId={session.pinned ? session.accountId : null}
             />
           )}
           {(session.epoch ?? 1) > 1 && (
@@ -710,17 +712,18 @@ function ForkBadge({
   rowAccountId,
 }: {
   base: string | null;
-  /** The listed base's account, its label as the Accounts page names it; null off an unlisted or unpinned base. */
+  /** The listed base's account while its pin is live, its label as the Accounts page names it; null off an unlisted base or one whose pin is gone. */
   baseAccount: { id: string; label: string } | null;
   depth: number | null;
   from: string;
   onFollow: (id: string) => void;
+  /** The row's own account while its pin is live; null off a row whose pin is gone. */
   rowAccountId: string | null;
 }) {
   const at = depth === null ? '' : ` at depth ${depth}`;
   const short = shortId(from, SESSION_CHARS);
-  // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a pinned
-  // account, is never claimed to be on the same account or another.
+  // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a live pin,
+  // is never claimed to be on the same account or another.
   const relation = base !== null && baseAccount !== null && rowAccountId !== null ? (baseAccount.id === rowAccountId ? 'same account' : 'on another account') : null;
   const title =
     base === null

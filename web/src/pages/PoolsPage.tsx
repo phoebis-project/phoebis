@@ -792,10 +792,11 @@ function MemberBudget({ member }: { member: PoolMember }) {
     <>
       {budgets.map(({ budget, period }) => {
         const spent = member.spends.find((s) => s.period === period)?.spentUsd;
+        // The fill column cuts the line and the cell's title names the account alone, so the line carries its own.
+        const text = `${metered}${spent === undefined ? '-' : fmtUsd(spent)} of ${fmtUsd(budget)} ${period === 'day' ? 'today' : 'this month'}`;
         return (
-          <span key={period} className="sub num">
-            {metered}
-            {spent === undefined ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {period === 'day' ? 'today' : 'this month'}
+          <span key={period} className="sub num" title={text}>
+            {text}
           </span>
         );
       })}

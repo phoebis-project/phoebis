@@ -1637,6 +1637,45 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   reads.restore();
   cancels.restore();
 
+  {
+    // A customized id the route's slug rule refuses is held in the form, the hint naming the shape, so that refusal
+    // never reaches the route. A start the route refuses all the same keeps the typed draft in the form.
+    dlg = await openAdd();
+    await typeInto(inputOf(dlg, 'Label'), 'Home desk');
+    buttonIn(idLine(dlg), 'customize')?.click();
+    await m.settle(150);
+    await typeInto(inputOf(dlg, 'Id'), 'Home_Invalid');
+    const hint = fieldOf(dlg, 'Id')?.querySelector('.field__hint')?.textContent ?? '';
+    results.push({
+      name: '/accounts a customized id outside the slug shape holds Start pairing, and the Id hint names the shape',
+      ok: primary(dlg)?.disabled === true && inputOf(dlg, 'Id')?.getAttribute('aria-invalid') === 'true' && hint.startsWith('Not an id the router takes. ') && hint.includes('a letter or digit first, 64 at most'),
+      missing: [`disabled ${primary(dlg)?.disabled}`, `aria-invalid ${inputOf(dlg, 'Id')?.getAttribute('aria-invalid')}`, hint || 'no hint'],
+    });
+    await typeInto(inputOf(dlg, 'Id'), 'home-desk');
+    const refusal = 'a pairing is already running for this account';
+    failNextCall('startPairing', '/admin/oauth/sessions', refusal, { quiet: true, status: 409 });
+    primary(dlg)?.click();
+    await m.settle(500);
+    const refused = {
+      callout: dlg?.querySelector('[role="alert"]')?.textContent ?? 'no callout',
+      enabled: primary(dlg)?.disabled === false,
+      id: inputOf(dlg, 'Id')?.value ?? 'no Id input',
+      label: inputOf(dlg, 'Label')?.value ?? 'no Label input',
+      open: open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
+    };
+    primary(dlg)?.click();
+    await m.settle(500);
+    const retried = open().pop() ?? null;
+    const retriedTitle = retried?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
+    results.push({
+      name: "/accounts a refused pairing start keeps the Add account form open with the typed label and id, the route's sentence in its callout and Start pairing enabled, and a second start reaches the pairing dialog",
+      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && open().length === 1 && retriedTitle === 'Pair Home desk',
+      missing: [JSON.stringify(refused), `${open().length} open`, retriedTitle || 'no title'],
+    });
+    buttonIn(retried, 'Cancel')?.click();
+    await m.settle(300);
+  }
+
   dlg = await openAdd();
   [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
@@ -2724,6 +2763,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
   results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['primary', 'secondary', 'nightly', 'Overflow workspace']), missing: accountsOf('all') });
   columnsMarked('/pools the serving table marks Account as its fill column', card('all')?.querySelector('.serving'), ['Account']);
+  {
+    // The Account cell's title names the account alone and the column's ellipsis cuts a budget line, so each line
+    // carries its own text as its title for the hover.
+    const lines = ['all', 'jobs', 'work'].flatMap((name) => rows(name).flatMap((tr) => [...(cell(tr, 1)?.querySelectorAll('.sub') ?? [])]));
+    const off = lines.filter((s) => s.getAttribute('title') !== s.textContent?.trim()).map((s) => `${JSON.stringify(s.textContent?.trim())}: ${s.getAttribute('title') ?? 'no title'}`);
+    results.push({ name: "/pools every budget line in a serving table's Account cell carries its own text as its title", ok: lines.length > 0 && off.length === 0, missing: [`${lines.length} budget lines`, ...off.slice(0, 5)] });
+  }
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
   results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
   const standing = (name, label) => {
@@ -11001,6 +11047,36 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: target?.getAttribute('aria-current') === 'true' && m.container.querySelectorAll('tr[aria-current="true"]').length === 1 && m.container.querySelectorAll('.srow__detail').length === expandedBefore,
       missing: [String(target?.getAttribute('aria-current')), String(m.container.querySelectorAll('.srow__detail').length)],
     });
+    {
+      // A released or expired pin leaves the last ledgered request's account on the row, so the relation reads only
+      // while both pins are live: with the base's pin taken away and its account still listed, the badge keeps the
+      // neutral words and still follows to the row.
+      const base = same?.base ?? null;
+      const forked = same?.session ?? null;
+      const { listSessions } = api;
+      api.listSessions = async () => (await listSessions.call(api)).map((s) => (base !== null && s.sessionId === base.sessionId && s.keyId === base.keyId && !s.historical ? { ...s, pinned: false } : s));
+      const page = await mount('/sessions');
+      const at = [...page.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+      const rowIn = (s) => [...page.container.querySelectorAll('tbody tr.srow')].find((r) => r.children[at]?.getAttribute('title') === s?.sessionId && sessionCell(page, r, 'Key')?.firstChild?.textContent === s?.keyId && sessionCell(page, r, 'Key')?.querySelector('.sub') === null);
+      const forkRow = rowIn(forked);
+      const baseRowIn = rowIn(base);
+      const badge = forkRow?.children[at]?.querySelector('a.srow__fork') ?? null;
+      const described = badge?.getAttribute('aria-describedby');
+      const read = {
+        baseAccount: sessionCell(page, baseRowIn, 'Account')?.querySelector('a')?.textContent?.trim() ?? null,
+        description: described ? (page.container.querySelector(`[id="${described}"]`)?.textContent ?? null) : null,
+        href: badge?.getAttribute('href') ?? null,
+        title: badge?.getAttribute('title') ?? null,
+        words: badge?.textContent?.trim() ?? null,
+      };
+      results.push({
+        name: "/sessions a fork whose base lost its pin keeps the neutral badge with its follow description while the base's account is still listed",
+        ok: forked !== null && base !== null && read.baseAccount === base.accountId && read.words === `fork at ${forked.forkDepth}` && read.title === `Branched from session ${forked.forkedFrom} at depth ${forked.forkDepth}. Follow to its row` && read.description === read.title && read.href === `#${baseRowIn?.id}`,
+        missing: [JSON.stringify(read), baseRowIn?.id ?? 'no base row'],
+      });
+      api.listSessions = listSessions;
+      page.unmount();
+    }
   }
 
   // A session with no ledgered requests cannot open either view.
