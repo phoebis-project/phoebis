@@ -1848,17 +1848,26 @@
   white-space: nowrap;
 }
 
+/* The fit columns leave the fill little in a 990 px card, so its cell keeps a floor of sixteen characters,
+   and grows past it where the room is.
+   The floor sits on the cell, which the column's width
+   is read off: a floor on the text's box alone widens nothing (the cell's zero max-width clamps the column) and clips
+   the text behind the cell without its ellipsis. A table wider than its card scrolls inside `.table-wrap`. */
+.requests__table td.requests__client {
+  min-width: 16ch;
+}
+
 /* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
    than the room a one-line sub takes. */
 .requests__table .sub {
   white-space: nowrap;
 }
 
-/* The held marker follows the count at the step size the `.trail__step` rule gives the card's badges and on the
-   count's line, so the row reads as one run and the fit column is one line of its widest cell. */
+/* The held marker follows the count at the step size the `.trail__step` rule gives the card's badges, so the row reads
+   as one run, and drops under the count where the column is narrow. */
 .requests__attempts {
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
 }
@@ -1881,20 +1890,20 @@
   box-shadow: var(--shadow-pop);
 }
 
-/* The outcome word follows the status badge at the attempts' step on the badge's line, so the fit column is one line
-   of its widest cell and the pair's width is the column's. */
+/* The outcome word follows the status badge at the attempts' step and drops under it where the column is narrow, so
+   the word widens the column by its own width at most, never by the pair's. */
 .requests__status {
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
 }
 
-/* The two links take the sub line's 11.5 px and sit on one line at every width, so the fit column is one line of its
-   widest cell. */
+/* A fit column is as wide as its widest single item, so the two links take the sub line's 11.5 px and stack there,
+   and the fills keep the room a one-line pair would take. */
 .requests__links {
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0 10px;
   font-size: 11.5px;
