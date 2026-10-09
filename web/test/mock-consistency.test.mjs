@@ -52,7 +52,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, aheadOf: d.aheadOf, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -363,6 +363,37 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
+  });
+
+  test(`the story lists two forks, one on its base's account and one on another, at ${at}`, async () => {
+    const s = await story;
+    // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
+    // among them is the slot the story pinned its fork on.
+    const live = s.sessions.filter((x) => !x.historical);
+    const forks = s.sessions.filter((x) => x.forkedFrom !== null);
+    assert.equal(forks.length, 2, `${forks.length} forks are listed`);
+    const pairs = forks.map((fork) => {
+      const base = s.sessions.find((x) => x.sessionId === fork.forkedFrom && x.keyId === fork.keyId);
+      assert.ok(base, `${fork.sessionId}'s base ${fork.forkedFrom} is listed under ${fork.keyId}`);
+      return { base, fork };
+    });
+    const same = pairs.filter((p) => p.fork.accountId === p.base.accountId);
+    const other = pairs.filter((p) => p.fork.accountId !== p.base.accountId);
+    assert.equal(same.length, 1, "one fork sits on its base's account");
+    assert.equal(other.length, 1, 'one fork sits on another account than its base');
+    assert.deepEqual([same[0].fork.sessionId, same[0].base.sessionId], [live[5].sessionId, live[3].sessionId], 'the same-account fork and its base');
+    assert.deepEqual([other[0].fork.sessionId, other[0].base.sessionId], [live[2].sessionId, live[1].sessionId], 'the other-account fork and its base');
+  });
+
+  test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {
+    const s = await story;
+    const lead = (accountId, windowId) => {
+      const w = s.accounts.find((a) => a.id === accountId).windows.find((x) => x.id === windowId);
+      return s.aheadOf(w, w.periodHours * HOUR, s.now);
+    };
+    assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
+    assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);
+    assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 }
 
