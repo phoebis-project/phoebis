@@ -2354,7 +2354,8 @@ function readRequestsTable() {
     // A placeholder row is one cell across the table, so it has no TTFB or Cost cell.
     const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
     const ttfb = cellsOf(columnAt('TTFB'));
-    const shares = cellsOf(columnAt('Cost')).filter((td) => / of (5-hour|7-day)/.test(td.querySelector('.sub')?.textContent ?? '')).length;
+    // The main line or the `.sub` line, whichever the row's shares fill.
+    const shares = cellsOf(columnAt('Cost')).filter((td) => / of (5-hour|7-day)/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
       client: wrap.clientWidth,
@@ -2391,9 +2392,10 @@ async function requestsTableFits(theme) {
 
 /**
  * The default set still fits at 1280 by 800 with share labels in the Cost column, the widest text the column draws
- * ("0.061% of 7-day" over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds one API key account, whose
- * rows read dollars. The share count is recorded beside the fit and stands as a guard: every mock row carries the
- * fixture's null shares until the story prices its own, so the count reads zero here and is asserted once it does.
+ * (a Fable request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass
+ * seeds one API key account, whose rows read dollars. The count of cells whose main line or `.sub` reads a share is
+ * recorded beside the fit and stands as a guard: every mock row carries the fixture's null shares until the story
+ * prices its own, so the count reads zero here and is asserted once it does.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
@@ -2694,9 +2696,11 @@ async function requestDrawerCompact(theme) {
 
 /**
  * The attempt count's hover card for a row at the table's bottom shows whole: the card is drawn under the body and
- * placed from the count's box inside the viewport, so `.table-wrap`'s overflow clips none of it. The last row of two
- * or more attempts on the page is scrolled to the viewport's bottom edge and its count hovered. The mock pass's alone:
- * the router pass seeds one API key account in a one-member pool, so no row of it has two attempts to hover.
+ * placed from the count's box inside the viewport, so `.table-wrap`'s overflow clips none of it, and its last badge
+ * ends inside it. The last row of two or more attempts on the page is scrolled to the viewport's bottom edge and its
+ * count hovered. A fixed card stays where it was drawn while the page moves under it, so a scroll that moves the count
+ * takes the card away rather than leaving it beside another row: the count is focused and the page scrolled. The mock
+ * pass's alone: the router pass seeds one API key account in a one-member pool, so no row of it has two attempts.
  */
 async function attemptCardAtTheBottom(theme) {
   const say = (what) => failures.push(`${theme} /requests attempt card: ${what}`);
@@ -2719,8 +2723,9 @@ async function attemptCardAtTheBottom(theme) {
     if (!card) return { card: null, row: at };
     const r = card.getBoundingClientRect();
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const badges = [...card.querySelectorAll('.trail__step')];
     return {
-      card: { bottom: Math.round(r.bottom), clientHeight: card.clientHeight, height: Math.round(r.height), inside: hit !== null && card.contains(hit), right: Math.round(r.right), scrollHeight: card.scrollHeight, top: Math.round(r.top) },
+      card: { badgeBottom: badges.length ? Math.round(badges[badges.length - 1].getBoundingClientRect().bottom) : null, bottom: Math.round(r.bottom), height: Math.round(r.height), inside: hit !== null && card.contains(hit), right: Math.round(r.right), top: Math.round(r.top) },
       row: at,
       viewport: { height: window.innerHeight, width: window.innerWidth },
     };
@@ -2732,12 +2737,24 @@ async function attemptCardAtTheBottom(theme) {
     if (card.top < 0) say(`the card's top is at ${card.top}px, above the viewport`);
     if (card.bottom > viewport.height) say(`the card's bottom is at ${card.bottom}px, under the viewport's ${viewport.height}px`);
     if (card.right > viewport.width) say(`the card's right edge is at ${card.right}px, past the viewport's ${viewport.width}px`);
-    if (card.scrollHeight !== card.clientHeight) say(`the card's content runs ${card.scrollHeight}px in a box of ${card.clientHeight}px`);
+    if (card.badgeBottom === null) say('the card draws no badge');
+    else if (card.badgeBottom > card.bottom) say(`the card's last badge ends at ${card.badgeBottom}px, under the card's ${card.bottom}px`);
     if (!card.inside) say('the card is covered at its center');
   }
   // The card leaves with the pointer, so the clicks that follow meet the rows alone.
   await page.mouse.move(0, 0);
   await settle();
+  await last.focus();
+  await settle();
+  const focused = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
+  await page.evaluate(() => window.scrollBy(0, -60));
+  await settle();
+  const afterScroll = await page.evaluate(() => document.querySelector('body > .trail-pop') !== null);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await settle();
+  measurements.push(`${theme} /requests attempt card on focus ${focused ? 'drawn' : 'absent'}, after a 60px scroll ${afterScroll ? 'still drawn' : 'gone'}`);
+  if (!focused) say('the focused count drew no card');
+  else if (afterScroll) say('the card stayed through a scroll that moved its count');
 }
 
 /**

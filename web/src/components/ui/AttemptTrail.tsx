@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AttemptOutcome } from '@/api/types';
 import { fmtAbsolute } from '@/lib/format';
@@ -61,7 +61,9 @@ export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
  * and on focus, and the trail's lines as the count's title and description. The card is drawn under the body: the
  * table's wrap scrolls sideways, which clips a card positioned inside it for the last rows however high its layer. It
  * is placed fixed from the count's box, below the count when the viewport has the room and above it otherwise, and
- * moved left when its right edge would pass the viewport.
+ * moved left when its right edge would pass the viewport. A fixed card stays where it was drawn while the page moves
+ * under it, so it leaves rather than float beside another row: on a scroll that moved the count, on a resize, and on
+ * a render that finds the count elsewhere (a refresh that re-sorts the rows, the columns changing under a drawer).
  */
 export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
   const many = attempts.length >= 2;
@@ -69,13 +71,22 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
   const lines = many ? trailLines(attempts) : undefined;
   const described = useDescription(lines);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  const open = at !== null;
   const countRef = useRef<HTMLSpanElement>(null);
   const cardRef = useRef<HTMLSpanElement>(null);
+  // Where the count stood when the card opened, which every move check below reads against.
+  const anchor = useRef<{ left: number; top: number } | null>(null);
   const show = () => {
     const rect = countRef.current?.getBoundingClientRect();
-    if (rect) setAt({ left: rect.left, top: rect.bottom + 4 });
+    if (!rect) return;
+    anchor.current = { left: rect.left, top: rect.top };
+    setAt({ left: rect.left, top: rect.bottom + 4 });
   };
   const hide = () => setAt(null);
+  const moved = () => {
+    const rect = countRef.current?.getBoundingClientRect();
+    return !rect || !anchor.current || rect.top !== anchor.current.top || rect.left !== anchor.current.left;
+  };
   // The card's size is known once it is drawn, so it opens at the count and moves inside the viewport here.
   useLayoutEffect(() => {
     const count = countRef.current;
@@ -86,6 +97,22 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
     const inside = { left: Math.max(0, Math.min(left, window.innerWidth - box.width)), top };
     if (inside.left !== at.left || inside.top !== at.top) setAt(inside);
   }, [at]);
+  // A refresh that re-sorts the rows moves the count with no scroll or resize to report it.
+  useLayoutEffect(() => {
+    if (open && moved()) hide();
+  });
+  useEffect(() => {
+    if (!open) return;
+    const onScroll = () => {
+      if (moved()) hide();
+    };
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', hide);
+    };
+  }, [open]);
   if (!many) return null;
   return (
     <>

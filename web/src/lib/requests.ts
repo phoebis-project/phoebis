@@ -11,14 +11,18 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
 
 /** A request's cost in its native unit: the shares the route answered for a plan-funded request (the windows it
  *  priced, a null one left out), in the order 5-hour, 7-day, then the model week; the dollars with the funding word
- *  for one billed in dollars; the dollar equivalent alone where the route priced no share. */
+ *  for one billed in dollars; the dollar equivalent alone where the route priced no share; the zero dollars of a
+ *  request no account served, which has no funding to name. */
 export type CostUnit =
   | { kind: 'dollars'; funding: Exclude<Funding, 'plan'>; usd: number }
   | { kind: 'shares'; shares: { key: string; share: number }[]; usd: number }
-  | { kind: 'unpriced'; usd: number };
+  | { kind: 'unpriced'; usd: number }
+  | { kind: 'unserved'; usd: number };
 
 export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costShares' | 'costUsd'>): CostUnit {
-  const funding = fundingOf(r.attempts[r.attempts.length - 1] ?? null);
+  const last = r.attempts[r.attempts.length - 1];
+  if (last === undefined) return { kind: 'unserved', usd: r.costUsd };
+  const funding = fundingOf(last);
   if (funding !== 'plan') return { kind: 'dollars', funding, usd: r.costUsd };
   // A null share is a window the route could not price, which draws nothing rather than a wrong figure.
   const priced = Object.entries(r.costShares ?? {}).filter((entry): entry is [string, number] => entry[1] !== null);
@@ -33,15 +37,18 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costShares' | 'cost
 }
 
 /** The table cell's two lines and title: the model week's share where there is one, else the 7-day's, over the
- *  5-hour share; the dollars over the funding word or `equivalent`; every share and the equivalent on the title. */
+ *  5-hour share; the dollars over the funding word or `equivalent`; every share and the equivalent on the title; an
+ *  unserved request's dollars alone, with no second line and no title. */
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
   if (unit.kind === 'unpriced') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: NO_SHARE_TITLE };
+  if (unit.kind === 'unserved') return { main: fmtUsd(unit.usd), sub: '', title: '' };
   const main = unit.shares.find((s) => !SHARED_WINDOWS.includes(s.key)) ?? unit.shares.find((s) => s.key === 'seven_day') ?? unit.shares[0];
   const fiveHour = unit.shares.find((s) => s.key === 'five_hour');
   return {
     main: shareLabel(main.key, main.share),
-    sub: fiveHour ? shareLabel(fiveHour.key, fiveHour.share) : '',
+    // A row priced on the 5-hour window alone reads it as its main line and not again under it.
+    sub: fiveHour && fiveHour !== main ? shareLabel(fiveHour.key, fiveHour.share) : '',
     title: [...unit.shares.map((s) => shareLabel(s.key, s.share)), `${fmtUsd(unit.usd)} equivalent`].join(', '),
   };
 }

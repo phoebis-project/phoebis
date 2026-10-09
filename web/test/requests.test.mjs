@@ -53,8 +53,15 @@ test('a plan request the route priced no share for reads dollars over equivalent
   }
 });
 
-test('a request with no attempt reads dollars', () => {
+test('a plan request priced on the 5-hour window alone reads it once, and one priced on its week alone reads the week', () => {
+  const fiveHour = d.costUnitOf(request({ five_hour: 0.0042 }));
+  assert.deepEqual(d.costCellOf(fiveHour), { main: '0.42% of 5-hour', sub: '', title: '0.42% of 5-hour, $0.0048 equivalent' }, 'the 5-hour share is the main line, so the second line stays empty');
+  const week = d.costUnitOf(request({ seven_day_fable: 0.0012 }));
+  assert.deepEqual(d.costCellOf(week), { main: '0.12% of 7-day Fable', sub: '', title: '0.12% of 7-day Fable, $0.0048 equivalent' });
+});
+
+test('a request with no attempt reads its zero dollars with no funding word and no title', () => {
   const unit = d.costUnitOf(request(null, [], 0));
-  assert.deepEqual(unit, { funding: 'api_key', kind: 'dollars', usd: 0 });
-  assert.deepEqual(d.costCellOf(unit), { main: '$0.00', sub: 'API key', title: 'Billed in dollars: API key' });
+  assert.deepEqual(unit, { kind: 'unserved', usd: 0 }, 'no account served it, so no funding is named');
+  assert.deepEqual(d.costCellOf(unit), { main: '$0.00', sub: '', title: '' });
 });

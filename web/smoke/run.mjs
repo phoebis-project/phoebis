@@ -6143,7 +6143,9 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const a = servedBy(r);
     return a !== null && a.accountKind === 'oauth' && a.response.speed !== 'fast' && a.overageInUse !== true && r.costShares === null;
   });
-  results.push({ name: 'fixture: a request an API key account served and a subscription request the mock prices no share for', ok: apiKeyRow !== undefined && unpricedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id)] });
+  // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
+  const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
+  results.push({ name: 'fixture: a request an API key account served, a subscription request the mock prices no share for, and one no account served', ok: apiKeyRow !== undefined && unpricedRow !== undefined && unservedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id), String(unservedRow?.id)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
@@ -6155,6 +6157,10 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     results.push({ name: "/requests an API key row's Cost cell reads dollars over API key with its title", ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
     const unpriced = await costCellOf(unpricedRow.id);
     results.push({ name: '/requests a subscription row the mock prices no share for reads dollars over equivalent', ok: unpriced.main.startsWith('$') && unpriced.sub === 'equivalent' && unpriced.title === 'The cost model prices no share for this request', missing: [unpricedRow.id, JSON.stringify(unpriced)] });
+  }
+  if (unservedRow) {
+    const unserved = await costCellOf(unservedRow.id);
+    results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
   }
   setter.call(heldSearch, '');
   heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -6270,6 +6276,16 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   });
   const tip = first?.getAttribute('title') ?? '';
   results.push({ name: "/requests the count's title lists outcome and cooldown per attempt", ok: /1\..*(failed over|rate limited|succeeded|upstream error)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
+  // A fixed card stays where it was drawn while the page changes under it, so a resize takes it away.
+  first?.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  await m.settle(100);
+  const shownAgain = document.querySelector('body > .trail-pop') !== null;
+  window.dispatchEvent(new window.Event('resize'));
+  await m.settle(100);
+  const afterResize = document.querySelector('body > .trail-pop') === null;
+  first?.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await m.settle(100);
+  results.push({ name: "/requests the count's hover card leaves on a resize", ok: shownAgain && afterResize, missing: [`shown before ${shownAgain}`, `gone after ${afterResize}`] });
 }
 {
   const rowsSelect = [...m.container.querySelectorAll('.pager select')].pop();

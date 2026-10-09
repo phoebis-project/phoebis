@@ -182,7 +182,7 @@ const routingLogHref = (r: RequestLog, now: number) => {
 function CostCell({ request }: { request: RequestLog }) {
   const cell = costCellOf(costUnitOf(request));
   return (
-    <td className="right num" title={cell.title}>
+    <td className="right num" title={cell.title || undefined}>
       {cell.main}
       {cell.sub && <span className="sub">{cell.sub}</span>}
     </td>
@@ -207,6 +207,8 @@ function costRowValue(unit: CostUnit) {
           {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
         </b>
       );
+    case 'unserved':
+      return <b>{fmtUsd(unit.usd)}</b>;
   }
 }
 
