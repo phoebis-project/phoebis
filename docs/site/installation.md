@@ -792,9 +792,9 @@ which makes it as sensitive as the registry even though it holds no credential, 
 
 `phoebis backup` takes the snapshot; [Operations](operations.md#backup) says how and how to restore it.
 
-![The Settings view: the downstream client block, Appearance and About
+![The Settings view: Appearance, About and the downstream client block
 ](assets/settings-light.png#only-light)
-![The Settings view: the downstream client block, Appearance and About
+![The Settings view: Appearance, About and the downstream client block
 ](assets/settings-dark.png#only-dark)
 
 ## Compiled-in limits

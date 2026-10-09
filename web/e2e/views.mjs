@@ -1701,7 +1701,7 @@ async function keysPageMenus(theme) {
 }
 
 /**
- * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
+ * The Settings cards in the order an operator uses them, the client block last with its own snippet, and the
  * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
  * sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
  * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
@@ -1716,11 +1716,12 @@ async function settingsOrder(theme) {
     const pre = document.querySelector('pre.snippet');
     const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
     const group = hint?.nextElementSibling?.matches('.snippet-group') ? hint.nextElementSibling : null;
-    const subtitle = cards[0]?.querySelector('.card__subtitle');
+    const client = cards.find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
+    const subtitle = client?.querySelector('.card__subtitle');
     return {
       above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
       below: hint && group ? Math.round((group.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
-      blockFirst: Boolean(pre && cards[0]?.contains(pre)),
+      blockLast: Boolean(pre && cards[cards.length - 1]?.contains(pre)),
       hintLines: hint ? Math.round(hint.getBoundingClientRect().height / parseFloat(getComputedStyle(hint).lineHeight)) : null,
       hintSize: hint ? getComputedStyle(hint).fontSize : null,
       subtitleSize: subtitle ? getComputedStyle(subtitle).fontSize : null,
@@ -1728,7 +1729,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
-  const want = ['Downstream client configuration', 'Appearance', 'About'];
+  const want = ['Appearance', 'About', 'Downstream client configuration'];
   if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
   const about = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -1752,7 +1753,7 @@ async function settingsOrder(theme) {
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
   if (offType.length > 0) say(`About's ${offType.join(', ')} read at another type than Storage path's ${storage}`);
   if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
-  if (!read.blockFirst) say("the client block's snippet is not in the first card");
+  if (!read.blockLast) say("the client block's snippet is not in the last card");
   if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
   else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);

@@ -11565,8 +11565,8 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
-  results.push({ name: '/settings the cards run client block, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Appearance', 'About']) && m.container.querySelector('.price-table') === null, missing: titles });
-  const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
+  results.push({ name: '/settings the cards run Appearance, About, client block', ok: JSON.stringify(titles) === JSON.stringify(['Appearance', 'About', 'Downstream client configuration']) && m.container.querySelector('.price-table') === null, missing: titles });
+  const subtitle = [...m.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration')?.querySelector('.card__subtitle')?.textContent;
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);

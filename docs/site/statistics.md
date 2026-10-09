@@ -620,13 +620,13 @@ its subtitle says so.
 
 ### Settings
 
-Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
-router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
-the address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About
-card with the version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's
-each with its effective date), the three keepalive limits the file sets and the admin secret's standing. About closes on
-a pointer: the values the configuration file sets are on the [installation page](installation.md), and
-`phoebis check-config` prints them.
+Settings opens on the appearance and time-format choices, then an About card with the version, the profile, the metrics
+listener, the four storage paths (the price table's and the cost model's each with its effective date), the three
+keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the values the configuration
+file sets are on the [installation page](installation.md), and `phoebis check-config` prints them. The page closes on
+the downstream client configuration, the six-line environment block that points Claude Code at the router with a reason
+under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and the address the listener
+binds shows beside the block.
 
 ## Conditions and gauges
 
