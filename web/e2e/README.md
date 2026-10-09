@@ -32,11 +32,11 @@ the Quota windows section, the Quota cards' one height (the head's and the foot'
 the remaining cards, the error state, the lines under the quota rings, the recent requests' model cells and their
 table's fit, the recent requests' columns (Key the fill), the cost-cap rows, the live feed, the wasted-probe rows, the
 burn cards, the plan legend's model unlisted entry, the placement and budget tables, the Analytics tables' columns, each
-read on the tab that draws it (the Traffic breakdown's group column the fill, Rung on the placements table, Pool and
-Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit, the
-request pages' widths, walked on a load of their own once every view's shot is taken, the speed
-filter, the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked
-under the filter bar at the end of the Latency tab,
+read on the tab that draws it (the Traffic breakdown's group column the fill, Key on the misses-by-reason breakdown
+under its wrapped headers, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is
+as wide as its meter's 140 px floor), the request table's fit, the request pages' widths, walked on a load of their own
+once every view's shot is taken, the speed filter, the traffic cards (each Analytics check opens
+the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,
 the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's decision card,
 which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by
 800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on the first rung

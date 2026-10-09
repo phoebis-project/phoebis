@@ -958,10 +958,12 @@ function BreakdownTable({
   groupLabel,
   columns,
   rows,
+  className = '',
   error = null,
   loading = false,
   subtitle = 'Totals for the selected range and filters',
 }: {
+  className?: string;
   columns: ReactNode[];
   error?: string | null;
   groupLabel: string;
@@ -971,7 +973,7 @@ function BreakdownTable({
   title: string;
 }) {
   return (
-    <Card title={title} subtitle={subtitle} padded={false} className="card--table">
+    <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -1121,6 +1123,7 @@ function MissReasonsByGroup({ groups, groupLabel, loading }: { groupLabel: strin
   return (
     <BreakdownTable
       title={`Misses by reason by ${groupLabel.toLowerCase()}`}
+      className="misses-table"
       loading={loading}
       groupLabel={groupLabel}
       columns={[...order.map(missLabel), 'Expired between turns']}

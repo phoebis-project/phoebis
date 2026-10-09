@@ -2437,14 +2437,16 @@ async function analyticsTables(theme) {
 
 /**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
- * the landing tab (its group column the fill, Key under the default grouping), the placements table on Cache (Rung)
- * and the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view returns
- * to Traffic afterwards, as the other Analytics checks leave it.
+ * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
+ * again, its nine figure headers wrapped so the group column keeps its room) and the placements table on Cache
+ * (Rung), and the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view
+ * returns to Traffic afterwards, as the other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
   await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
   try {
     if (!(await tabTo(theme, 'Cache'))) return;
+    await tableColumns(theme, 'analytics', '.misses-table table', ['Key']);
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);

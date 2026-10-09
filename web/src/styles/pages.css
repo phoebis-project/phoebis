@@ -3546,6 +3546,12 @@
   color: var(--ink-2);
 }
 
+/* Nine reason headers on one line each leave the key column its padding alone at 1280, so they wrap and each fit
+   column sizes to its widest word or figure. The class outranks the fit rule's nowrap. */
+.misses-table th.col-fit {
+  white-space: normal;
+}
+
 .filters__range {
   display: inline-flex;
   gap: 6px;
