@@ -2839,8 +2839,7 @@ async function subscriptionEndForm(theme) {
 
 /**
  * The Add account dialog on Accounts: the type control keeps its content width, which the body's flex column
- * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs, the mono Id as
- * tall as the Label.
+ * would otherwise stretch across the dialog, and the id line sits under the Label input, flush with its left edge.
  */
 async function addAccountDialog(theme) {
   const say = (what) => failures.push(`${theme} /accounts add account: ${what}`);
@@ -2851,27 +2850,24 @@ async function addAccountDialog(theme) {
     const read = await dialog.evaluate((el) => {
       const body = el.querySelector('.dialog__body');
       const style = body ? getComputedStyle(body) : null;
-      const input = (text) => {
-        const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
-        const box = field?.querySelector('input')?.getBoundingClientRect();
-        return box ? { height: box.height, left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
-      };
+      const box = (b) => (b ? { bottom: Math.round(b.bottom), left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width) } : null);
+      const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Label');
+      const line = [...el.querySelectorAll('p.field__hint')].find((p) => p.textContent?.trim().startsWith('Id:'));
       const type = el.querySelector('[aria-label="Account type"]')?.getBoundingClientRect();
       return {
         body: body && style ? Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) : null,
-        id: input('Id'),
-        label: input('Label'),
+        label: box(field?.querySelector('input')?.getBoundingClientRect()),
+        line: box(line?.getBoundingClientRect()),
         type: type ? Math.round(type.width) : null,
       };
     });
     measurements.push(`${theme} /accounts add account ${JSON.stringify(read)}`);
     if (!read.type || !read.body) say('the type control and the body are not both drawn to measure');
     else if (read.type >= read.body) say(`the type control is ${read.type} px across a ${read.body} px body rather than its content width`);
-    if (!read.id || !read.label) say('the Id and Label inputs are not both drawn to compare');
+    if (!read.label || !read.line) say('the Label input and the id line are not both drawn to compare');
     else {
-      if (read.id.top !== read.label.top) say(`the Id input's top at ${read.id.top} px differs from the Label input's at ${read.label.top} px`);
-      if (read.id.width !== read.label.width) say(`the Id input is ${read.id.width} px wide against the Label input's ${read.label.width} px`);
-      if (Math.abs(read.id.height - read.label.height) > 1) say(`the Id input is ${read.id.height} px tall against the Label input's ${read.label.height} px`);
+      if (read.line.top < read.label.bottom) say(`the id line's top at ${read.line.top} px is above the Label input's bottom at ${read.label.bottom} px`);
+      if (Math.abs(read.line.left - read.label.left) > 1) say(`the id line's left edge at ${read.line.left} px is off the Label input's at ${read.label.left} px`);
     }
   } catch (error) {
     say(`the dialog never opened (${error instanceof Error ? error.message : String(error)})`);

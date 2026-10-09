@@ -16,21 +16,16 @@ error recorded and no models.
 ## Through the console
 
 Open Accounts and choose Add account. The dialog's subtitle names the choice: subscription logins share your Claude.ai
-quota, while API keys bill per token against a Console workspace. Pick OAuth login, give the account an id
-(lowercase letters, digits, and dashes; it names the account in every log and URL) and a label, then choose Start
-pairing.
+quota, while API keys bill per token against a Console workspace. Pick OAuth login and give the account a label. The id
+the router will use is shown under it, derived from the label, and customize opens it for editing. Choose Start
+pairing. The account appears in the list once the pairing is confirmed. A pairing you cancel leaves no account.
 
-The pairing dialog runs three steps.
+The pairing dialog runs two steps.
 
-### Log in
+### Log in and paste the address
 
 Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback
-address; keep that tab open for the next step.
-
-### Paste the address
-
-Paste the URL your browser landed on, or the code alone. The page will not load, since nothing listens on that
-port; the URL in the address bar is complete, and the code alone works too.
+address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code alone.
 
 ### Confirm
 
@@ -38,9 +33,9 @@ Confirm the identity shown, the account's email and organization, to store the r
 
 The console starts every pairing as a `claude_ai` login, authorizing against `claude.com`; a `console` login,
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
-after it starts, and the dialog shows the remaining time. Starting again from the same console session, after a reload
-or a closed tab, replaces the pairing left standing; a pairing another session started, or one being confirmed, has to
-finish or expire first.
+after it starts, and the dialog shows the remaining time. Starting again from the same console session replaces the
+pairing left standing, for an existing account and for a new one alike. A pairing another session started, or one being
+confirmed, has to finish or expire first.
 
 ![The Accounts view: the list on the left, the selected account's actions, identity, usage, cooling-down block,
 and credential on the right](assets/accounts-light.png#only-light)

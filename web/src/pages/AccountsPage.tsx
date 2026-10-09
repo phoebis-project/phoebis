@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
+import type { Account, AccountStatus, PairingPreview, PairingSession, PairingStart, QuotaHistory } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -13,7 +13,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
-import { accountPatchOf, advancesOwnToken, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, derivedId, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -28,7 +28,7 @@ export function AccountsPage() {
   const { accountId } = useParams();
   const navigate = useNavigate();
   const [addOpen, setAddOpen] = useState(false);
-  const [pairing, setPairing] = useState<{ accountId: string; label: string; repair: boolean } | null>(null);
+  const [pairing, setPairing] = useState<{ start: PairingStart; label: string; repair: boolean } | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const accounts = useAsync(() => api.listAccounts(), [], { paused: addOpen || pairing !== null || detailBusy, refreshMs: 30_000 });
   const now = useNow();
@@ -54,11 +54,18 @@ export function AccountsPage() {
   }, [accounts.data, query, status, sort, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
+  // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
+  // leaves that URL alone until a read lands.
+  const [created, setCreated] = useState<{ before: Account[] | null; id: string } | null>(null);
+  useEffect(() => {
+    if (created !== null && accounts.data !== created.before) setCreated(null);
+  }, [accounts.data, created]);
   // A deleted account's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
   // /accounts does rather than to a detail that never loads.
   useEffect(() => {
+    if (created !== null && accountId === created.id && accounts.data === created.before) return;
     if (accounts.data && !selected && accounts.data.length) navigate(`/accounts/${accounts.data[0].id}`, { replace: true });
-  }, [accounts.data, selected, navigate]);
+  }, [accounts.data, accountId, created, navigate, selected]);
 
   return (
     <div className="accounts">
@@ -125,7 +132,7 @@ export function AccountsPage() {
           <Descriptions>
             {/* Keyed by the account, so a save still running when the operator moves on answers into its own
                 unmounted detail and never moves the token of an editor another account opened. */}
-            <AccountDetail key={selected.id} account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+            <AccountDetail key={selected.id} account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -135,24 +142,33 @@ export function AccountsPage() {
       </section>
       <AddAccountDialog
         open={addOpen}
+        existingIds={new Set((accounts.data ?? []).map((a) => a.id))}
         onClose={() => setAddOpen(false)}
-        onDone={(kind, created) => {
+        onDone={(done) => {
           setAddOpen(false);
-          accounts.reload();
-          if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
-          else notify('API key added');
+          // An OAuth account is written when its pairing confirms, so there is nothing to reload yet.
+          if (done.kind === 'oauth') setPairing({ start: done.start, label: done.start.label, repair: false });
+          else {
+            accounts.reload();
+            notify('API key added');
+          }
         }}
       />
       <PairingDialog
         open={pairing !== null}
-        accountId={pairing?.accountId ?? ''}
+        start={pairing?.start ?? { accountId: '' }}
         label={pairing?.label ?? ''}
         repair={pairing?.repair ?? false}
         onClose={() => setPairing(null)}
         onPaired={(preview) => {
+          const start = pairing?.start ?? null;
           setPairing(null);
           accounts.reload();
           notify(`Paired ${preview.email}`);
+          if (start !== null && 'id' in start) {
+            setCreated({ before: accounts.data, id: start.id });
+            navigate(`/accounts/${start.id}`);
+          }
         }}
       />
     </div>
@@ -722,10 +738,15 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
   );
 }
 
-function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDone: (kind: 'api_key' | 'oauth', created: Account) => void; open: boolean }) {
+const ID_HINT = 'Lowercase letters, digits, and dashes. It names the account in every log and URL.';
+const ID_UNNAMED = 'none yet, the label needs a letter or digit';
+const ID_TAKEN = 'taken, customize the id';
+
+function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds: ReadonlySet<string>; onClose: () => void; onDone: (done: { kind: 'api_key'; created: Account } | { kind: 'oauth'; start: { id: string; label: string } }) => void; open: boolean }) {
   const [kind, setKind] = useState<'api_key' | 'oauth'>('oauth');
-  const [id, setId] = useState('');
   const [label, setLabel] = useState('');
+  // Null while the id follows the label. A string once customize revealed the input, '' following the label again.
+  const [customId, setCustomId] = useState<string | null>(null);
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -733,23 +754,37 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
   useEffect(() => {
     if (!open) return;
     setKind('oauth');
-    setId('');
     setLabel('');
+    setCustomId(null);
     setSecret('');
     setError(null);
   }, [open]);
+
+  const derived = derivedId(label);
+  const custom = customId?.trim() ?? '';
+  const id = custom || derived.id;
+  const unnamed = !custom && derived.unnamed;
+  // Held before the route's 409, as the key and pool dialogs hold a taken derived id. The route stays the backstop.
+  const taken = !unnamed && existingIds.has(id);
+  const unsaved = label.trim() !== '' || (customId ?? '') !== '' || secret !== '';
+  const held = busy || !label.trim() || unnamed || taken || (kind === 'api_key' && !secret);
 
   const create = async () => {
     setBusy(true);
     setError(null);
     try {
-      const created = await api.createAccount({ id: id.trim(), kind, label: label.trim(), secret: kind === 'api_key' ? secret : null });
-      onDone(kind, created);
+      const created = await api.createAccount({ id, kind: 'api_key', label: label.trim(), secret });
+      onDone({ kind: 'api_key', created });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  };
+  // An OAuth account is written by the pairing's confirm, so its primary opens the pairing and makes no request.
+  const proceed = () => {
+    if (kind === 'oauth') onDone({ kind: 'oauth', start: { id, label: label.trim() } });
+    else void create();
   };
 
   return (
@@ -758,12 +793,13 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
       onClose={onClose}
       title="Add account"
       subtitle="Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace."
+      unsaved={unsaved}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={busy || !id.trim() || !label.trim() || (kind === 'api_key' && !secret)} onClick={() => void create()}>
+          <Button variant="primary" disabled={held} onClick={proceed}>
             {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
           </Button>
         </>
@@ -781,14 +817,24 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
           ]}
         />
       </div>
-      <div className="form-row">
-        <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the account in every log and URL">
-          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'work'} className="mono" />
+      <Field label="Label" hint="Short name used in pools and logs.">
+        <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
+      </Field>
+      {customId === null ? (
+        <p className="field__hint">
+          <span className="mono">Id: {unnamed ? ID_UNNAMED : id}</span>
+          {taken && ` ${ID_TAKEN}`}{' '}
+          <button type="button" className="link-btn" onClick={() => setCustomId(unnamed ? '' : id)}>
+            customize
+          </button>
+          <br />
+          {ID_HINT}
+        </p>
+      ) : (
+        <Field label="Id" hint={unnamed ? `${ID_HINT} ${ID_UNNAMED}` : taken ? `${ID_HINT} ${ID_TAKEN}` : ID_HINT}>
+          <Input value={customId} onChange={(e) => setCustomId(e.target.value)} placeholder={unnamed ? '' : derived.id} className="mono" aria-invalid={taken || undefined} />
         </Field>
-        <Field label="Label" hint="Short name used in pools and logs.">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
-        </Field>
-      </div>
+      )}
       {kind === 'api_key' && (
         <Field label="API key">
           <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
@@ -805,15 +851,14 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
   );
 }
 
-type PairStep = 1 | 2 | 3;
+type PairStep = 1 | 2;
 
 const PAIR_STEPS: { label: string; step: PairStep }[] = [
-  { step: 1, label: 'Log in' },
-  { step: 2, label: 'Paste the address' },
-  { step: 3, label: 'Confirm' },
+  { step: 1, label: 'Log in and paste the address' },
+  { step: 2, label: 'Confirm' },
 ];
 
-function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { accountId: string; label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean }) {
+function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean; start: PairingStart }) {
   const [session, setSession] = useState<PairingSession | null>(null);
   const [step, setStep] = useState<PairStep>(1);
   const [callback, setCallback] = useState('');
@@ -822,6 +867,8 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
   const [preview, setPreview] = useState<PairingPreview | null>(null);
   const now = useNow(1_000);
 
+  // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing.
+  const startKey = JSON.stringify(start);
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -830,7 +877,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
     setCallback('');
     setError(null);
     setPreview(null);
-    api.startPairing(accountId).then(
+    api.startPairing(start).then(
       (s) => {
         // A pairing that lands after the dialog closed would hold the account until its own deadline.
         if (alive) setSession(s);
@@ -843,7 +890,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
     return () => {
       alive = false;
     };
-  }, [open, accountId]);
+  }, [open, startKey]);
 
   const dismiss = () => {
     // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
@@ -863,7 +910,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
       // A pasted callback URL carries its own state; a bare code borrows the one this pairing started under.
       const p = await api.completePairing(session.id, /^https?:\/\//i.test(pasted) ? { url: pasted } : { code: pasted, state: session.state });
       setPreview(p);
-      setStep(3);
+      setStep(2);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -892,20 +939,12 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
       onClose={dismiss}
       title={title}
       width={600}
+      unsaved={callback.trim() !== '' || preview !== null}
       footer={
         step === 1 ? (
           <>
             <Button variant="ghost" onClick={dismiss}>
               Cancel
-            </Button>
-            <Button variant="primary" disabled={!session || expired} onClick={() => setStep(2)}>
-              I have logged in
-            </Button>
-          </>
-        ) : step === 2 ? (
-          <>
-            <Button variant="ghost" onClick={() => setStep(1)}>
-              Back
             </Button>
             <Button variant="primary" disabled={!callback.trim() || busy || expired} onClick={submit}>
               {busy ? 'Checking…' : 'Submit'}
@@ -941,7 +980,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
 
       {step === 1 && (
         <div className="stack">
-          <p className="secondary">Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address; keep that tab open for the next step.</p>
+          <p className="secondary">Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code alone.</p>
           {session ? (
             <div className="secret">
               <code className="pairing__url">{session.authorizeUrl}</code>
@@ -956,25 +995,18 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
             </a>
             <PairingExpiry remaining={remaining} expired={expired} ready={session !== null} />
           </div>
-        </div>
-      )}
-
-      {step === 2 && (
-        <div className="stack">
           <Field label="Paste the URL your browser landed on, or the code">
-            <Input value={callback} onChange={(e) => setCallback(e.target.value)} placeholder={`${session?.redirectUri ?? 'http://localhost:…/callback'}?code=…&state=…`} className="mono" autoFocus />
+            <Input value={callback} onChange={(e) => setCallback(e.target.value)} placeholder={`${session?.redirectUri ?? 'http://localhost:…/callback'}?code=…&state=…`} className="mono" />
           </Field>
           {session && (
             <p className="muted">
               Registered redirect: <code>{session.redirectUri}</code>
             </p>
           )}
-          <p className="muted">The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.</p>
-          <PairingExpiry remaining={remaining} expired={expired} ready={session !== null} />
         </div>
       )}
 
-      {step === 3 && preview && (
+      {step === 2 && preview && (
         <div className="stack">
           <p className="secondary">Confirm the identity below to store the refresh token for this account.</p>
           <KeyValue

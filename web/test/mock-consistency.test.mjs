@@ -201,7 +201,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
       'every subscription keeps the identity it last paired with',
     );
-    const pairing = await s.api.startPairing('legacy');
+    const pairing = await s.api.startPairing({ accountId: 'legacy' });
     const preview = await s.api.completePairing(pairing.id, { code: 'code', state: pairing.state });
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
   });

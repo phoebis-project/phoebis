@@ -1411,95 +1411,222 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await rename('primary');
 }
 {
-  const add = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account');
-  add?.click();
+  // The Add account dialog: the id derives from the label, and the OAuth kind opens the pairing with no row written.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const open = () => [...m.container.querySelectorAll('dialog[open]')];
+  const openAdd = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+    await m.settle(300);
+    return open().pop() ?? null;
+  };
+  /** A dialog's field by its label, and the input inside it. */
+  const fieldOf = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label) ?? null;
+  const inputOf = (dlg, label) => fieldOf(dlg, label)?.querySelector('input') ?? null;
+  const typeInto = async (input, value) => {
+    if (!input) return;
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+  };
+  /** The id line under the Label field, drawn while the id follows the label. Null once customize revealed the input. */
+  const idLine = (dlg) => [...(dlg?.querySelectorAll('p.field__hint') ?? [])].find((p) => p.textContent?.trim().startsWith('Id:')) ?? null;
+  const idRead = (dlg) => idLine(dlg)?.querySelector('.mono')?.textContent ?? null;
+  const primary = (dlg) => buttonIn(dlg, 'Start pairing') ?? buttonIn(dlg, 'Add API key') ?? null;
+  const rowCount = () => m.container.querySelectorAll('.account-rows .account-row').length;
+  const names = () => [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+
+  let dlg = await openAdd();
+  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(open().length)] });
+  const oauthHint = inputOf(dlg, 'Label')?.getAttribute('placeholder') ?? null;
+  await typeInto(inputOf(dlg, 'Label'), '!!!');
+  results.push({
+    name: '/accounts a label of punctuation alone holds Start pairing',
+    ok: idRead(dlg) === 'Id: none yet, the label needs a letter or digit' && primary(dlg)?.textContent?.trim() === 'Start pairing' && primary(dlg)?.disabled === true,
+    missing: [idRead(dlg) ?? 'no id line', `${primary(dlg)?.textContent?.trim() ?? 'no primary'} disabled ${primary(dlg)?.disabled}`],
+  });
+  await typeInto(inputOf(dlg, 'Label'), 'primary');
+  const takenLine = idLine(dlg)?.textContent ?? '';
+  const takenHeld = primary(dlg)?.disabled === true;
+  await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
+  results.push({
+    name: '/accounts a label that derives a listed id holds the button with the taken hint',
+    ok: takenLine.includes('Id: primary') && takenLine.includes('taken, customize the id') && takenHeld && idRead(dlg) === 'Id: fresh-desk' && !(idLine(dlg)?.textContent ?? '').includes('taken') && primary(dlg)?.disabled === false,
+    missing: [takenLine || 'no id line', `held ${takenHeld}`, idLine(dlg)?.textContent ?? 'no id line after', `enabled ${primary(dlg)?.disabled === false}`],
+  });
+  // Start pairing opens the pairing dialog and writes nothing: no read lands and the list keeps its rows.
+  const rowsBefore = rowCount();
+  const reads = countCalls('listAccounts');
+  const cancels = countCalls('cancelPairing');
+  primary(dlg)?.click();
+  await m.settle(500);
+  const pairingDlg = open().pop() ?? null;
+  const pairingTitle = pairingDlg?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
+  results.push({
+    name: '/accounts Start pairing opens the pairing dialog with no new row in the list',
+    ok: open().length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
+    missing: [`${open().length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+  });
+  buttonIn(pairingDlg, 'Cancel')?.click();
   await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
-  const hints = () => [...(dlg?.querySelectorAll('.form-row input') ?? [])].map((i) => i.getAttribute('placeholder'));
-  const oauthHints = hints();
-  const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
-  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
+  results.push({
+    name: "/accounts Cancel on a new account's pairing leaves the list unchanged",
+    ok: pairingTitle === 'Pair Fresh desk' && open().length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
+    missing: [pairingTitle || 'no pairing dialog', `${open().length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+  });
+  reads.restore();
+  cancels.restore();
+
+  dlg = await openAdd();
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
   results.push({
-    name: "/accounts Add account suggests personal for an OAuth account's id and label, and Console workspace for an API key's label",
-    ok: JSON.stringify(oauthHints) === '["personal","personal"]' && hints()[1] === 'Console workspace',
-    missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
+    name: "/accounts Add account suggests personal for an OAuth account's label, and Console workspace for an API key's",
+    ok: oauthHint === 'personal' && inputOf(dlg, 'Label')?.getAttribute('placeholder') === 'Console workspace',
+    missing: [String(oauthHint), String(inputOf(dlg, 'Label')?.getAttribute('placeholder'))],
   });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
   const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
   results.push({
-    name: '/accounts the API-key form asks for an id, a label, and the key, and nothing else',
-    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
-    missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
+    name: '/accounts the API-key form asks for a label and the key, with the id as a line, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 2 && (idLine(dlg)?.textContent?.trim().startsWith('Id:') ?? false) && (dlg?.textContent ?? '').includes(subtitle),
+    missing: [...fields, ...choices, `${inputs} inputs`, idLine(dlg)?.textContent ?? 'no id line', (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
-  const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
   const typeBox = dlg?.querySelector('[aria-label="Account type"]')?.parentElement;
+  await typeInto(inputOf(dlg, 'Label'), 'Work (Max)');
+  const derivedRead = idRead(dlg);
+  const follows = fieldOf(dlg, 'Label') !== null && fieldOf(dlg, 'Label')?.nextElementSibling === idLine(dlg);
+  buttonIn(idLine(dlg), 'customize')?.click();
+  await m.settle(150);
+  const idInput = inputOf(dlg, 'Id');
   results.push({
-    name: '/accounts Id and Label share a row and the type control keeps its content width',
-    ok: pairs.length === 1 && JSON.stringify(pairs[0]) === JSON.stringify(['Id', 'Label']) && typeBox?.classList.contains('row') === true,
-    missing: [JSON.stringify(pairs), `type control in ${typeBox?.className ?? 'nothing'}`],
+    name: '/accounts the id line follows the Label field and customize reveals an input holding the derived id',
+    ok: derivedRead === 'Id: work-max' && follows && idLine(dlg) === null && idInput?.value === 'work-max' && idInput?.classList.contains('mono') === true && typeBox?.classList.contains('row') === true,
+    missing: [derivedRead ?? 'no id line', `follows the Label field ${follows}`, `Id input ${idInput?.value ?? 'absent'}`, `type control in ${typeBox?.className ?? 'nothing'}`],
   });
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  buttonIn(dlg, 'Cancel')?.click();
   await m.settle(200);
+
+  // The confirm of a new account: the row appears, the page selects it, and the toast names the identity.
+  dlg = await openAdd();
+  await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
+  primary(dlg)?.click();
+  await m.settle(500);
+  const pair = open().pop() ?? null;
+  const pairState = new URLSearchParams((pair?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  await typeInto(pair?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${pairState}`);
+  buttonIn(pair, 'Submit')?.click();
+  await m.settle(900);
+  buttonIn(pair, 'Confirm')?.click();
+  await m.settle(900);
+  const toast = m.container.querySelector('.toast')?.textContent ?? '';
+  results.push({
+    name: '/accounts Confirm adds the row and selects it',
+    ok: open().length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
+    missing: [`${open().length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
+  });
+  // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
+  // the page returns to primary for the checks that follow.
+  await api.deleteAccount('fresh-desk').catch(() => undefined);
+  await m.navigate('/accounts/primary');
+
+  // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
+  dlg = await openAdd();
+  clickOutside(dlg);
+  await m.settle(200);
+  results.push({ name: '/accounts Add account closes on an outside click while unchanged', ok: dlg !== null && open().length === 0, missing: [dlg ? 'opened' : 'no dialog', `${open().length} open`] });
+  dlg = await openAdd();
+  await typeInto(inputOf(dlg, 'Label'), 'Draft');
+  clickOutside(dlg);
+  await m.settle(200);
+  const asked = discardQuestion(m.container);
+  results.push({ name: '/accounts Add account asks after a typed label', ok: open().length === 2 && asked !== null && dlg?.hasAttribute('open') === true, missing: [`${open().length} open`, asked ? 'asked' : 'no question'] });
+  buttonIn(asked, 'Keep editing')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Add account Keep editing keeps the label', ok: open().length === 1 && inputOf(dlg, 'Label')?.value === 'Draft', missing: [`${open().length} open`, inputOf(dlg, 'Label')?.value ?? 'no Label input'] });
+  clickOutside(dlg);
+  await m.settle(200);
+  const askedAgain = discardQuestion(m.container);
+  buttonIn(askedAgain, 'Discard')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Add account Discard closes it', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`] });
 }
 {
-  const head = m.container.querySelector('.detail__head');
-  // Pairing dialog: step 1 link, step 2 paste, step 3 preview.
-  const repair = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
-  repair?.click();
-  await m.settle(500);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts pairing step 1', dlg?.textContent ?? '', ['Re-pair primary', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'I have logged in']);
-  // Read before step 1 unmounts: the callback the browser lands on carries this state, and the mock now checks it.
-  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
-  const next = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in');
-  next?.click();
-  await m.settle(200);
-  expect('/accounts pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
-  const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
-  results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
-  results.push({ name: '/accounts pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
+  // The pairing dialog: the link, the paste field and the redirect on one page, the identity on the Confirm page.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const type = async (value) => {
+  const open = () => [...m.container.querySelectorAll('dialog[open]')];
+  const openRepair = async () => {
+    [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
+    await m.settle(500);
+    return open().pop() ?? null;
+  };
+  const type = async (input, value) => {
+    if (!input) return;
     setter.call(input, value);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(100);
   };
+  const CALLBACK_SENTENCE = 'Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code alone.';
+  const dlg = await openRepair();
+  expect("/accounts the pairing's first page carries the link, Copy, Open in browser, the expiry, the field, the redirect and the callback sentence", dlg?.textContent ?? '', ['Re-pair primary', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', CALLBACK_SENTENCE, 'Submit']);
+  // The callback the browser lands on carries this state, and the mock checks it.
+  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
+  results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
+  results.push({ name: "/accounts the pairing's first page exposes the state the callback must carry", ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
   if (input) {
-    await type(`http://localhost:54545/callback?code=abc123&state=${state}`);
-    const submit = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit');
-    submit?.click();
+    await type(input, `http://localhost:54545/callback?code=abc123&state=${state}`);
+    buttonIn(dlg, 'Submit')?.click();
     await m.settle(900);
-    expect('/accounts pairing step 3', dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
-    const confirm = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm');
-    confirm?.click();
+    expect("/accounts the pairing's Confirm page reads the identity", dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
+    buttonIn(dlg, 'Confirm')?.click();
     await m.settle(600);
-    results.push({ name: '/accounts pairing closes after confirm', ok: !m.container.querySelector('dialog[open]'), missing: [] });
+    results.push({ name: '/accounts pairing closes after confirm', ok: open().length === 0, missing: [] });
   } else {
     results.push({ name: '/accounts pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
   }
   // A bare code is the other half of the field's promise, so it gets its own pass through the dialog.
-  repair?.click();
-  await m.settle(500);
-  const bare = [...m.container.querySelectorAll('dialog[open]')].pop();
-  [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in')?.click();
-  await m.settle(200);
+  const bare = await openRepair();
   const bareInput = bare?.querySelector('input[placeholder^="http://localhost"]');
   if (bareInput) {
-    setter.call(bareInput, 'abc123');
-    bareInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(100);
-    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit')?.click();
+    await type(bareInput, 'abc123');
+    buttonIn(bare, 'Submit')?.click();
     await m.settle(900);
     expect('/accounts pairing accepts a bare code', bare?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm']);
-    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    buttonIn(bare, 'Cancel')?.click();
     await m.settle(300);
   } else {
     results.push({ name: '/accounts pairing accepts a bare code', ok: false, missing: ['no input on the second pass'] });
   }
+  // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
+  const unchanged = await openRepair();
+  clickOutside(unchanged);
+  await m.settle(300);
+  results.push({ name: '/accounts the pairing dialog closes on an outside click before anything is pasted', ok: unchanged !== null && open().length === 0, missing: [unchanged ? 'opened' : 'no pairing dialog', `${open().length} open`] });
+  // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
+  const cancels = countCalls('cancelPairing');
+  const pasted = await openRepair();
+  const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
+  await type(pastedInput, 'abc123');
+  clickOutside(pasted);
+  await m.settle(200);
+  const asked = discardQuestion(m.container);
+  results.push({
+    name: '/accounts the pairing dialog asks once the field holds text',
+    ok: open().length === 2 && asked !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
+    missing: [`${open().length} open`, asked ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  });
+  buttonIn(asked, 'Keep editing')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Keep editing keeps the pasted text in the pairing field', ok: open().length === 1 && pastedInput?.value === 'abc123', missing: [`${open().length} open`, pastedInput?.value ?? 'no field'] });
+  clickOutside(pasted);
+  await m.settle(200);
+  const askedAgain = discardQuestion(m.container);
+  buttonIn(askedAgain, 'Discard')?.click();
+  await m.settle(300);
+  results.push({ name: '/accounts Discard cancels the pairing and closes the dialog', ok: askedAgain !== null && open().length === 0 && cancels.calls.length === 1, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`, `cancelPairing ${cancels.calls.length}`] });
+  cancels.restore();
 }
 await m.navigate('/accounts/legacy');
 expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a', 'Payment method declined']);
@@ -2142,11 +2269,19 @@ m.unmount();
   [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
   await page.settle(150);
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const values = ['refused', 'Refused workspace', 'sk-ant-api03-not-a-key'];
-  for (const [n, input] of [...(dlg?.querySelectorAll('input') ?? [])].entries()) {
-    setter.call(input, values[n]);
+  const fill = async (label, value) => {
+    const input = [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    if (!input) return;
+    setter.call(input, value);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
-  }
+    await page.settle(100);
+  };
+  // The Label first: customize copies the id the label derives, which the typed id then replaces.
+  await fill('Label', 'Refused workspace');
+  buttonIn(dlg, 'customize')?.click();
+  await page.settle(100);
+  await fill('Id', 'refused');
+  await fill('API key', 'sk-ant-api03-not-a-key');
   await page.settle(100);
   const refusal = 'secret must be an API key';
   failNextCall('createAccount', '/admin/accounts', refusal, { quiet: true, status: 400 });

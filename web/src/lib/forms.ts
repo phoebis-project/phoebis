@@ -125,7 +125,7 @@ export interface PoolChecks {
  * The id a create derives from a name, and whether the name gave it nothing: `slug` keeps ASCII letters and digits
  * alone, so a name without one falls back to the id `item`.
  */
-function derivedId(name: string): { id: string; unnamed: boolean } {
+export function derivedId(name: string): { id: string; unnamed: boolean } {
   const id = slug(name);
   return { id, unnamed: id === 'item' && !/[a-z0-9]/i.test(name) };
 }

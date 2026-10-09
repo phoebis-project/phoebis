@@ -112,6 +112,9 @@ export interface Account {
 /** What the operator pasted: a whole callback URL, which carries its own state, or the bare code with the state the pairing started under. */
 export type PairingInput = { code: string; state: string } | { url: string };
 
+/** What a pairing starts on: an existing OAuth row, or a row the confirm creates under `id` with `label`. */
+export type PairingStart = { accountId: string } | { id: string; label: string };
+
 export interface PairingSession {
   authorizeUrl: string;
   expiresAt: string;

@@ -3,7 +3,7 @@ import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALU
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
@@ -32,6 +32,7 @@ const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) =>
 // The routes' own wording, so a page draws the text the router would have sent.
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
+const ACCOUNT_TAKEN = 'an account with this id exists';
 
 /** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
  * moves it and an edit read before it cannot pass. */
@@ -369,7 +370,8 @@ export class MockApi implements Api {
   // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
   // key of the story is its id's first.
   private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
-  private pairings = new Map<string, { accountId: string; state: string }>();
+  /** `label` is set on a pairing that creates its row at the confirm. The row's id is `accountId` either way. */
+  private pairings = new Map<string, { accountId: string; label?: string; state: string }>();
   /** Set by the first replay, which lands the story's parked records. */
   private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
@@ -406,6 +408,31 @@ export class MockApi implements Api {
   private putAccount(next: Account): Account {
     this.accounts = this.accounts.map((a) => (a.id === next.id ? next : a));
     return next;
+  }
+
+  /** The row the create route builds, and the row the confirm of a pairing started for a new account writes. */
+  private newAccountRow(input: AccountInput, status: Account['status'], email: string | null): Account {
+    return {
+      ...ACCOUNT_SAMPLE,
+      cooldowns: [],
+      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+      email,
+      extraUsage: null,
+      fableWindow: null,
+      fastLane: null,
+      id: input.id,
+      kind: input.kind,
+      label: input.label,
+      plan: null,
+      pool: null,
+      requests: { last24h: 0, last7d: 0, lifetime: 0 },
+      revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
+      routingEnabled: true,
+      status,
+      subscription: null,
+      usage: usageOf({ id: input.id, kind: input.kind, status }),
+      windows: [],
+    };
   }
 
   /** The account as the route answers it, its pool read off the member lists a pool write rewrites. */
@@ -472,33 +499,19 @@ export class MockApi implements Api {
   }
 
   async confirmPairing(pairingId: string) {
+    const pairing = this.pairings.get(pairingId);
+    // Deleted either way: the router fails the session on a refused confirm.
     this.pairings.delete(pairingId);
+    if (pairing?.label !== undefined) {
+      // The backstop for a create that landed between the start and the confirm.
+      if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
+      this.accounts = [...this.accounts, this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com')];
+    }
     return latency(undefined, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
-    const status: Account['status'] = input.kind === 'oauth' ? 'unpaired' : 'ready';
-    const account: Account = {
-      ...ACCOUNT_SAMPLE,
-      cooldowns: [],
-      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
-      email: null,
-      extraUsage: null,
-      fableWindow: null,
-      fastLane: null,
-      id: input.id,
-      kind: input.kind,
-      label: input.label,
-      plan: null,
-      pool: null,
-      requests: { last24h: 0, last7d: 0, lifetime: 0 },
-      revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
-      routingEnabled: true,
-      status,
-      subscription: null,
-      usage: usageOf({ id: input.id, kind: input.kind, status }),
-      windows: [],
-    };
+    const account = this.newAccountRow(input, input.kind === 'oauth' ? 'unpaired' : 'ready', null);
     this.accounts = [...this.accounts, account];
     return latency(this.withPool(account), 300);
   }
@@ -877,11 +890,14 @@ export class MockApi implements Api {
     return latency({ key: next, secret }, 300);
   }
 
-  async startPairing(accountId: string): Promise<PairingSession> {
+  async startPairing(start: PairingStart): Promise<PairingSession> {
+    const accountId = 'accountId' in start ? start.accountId : start.id;
+    // A new account's id is refused while a row holds it, as the route refuses it before the session starts.
+    if ('id' in start && this.accounts.some((a) => a.id === start.id)) throw new ApiError(409, ACCOUNT_TAKEN, null);
     const state = this.token(24);
     // The router names the pairing with an id of its own; the state only ever travels through the browser.
     const id = `pair_${this.token(10)}`;
-    this.pairings.set(id, { accountId, state });
+    this.pairings.set(id, 'id' in start ? { accountId, label: start.label, state } : { accountId, state });
     const params = new URLSearchParams({
       client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
       code_challenge: this.token(43),
