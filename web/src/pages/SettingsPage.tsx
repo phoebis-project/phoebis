@@ -147,11 +147,11 @@ export function SettingsPage() {
                 { label: 'Keepalive sessions', value: String(s.keepalive.maxSessions), mono: true, title: restartNote('keepalive.max_sessions') },
                 { label: 'Keepalive agents', value: String(s.keepalive.maxAgents), mono: true, title: restartNote('keepalive.max_agents') },
                 { label: 'Keepalive retained bytes', value: fmtMiB(s.keepalive.maxRetainedBytes), mono: true, title: restartNote('keepalive.max_retained_bytes') },
-                { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names; it reaches every route.' },
+                { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />
             <p className="muted" style={{ marginTop: 10 }}>
-              The values the configuration file sets are on the installation page; <code>phoebis check-config</code> prints this router&apos;s.
+              The values the configuration file sets are on the installation page, and <code>phoebis check-config</code> prints this router&apos;s.
             </p>
           </>
         ) : settings.error ? (

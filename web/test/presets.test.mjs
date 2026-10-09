@@ -241,7 +241,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
 
 test('while the cost model is loading or did not load the preview names the model and counts nothing', () => {
   const round = replay([hot, cool], four);
-  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading; window-share pins are counted once it is read.');
+  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading, and window-share pins are counted once it is read.');
   assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost model did not load, so window-share pins cannot be counted.');
   assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read model counts as before');
   assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, model or not');

@@ -337,7 +337,7 @@ impl CachedEntry {
     /// The one sentence the held answer and the poll's last error both read.
     fn hold_message(&self) -> String {
         format!(
-            "the {} endpoint rate-limited the account; next attempt at {}",
+            "the {} endpoint rate-limited the account, and the next attempt is at {}",
             self.held_by,
             utc(self.not_before)
         )

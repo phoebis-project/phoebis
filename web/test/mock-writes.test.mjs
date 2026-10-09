@@ -174,8 +174,8 @@ test('a pool answers its keys from the key registry', async () => {
 });
 
 const staleAs = (message) => (e) => e instanceof d.ApiError && e.status === 409 && e.message === message && e.code === 'stale_edit';
-const POOL_STALE = 'the pool changed while it was being edited; reload and try again';
-const KEY_STALE = 'the key changed while it was being edited; reload and try again';
+const POOL_STALE = 'the pool changed while it was being edited, so reload and try again';
+const KEY_STALE = 'the key changed while it was being edited, so reload and try again';
 const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
 
 /** The route's token: the row's incarnation above the 42 bits of its stamp. */

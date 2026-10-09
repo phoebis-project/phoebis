@@ -557,7 +557,7 @@ fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &
     ) {
         (
             None,
-            "no credential is stored for this account; pair it to load quota",
+            "no credential is stored for this account, so pair it to load quota",
         )
     } else {
         (
@@ -941,7 +941,7 @@ async fn pairing_confirm(
             }
             StoreError::Stale => conflict(
                 &state,
-                "the credential changed while pairing; start the pairing again",
+                "the credential changed while pairing, so start the pairing again",
             ),
             other => unstored(&state, other),
         };
@@ -1234,7 +1234,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let (quota, extra, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {
-            tracing::warn!(%error, "the account view could not read the ledger; totals and windows are empty");
+            tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
             Default::default()
         }
     };
@@ -1666,7 +1666,7 @@ pub(crate) fn registry_unavailable() -> Response {
     failure_with_code(
         StatusCode::SERVICE_UNAVAILABLE,
         "registry_unavailable",
-        "the registry was written but could not be reloaded; the next successful reload publishes it",
+        "the registry was written but could not be reloaded, and the next successful reload publishes it",
     )
 }
 

@@ -231,7 +231,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessi
     return account ? { accountId: account.id, label: account.label } : { text: id };
   };
   const say = (parts: StatusPart[]): PoolStatusSentence => ({ parts, status, word });
-  if (status === 'disabled') return say([{ text: 'the pool accepts no requests; its keys and members stay.' }]);
+  if (status === 'disabled') return say([{ text: 'the pool accepts no requests, but its keys and members stay.' }]);
   if (status === 'exhausted') {
     if (accounts === null) return say([{ text: 'no member can take a request.' }]);
     const first = pool.members
@@ -250,5 +250,5 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessi
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
   const next = selectionOrder(pool, accounts, sessions, now).find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
-  return say([{ text: `${count}; the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
+  return say([{ text: `${count}, and the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

@@ -69,7 +69,7 @@ export function DashboardPage() {
       )}
       {overview.data !== null && (
         <p className="muted dash__asof" title={fmtAbsolute(overview.fetchedAt)}>
-          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}; showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
+          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}. Showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
         </p>
       )}
 

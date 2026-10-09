@@ -219,7 +219,7 @@ export function shedPreview(
  */
 export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
-  if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
+  if (table === 'loading') return 'The cost model is loading, and window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';
   const of = preview.averaged

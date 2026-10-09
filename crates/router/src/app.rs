@@ -487,7 +487,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     );
     if phoebis_ui::is_placeholder() {
         tracing::warn!(
-            "this build carries no web UI; the admin listener serves a placeholder page"
+            "this build carries no web UI, so the admin listener serves a placeholder page"
         );
     }
 
@@ -587,7 +587,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     )
     .await;
     if let Some(listener) = ended_early {
-        tracing::error!(listener, "a listener ended on its own; shutting down");
+        tracing::error!(
+            listener,
+            "a listener ended on its own, so the process shuts down"
+        );
     }
     let early_error = ended_early.map(|listener| {
         let index = match listener {

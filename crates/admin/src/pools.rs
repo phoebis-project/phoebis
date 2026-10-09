@@ -26,7 +26,7 @@ use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
-const STALE_EDIT: &str = "the pool changed while it was being edited; reload and try again";
+const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -633,7 +633,7 @@ mod service {
             if step == 0 {
                 assert_eq!(
                     service.snapshot("a").await.unwrap().error.as_deref(),
-                    Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
+                    Some("the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:40 UTC"),
                     "the held answer names the endpoint and when it may be asked again"
                 );
             }
@@ -801,7 +801,7 @@ mod service {
         let held = service.snapshot("a").await.unwrap();
         assert_eq!(
             held.error.as_deref(),
-            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
+            Some("the profile endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:40 UTC"),
             "a cache hit inside the hold carries the error"
         );
         assert_eq!(held.windows.len(), clean.windows.len(), "the old windows");
@@ -869,7 +869,7 @@ mod service {
         service.snapshot("a").await.unwrap();
         assert_eq!(
             last_error(&service).as_deref(),
-            Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:44 UTC"),
+            Some("the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:44 UTC"),
             "a usage 429 keeps the held answer's sentence"
         );
 
@@ -917,7 +917,7 @@ mod service {
         assert!(service.profile("a").await.is_err());
         assert_eq!(
             last_error(&service).as_deref(),
-            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
+            Some("the profile endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:40 UTC"),
             "a profile 429 before any reading sets the hold's sentence"
         );
 
@@ -933,7 +933,7 @@ mod service {
         assert!(service.profile("a").await.is_err());
         assert_eq!(
             last_error(&service).as_deref(),
-            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:22:00 UTC"),
+            Some("the profile endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:22:00 UTC"),
             "a profile 429 over a clean reading sets it again"
         );
         up.shutdown().await;
@@ -1116,7 +1116,7 @@ mod service {
         let answer = fetching.await.unwrap().unwrap();
         assert_eq!(
             answer.error.as_deref(),
-            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:26:50 UTC"),
+            Some("the profile endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:26:50 UTC"),
             "the discarded fetch answers the held snapshot"
         );
         up.shutdown().await;

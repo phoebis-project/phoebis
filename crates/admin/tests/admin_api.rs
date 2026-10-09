@@ -1204,7 +1204,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": NOW + 10_000,
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
-            "last_error": "the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:50 UTC",
+            "last_error": "the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:50 UTC",
             "last_outcome": "rate_limited",
             "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
@@ -1418,7 +1418,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     .await;
     assert_eq!(removed.status(), 204);
     let no_credential = (
-        Some("no credential is stored for this account; pair it to load quota".into()),
+        Some("no credential is stored for this account, so pair it to load quota".into()),
         true,
         Some(0),
     );
@@ -1450,7 +1450,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     assert_eq!(created.status(), 201);
     let created = json(created).await;
     let no_credential = serde_json::json!({
-        "error": "no credential is stored for this account; pair it to load quota",
+        "error": "no credential is stored for this account, so pair it to load quota",
         "fetched_at": null,
         "poll": null,
     });

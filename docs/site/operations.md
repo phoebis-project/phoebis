@@ -55,9 +55,9 @@ names, and nothing derived from the key), and under `registry` and `ledger` each
 `backup` exits 1 with nothing written when the file does not load, when `--to` names a file or a directory that is not
 empty, when it names a directory that group or other can write or that another user owns
 (`{dir}: group or other can write it, or another user owns it. Nothing was written.`), or when either database does not
-exist (`a backup carries both databases; {path} does not exist`). A copy that fails, such as one whose database another
-connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
-`backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written
+exist (`a backup carries both databases, but {path} does not exist`). A copy that fails, such as one whose database
+another connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
+`backup failed: {reason}. Nothing was written to {dir}`. It exits 0 once the manifest is written
 ([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the same
 snapshot, one database at a time.
 

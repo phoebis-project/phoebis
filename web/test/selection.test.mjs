@@ -280,27 +280,27 @@ const linked = (p, accs = accounts) => poolStatusSentence(p, accs, [], NOW).part
 const at = (p, status) => ({ ...p, status });
 
 test('the status sentence reads one row of the table per pool state', () => {
-  assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'disabled')), 'Disabled: the pool accepts no requests; its keys and members stay.');
+  assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'disabled')), 'Disabled: the pool accepts no requests, but its keys and members stay.');
   assert.equal(read(at(pool('pace', 'allow', []), 'active')), 'Active: the pool has no members yet.');
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0, 'cooldown')]), 'degraded')), 'Degraded: no member takes a fresh session right now.');
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), `Active: ${labelOf('plan')} takes every fresh session.`);
   assert.deepEqual(linked(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), ['plan']);
-  assert.equal(read(at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'degraded')), `Degraded: all 2 members take fresh sessions; the next one goes to ${labelOf('plan')}.`);
+  assert.equal(read(at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'degraded')), `Degraded: all 2 members take fresh sessions, and the next one goes to ${labelOf('plan')}.`);
   assert.equal(
     read(at(pool('priority', 'allow', [member('plan', 0), member('over', 0, 'cooldown'), member('key', 1, 'budget'), member('fresh', 1, 'overage')]), 'degraded')),
-    `Degraded: 1 of 4 members takes fresh sessions; the next one goes to ${labelOf('plan')}.`,
+    `Degraded: 1 of 4 members takes fresh sessions, and the next one goes to ${labelOf('plan')}.`,
   );
 });
 
 test('the status sentence names several next accounts and the earliest return', () => {
   const two = at(pool('priority', 'allow', [member('plan', 0), member('over', 0)]), 'active');
   const names = [...selectionOrder(two, accounts, [], NOW)[0].next].map(labelOf);
-  assert.equal(read(two), `Active: all 2 members take fresh sessions; the next one goes to ${names[0]} or ${names[1]}.`);
+  assert.equal(read(two), `Active: all 2 members take fresh sessions, and the next one goes to ${names[0]} or ${names[1]}.`);
   const withFresh = [...accounts, account('fresh')];
   const three = at(pool('priority', 'allow', [member('plan', 0), member('over', 0), member('fresh', 0)]), 'active');
   const trio = [...selectionOrder(three, withFresh, [], NOW)[0].next].map(labelOf);
   assert.equal(trio.length, 3);
-  assert.equal(read(three, withFresh), `Active: all 3 members take fresh sessions; the next one goes to ${trio[0]}, ${trio[1]} or ${trio[2]}.`);
+  assert.equal(read(three, withFresh), `Active: all 3 members take fresh sessions, and the next one goes to ${trio[0]}, ${trio[1]} or ${trio[2]}.`);
   const daily = { ...member('key', 0, 'budget'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
   const monthly = { ...member('plan', 0, 'budget'), budgetUntil: hoursFromNow(9), spends: [{ period: 'month', periodEnd: hoursFromNow(9), spentUsd: 300 }] };
   assert.equal(read(at(pool('pace', 'allow', [monthly, daily]), 'exhausted')), `Exhausted: no member can take a request until ${labelOf('key')}'s daily budget resets at ${fmtPeriodEnd(hoursFromNow(5))}.`);
@@ -358,7 +358,7 @@ test('while the accounts are unread the status sentence says only what the verdi
     [],
     'no account part and no raw account id',
   );
-  assert.equal(read(degraded), `Degraded: 1 of 2 members takes fresh sessions; the next one goes to ${labelOf('plan')}.`);
+  assert.equal(read(degraded), `Degraded: 1 of 2 members takes fresh sessions, and the next one goes to ${labelOf('plan')}.`);
   assert.equal(read(single), `Active: ${labelOf('plan')} takes every fresh session.`);
   assert.equal(read(exhausted, cooled), `Exhausted: no member can take a request until ${labelOf('over')}'s cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`);
 });

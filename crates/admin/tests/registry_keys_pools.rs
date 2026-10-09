@@ -3048,7 +3048,7 @@ async fn two_pool_edits_from_one_read_answer_409_on_the_second() {
     );
     assert_eq!(
         json(first).await["error"],
-        "the pool changed while it was being edited; reload and try again"
+        "the pool changed while it was being edited, so reload and try again"
     );
     assert_eq!(
         store.pool("main").unwrap().unwrap().label,
@@ -3110,7 +3110,7 @@ async fn two_key_edits_from_one_read_answer_409_on_the_second() {
     );
     assert_eq!(
         json(first).await["error"],
-        "the key changed while it was being edited; reload and try again"
+        "the key changed while it was being edited, so reload and try again"
     );
     assert_eq!(
         store.api_key("desktop").unwrap().unwrap().label,
@@ -3182,7 +3182,7 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
         );
         assert_eq!(
             json(stale).await["error"],
-            "the pool changed while it was being edited; reload and try again",
+            "the pool changed while it was being edited, so reload and try again",
             "{sent}"
         );
     }
@@ -3275,7 +3275,7 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
         );
         assert_eq!(
             json(stale).await["error"],
-            "the key changed while it was being edited; reload and try again",
+            "the key changed while it was being edited, so reload and try again",
             "{sent}"
         );
     }
@@ -3444,22 +3444,22 @@ async fn a_stale_token_across_a_recreation_answers_stale_edit_for_a_pool_and_a_k
         (
             "/admin/pools/spare",
             old_pool,
-            "the pool changed while it was being edited; reload and try again",
+            "the pool changed while it was being edited, so reload and try again",
         ),
         (
             "/admin/pools/spare",
             phoebis_store::stamp_token(1, pool_row.updated_at),
-            "the pool changed while it was being edited; reload and try again",
+            "the pool changed while it was being edited, so reload and try again",
         ),
         (
             "/admin/keys/laptop",
             old_key,
-            "the key changed while it was being edited; reload and try again",
+            "the key changed while it was being edited, so reload and try again",
         ),
         (
             "/admin/keys/laptop",
             phoebis_store::stamp_token(1, key_row.updated_at),
-            "the key changed while it was being edited; reload and try again",
+            "the key changed while it was being edited, so reload and try again",
         ),
     ] {
         let refused = patch(

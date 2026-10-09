@@ -97,7 +97,7 @@ test('an account row decodes its usage block and null for an API-key account', (
     status: 'success',
   });
   assert.equal(direct.usage, null, 'the poll never reads an API-key account');
-  const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account; pair it to load quota', fetched_at: null, poll: null } }).usage;
+  const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account, so pair it to load quota', fetched_at: null, poll: null } }).usage;
   assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
 
@@ -1454,7 +1454,7 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.equal(snapshot.status, 'success');
   const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
   assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
-  const hold = 'the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:04:00 UTC';
+  const hold = 'the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:04:00 UTC';
   const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
   assert.deepEqual(
     [held.status, held.poll],
