@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, stationModel, SwitchedNumber, tick, walkLines, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -7643,14 +7643,37 @@ m.unmount();
     const all = el.textContent ?? '';
     return label ? `${label} ${all.slice(label.length)}` : all;
   };
-  const walkOf = (card) =>
-    [...(card?.querySelectorAll('.decision-card__walk > li') ?? [])].map((li) => ({
-      chips: [...li.querySelectorAll('.chips > .chip')].map(chipWords),
-      li,
-      n: li.querySelector('.decision-card__n')?.textContent ?? '',
-      step: li.querySelector('.decision-card__step')?.textContent ?? '',
-      verdict: li.querySelector('.decision-card__verdict-cell')?.textContent ?? '',
+  /** The strip's stations in its order, the line's then the track's: the word, the badge, the second line and the state. */
+  const stationsOf = (card) =>
+    [...(card?.querySelectorAll('.decision-strip .strip-station') ?? [])].map((b) => ({
+      button: b,
+      id: b.dataset.station,
+      second: [...b.querySelectorAll('.strip-station__second > span')].map((s) => s.textContent),
+      state: [...b.classList].find((c) => c.startsWith('is-')) ?? '',
+      step: b.querySelector('.strip-station__word')?.textContent ?? '',
+      verdict: b.querySelector('.badge')?.textContent ?? '',
     }));
+  const leavesOf = (card) =>
+    [...(card?.querySelectorAll('.decision-strip .strip-candidate') ?? [])].map((b) => ({ account: b.querySelector('.strip-candidate__account')?.textContent ?? '', badge: b.querySelector('.badge')?.textContent ?? '', chosen: b.classList.contains('is-chosen') }));
+  const terminiOf = (card) => [...(card?.querySelectorAll('.decision-strip .strip-terminus') ?? [])].map((b) => ({ badge: b.querySelector('.badge')?.textContent ?? null, kind: b.dataset.terminus, taken: b.classList.contains('is-taken') }));
+  /** A step's fact chips as `label value`, off the record through the lib, since the strip draws none of them. */
+  const chipsOf = (record, row, stepName) => (walkLines(record, row).find((l) => l.step === stepName)?.chips ?? []).map((c) => (c.label ? `${c.label} ${c.value}` : c.value));
+  /**
+   * A strip word's horizontal span as the component placed it: jsdom lays nothing out, so the inline position is what
+   * a check can read.
+   */
+  const spanOf = (el) => ({ from: parseFloat(el?.style.left ?? 'NaN'), to: parseFloat(el?.style.left ?? 'NaN') + parseFloat(el?.style.width || '0') });
+  const centerOf = (el) => (spanOf(el).from + spanOf(el).to) / 2;
+  const groupOf = (card, word) => [...(card?.querySelectorAll('.decision-strip .strip-group') ?? [])].find((g) => g.textContent === word) ?? null;
+  const stubsOf = (card, word) => [...(card?.querySelectorAll('.decision-strip .strip-stub') ?? [])].filter((w) => w.textContent === word);
+  const onTrack = (s) => s?.button.classList.contains('strip-station--track') ?? false;
+  const pairsOf = (card) => stationsOf(card).map((s) => [s.step, s.verdict]);
+  /** The pairs the model gives, the line's before the track's, for a record whose sequence a check does not spell. */
+  const modelPairs = (record, row) => {
+    const { stations } = stationModel(record, row, CLOCK_ORIGIN);
+    return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
+  };
+  const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed']];
   const kvRows = (dl) => [...(dl?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ dd: r.querySelector('dd'), label: r.querySelector('dt')?.textContent ?? '' }));
   const ddWords = (dd) => {
     const chips = [...(dd?.querySelectorAll('.chip') ?? [])];
@@ -7678,13 +7701,33 @@ m.unmount();
   const scan = (where, root) => {
     if (root) scanned.push({ root: root.cloneNode(true), where });
   };
+  /**
+   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row in
+   * the table's order up to eight and then "and N more", and the one taken terminus reading the kind's word.
+   */
+  const stripDrawn = (what, card, expected) => {
+    const rows = candidateRows(card).map((tr) => [tr.querySelector('td a')?.textContent ?? '', tr.querySelector('.decision-card__judged .badge')?.textContent ?? '']);
+    const leaves = leavesOf(card).map((l) => [l.account, l.badge]);
+    const fanned = rows.length <= 8 ? JSON.stringify(leaves) === JSON.stringify(rows) : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b));
+    const taken = terminiOf(card).filter((t) => t.taken);
+    const kind = card?.querySelector('.decision-card__verdict > .badge')?.textContent ?? null;
+    results.push({
+      name: `/routing-log the ${what}'s card draws the strip in the walk's place with its stations in order`,
+      ok: card !== null && card.querySelector('.decision-card__walk') === null && card.querySelectorAll('.decision-strip').length === 1 && JSON.stringify(pairsOf(card)) === JSON.stringify(expected) && fanned && taken.length === 1 && kind !== null && taken[0].badge === kind,
+      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, JSON.stringify(terminiOf(card))],
+    });
+  };
 
   {
-    const { card, page, panel, record } = await story('req_f8085653-422');
+    const { card, page, panel, record, row: summary } = await story('req_f8085653-422');
     scan('renewal', card);
-    const lines = walkOf(card);
-    const moves = lines.filter((l) => ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].includes(l.step));
-    const pin = lines.find((l) => l.step === 'Pin');
+    stripDrawn('renewal', card, RENEWAL_STATIONS);
+    const stations = stationsOf(card);
+    // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
+    const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
+    const bracket = groupOf(card, 'Moves');
+    const fires = stubsOf(card, 'fires');
+    const renew = stations.at(-1);
     const row = rowOf(page, 'req_f8085653-422/1');
     results.push({
       name: "/routing-log the renewal's card reads no rule fired, five move lines and idle",
@@ -7692,16 +7735,20 @@ m.unmount();
         row?.classList.contains('is-open') && row.getAttribute('aria-expanded') === 'true' && panel?.querySelector('td')?.getAttribute('colspan') === '9' &&
         card?.querySelector('.decision-card__verdict > .badge')?.textContent === 'renewed' && sentenceOf(card) === `Renewed on [${record.outcome.accountId}]` &&
         verdictChipsOf(card).includes('no rule fired') && verdictChipsOf(card).includes('pin warm') &&
-        moves.length === 5 && moves.every((l) => l.verdict === 'no' && l.chips.length > 0) && lines.some((l) => l.step === 'Renew' && l.verdict === 'renewed') &&
-        pin?.chips.some((c) => c.startsWith('idle ')) && JSON.stringify(lines.map((l) => l.n)) === JSON.stringify(lines.map((_, i) => String(i + 1))),
-      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...lines.map((l) => `${l.n} ${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+        moves.length === 5 && moves.every((s) => s.state === 'is-taken' && s.verdict === 'no' && centerOf(s.button) >= spanOf(bracket).from && centerOf(s.button) <= spanOf(bracket).to) &&
+        ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].every((name) => chipsOf(record, summary, name).length > 0) &&
+        fires.length === 5 && fires.every((w) => moves.some((s) => parseFloat(w.style.left) > centerOf(s.button) && parseFloat(w.style.left) < centerOf(s.button) + 20)) &&
+        !stations.some((s) => s.state === 'is-idle') && renew?.step === 'Renew' && renew.verdict === 'renewed' && renew.state === 'is-taken' && renew.second.length === 0 && renew.button.classList.contains('strip-station--above') &&
+        JSON.stringify(terminiOf(card)) === JSON.stringify([{ badge: 'renewed', kind: 'chosen', taken: true }]) &&
+        chipsOf(record, summary, 'Pin').some((c) => c.startsWith('idle ')) && stations.every((s, i) => s.button.dataset.index === String(i)),
+      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...stations.map((s) => `${s.button.dataset.index} ${s.step} ${s.verdict} (${s.state}): ${s.second.join(' / ')}`), `${fires.length} fires stubs`, bracket?.textContent ?? 'no Moves bracket', JSON.stringify(terminiOf(card))],
     });
     // The re-made drawer check: a renewal reads as the pin continued, renewed in place on the account it was on.
     const out = outcomeOf(card);
     results.push({
       name: '/routing-log a card reads a renewed pin as continued',
-      ok: lines.at(-1)?.step === 'Renew' && lines.at(-1)?.chips.includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !lines.some((l) => l.step === 'Pick'),
-      missing: [JSON.stringify(out['Pin written']), lines.at(-1)?.chips.join(' / ') ?? 'no line'],
+      ok: renew?.step === 'Renew' && chipsOf(record, summary, 'Renew').includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !stations.some((s) => s.step === 'Pick'),
+      missing: [JSON.stringify(out['Pin written']), renew ? `${renew.step}: ${chipsOf(record, summary, 'Renew').join(' / ')}` : 'no station'],
     });
     results.push({
       name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
@@ -7748,15 +7795,14 @@ m.unmount();
   }
   {
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
-    const { card, page, record } = await story('req_b2bed817-a58');
+    const { card, page, record, row } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    const lines = walkOf(card);
-    const rungs = lines.filter((l) => l.step.startsWith('Rung: '));
+    stripDrawn('static placement', card, modelPairs(record, row));
+    const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
-    const staticLine = rungs.find((l) => l.step === 'Rung: static');
-    const hash = staticLine?.li.querySelector('.decision-card__hash');
-    const warm = staticLine?.li.querySelector('.decision-card__warm');
+    // The strip draws no entry chip, so the static rung's entry is read off the record as the walk derives it.
+    const entry = walkLines(record, row).find((l) => l.step === 'Rung: static')?.hash ?? null;
     const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
     const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
     const mine = prefixCell(chosen.accountId);
@@ -7764,13 +7810,14 @@ m.unmount();
     results.push({
       name: "/routing-log the static placement's card reads the three rung lines, the hash chip of eight characters with the full hash in its title, the warm-until chip and the candidate table's Prefix cells",
       ok:
-        JSON.stringify(rungs.map((l) => `${l.step} ${l.verdict}`)) === JSON.stringify(['Rung: content none', 'Rung: with main none', 'Rung: static match']) &&
+        JSON.stringify(rungs.map((s) => `${s.step} ${s.verdict}`)) === JSON.stringify(['content none', 'with main none', 'static match']) &&
+        rungs.every((s) => centerOf(s.button) >= spanOf(groupOf(card, 'Rungs')).from && centerOf(s.button) <= spanOf(groupOf(card, 'Rungs')).to) && rungs.at(-1)?.button.classList.contains('is-decisive') &&
         chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
-        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash?.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
+        entry?.hash.slice(0, 8) === chosen.prefix.staticMatch.hash.slice(0, 8) && entry.hash === chosen.prefix.staticMatch.hash && entry.hash.length === 64 && until(entry) === until(chosen.prefix.staticMatch) &&
         mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
         refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
         !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
-      missing: [...rungs.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+      missing: [...rungs.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, `Rung: ${s.step}`).join(' / ')}`), entry ? `${entry.hash} ${until(entry)}` : 'no entry', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
     });
     // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
     // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.
@@ -7791,21 +7838,24 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_da52d141-a5a');
+    const { card, page, record, row } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    const lines = walkOf(card);
-    const steps = lines.map((l) => `${l.step} ${l.verdict}`);
-    const cool = lines.find((l) => l.step === 'Cool reading');
-    const rules = lines.find((l) => l.step === 'Rules after spent');
-    const landed = lines.find((l) => l.step === 'Rung: static');
+    stripDrawn('spent move', card, modelPairs(record, row));
+    const stations = stationsOf(card);
+    const steps = stations.map((s) => `${s.step} ${s.verdict}`);
+    const cool = stations.find((s) => s.step === 'Cool reading');
+    // The rules after a fired one never ran, so they stand idle on the line while the move rides the track.
+    const rules = stations.filter((s) => ['overage', 'return to plan', 'drain', 'shed'].includes(s.step));
+    const landed = stations.find((s) => s.step === 'static');
     results.push({
       name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
       ok:
         sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
-        steps.includes('Spent fired') && JSON.stringify(rules?.chips) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules?.verdict === 'not run' &&
-        cool?.verdict === 'preferred' && cool.chips.includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
-        landed?.verdict === 'match' && landed.chips.includes(`on ${record.outcome.accountId}`) && steps.indexOf('Spent fired') < steps.indexOf('Cool reading preferred'),
-      missing: [sentenceOf(card), ...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+        steps.includes('spent fired') && JSON.stringify(rules.map((s) => s.step)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules.every((s) => s.verdict === 'not run' && s.state === 'is-idle' && !onTrack(s)) &&
+        cool?.verdict === 'preferred' && chipsOf(record, row, 'Cool reading').includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
+        landed?.verdict === 'match' && chipsOf(record, row, 'Rung: static').includes(`on ${record.outcome.accountId}`) &&
+        steps.indexOf('spent fired') < steps.indexOf('Move moved') && steps.indexOf('Move moved') < steps.indexOf('Cool reading preferred') && onTrack(stations.find((s) => s.id === 'move')) && onTrack(cool),
+      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`)],
     });
     // The re-made drawer check: the move and the rung that placed it read on one card.
     results.push({
@@ -7817,39 +7867,55 @@ m.unmount();
   }
   {
     // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
-    const { card, page, record } = await story('req_868264bc-611');
+    const { card, page, record, row } = await story('req_868264bc-611');
     scan('shed move', card);
-    const shed = walkOf(card).find((l) => l.step === 'Shed');
+    stripDrawn('shed move', card, [
+      ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
+      ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
+    ]);
+    const shed = stationsOf(card).find((s) => s.step === 'shed');
     const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
     const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
-    const toneClasses = [rowOf(page, 'req_868264bc-611/1')?.querySelector('td.routing-log__kind .badge')?.className ?? 'no row badge', card?.querySelector('.decision-card__verdict > .badge')?.className ?? 'no card badge'];
+    // The moved row's tone reads on the card's verdict badge, the strip's Move station and the terminus it reached.
+    const toneClasses = [
+      rowOf(page, 'req_868264bc-611/1')?.querySelector('td.routing-log__kind .badge')?.className ?? 'no row badge',
+      card?.querySelector('.decision-card__verdict > .badge')?.className ?? 'no card badge',
+      card?.querySelector('.decision-strip .strip-station[data-station="move"] .badge')?.className ?? 'no Move station badge',
+      card?.querySelector('.decision-strip .strip-terminus.is-taken .badge')?.className ?? 'no taken terminus badge',
+    ];
     page.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
-    const ran = walkOf(round.card).find((l) => l.step === 'Shed');
-    const marks = [...(ran?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
+    stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
+    const ran = stationsOf(round.card).find((s) => s.step === 'shed');
+    // The strip draws no chip, so the marks' session links are read off the chips the walk derives for the round.
+    const marks = (walkLines(round.record, round.row).find((l) => l.step === 'Shed')?.chips ?? []).filter((c) => c.label === 'mark');
     const sessions = (round.record.outcome.shedMarks ?? []).map((m) => m.sessionId);
     results.push({
       name: "/routing-log the shed move's card reads the round and its marks",
       ok:
-        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && shed.chips.includes('round within dwell') && shed.chips.includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
-        ran?.verdict === 'no' && ran.chips.includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
-        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
-      missing: [shed?.chips.join(' / ') ?? 'no shed line', JSON.stringify(ddWords(mark?.dd)), ran?.chips.join(' / ') ?? 'no round line'],
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && chipsOf(record, row, 'Shed').includes('round within dwell') && chipsOf(record, row, 'Shed').includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
+        ran?.verdict === 'no' && chipsOf(round.record, round.row, 'Shed').includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        JSON.stringify(marks.map((c) => params(c.href).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(`${c.label}${c.value}`)),
+      missing: [shed ? `${shed.step} ${shed.verdict}: ${chipsOf(record, row, 'Shed').join(' / ')}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? chipsOf(round.record, round.row, 'Shed').join(' / ') : 'no round station'],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
   }
   {
-    const { card, page, record } = await story('req_69e30548-32e', 1);
+    const { card, page, record, row } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    stripDrawn('hold', card, modelPairs(record, row));
+    const hold = stationsOf(card).find((s) => s.step === 'Hold');
+    const chips = chipsOf(record, row, 'Hold');
     const out = outcomeOf(card);
     const bound = record.outcome.hold?.boundMs;
     results.push({
       name: "/routing-log the hold's card reads its place and bound",
-      ok: sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && hold.chips.includes('place cohort') && hold.chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && hold.chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
-      missing: [sentenceOf(card), hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(out.Hold)],
+      ok:
+        sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && JSON.stringify(hold.second) === JSON.stringify(['cohort', 'bound 1 min']) &&
+        chips.includes('place cohort') && chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
+      missing: [sentenceOf(card), hold ? `${hold.verdict}: ${hold.second.join(' / ')}` : 'no hold station', chips.join(' / '), JSON.stringify(out.Hold)],
     });
     // The held-on member is at its cap, which its chip says beneath the badge.
     const heldOn = candidateRows(card).find((tr) => tr.classList.contains('is-chosen'));
@@ -7861,7 +7927,9 @@ m.unmount();
     const after = await openRow(page, 'req_69e30548-32e/2');
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
-    const { cohort, heldMs } = (await api.getDecision('req_69e30548-32e', 2)).outcome.cohortHold;
+    const second = await api.getDecision('req_69e30548-32e', 2);
+    stripDrawn('placement after the hold', placed, modelPairs(second, undefined));
+    const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the account a hold waited on and how long it waited',
       ok: JSON.stringify(outcomeOf(placed).Hold) === JSON.stringify([`on ${cohort}`, 'cohort', `freed after ${waitText(heldMs)}`]),
@@ -7871,17 +7939,20 @@ m.unmount();
   }
   {
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
-    const { card, page, record } = await story('req_e8b7eb13-060', 1);
+    const { card, page, record, row } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    stripDrawn('strategy hold', card, modelPairs(record, row));
+    const hold = stationsOf(card).find((s) => s.step === 'Hold');
     results.push({
       name: "/routing-log a held card reads the hold's place on the strategy's pick",
-      ok: record.outcome.hold?.cohort === null && hold?.chips.includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
-      missing: [hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(outcomeOf(card).Hold)],
+      ok: record.outcome.hold?.cohort === null && hold?.second[0] === 'strategy pick' && chipsOf(record, row, 'Hold').includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
+      missing: [hold ? hold.second.join(' / ') : 'no hold station', chipsOf(record, row, 'Hold').join(' / '), JSON.stringify(outcomeOf(card).Hold)],
     });
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
-    const { heldMs, waitedOn } = (await api.getDecision('req_e8b7eb13-060', 2)).outcome.cohortHold;
+    const second = await api.getDecision('req_e8b7eb13-060', 2);
+    stripDrawn('placement after a strategy hold', after, modelPairs(second, undefined));
+    const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
       ok: JSON.stringify(outcomeOf(after).Hold) === JSON.stringify([`on ${waitedOn.at(-1)}`, 'strategy pick', `freed after ${waitText(heldMs)}`]),
@@ -7892,8 +7963,9 @@ m.unmount();
   {
     // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
     const [id, seq] = ['req_77634945-72b', 2];
-    const { card, page, record } = await story(id, seq);
+    const { card, page, record, row } = await story(id, seq);
     scan('exhaustion after a hold', card);
+    stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
     results.push({
       name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
       ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
@@ -7902,25 +7974,35 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_51d0e2b8-7a0');
+    const { card, page, record, row } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    const line = walkOf(card).find((l) => l.step === 'Exhausted');
+    stripDrawn('exhaustion', card, modelPairs(record, row));
+    const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
-    const drawn = [...(line?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => c.textContent);
+    // The story's obstacles name no account, so each one's chip is keyed `obstacle`.
+    const drawn = chipsOf(record, row, 'Exhausted').filter((c) => c.startsWith('obstacle ')).map((c) => c.slice('obstacle '.length));
     results.push({
       name: "/routing-log the exhaustion's card reads the obstacles in order",
       ok:
         sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools#${record.request.poolId}` && line?.verdict === 'exhausted' &&
-        weighed.length > 0 && JSON.stringify(drawn.map((t) => t.replace(/^obstacle/, ''))) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
+        weighed.length > 0 && JSON.stringify(drawn) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
         JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
-      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+      missing: [line ? `${line.step} ${line.verdict}` : 'no station', chipsOf(record, row, 'Exhausted').join(' / '), JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    // No member was eligible, so the walk stops at Eligible with none, the one none the scheme reads as a refusal.
+    const eligible = card?.querySelector('.decision-strip .strip-station[data-station="eligible"] .badge');
+    results.push({
+      name: "/routing-log the exhaustion's Eligible station reads none in the critical tone",
+      ok: record.walk.some((s) => s.step === 'eligible' && s.verdict === 'none') && eligible?.textContent === 'none' && eligible.classList.contains('badge--critical'),
+      missing: [eligible ? `${eligible.textContent} ${eligible.className}` : 'no Eligible badge'],
     });
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_e0a4c6f2-118');
+    const { card, page, record, row } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
-    const lines = walkOf(card);
+    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
+    const stations = stationsOf(card);
     const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
     for (const f of folds) f.open = true;
     await page.settle(50);
@@ -7930,18 +8012,19 @@ m.unmount();
       name: "/routing-log the refusal's card reads two lines and Pin not looked up",
       ok:
         record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
-        JSON.stringify(lines.map((l) => [l.step, l.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(lines[1]?.chips) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
+        JSON.stringify(stations.map((s) => [s.step, s.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(chipsOf(record, row, 'Rest of the walk')) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
         JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
-        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${lines[0]?.chips[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
-      missing: [...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${chipsOf(record, row, 'Admission')[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, s.step).join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
     });
     page.unmount();
   }
   {
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
-    const { card, page } = await story('req_c41d0311-200', 1, 'probe');
+    const { card, page, record, row } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    const steps = walkOf(card).map((l) => l.step);
+    stripDrawn('probe', card, modelPairs(record, row));
+    const steps = stationsOf(card).map((s) => s.step);
     results.push({
       name: "/routing-log the probe's card is the decision card",
       ok: card !== null && steps.includes('Probe') && steps.includes('Pin') && candidateRows(card).length > 0 && card.querySelector('.decision-card__foot') !== null,
@@ -7952,6 +8035,7 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
+    stripDrawn('failover attempt', card, modelPairs(record, row));
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
       ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
@@ -7961,13 +8045,29 @@ m.unmount();
   }
   {
     // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
-    const { card, page, record } = await story('req_ef099b34-453');
+    const { card, page, record, row } = await story('req_ef099b34-453');
     scan('fresh placement', card);
-    const lines = walkOf(card);
+    stripDrawn('fresh placement', card, [
+      ['Pin', 'none'],
+      ['Eligible', 'match'],
+      ['Spent', 'off'],
+      ['At cap', '0 out'],
+      ['Above ceiling', 'off'],
+      ['Winding down', '0 out'],
+      ['Floor', '0 out'],
+      ['content', 'none'],
+      ['with main', 'none'],
+      ['static', 'none'],
+      ['Pick', 'chosen'],
+    ]);
+    const stations = stationsOf(card);
+    const pick = stations.find((s) => s.step === 'Pick');
     results.push({
       name: '/routing-log a card reads a fresh placement',
-      ok: sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && lines[0]?.chips.includes('found none') && lines.some((l) => l.step === 'Pick' && l.verdict === 'chosen') && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
-      missing: lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`),
+      ok:
+        sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && stations[0]?.step === 'Pin' && chipsOf(record, row, 'Pin').includes('found none') && pick?.verdict === 'chosen' &&
+        pick.button.classList.contains('strip-station--above') && leavesOf(card).some((l) => l.chosen && l.account === record.outcome.accountId) && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, s.step).join(' / ')}`), JSON.stringify(leavesOf(card))],
     });
     page.unmount();
   }
@@ -8001,8 +8101,9 @@ m.unmount();
   }
   {
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
-    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
+    const { card, page, record, row } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
+    stripDrawn('fast failover', card, modelPairs(record, row));
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
     results.push({
@@ -8014,14 +8115,17 @@ m.unmount();
   }
   {
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
-    const { card, page, record } = await story('req_52f62e67-839');
+    const { card, page, record, row } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    const line = walkOf(card).find((l) => l.step === 'Rung: with main');
+    stripDrawn('with main placement', card, modelPairs(record, row));
+    const line = stationsOf(card).find((s) => s.step === 'with main');
+    // A placement beside the main conversation names no entry, which the walk's line for the rung carries as none.
+    const entry = walkLines(record, row).find((l) => l.step === 'Rung: with main')?.hash ?? null;
     const read = outcomeOf(card)['Cache read'] ?? [];
     results.push({
       name: '/routing-log a card reads a placement with the main conversation against the input, since it promised no size',
-      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && line.li.querySelector('.decision-card__hash') === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
-      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(read)],
+      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && entry === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
+      missing: [line ? `${line.step} ${line.verdict}: ${chipsOf(record, row, 'Rung: with main').join(' / ')}` : 'no station', JSON.stringify(entry), JSON.stringify(read)],
     });
     page.unmount();
   }
@@ -8115,7 +8219,7 @@ m.unmount();
     api.getDecision = original;
     results.push({
       name: "/routing-log a record the retention took reads its sentence in the card's place",
-      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-card__walk') === null,
+      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-strip') === null && panel?.querySelector('.decision-card__walk') === null,
       missing: [panel?.textContent ?? 'no panel'],
     });
     page.unmount();
@@ -8287,7 +8391,7 @@ m.unmount();
       await page.settle(800);
       const panels = [...page.container.querySelectorAll('.routing-log__panel')];
       for (const p of panels) scan('the hour', p.querySelector('.decision-card, .event-detail'));
-      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-card__walk, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
+      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-strip, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
     };
     const second = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();

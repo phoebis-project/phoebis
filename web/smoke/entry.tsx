@@ -28,8 +28,12 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumbe
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
 export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
+// The strip's model, so a card check spells the stations a record draws from the derivation the strip reads.
+export { stationModel } from '@/lib/decisionStrip';
 export { fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
+// A step's facts as chips, which the strip draws none of, so a card check reads them off the record.
+export { walkLines } from '@/lib/routingLog';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

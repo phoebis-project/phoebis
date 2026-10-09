@@ -2001,33 +2001,209 @@
   color: var(--ink-2);
 }
 
-/* The walk: the number, the step, its verdict and the facts, one line a step. */
-.decision-card__walk {
-  display: grid;
-  grid-template-columns: 22px 150px 96px minmax(0, 1fr);
-  gap: 5px 10px;
-  align-items: start;
-  margin: 0;
+/* The decision strip: the walk as stations on a line, the path the decision took in the accent and every branch it
+   left as an idle stub. Every color is a theme token, so both themes draw it with no rule of their own. A label's
+   lines are the ones the layout counts (16 px, the badge's 22 px box, 3 px apart), so the fan meets its host's label
+   where the layout put it. */
+.decision-strip {
+  position: relative;
+  overflow-x: auto;
+}
+
+.decision-strip__surface {
+  position: relative;
+  min-width: 640px;
+}
+
+.decision-strip svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The curves are open, which an SVG path would otherwise fill. */
+.strip-path,
+.strip-bracket {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.strip-path.is-taken {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.strip-path.is-inferred {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+
+.strip-path.is-idle {
+  stroke: var(--hairline);
+  stroke-width: 1.5;
+}
+
+.strip-bracket {
+  stroke: var(--hairline);
+  stroke-width: 1;
+}
+
+.strip-node {
+  fill: var(--surface);
+  stroke-width: 2;
+}
+
+.strip-node.is-taken {
+  stroke: var(--accent);
+}
+
+.strip-node.is-inferred {
+  stroke: var(--accent);
+  stroke-dasharray: 3 3;
+}
+
+.strip-node.is-idle {
+  stroke: var(--hairline);
+}
+
+.strip-node.is-decisive {
+  stroke-width: 3;
+}
+
+.strip-node--terminus.is-taken.strip-node--good {
+  fill: var(--good-soft);
+}
+
+.strip-node--terminus.is-taken.strip-node--warning {
+  fill: var(--warning-soft);
+}
+
+.strip-node--terminus.is-taken.strip-node--critical {
+  fill: var(--critical-soft);
+}
+
+/* An idle word keeps the ink too: on the open row's tint the muted ink falls below the card's muted contrast, so the
+   idle ring and edge carry the muted look. */
+.strip-station,
+.strip-candidate,
+.strip-terminus {
+  position: absolute;
   padding: 0;
-  list-style: none;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
 }
 
-.decision-card__walk li {
-  display: contents;
+.strip-station {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: center;
 }
 
-.decision-card__n {
-  color: var(--ink-2);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+/* A word that wraps grows away from the line, and the badge keeps to its node, so the second line stays clear of the
+   stub words that rise beside the host. */
+.strip-station--above {
+  justify-content: flex-end;
 }
 
-.decision-card__step {
+.strip-station--above .strip-station__second {
+  order: 1;
+}
+
+.strip-station--above .badge {
+  order: 2;
+}
+
+.strip-station__word,
+.strip-terminus__word,
+.strip-candidate__account {
   font-weight: 500;
 }
 
-.decision-card__verdict-cell {
-  justify-self: start;
+.strip-station__second {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  justify-content: center;
+  color: var(--ink-2);
+}
+
+.strip-station__second > span {
+  white-space: nowrap;
+}
+
+.strip-group,
+.strip-stub {
+  position: absolute;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.strip-group {
+  font-weight: 600;
+  text-align: center;
+}
+
+/* The leaf's right edge is the layout's point, 16 px short of the fan's line. */
+.strip-candidate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  transform: translateX(-100%);
+}
+
+.strip-candidate.is-chosen {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.strip-candidate.is-more {
+  font-style: italic;
+}
+
+.strip-terminus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  align-items: center;
+  min-height: 22px;
+  text-align: left;
+}
+
+.strip-terminus--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.strip-station.is-selected,
+.strip-candidate.is-selected,
+.strip-terminus.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.strip-station:focus-visible,
+.strip-candidate:focus-visible,
+.strip-terminus:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .decision-card .chip.decision-card__hash {

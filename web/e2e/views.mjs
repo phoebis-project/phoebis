@@ -2653,12 +2653,12 @@ async function requestDrawerCompact(theme) {
 
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
 
-/** Opens `row` beneath itself and answers whether a card with its walk arrived. */
+/** Opens `row` beneath itself and answers whether a card with its strip arrived. */
 async function openDecision(row) {
   await row.locator('td.routing-log__kind').click();
   await advance(LOAD_MS);
   try {
-    await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
+    await page.waitForSelector('.routing-log__panel .decision-strip', { timeout: 15_000 });
     return true;
   } catch {
     return false;
@@ -2683,16 +2683,17 @@ async function firstDecisionOpen(theme) {
 }
 
 /**
- * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the walk and the candidate
- * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, and every verdict badge of the walk
- * takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
- * placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the strip and the candidate
+ * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
+ * kind badge's box, and the strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are
+ * read on the first rung placement the page lists. The router's seed places no request by a rung and records no move,
+ * so there that check stands down and the shed move's badge colors are the story's alone.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
   const decisions = page.locator(DECISION_ROWS);
   // `firstDecisionOpen` has named the missing card already.
-  if ((await page.locator('.routing-log__panel .decision-card__walk').count()) === 0) return;
+  if ((await page.locator('.routing-log__panel .decision-strip').count()) === 0) return;
   const read = () =>
     page.evaluate(() => {
       const box = (el) => {
@@ -2700,18 +2701,20 @@ async function decisionCard(theme) {
         return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
       };
       const card = document.querySelector('.routing-log__panel .decision-card');
-      const walk = card?.querySelector('.decision-card__walk');
+      const strip = card?.querySelector('.decision-strip');
+      const surface = strip?.querySelector('.decision-strip__surface');
       const table = card?.querySelector('.decision-card__candidates');
       const wrap = table?.closest('.table-wrap');
       const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
       const kind = card?.querySelector('.decision-card__verdict > .badge');
       return {
-        badges: [...(card?.querySelectorAll('.decision-card__walk .badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
+        badges: [...(strip?.querySelectorAll('.badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
         card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
         log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
         reference: kind ? box(kind) : null,
+        strip: strip ? { client: strip.clientWidth, scroll: strip.scrollWidth } : null,
+        surface: surface ? { height: Math.round(surface.getBoundingClientRect().height), leaves: Number(surface.dataset.leaves), y0: Number(surface.dataset.y0) } : null,
         table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
-        walk: walk ? { client: walk.clientWidth, scroll: walk.scrollWidth } : null,
       };
     });
   for (const { height, table, width } of [
@@ -2720,21 +2723,26 @@ async function decisionCard(theme) {
   ]) {
     const where = `the open card at ${width} by ${height}`;
     await page.setViewportSize({ height, width });
-    await settle();
+    // The strip redraws for the new width once a resize has settled for 120 ms, which only the page's clock moves.
+    await advance(2 * CLOCK_STEP_MS);
     const got = await read();
     measurements.push(`${theme} /routing-log decision card at ${width} by ${height} ${JSON.stringify({ ...got, badges: got.badges.length })}`);
-    if (got.card === null || got.walk === null) {
-      say(`${where} draws no walk`);
+    if (got.card === null || got.strip === null || got.surface === null) {
+      say(`${where} draws no strip`);
       continue;
     }
     if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
-    if (got.walk.scroll > got.walk.client) say(`${where}: the walk runs ${got.walk.scroll}px in ${got.walk.client}px`);
+    if (got.strip.scroll > got.strip.client) say(`${where}: the strip runs ${got.strip.scroll}px in ${got.strip.client}px`);
+    const { leaves, y0 } = got.surface;
+    const rows = Math.max(y0 + 76 + Math.max(leaves, 1) * 30 + 4, y0 + 104);
+    if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves under a line at ${y0}px take`);
     if (got.table === null) say(`${where} draws no candidate table`);
     else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
     else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
     if (got.log !== null && got.log.scroll > got.log.client) say(`${where}: the log's table scrolls sideways (${got.log.scroll}px in ${got.log.client}px)`);
     if (got.reference === null) say(`${where} has no kind badge to measure against`);
-    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the "${b.text}" verdict badge measures ${b.box} against the kind badge's ${got.reference}`);
+    if (got.badges.length === 0) say(`${where}: the strip draws no badge to measure`);
+    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the strip's "${b.text}" badge measures ${b.box} against the kind badge's ${got.reference}`);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
@@ -2754,6 +2762,35 @@ async function decisionCard(theme) {
   });
   measurements.push(`${theme} /routing-log prefix cell ${JSON.stringify(prefix)}`);
   if (prefix.hash?.length !== 8 || prefix.title?.length !== 64 || !prefix.title.startsWith(prefix.hash) || !/^warm until /.test(prefix.warm ?? '')) say(`the chosen row's Prefix cell reads ${JSON.stringify(prefix)}, not the hash's eight characters with the whole hash on hover and the warm-until chip`);
+  if (!mock) return;
+  // The shed move sits hours before the page's default hour, so it opens on the address the Requests view's Routing
+  // link builds: its request a quarter hour either side of the story's 11:08:30, which the mock dates from its load.
+  const shed = 'req_868264bc-611';
+  const story = (await page.evaluate(() => Date.now())) - (3 * 60 + 21) * 60_000 - 30_000;
+  const quarter = 15 * 60_000;
+  await page.goto(`${base}/routing-log?request=${shed}&from=${new Date(story - quarter).toISOString()}&to=${new Date(story + quarter).toISOString()}`);
+  await booted();
+  await advance(LOAD_MS);
+  const moved = page.locator(`.routing-log__table tbody tr[data-row="${shed}/1"]`);
+  if ((await moved.count()) === 0 || !(await openDecision(moved))) {
+    say(`the shed move ${shed} opened to no card on its request's page`);
+    return;
+  }
+  const tones = await page.evaluate((id) => {
+    // The color a badge reads on: its own background, else the first ancestor's that paints one.
+    const shade = (el) => {
+      for (let at = el; at; at = at.parentElement) {
+        const bg = getComputedStyle(at).backgroundColor;
+        if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+      }
+      return null;
+    };
+    const row = document.querySelector(`.routing-log__table tbody tr[data-row="${id}/1"] td.routing-log__kind .badge`);
+    const move = document.querySelector('.routing-log__panel .decision-strip .strip-station[data-station="move"] .badge');
+    return { move: move ? shade(move) : null, row: row ? shade(row) : null };
+  }, shed);
+  measurements.push(`${theme} /routing-log shed move badges ${JSON.stringify(tones)}`);
+  if (tones.row === null || tones.move === null || tones.row !== tones.move) say(`the moved row's badge paints ${tones.row} and the shed move's Move station badge ${tones.move}, not one color`);
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */

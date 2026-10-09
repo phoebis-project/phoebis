@@ -11,7 +11,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, api, createElement: h, createRoot, DecisionCard, Descriptions, MemoryRouter } = await import('./dist/ui.js');
-const { MockApi } = await import('./dist/api.js');
+const { MockApi, stationModel } = await import('./dist/api.js');
 
 const roots = [];
 const getDecision = api.getDecision;
@@ -118,4 +118,29 @@ test("each Pace cell is described by its hover through the host the card sits un
     assert.ok(title, `a Pace cell carries its hover: ${td.textContent}`);
     assert.equal(document.getElementById(td.getAttribute('aria-describedby') ?? '')?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
   }
+});
+
+test("the card draws the strip in the walk's place", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  api.getDecision = async () => placed;
+  const now = Date.parse(row.at);
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now, onWiden() {}, row }))));
+  await settled();
+  const model = stationModel(placed, row, now);
+  // A count rather than the node: an assertion that prints a jsdom element walks the whole window.
+  assert.equal(container.querySelectorAll('.decision-card__walk').length, 0, 'the walk list is gone');
+  const strips = container.querySelectorAll('.decision-strip');
+  assert.equal(strips.length, 1, 'one strip stands under the title');
+  assert.equal(strips[0].previousElementSibling?.textContent, 'How the router decided', 'the strip stands where the walk list stood');
+  assert.equal(strips[0].querySelectorAll('.strip-station').length, model.stations.length, "a station per recorded step and per placeholder the walk's shape expects");
+  assert.ok(model.host !== null, 'a placement hangs its candidates from a station');
+  assert.ok(strips[0].querySelector(`.strip-station[data-station="${model.host}"]`)?.classList.contains('strip-station--above'), 'the station the candidates hang from carries its label above the line');
 });

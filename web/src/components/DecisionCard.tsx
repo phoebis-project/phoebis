@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { DecisionRecord, DecisionSummary, PrefixEntry } from '@/api/types';
+import { DecisionStrip } from '@/components/DecisionStrip';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
 import { useAsync } from '@/lib/hooks';
 import {
@@ -23,9 +24,6 @@ import {
   shortHash,
   verdictChips,
   verdictSentence,
-  verdictTone,
-  verdictWord,
-  walkLines,
   warmUntil,
 } from '@/lib/routingLog';
 
@@ -130,23 +128,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
 
       <section>
         <h4 className="decision-card__title">How the router decided</h4>
-        <ol className="decision-card__walk">
-          {walkLines(record, row).map((l) => (
-            <li key={l.number}>
-              <span className="decision-card__n">{l.number}</span>
-              <span className="decision-card__step">{l.step}</span>
-              <span className="decision-card__verdict-cell">
-                <Badge tone={verdictTone(l.verdict)}>{verdictWord(l.verdict)}</Badge>
-              </span>
-              <span className="chips">
-                {l.chips.map((c, i) => (
-                  <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} />
-                ))}
-                {l.hash && <EntryChips entry={l.hash} now={now} />}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <DecisionStrip now={now} record={record} row={row} />
       </section>
 
       {record.candidates.length > 0 && (
