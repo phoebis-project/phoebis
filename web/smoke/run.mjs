@@ -91,6 +91,33 @@ function expect(name, text, needles) {
 }
 /** A grouped dialog's group section by its label; hidden groups stay mounted, so a lookup reaches every one. */
 const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
+/**
+ * A table's columns as the width rule marks them: each header's class (fit, fill, both or none), the fill headers'
+ * texts in order, the rows shaped like the head (a placeholder spans the table with one cell and takes no class), and
+ * every cell of those rows whose class differs from its header's. jsdom lays nothing out, so the classes alone are
+ * read here and the browser pass reads the widths.
+ */
+const columnClasses = (table) => {
+  const classOf = (c) => (c?.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c?.classList.contains('col-fill') ? 'fill' : 'none');
+  const ths = [...(table?.querySelectorAll('thead th') ?? [])];
+  const heads = ths.map(classOf);
+  const rows = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === ths.length);
+  return {
+    cellsOff: rows.flatMap((tr) => [...tr.children].map((td, i) => (classOf(td) === heads[i] ? null : `${ths[i].textContent?.trim() || `cell ${i}`}: ${classOf(td)}`)).filter(Boolean)),
+    fills: ths.filter((th) => classOf(th) === 'fill').map((th) => th.textContent?.trim()),
+    heads,
+    rows: rows.length,
+  };
+};
+/** Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class. */
+const columnsMarked = (name, table, fill) => {
+  const read = columnClasses(table);
+  results.push({
+    name,
+    ok: read.heads.length > 0 && read.heads.every((c) => c === 'fit' || c === 'fill') && JSON.stringify(read.fills) === JSON.stringify(fill) && read.rows > 0 && read.cellsOff.length === 0,
+    missing: [table ? JSON.stringify(read.heads) : 'no table', JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
+  });
+};
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 /** A dialog's button by its label. */
@@ -1208,6 +1235,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   });
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
   results.push({ name: '/accounts/primary the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
+  columnsMarked('/accounts the cooling-down block marks Reason as its fill column', cardOf('Cooling down')?.querySelector('table'), ['Reason']);
   const badge = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/accounts/primary the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
 }
@@ -1720,15 +1748,16 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   };
   const listed = await openCatalog();
   const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-  const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('td')?.firstChild?.textContent ?? '');
+  const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('.catalog__id')?.textContent ?? '');
   expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
   results.push({
     name: '/accounts/primary the catalog popup reads six columns, sorted by id',
     ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
     missing: [...heads, ...ids],
   });
+  columnsMarked('/accounts the catalog dialog marks Model and Name as its fill columns', listed?.querySelector('table'), ['Model', 'Name']);
   {
-    const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('td')?.firstChild?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
+    const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('.catalog__id')?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
     const read = { haiku: effort('claude-haiku-4-5-20251001'), opus: effort('claude-opus-5') };
     results.push({
       name: '/accounts/primary the catalog popup ends each row with the effort levels it lists, a dash for none',
@@ -2521,6 +2550,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const cell = (tr, i) => tr.children[i];
   const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
   results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['primary', 'secondary', 'nightly', 'Overflow workspace']), missing: accountsOf('all') });
+  columnsMarked('/pools the serving table marks Account as its fill column', card('all')?.querySelector('.serving'), ['Account']);
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
   results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
   const standing = (name, label) => {
@@ -3306,6 +3336,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // Keys can leave a pool only by moving to another one or being revoked.
   const keyRows = () => [...(dlg?.querySelectorAll('.keys-table tbody tr') ?? [])];
   const rowNames = keyRows().map((tr) => tr.children[0]?.textContent?.trim());
+  columnsMarked("/pools the dialog's keys table marks Key as its fill column", dlg?.querySelector('.keys-table'), ['Key']);
   results.push({ name: '/pools the key table lists desktop and laptop', ok: rowNames.includes('desktop') && rowNames.includes('laptop'), missing: rowNames });
   results.push({ name: '/pools key rows have no plain remove', ok: keyRows().length > 0 && keyRows().every((tr) => ![...tr.querySelectorAll('button')].some((b) => ['Remove', 'Delete'].includes(b.textContent?.trim() ?? ''))), missing: rowNames });
   const desktopRowIdx = rowNames.indexOf('desktop');
@@ -3467,6 +3498,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: JSON.stringify(gridSelects) === '[1,1,1,1]' && names.join(',') === 'metered,plan' && labels.join(',') === 'metered=Metered writes,plan=Plan writes' && ruleSets.every((el) => el.querySelectorAll('select[aria-label^="Model to add"]').length === 1),
       missing: [JSON.stringify(gridSelects), ...names, ...labels],
     });
+    columnsMarked('/pools the model rules table marks Model as its fill column and every other column fit', dlg?.querySelector('[data-rule-set="plan"] table'), ['Model']);
     const writeCost = [...(ttl?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Write cost');
     const gridHint = ttl?.querySelector('.ttl-grid')?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '';
     const meteredMain = ttl?.querySelector('select[aria-label="Metered writes main conversation TTL"]');
@@ -3574,6 +3606,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         (group(dlg, 'Members')?.textContent ?? '').includes(hint),
       missing: [...rows.map(String), ...subscription.map(String), ...heads, `legacy fields ${daily('legacy')?.disabled === true && monthly('legacy')?.disabled === true ? 'disabled' : 'absent or enabled'}`],
     });
+    columnsMarked('/pools the members table marks Account as its fill column', group(dlg, 'Members')?.querySelector('.members-table'), ['Account']);
     await type(daily('Overflow workspace'), '0');
     const members = group(dlg, 'Members');
     const held = [save()?.disabled, members?.querySelector('.callout--critical')?.textContent ?? '', daily('Overflow workspace')?.getAttribute('aria-invalid')];
@@ -5276,6 +5309,7 @@ localStorage.removeItem('phoebis.expertView');
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
+columnsMarked('/keys every header cell is fit or fill, and Name, Models and Status are the fill columns', m.container.querySelector('.card--table table'), ['Name', 'Models', 'Status']);
 {
   // jsdom draws no styles and lays nothing out, so the menu reads the viewport's room below and keeps the list in flow.
   const last = [...m.container.querySelectorAll('.card--table tbody tr')].pop();
@@ -5297,7 +5331,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     name: '/keys a rotated key counts the sessions still on the previous secret',
     ok:
       retired?.textContent?.trim() === '1 session still on the previous secret' &&
-      (retired.getAttribute('title') ?? '').startsWith('Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched. Previous secret last used '),
+      (retired.getAttribute('title') ?? '').startsWith('1 session still on the previous secret. Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched. Previous secret last used '),
     missing: [retired?.textContent?.trim() ?? 'absent', retired?.getAttribute('title') ?? 'no title'],
   });
 }

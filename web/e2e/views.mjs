@@ -1277,6 +1277,39 @@ async function poolDialogWalk(theme, mode) {
     }
     return found;
   };
+  // Each Priority and budget input against its column's width (96, 140 and 150 px) less the cell's horizontal padding,
+  // read off the first row that draws all three: a held row draws a blank in place of its Priority input.
+  const memberInputs = async () => {
+    const read = await dialog.evaluate((el) => {
+      const row = [...(el.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelectorAll('input[type="number"]').length === 3);
+      if (!row) return null;
+      return [...row.children].slice(1).map((td) => {
+        const s = getComputedStyle(td);
+        const input = td.querySelector('input');
+        return { input: input ? input.getBoundingClientRect().width : null, padding: parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) };
+      });
+    });
+    measurements.push(`${theme} /pools ${mode} dialog members inputs ${JSON.stringify(read)}`);
+    if (read === null) return sayIn('Members', 'no member row draws its three inputs to measure');
+    [96, 140, 150].forEach((width, i) => {
+      const box = read[i];
+      if (!box || box.input === null) sayIn('Members', `column ${i + 2} draws no input`);
+      else if (box.input < width - box.padding - 1) sayIn('Members', `the column ${i + 2} input is ${box.input} px wide, under the column's ${width} px less its ${box.padding} px of padding`);
+    });
+  };
+  // A hidden group lays out at 0 px, so each table is measured while its group shows. The router's seed carries no
+  // model override, so the model rules table is drawn in the mock pass alone.
+  const tables = async (group) => {
+    if (group === 'Members') {
+      await tableColumns(theme, `pools ${mode} dialog`, '.members-table', ['Account']);
+      await memberInputs();
+    }
+    if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
+    if (group === 'Cache TTL' && expert) {
+      if (mock) await tableColumns(theme, `pools ${mode} dialog`, 'dialog[open] [data-rule-set="plan"] table', ['Model']);
+      else measurements.push(`${theme} /pools ${mode} dialog model rules table: not drawn against the seed, which carries no model override`);
+    }
+  };
   for (const group of labels) {
     try {
       await railEntry(dialog, group).click();
@@ -1285,6 +1318,7 @@ async function poolDialogWalk(theme, mode) {
       found.push(...(await dependents(group)));
       measurements.push(`${theme} /pools ${mode} dialog ${group} ${JSON.stringify(line)}`);
       for (const what of found) sayIn(group, what);
+      await tables(group);
     } catch (error) {
       sayIn(group, error instanceof Error ? error.message : String(error));
     }
@@ -2922,6 +2956,7 @@ async function catalogDialog(theme) {
     failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /accounts catalog: an Effort levels cell against its Name cell`));
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
+    await tableColumns(theme, 'accounts catalog', 'dialog[open] table', ['Model', 'Name']);
     if (mock) {
       await atRest();
       await dialog.screenshot({ path: join(shots, theme, 'accounts-catalog.png') });
@@ -3404,10 +3439,15 @@ async function sessionsTableFits(theme) {
  * `fill` in order, and each row's cell carries its header's class. A fit column is as wide as the larger of its widest
  * cell's inline content plus that cell's horizontal padding and the cells' `min-width`, within 1 px, the header among
  * the cells: a block child (a `.sub` line) spans its cell whatever it holds, so it is read by its own inline runs
- * rather than its box, while an inline child's box counts whole, its padding included. Two or more fill columns are
- * equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one exists, else its
- * parent element. `fixed` counts the leading columns that keep a width of their own (the Sessions gutter's 30 px) and
- * carry neither class. The measurement records every column's class, width and content.
+ * rather than its box, while an inline child's box counts whole, its padding included. A flex container's items are
+ * one run of boxes with their gaps (a Standing cell's badges), and a form control is its box whatever its display (a
+ * select's options draw no boxes of their own). An out-of-flow child (a screen-reader-only description, a select's
+ * chevron) takes no room in its cell and is left out. Two or more fill
+ * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
+ * exists, else its parent element. `fixed` counts the leading columns that keep a width of their own (the Sessions
+ * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
+ * row spans its cells would otherwise pass on its header alone. The measurement records every column's class, width
+ * and content.
  */
 async function tableColumns(theme, view, selector, fill, fixed = 0) {
   const say = (what) => failures.push(`${theme} /${view} ${selector}: ${what}`);
@@ -3419,7 +3459,11 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
     // A detail row spans the table with one cell, so only the rows shaped like the head are read.
     const rows = [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length);
     const inline = (display) => display.startsWith('inline') || display === 'contents';
+    // A form control is a box whatever its display, since a select's options draw no boxes of their own.
+    const atomic = (node) => node.matches('button, input, select, textarea');
     const inlineWidth = (el) => {
+      // A flex container lays its items on one line, so they are read as one run of boxes, the gaps included.
+      const items = ['flex', 'inline-flex'].includes(getComputedStyle(el).display);
       let widest = 0;
       let run = [];
       const flush = () => {
@@ -3433,7 +3477,8 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
       for (const node of el.childNodes) {
         if (node.nodeType === Node.TEXT_NODE) run.push(node);
         else if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        else if (inline(getComputedStyle(node).display)) run.push(node);
+        else if (['absolute', 'fixed'].includes(getComputedStyle(node).position)) continue;
+        else if (items || atomic(node) || inline(getComputedStyle(node).display)) run.push(node);
         else {
           flush();
           widest = Math.max(widest, inlineWidth(node));
@@ -3462,6 +3507,7 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
   }, selector);
   measurements.push(`${theme} /${view} ${selector} columns ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px over ${read.rows} rows: ${JSON.stringify(read.columns.map((c) => [c.label, c.cls, c.width, c.need]))}`}`);
   if (read === null) return say('no table to measure');
+  if (mock && read.rows === 0) say('no rows to measure');
   const named = (c, i) => c.label || `column ${i}`;
   read.columns.forEach((c, i) => {
     if (i < fixed) {
@@ -3918,6 +3964,7 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);
       }
@@ -3932,6 +3979,7 @@ try {
       }
       if (view.path === '/settings') await settingsOrder(theme);
       if (view.path === '/accounts') {
+        await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
         await subscriptionEndForm(theme);
@@ -3939,6 +3987,7 @@ try {
         await catalogDialog(theme);
       }
       if (view.path === '/keys') {
+        await tableColumns(theme, 'keys', '.card--table table', ['Name', 'Models', 'Status']);
         await keysPoolSelect(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);

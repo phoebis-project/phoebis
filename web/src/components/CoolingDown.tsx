@@ -28,6 +28,7 @@ export function CoolingDown({ busy = false, now, onClear, rows, showAccount = fa
   const earliest = rows.reduce<string | null>((min, r) => (min === null || Date.parse(r.until) < Date.parse(min) ? r.until : min), null);
   return (
     <Card
+      className="cooling-down"
       title={title}
       subtitle={
         earliest === null ? (
@@ -51,29 +52,29 @@ export function CoolingDown({ busy = false, now, onClear, rows, showAccount = fa
               <table className="table">
                 <thead>
                   <tr>
-                    {showAccount && <th>Account</th>}
-                    <th>Scope</th>
-                    <th>Reason</th>
-                    <th>Until</th>
-                    {onClear && <th />}
+                    {showAccount && <th className="col-fit">Account</th>}
+                    <th className="col-fit">Scope</th>
+                    <th className="col-fill">Reason</th>
+                    <th className="col-fit">Until</th>
+                    {onClear && <th className="col-fit" />}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => (
                     <tr key={`${r.accountId}/${r.scope}`}>
                       {showAccount && (
-                        <td>
+                        <td className="col-fit">
                           <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
                         </td>
                       )}
-                      <td>{r.scope === 'account' ? scopeLabel(r.scope) : <span className="mono">{scopeLabel(r.scope)}</span>}</td>
-                      <td className="mono">{r.reason}</td>
-                      <td className="num">
+                      <td className="col-fit">{r.scope === 'account' ? scopeLabel(r.scope) : <span className="mono">{scopeLabel(r.scope)}</span>}</td>
+                      <td className="mono col-fill" title={r.reason}>{r.reason}</td>
+                      <td className="num col-fit">
                         {fmtAbsolute(r.until)}
                         <span className="sub">{fmtRelative(r.until, now)}</span>
                       </td>
                       {onClear && (
-                        <td className="right">
+                        <td className="right col-fit">
                           <Button size="sm" disabled={busy} onClick={() => onClear(r)}>
                             Clear
                           </Button>

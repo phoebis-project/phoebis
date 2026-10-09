@@ -402,32 +402,32 @@ function CacheTtlOverrides({
     <Field plain label={label} data-rule-set={name} hint="A model absent here takes the rule above.">
       {rules.models.length > 0 && (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table rules-table">
             <thead>
               <tr>
-                <th>Model</th>
-                <th>Main conversation</th>
-                <th>Subagents</th>
-                <th />
+                <th className="col-fill">Model</th>
+                <th className="col-fit">Main conversation</th>
+                <th className="col-fit">Subagents</th>
+                <th className="col-fit" />
               </tr>
             </thead>
             <tbody>
               {rules.models.map((m) => (
                 <tr key={m.model}>
-                  <td className="mono">{m.model}</td>
-                  <td>
+                  <td className="mono col-fill" title={m.model}>{m.model}</td>
+                  <td className="col-fit">
                     <Select value={m.main} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
                       <option value="1h">1 hour</option>
                     </Select>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <Select value={m.subagent} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
                       <option value="1h">1 hour</option>
                     </Select>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <Button size="sm" variant="ghost" disabled={disabled} onClick={() => removeModelOverride(m.model)}>
                       Remove
                     </Button>
@@ -570,10 +570,10 @@ function PoolCard({
           <caption title={RULE_NOTE}>{caption}</caption>
           <thead>
             <tr>
-              <th>Tier</th>
-              <th>Account</th>
-              <th>Standing</th>
-              <th className="right">Pins</th>
+              <th className="col-fit">Tier</th>
+              <th className="col-fill">Account</th>
+              <th className="col-fit">Standing</th>
+              <th className="right col-fit">Pins</th>
             </tr>
           </thead>
           <tbody>
@@ -593,12 +593,12 @@ function PoolCard({
                 const whyId = `${standingId}-${p.account.id}`;
                 return (
                   <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
-                    <td className="pool__prio num">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
-                    <td>
+                    <td className="pool__prio num col-fit">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
+                    <td className="col-fill" title={p.account.label}>
                       <Link to={`/accounts/${p.account.id}`}>{p.account.label}</Link>
                       {m && <MemberBudget member={m} />}
                     </td>
-                    <td className="serving__standing" aria-describedby={whyId}>
+                    <td className="serving__standing col-fit" aria-describedby={whyId}>
                       <span className="chips">
                         {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
                         {!isNext && p.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[p.lastResort]}</Badge>}
@@ -611,7 +611,7 @@ function PoolCard({
                         {why}
                       </span>
                     </td>
-                    <td className="right num">{p.pins === 0 ? <span className="muted">0</span> : p.pins}</td>
+                    <td className="right num col-fit">{p.pins === 0 ? <span className="muted">0</span> : p.pins}</td>
                   </tr>
                 );
               }),
@@ -620,9 +620,9 @@ function PoolCard({
               const whyId = `${standingId}-${m.accountId}`;
               return (
                 <tr key={m.accountId}>
-                  <td className="pool__prio num">P{m.priority}</td>
-                  <td className="mono">{m.accountId}</td>
-                  <td className="serving__standing" aria-describedby={whyId}>
+                  <td className="pool__prio num col-fit">P{m.priority}</td>
+                  <td className="mono col-fill" title={m.accountId}>{m.accountId}</td>
+                  <td className="serving__standing col-fit" aria-describedby={whyId}>
                     <span className="chips">
                       <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
                     </span>
@@ -630,7 +630,7 @@ function PoolCard({
                       {`${m.accountId}: not a known account`}
                     </span>
                   </td>
-                  <td className="right num">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                  <td className="right num col-fit">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
                 </tr>
               );
             })}
@@ -1258,10 +1258,10 @@ export function PoolDialog({
             <table className="table members-table">
               <thead>
                 <tr>
-                  <th>Account</th>
-                  <th className="right">Priority</th>
-                  <th className="right">Daily budget, USD</th>
-                  <th className="right">Monthly budget, USD</th>
+                  <th className="col-fill">Account</th>
+                  <th className="right col-fit">Priority</th>
+                  <th className="right col-fit">Daily budget, USD</th>
+                  <th className="right col-fit">Monthly budget, USD</th>
                 </tr>
               </thead>
               <tbody>
@@ -1273,27 +1273,27 @@ export function PoolDialog({
                   if (heldBy) {
                     return (
                       <tr key={a.id}>
-                        <td>
+                        <td className="col-fill" title={a.label}>
                           <div className="row">
                             <div className="members-table__check" />
-                            <span>{a.label}</span>
+                            <span className="members-table__name">{a.label}</span>
                             {a.email && <span className="muted mono">{a.email}</span>}
                             <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
                               In pool {heldBy.id}
                             </span>
                           </div>
                         </td>
-                        <td className="right">
+                        <td className="right col-fit">
                           <div className="input members-table__blank">&nbsp;</div>
                         </td>
-                        <td className="right" />
-                        <td className="right" />
+                        <td className="right col-fit" />
+                        <td className="right col-fit" />
                       </tr>
                     );
                   }
                   return (
                     <tr key={a.id}>
-                      <td>
+                      <td className="col-fill" title={a.label}>
                         <label>
                           <input
                             type="checkbox"
@@ -1306,11 +1306,11 @@ export function PoolDialog({
                               setMemberOrder(orderedAccountIds(accounts, next));
                             }}
                           />
-                          <span>{a.label}</span>
+                          <span className="members-table__name">{a.label}</span>
                           {a.email && <span className="muted mono">{a.email}</span>}
                         </label>
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0}
@@ -1326,7 +1326,7 @@ export function PoolDialog({
                           aria-invalid={invalid(`priority:${a.id}`)}
                         />
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0.01}
@@ -1339,7 +1339,7 @@ export function PoolDialog({
                           aria-invalid={invalid(`budget_daily:${a.id}`)}
                         />
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0.01}
@@ -1357,7 +1357,7 @@ export function PoolDialog({
                 })}
                 {unlisted.map((id) => (
                   <tr key={id}>
-                    <td>
+                    <td className="col-fill" title={id}>
                       <label>
                         <input
                           type="checkbox"
@@ -1369,17 +1369,17 @@ export function PoolDialog({
                           }}
                           aria-invalid={invalid(`member:${id}`)}
                         />
-                        <span>{id}</span>
+                        <span className="members-table__name">{id}</span>
                         {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
                       </label>
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                     </td>
                   </tr>
@@ -1412,10 +1412,10 @@ export function PoolDialog({
               <table className="table keys-table">
                 <thead>
                   <tr>
-                    <th>Key</th>
-                    <th>Prefix</th>
-                    <th>Status</th>
-                    <th />
+                    <th className="col-fill">Key</th>
+                    <th className="col-fit">Prefix</th>
+                    <th className="col-fit">Status</th>
+                    <th className="col-fit" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1423,14 +1423,14 @@ export function PoolDialog({
                     const status = revoked.has(k.id) ? 'revoked' : k.status;
                     return (
                       <tr key={k.id}>
-                        <td>{k.name}</td>
-                        <td className="mono muted">{k.prefix}…</td>
-                        <td>
+                        <td className="col-fill" title={k.name}>{k.name}</td>
+                        <td className="mono muted col-fit">{k.prefix}…</td>
+                        <td className="col-fit">
                           <Badge tone={KEY_STATUS_TONE[status]} dot>
                             {status}
                           </Badge>
                         </td>
-                        <td>
+                        <td className="col-fit">
                           <Menu
                             label={`Actions for key ${k.name}`}
                             items={[

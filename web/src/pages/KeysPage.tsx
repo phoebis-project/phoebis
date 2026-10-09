@@ -30,6 +30,8 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
+/** The note under the Status badge; the fill column cuts it, so its title opens with the whole of it. */
+const retiredNote = (sessions: number) => `${sessions} ${sessions === 1 ? 'session' : 'sessions'} still on the previous secret`;
 
 export function KeysPage() {
   const now = useNow();
@@ -221,14 +223,14 @@ export function KeysPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Prefix</th>
-                  <th>Pool</th>
-                  <th>Models</th>
-                  <th className="right">Usage, 7d</th>
-                  <th>Expiry</th>
-                  <th>Status</th>
-                  <th />
+                  <th className="col-fill">Name</th>
+                  <th className="col-fit">Prefix</th>
+                  <th className="col-fit">Pool</th>
+                  <th className="col-fill">Models</th>
+                  <th className="right col-fit">Usage, 7d</th>
+                  <th className="col-fit">Expiry</th>
+                  <th className="col-fill">Status</th>
+                  <th className="col-fit" />
                 </tr>
               </thead>
               <tbody>
@@ -250,7 +252,7 @@ export function KeysPage() {
                       ))
                   : rows.map((k) => (
                       <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
-                        <td>
+                        <td className="col-fill" title={k.name}>
                           <b>{k.name}</b>
                           <span className="sub">
                             {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
@@ -263,27 +265,27 @@ export function KeysPage() {
                           </span>
                           {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
                         </td>
-                        <td className="mono">{k.prefix}…</td>
-                        <td className="mono">{k.poolId}</td>
-                        <td>{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted">{k.modelRulesMode === 'replace' ? 'No rules' : 'Pool rules'}</span>}</td>
-                        <td className="right num">
+                        <td className="mono col-fit">{k.prefix}…</td>
+                        <td className="mono col-fit">{k.poolId}</td>
+                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted">{k.modelRulesMode === 'replace' ? 'No rules' : 'Pool rules'}</span>}</td>
+                        <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
                           <span className="sub">{fmtUsd(k.usage7d.cost)}</span>
                         </td>
-                        <td title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
-                        <td>
+                        <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
+                        <td className="col-fill">
                           <Badge tone={STATUS_TONE[k.status]} dot>
                             {k.status}
                           </Badge>
                           {k.lastUsedAt && <span className="sub">used {fmtRelative(k.lastUsedAt, now)}</span>}
                           {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
                           {k.sessionsOnRetiredSecret > 0 && (
-                            <span className="sub" title={k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}>
-                              {k.sessionsOnRetiredSecret} {k.sessionsOnRetiredSecret === 1 ? 'session' : 'sessions'} still on the previous secret
+                            <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
+                              {retiredNote(k.sessionsOnRetiredSecret)}
                             </span>
                           )}
                         </td>
-                        <td className="right">
+                        <td className="right col-fit">
                           <Menu
                             onOpenChange={(open) =>
                               setOpenMenus((s) => {
