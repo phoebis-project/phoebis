@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView } from '@/components/DecisionCard';
-import { StripPopover } from '@/components/StripPopover';
+import { Described, StripPopover } from '@/components/StripPopover';
 import { Badge } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
@@ -36,7 +36,8 @@ const boundsOf = (el: HTMLElement) => el.closest<HTMLElement>('.decision-card') 
  * The walk as a subway strip: the model from the record, the layout from the slot's width (at least 640 px, re-read on
  * a resize debounced at 120 ms), one SVG for the lines and a button per station, leaf and terminus, each opening the
  * popover of its facts. One popover is open at a time: a hover opens it, a click pins it and marks its anchor, and a
- * click outside, a click on another anchor or Escape closes it.
+ * click outside, a click on another anchor or Escape closes it. Enter or Space pins it and moves focus into it, Escape
+ * from there returns focus to the anchor, and focus leaving both closes it.
  */
 export function DecisionStrip({ now, record, row }: { now: number; record: DecisionRecord; row: DecisionSummary }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -87,18 +88,44 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
     }
     if (!sameHeights(next, measured)) setMeasured(next);
   }, [counted, measured]);
-  const [open, setOpen] = useState<{ anchor: StripAnchor; pinned: boolean } | null>(null);
-  const close = useCallback(() => setOpen(null), []);
+  // `focus` is true when a key opened the popover, which then takes focus. A hover or a click leaves focus where it is.
+  const [open, setOpen] = useState<{ anchor: StripAnchor; focus: boolean; pinned: boolean } | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
+  // The anchor's button from the last draw: one the new draw leaves out closes its popover as it leaves the document.
+  const anchorEl = open === null ? undefined : buttons.current.get(keyOf(open.anchor));
+  const close = useCallback(
+    (returnFocus: boolean) => {
+      if (returnFocus) anchorEl?.focus({ preventScroll: true });
+      setOpen(null);
+    },
+    [anchorEl],
+  );
   const anchorRef = (anchor: StripAnchor) => (el: HTMLButtonElement | null) => {
     if (el === null) buttons.current.delete(keyOf(anchor));
     else buttons.current.set(keyOf(anchor), el);
   };
   // A hover opens a popover while none is pinned. A click pins it, or closes the one its anchor already pinned.
-  const enter = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned ? o : { anchor, pinned: false }));
+  const enter = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned ? o : { anchor, focus: false, pinned: false }));
   const leave = (anchor: StripAnchor) => () => setOpen((o) => (o !== null && !o.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : o));
-  const pin = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : { anchor, pinned: true }));
-  const handlers = (anchor: StripAnchor) => ({ onClick: pin(anchor), onMouseEnter: enter(anchor), onMouseLeave: leave(anchor), ref: anchorRef(anchor) });
+  const pin = (anchor: StripAnchor, focus: boolean) => setOpen((o) => (o?.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : { anchor, focus, pinned: true }));
+  // The key's own click is cancelled, or it would pin a second time and close the popover again.
+  const keyDown = (anchor: StripAnchor) => (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    pin(anchor, true);
+  };
+  // Engines differ on which of Space's two events fires a button's click, so its release is cancelled too.
+  const keyUp = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === ' ') e.preventDefault();
+  };
+  // Focus leaving an open popover's anchor for anything but the popover closes it, as a menu closes on a blur outside
+  // its list and its trigger. A blur naming no element (a click on a button Safari gives no focus) closes nothing.
+  const blurred = (anchor: StripAnchor) => (e: FocusEvent<HTMLButtonElement>) => {
+    const to = e.relatedTarget;
+    if (to === null || e.currentTarget.contains(to) || document.getElementById(popoverId)?.contains(to)) return;
+    setOpen((o) => (o !== null && keyOf(o.anchor) === keyOf(anchor) ? null : o));
+  };
+  const handlers = (anchor: StripAnchor) => ({ onBlur: blurred(anchor), onClick: () => pin(anchor, false), onKeyDown: keyDown(anchor), onKeyUp: keyUp, onMouseEnter: enter(anchor), onMouseLeave: leave(anchor), ref: anchorRef(anchor) });
   const pinned = open?.pinned ? open.anchor : null;
   useEffect(() => {
     if (pinned === null) return undefined;
@@ -110,19 +137,25 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
     document.addEventListener('mousedown', onOutside);
     return () => document.removeEventListener('mousedown', onOutside);
   }, [pinned, popoverId]);
-  // Captured on the document ahead of every other handler, so a dialog around the card never takes the key too.
+  // Captured on the document ahead of every other handler, so a dialog around the card never takes the key too, and
+  // no handler on the popover or the anchor ever sees it. Focus returns to the anchor from the popover or the anchor
+  // alone: a popover a hover opened closes with focus left where it was.
   useEffect(() => {
     if (open === null) return undefined;
-    const onEscape = (e: KeyboardEvent) => {
+    const onEscape = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopPropagation();
-      setOpen(null);
+      const at = e.target as Node;
+      close(Boolean(document.getElementById(popoverId)?.contains(at) || anchorEl?.contains(at)));
     };
     document.addEventListener('keydown', onEscape, true);
     return () => document.removeEventListener('keydown', onEscape, true);
-  }, [open]);
+  }, [anchorEl, close, open, popoverId]);
   const picked = pinned === null ? null : keyOf(pinned);
+  // Only a pinned popover marks its anchor expanded: one a hover opened closes as the pointer leaves, out of a reader's
+  // reach.
+  const expanded = (anchor: StripAnchor) => (picked === keyOf(anchor) ? { 'aria-controls': popoverId, 'aria-expanded': true } : {});
   // The line's stations left to right, then the track's, so Tab walks the strip in the record's order.
   const stations = [...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')];
   const termini = model.termini.flatMap((t) => {
@@ -131,9 +164,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   });
   // A move's continuation leaves its terminus a narrower margin than a line does, so the word stacks over the badge.
   const stacked = model.branch?.kind === 'move';
-  // The anchor's button from the last draw: one the new draw leaves out closes its popover as it leaves the document.
-  const anchorEl = open === null ? undefined : buttons.current.get(keyOf(open.anchor));
-  const popover = open === null || anchorEl === undefined ? null : { anchor: anchorEl, at: open.anchor, pinned: open.pinned };
+  const popover = open === null || anchorEl === undefined ? null : { anchor: anchorEl, at: open.anchor, focus: open.focus, pinned: open.pinned };
   return (
     <div className="decision-strip" ref={ref}>
       <div className="decision-strip__surface" style={{ height: layout.height, minWidth: MIN_WIDTH }} data-y0={layout.y0} data-leaves={model.leaves.length} data-stations={model.stations.length}>
@@ -167,6 +198,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
               data-step={s.step}
               data-index={i}
               aria-label={stationName(s)}
+              {...expanded(anchor)}
               style={{ left: p.x - label.width / 2, top: label.top, width: label.width }}
               {...handlers(anchor)}
             >
@@ -203,20 +235,27 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           const p = layout.leaves[i];
           if (p === undefined) return null;
           const anchor: StripAnchor = { kind: 'leaf', index: i };
+          // The obstacle chip's hover describes the button a reader lands on. Its node stands after the button, whose
+          // own content reads as the button and not apart from it.
           return (
-            <button
-              key={i}
-              type="button"
-              className={classes('strip-candidate', l.chosen && 'is-chosen', l.more > 0 && 'is-more', picked === keyOf(anchor) && 'is-selected')}
-              data-leaf={i}
-              aria-label={leafName(l)}
-              style={{ left: p.x, top: p.y - LEAF_HALF }}
-              {...handlers(anchor)}
-            >
-              {l.accountId !== null && <span className="strip-candidate__account">{l.accountId}</span>}
-              <Badge tone={l.tone}>{l.badge}</Badge>
-              {l.chip !== null && <ChipView chip={l.chip} />}
-            </button>
+            <Described key={i} text={l.chip?.title}>
+              {(describedBy) => (
+                <button
+                  type="button"
+                  className={classes('strip-candidate', l.chosen && 'is-chosen', l.more > 0 && 'is-more', picked === keyOf(anchor) && 'is-selected')}
+                  data-leaf={i}
+                  aria-label={leafName(l)}
+                  aria-describedby={describedBy}
+                  {...expanded(anchor)}
+                  style={{ left: p.x, top: p.y - LEAF_HALF }}
+                  {...handlers(anchor)}
+                >
+                  {l.accountId !== null && <span className="strip-candidate__account">{l.accountId}</span>}
+                  <Badge tone={l.tone}>{l.badge}</Badge>
+                  {l.chip !== null && <ChipView chip={l.chip} />}
+                </button>
+              )}
+            </Described>
           );
         })}
         {termini.map(({ p, t }) => {
@@ -229,6 +268,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
               className={classes('strip-terminus', `is-${t.state}`, picked === keyOf(anchor) && 'is-selected', stacked && 'strip-terminus--stacked')}
               data-terminus={t.kind}
               aria-label={terminusName(t)}
+              {...expanded(anchor)}
               style={{ left, maxWidth: layout.width - left, top: p.y - (stacked ? TERMINUS_LINE_HALF : TERMINUS_ROW_HALF) }}
               {...handlers(anchor)}
             >
@@ -238,7 +278,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           );
         })}
       </div>
-      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} id={popoverId} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
+      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
     </div>
   );
 }

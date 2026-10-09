@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, stationModel, STEP_NAME, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -7653,6 +7653,14 @@ m.unmount();
       step: b.querySelector('.strip-station__word')?.textContent ?? '',
       verdict: b.querySelector('.badge')?.textContent ?? '',
     }));
+  /**
+   * A key pressed where focus stands, or on `target`, as the keyboard checks below press one. jsdom fires no click for
+   * the key, so a check reads what the key's own handler did.
+   */
+  const pressKey = async (page, key, target = document.activeElement) => {
+    target?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+    await page.settle(150);
+  };
   const leavesOf = (card) =>
     [...(card?.querySelectorAll('.decision-strip .strip-candidate') ?? [])].map((b) => ({ account: b.querySelector('.strip-candidate__account')?.textContent ?? '', badge: b.querySelector('.badge')?.textContent ?? '', chosen: b.classList.contains('is-chosen') }));
   const terminiOf = (card) => [...(card?.querySelectorAll('.decision-strip .strip-terminus') ?? [])].map((b) => ({ badge: b.querySelector('.badge')?.textContent ?? null, kind: b.dataset.terminus, taken: b.classList.contains('is-taken') }));
@@ -8239,6 +8247,75 @@ m.unmount();
     page.unmount();
   }
   {
+    // The strip by keyboard and by ear on the fresh placement and the shed move: the buttons' names in the record's
+    // order, Enter into the pick's popover and Escape back to the station, a pinned popover closing once focus leaves
+    // it and its station, and a drawing that says nothing. jsdom moves no focus on Tab, so a Tab out is a focus on the
+    // next station.
+    const named = (el) => (el === null || el === document.body ? 'the body' : (el.getAttribute('aria-label') ?? el.className ?? el.tagName));
+    const seen = { enter: [], escape: [], names: [], svg: [], tab: [] };
+    const held = { enter: true, escape: true, names: true, svg: true, tab: true };
+    for (const [what, id] of [
+      ['fresh placement', 'req_ef099b34-453'],
+      ['shed move', 'req_868264bc-611'],
+    ]) {
+      const { card, page, record, row } = await story(id);
+      const strip = card?.querySelector('.decision-strip') ?? null;
+      const model = stationModel(record, row, CLOCK_ORIGIN);
+      const names = [...(strip?.querySelectorAll('.strip-station, .strip-candidate, .strip-terminus') ?? [])].map((b) => b.getAttribute('aria-label'));
+      const expected = [
+        ...[...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')].map(stationName),
+        ...model.leaves.map(leafName),
+        ...model.termini.filter((t) => t.drawn).map(terminusName),
+      ];
+      held.names &&= names.length > 0 && JSON.stringify(names) === JSON.stringify(expected);
+      seen.names.push(`${what}: ${JSON.stringify(names)} against ${JSON.stringify(expected)}`);
+
+      const pick = strip?.querySelector('.strip-station[data-step="pick"]') ?? null;
+      pick?.focus();
+      await pressKey(page, 'Enter', pick);
+      const opened = [...document.querySelectorAll('.strip-popover')];
+      const popover = opened.length === 1 ? opened[0] : null;
+      const into = popover !== null && popover.contains(document.activeElement);
+      const expanded = pick?.getAttribute('aria-expanded') ?? null;
+      const controls = pick?.getAttribute('aria-controls') ?? null;
+      const entered = pick !== null && into && expanded === 'true' && controls !== null && controls === popover.id;
+      held.enter &&= entered;
+      seen.enter.push(`${what}: ${opened.length} open, focus on ${named(document.activeElement)}, aria-expanded ${expanded}, aria-controls ${controls} for ${popover?.id ?? 'no popover'}`);
+
+      await pressKey(page, 'Escape');
+      const left = document.querySelectorAll('.strip-popover').length;
+      held.escape &&= entered && left === 0 && document.activeElement === pick && pick.getAttribute('aria-expanded') === null;
+      seen.escape.push(`${what}: open with focus inside ${entered}, then ${left} open, focus on ${named(document.activeElement)}, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+
+      // The Eligible station's table links each member's account, and a station follows it on the line.
+      const stations = [...(strip?.querySelectorAll('.strip-station') ?? [])];
+      const eligible = strip?.querySelector('.strip-station[data-step="eligible"]') ?? null;
+      const next = eligible === null ? undefined : stations[stations.indexOf(eligible) + 1];
+      eligible?.click();
+      await page.settle(150);
+      const pinned = [...document.querySelectorAll('.strip-popover')];
+      const links = [...(pinned[0]?.querySelectorAll('a') ?? [])];
+      const last = links.at(-1) ?? null;
+      last?.focus();
+      const onLink = last !== null && document.activeElement === last;
+      next?.focus();
+      await page.settle(150);
+      const after = document.querySelectorAll('.strip-popover').length;
+      held.tab &&= pinned.length === 1 && pinned[0].classList.contains('is-pinned') && onLink && next !== undefined && document.activeElement === next && after === 0;
+      seen.tab.push(`${what}: ${pinned.length} pinned with ${links.length} links, focus on its last link ${onLink}, then on ${named(document.activeElement)} with ${after} open`);
+
+      const drawings = [...(strip?.querySelectorAll('svg') ?? [])];
+      held.svg &&= drawings.length === 1 && drawings.every((svg) => svg.getAttribute('aria-hidden') === 'true' && (svg.textContent ?? '').trim() === '');
+      seen.svg.push(`${what}: ${drawings.length} drawings, ${drawings.map((svg) => `aria-hidden ${svg.getAttribute('aria-hidden')}, text ${JSON.stringify((svg.textContent ?? '').trim())}`).join(' / ')}`);
+      page.unmount();
+    }
+    results.push({ name: "/routing-log the strip's buttons read their names in the record's order", ok: held.names, missing: seen.names });
+    results.push({ name: '/routing-log Enter on the pick station opens its popover with focus inside it and the station expanded', ok: held.enter, missing: seen.enter });
+    results.push({ name: '/routing-log Escape closes the popover and returns focus to the station', ok: held.escape, missing: seen.escape });
+    results.push({ name: "/routing-log Tab from a pinned popover's last link onto the next station closes it", ok: held.tab, missing: seen.tab });
+    results.push({ name: "/routing-log the strip's drawing is hidden from readers and carries no text", ok: held.svg, missing: seen.svg });
+  }
+  {
     // A Pace pick: the header names the window the record read, each member's Pace cell says on hover what its score
     // divided, and the row's By chip how the strategy ranks.
     const { card, page, record } = await story('req_ef099b34-453');
@@ -8582,7 +8659,7 @@ m.unmount();
     const wrong = [];
     let read = 0;
     for (const { root, where } of scanned) {
-      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence')];
+      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence, .strip-station__word, .strip-station__second > span, .strip-candidate__account, .strip-terminus__word')];
       for (const n of nodes) {
         if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'User agent') continue;
         read += 1;

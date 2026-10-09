@@ -2710,6 +2710,64 @@ async function stripWords(theme, where) {
   for (const hit of got.hits) failures.push(`${theme} /routing-log: ${where}: a station label runs into a leaf row or a bracket (${hit})`);
 }
 
+/**
+ * The contrast of every station's and way out's word on the open card against the background painted under it, by the
+ * WCAG ratio of relative luminances, beside the card's muted text (`--ink-2` on `--surface`) read on a probe. The
+ * buttons paint nothing, so a word reads on the first background painted above it, the open row's tint.
+ */
+function stripWordContrast() {
+  const card = [...document.querySelectorAll('.routing-log__panel .decision-card')].at(-1);
+  const strip = card?.querySelector('.decision-strip');
+  if (!card || !strip) return null;
+  const luminance = (color) => {
+    const [r, g, b] = (color.match(/[\d.]+/g) ?? []).slice(0, 3).map((v) => {
+      const c = Number(v) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (ink, bg) => {
+    const [hi, lo] = [luminance(ink), luminance(bg)].sort((a, b) => b - a);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const shade = (el) => {
+    for (let at = el; at; at = at.parentElement) {
+      const bg = getComputedStyle(at).backgroundColor;
+      if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+    }
+    return null;
+  };
+  const probe = document.createElement('div');
+  probe.style.color = 'var(--ink-2)';
+  probe.style.background = 'var(--surface)';
+  card.append(probe);
+  const muted = { bg: getComputedStyle(probe).backgroundColor, ink: getComputedStyle(probe).color };
+  probe.remove();
+  const words = [...strip.querySelectorAll('.strip-station .strip-station__word, .strip-terminus .strip-terminus__word')].map((word) => {
+    const button = word.closest('button');
+    const ink = getComputedStyle(word).color;
+    const bg = shade(word);
+    return { bg, idle: button?.classList.contains('is-idle') ?? false, ink, kind: button?.classList.contains('strip-terminus') ? 'way out' : 'station', ratio: bg === null ? 0 : ratio(ink, bg), text: word.textContent };
+  });
+  return { muted: { ...muted, ratio: ratio(muted.ink, muted.bg) }, words };
+}
+
+/**
+ * Holds every word `stripWordContrast` reads at the card's muted contrast or better, and an idle way out's word among
+ * them, whose ink an idle station's word shares.
+ */
+async function stripContrast(theme, where) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${where}: ${what}`);
+  const got = await page.evaluate(stripWordContrast);
+  measurements.push(`${theme} /routing-log word contrast of ${where} ${JSON.stringify(got)}`);
+  if (got === null) {
+    say('no strip to read');
+    return;
+  }
+  for (const w of got.words.filter((x) => x.ratio < got.muted.ratio)) say(`the ${w.kind} word "${w.text}" reads ${w.ratio.toFixed(2)}:1 (${w.ink} on ${w.bg}), under the card's muted text's ${got.muted.ratio.toFixed(2)}:1`);
+  if (!got.words.some((w) => w.kind === 'way out' && w.idle)) say(`no idle way out's word among the ${got.words.length} read`);
+}
+
 /** The popover's viewports: the card's two, and one where the card is wider than the window. */
 const POPOVER_VIEWPORTS = [
   { height: 800, width: 1280 },
@@ -2802,7 +2860,9 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
  * so there that check stands down and the shed move's badge colors are the story's alone. A station's popover keeps
  * inside the card at the two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest
  * popover), its Cool reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the
- * seeded router's pass the station its first card's candidates hang from.
+ * seeded router's pass the station its first card's candidates hang from. The open card draws its record's station
+ * count at both viewports, and every station's and way out's word holds the card's muted contrast with an idle way out
+ * among them, read on the seeded router's first card and on the mock's fresh placement.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -2835,14 +2895,17 @@ async function decisionCard(theme) {
                 const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
                 return leaf ? Math.round((leaf.top + leaf.bottom) / 2 - surface.getBoundingClientRect().top) : null;
               })(),
+              drawn: surface.querySelectorAll('.strip-station').length,
               height: Math.round(surface.getBoundingClientRect().height),
               leaves: Number(surface.dataset.leaves),
+              stations: Number(surface.dataset.stations),
               y0: Number(surface.dataset.y0),
             }
           : null,
         table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
       };
     });
+  const counts = [];
   for (const { height, table, width } of [
     { height: 800, table: 958, width: 1280 },
     { height: 900, table: 1118, width: 1440 },
@@ -2865,6 +2928,9 @@ async function decisionCard(theme) {
     const rows = Math.max(first + Math.max(leaves, 1) * 30 + 4, y0 + 104);
     if (first < y0 + 76) say(`${where}: the first leaf row stands at ${first}px, above the ${y0 + 76}px it starts at under a line at ${y0}px`);
     if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves from a first row at ${first}px take`);
+    // The record's steps and its placeholders, which the surface carries, are the stations a reader tabs through.
+    if (got.surface.drawn !== got.surface.stations) say(`${where}: the strip draws ${got.surface.drawn} stations, not the ${got.surface.stations} of its record's steps and placeholders`);
+    counts.push(got.surface.drawn);
     await stripWords(theme, where);
     if (got.table === null) say(`${where} draws no candidate table`);
     else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
@@ -2874,8 +2940,10 @@ async function decisionCard(theme) {
     if (got.badges.length === 0) say(`${where}: the strip draws no badge to measure`);
     for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the strip's "${b.text}" badge measures ${b.box} against the kind badge's ${got.reference}`);
   }
+  if (counts.length === 2 && counts[0] !== counts[1]) say(`the open card draws ${counts[0]} stations at 1280 by 800 and ${counts[1]} at 1440 by 900`);
   // The seed's first card is a placement, whose candidates hang from its pick, or else from the station that decided it.
   if (!mock) {
+    await stripContrast(theme, 'the first card');
     await popoverBounds(theme, "the first card's host station", async (card) => {
       const pick = card.locator('.strip-station[data-step="pick"]');
       return (await pick.count()) > 0 ? pick.first() : card.locator('.strip-station.is-decisive').first();
@@ -2955,6 +3023,8 @@ async function decisionCard(theme) {
     say(`the fresh placement ${fresh} opened to no card on its request's page`);
     return;
   }
+  // A placement walks no rule, so its Held for a slot and Refused ways out stand idle.
+  await stripContrast(theme, "the fresh placement's card");
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
 }
 

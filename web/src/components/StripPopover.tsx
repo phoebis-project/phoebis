@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { type FocusEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/DecisionCard';
 import { HashChip } from '@/components/EntryChips';
-import { Badge } from '@/components/ui/primitives';
+import { Badge, useDescription } from '@/components/ui/primitives';
+import type { Chip } from '@/lib/routingLog';
 import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/lib/stripFacts';
 
 /** The popover's widest box, as the stylesheet bounds it too. */
@@ -18,20 +19,60 @@ const WINDOW_COLUMNS: { key: keyof WindowRow; label: string; numeric: boolean }[
   { key: 'age', label: 'Age', numeric: true },
 ];
 
+/**
+ * Describes the element `children` draws by `text` for a reader: through the card's description host where one
+ * stands, else through a hidden node after the element, as the attempt trail's is.
+ */
+export function Described({ children, text }: { children: (describedBy: string | undefined) => ReactNode; text: string | undefined }) {
+  const described = useDescription(text);
+  return (
+    <>
+      {children(described?.id)}
+      {described?.sibling && (
+        <span id={described.id} className="sr-only" data-descriptions="">
+          {text}
+        </span>
+      )}
+    </>
+  );
+}
+
+function DescribedChip({ chip, marked }: { chip: Chip; marked?: boolean }) {
+  return <Described text={chip.title}>{(describedBy) => <ChipView chip={chip} describedBy={describedBy} marked={marked} />}</Described>;
+}
+
+/** A table cell's hover, described through the host. Outside one the title alone describes it, as the Pace cell's. */
+function Cell({ children, head = false, numeric, title }: { children: ReactNode; head?: boolean; numeric: boolean; title: string | undefined }) {
+  const described = useDescription(title);
+  // A node after the cell would stand in the row, where only cells may.
+  const hosted = described && !described.sibling ? described.id : undefined;
+  const Tag = head ? 'th' : 'td';
+  return (
+    <Tag className={numeric ? 'right' : undefined} title={title} aria-describedby={hosted}>
+      {children}
+    </Tag>
+  );
+}
+
 function Rows({ rows }: { rows: PlanRow[] }) {
   return (
     <dl className="kv">
       {rows.map((r, i) => (
         <div key={`${r.label}/${i}`} className={r.marked ? 'kv__row is-marked' : 'kv__row'}>
           <dt>{r.label}</dt>
-          <dd title={r.title}>
-            <span className="chips">
-              {r.entry !== undefined && <HashChip entry={r.entry} />}
-              {r.chips.map((c, j) => (
-                <ChipView key={`${c.label ?? ''}/${c.value}/${j}`} chip={c} />
-              ))}
-            </span>
-          </dd>
+          {/* The node follows the dd inside the row, so the dd's own text stays its chips alone. */}
+          <Described text={r.title}>
+            {(describedBy) => (
+              <dd title={r.title} aria-describedby={describedBy}>
+                <span className="chips">
+                  {r.entry !== undefined && <HashChip entry={r.entry} />}
+                  {r.chips.map((c, j) => (
+                    <DescribedChip key={`${c.label ?? ''}/${c.value}/${j}`} chip={c} />
+                  ))}
+                </span>
+              </dd>
+            )}
+          </Described>
         </div>
       ))}
     </dl>
@@ -59,9 +100,9 @@ function Table({ table }: { table: PlanTable }) {
           <tr>
             <th>Account</th>
             {table.columns.map((c) => (
-              <th key={c.key} className={c.numeric ? 'right' : undefined} title={c.title}>
+              <Cell key={c.key} head numeric={c.numeric} title={c.title}>
                 {c.label}
-              </th>
+              </Cell>
             ))}
           </tr>
         </thead>
@@ -72,9 +113,9 @@ function Table({ table }: { table: PlanTable }) {
               {table.columns.map((c) => {
                 const cell = r.cells[c.key];
                 return (
-                  <td key={c.key} className={c.numeric ? 'right' : undefined} title={cell?.title}>
+                  <Cell key={c.key} numeric={c.numeric} title={cell?.title}>
                     {cell?.text ?? ''}
-                  </td>
+                  </Cell>
                 );
               })}
             </tr>
@@ -122,7 +163,7 @@ function Block({ plan }: { plan: PopoverPlan }) {
         <>
           <span className="chips">
             {b.chips.map((c, i) => (
-              <ChipView key={`${c.label ?? ''}/${i}`} chip={c} />
+              <DescribedChip key={`${c.label ?? ''}/${i}`} chip={c} />
             ))}
           </span>
           {b.windows.length > 0 && <Windows windows={b.windows} />}
@@ -132,7 +173,7 @@ function Block({ plan }: { plan: PopoverPlan }) {
       return (
         <span className="chips">
           {b.chips.map((c, i) => (
-            <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} marked={i === b.marked} />
+            <DescribedChip key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} marked={i === b.marked} />
           ))}
         </span>
       );
@@ -155,15 +196,15 @@ function Block({ plan }: { plan: PopoverPlan }) {
  * anything absolute inside it: measured at the window's corner, then centered under its anchor 8 px below, kept 8 px
  * inside the part of the card's box on screen, and moved above the anchor where it would pass the window's bottom. A
  * strip redrawn for a record that no longer holds the anchor takes the anchor's button away, and the popover closes
- * with it.
+ * with it. A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it.
  */
-export function StripPopover({ anchor, bounds, id, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; id: string; onClose: () => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
+export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const place = useCallback(() => {
     const el = ref.current;
     if (el === null) return;
     if (!anchor.isConnected) {
-      onClose();
+      onClose(false);
       return;
     }
     const card = bounds.getBoundingClientRect();
@@ -183,6 +224,16 @@ export function StripPopover({ anchor, bounds, id, onClose, pinned, plan }: { an
   }, [anchor, bounds, onClose]);
   // Every draw places it again, so a strip redrawn for a new width carries it along with its anchor.
   useLayoutEffect(place, [place, plan]);
+  // After the placement, so the box takes focus where it stands. A redraw for the same anchor leaves focus where Tab
+  // has since put it.
+  useEffect(() => {
+    if (focus) ref.current?.focus({ preventScroll: true });
+  }, [anchor, focus]);
+  // A blur naming no element (a click on a button Safari gives no focus) closes nothing, as a menu's does.
+  const leave = (e: FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget;
+    if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) onClose(false);
+  };
   useEffect(() => {
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
@@ -194,7 +245,7 @@ export function StripPopover({ anchor, bounds, id, onClose, pinned, plan }: { an
   const headId = `${id}-head`;
   const { head } = plan;
   return createPortal(
-    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed' }}>
+    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed' }} onBlur={leave}>
       <div className="strip-popover__head">
         <span className="strip-popover__title" id={headId}>
           {head.account !== null ? rowValue([head.account]) : head.word}

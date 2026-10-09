@@ -25,12 +25,15 @@ import {
   verdictSentence,
 } from '@/lib/routingLog';
 
-/** One chip: a value or a key-value pair, the entity it names a link. A popover marks the chip its anchor stands for. */
-export function ChipView({ chip, marked = false }: { chip: Chip; marked?: boolean }) {
+/**
+ * One chip: a value or a key-value pair, the entity it names a link. A popover marks the chip its anchor stands for,
+ * and `describedBy` points at the node that carries its hover for a reader.
+ */
+export function ChipView({ chip, describedBy, marked = false }: { chip: Chip; describedBy?: string; marked?: boolean }) {
   const value = chip.entity ? <Link to={entityHref(chip.entity.kind, chip.entity.id)}>{chip.value}</Link> : chip.href ? <Link to={chip.href}>{chip.value}</Link> : chip.value;
   const label = chip.labelEntity ? <Link to={entityHref(chip.labelEntity.kind, chip.labelEntity.id)}>{chip.label}</Link> : chip.label;
   return (
-    <span className={`${chip.mono ? 'chip mono' : 'chip'}${marked ? ' is-marked' : ''}`} title={chip.title}>
+    <span className={`${chip.mono ? 'chip mono' : 'chip'}${marked ? ' is-marked' : ''}`} title={chip.title} aria-describedby={describedBy}>
       {label !== undefined && <span className="chip__label">{label}</span>}
       {value}
     </span>
