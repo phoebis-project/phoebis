@@ -24,34 +24,38 @@ the fill), the pool dialog's members table (Account the fill, each Priority and 
 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its group shows, and in the mock
 pass's expert view its model rules table (Model the fill, each select holding its widest option's text inside its
 padding), which the router's seed draws no override for, the settings cards' order, the listener hint's gaps and size
-and About's lines (their order, one type and one gap), the
-cooling-down block's columns (Reason the fill), the Delete account button, the account lines, the Quota cards' poll
-lines (short of the Refresh pill and inside the card, the backoff line in the
-serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the timeline's chips on
-the Quota windows section, the Quota cards' one height (the head's and the foot's rules at one offset on every card),
-the remaining cards, the error state, the lines under the quota rings, the recent requests' model cells and their
-table's fit, the recent requests' columns (Key the fill), the cost-cap rows, the live feed, the wasted-probe rows, the
-burn cards, the plan legend's model unlisted entry, the placement and budget tables, the Analytics tables' columns, each
-read on the tab that draws it (the Traffic breakdown's group column the fill, Key on the misses-by-reason breakdown
-under its wrapped headers, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is
-as wide as its meter's 140 px floor), the request table's fit, the request pages' widths, walked on a load of their own
-once every view's shot is taken, the speed filter, the traffic cards (each Analytics check opens
-the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,
-the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's decision card,
-which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by
-800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on the first rung
-placement the log lists), the subscription end editor, the catalog popup and its columns (Model and Name the fills),
-the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its
-cell and cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's
-Access selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440
-by 900 (the head's height
+and About's lines (their order, one type and one gap), the cooling-down block's columns (Reason the fill), the Delete
+account button, the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the
+backoff line in the serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the
+Quota cards' chips and reset cells (each on one line inside its column, the window grid inside its card) and each live
+window's pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows section (each
+inside its column, a chip with a share in the background and ink of the card chip of the same tone, primary's used fill
+at the share the page computed, and the lane label's ink at 4.5:1 or better over each tone's fill), the Quota cards' one
+height (the head's and the foot's rules at one offset on every card), the remaining cards, the error state, the lines
+under the quota rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the
+fill), the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry,
+the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic
+breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Rung on the
+placements table, Pool and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor),
+the request table's fit, the request pages' widths, walked on a load of their own once every view's shot is taken, the
+speed filter, the traffic cards (each Analytics check opens the tab it reads and returns to
+Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the fast lane, the request drawer,
+which opens once the request list's shot is taken, the routing log's decision card, which opens once the log's shot is
+taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by 800 and 1440 by 900, every verdict
+badge in the kind badge's box, and the chosen row's Prefix chips on the first rung placement the log lists), the
+subscription end editor, the catalog popup and its columns (Model and Name the fills), the Keys table's columns (Name,
+Models and Status the fills) and the badges of its fill cells (each ending inside its cell and cutting its own label
+with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's Access selects, the Pool
+select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
 closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the
 lead, Cost reference one line at the head's top right), the cost reference, the session table's fit and its columns
 (each fit column as wide as its content, the Session column the fill), the session id's width, the session row menu, the
 agent lines, the fork badges (inside their cell and whole),
-the fork link, which is followed once the session list's shot is taken). A check that opens an
-editor, a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again. The
-script exits non-zero with the list of failures when any of that does not hold.
+the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied
+on the Settings snippet with the clipboard API removed, and on a Key created dialog's secret in the mock pass, each on a
+load of its own)). A check that opens an editor, a dialog or a row closes it again before the view's shot, and one that
+turns a column on turns it off again. The script exits non-zero with the list of failures when any of that does not
+hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

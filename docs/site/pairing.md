@@ -121,7 +121,7 @@ every example above, and sends no `Origin`.
 | `funding_required` | The upstream named an `api_key` account's credit balance | Clear funding, back to `ready` |
 | `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | Reauth, funding, or Disconnect |
 | `reauth_required` | A definitive credential failure; see note below | Re-pair, or a new `api_key` secret |
-| `unpaired` | A create ahead of its pairing, or an `api_key` Disconnect | Pairing, or a stored `api_key` secret |
+| `unpaired` | Created ahead of pairing, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
 
 A pairing session on an existing row leaves its state unchanged, `unpaired` or `reauth_required` for a re-pair, for
 the whole flow. The console tracks progress through the session's own status. A session started with `new` has no row

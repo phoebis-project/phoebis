@@ -55,15 +55,19 @@ export function AccountsPage() {
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
-  // leaves that URL alone until a read lands.
-  const [created, setCreated] = useState<{ before: Account[] | null; id: string } | null>(null);
+  // leaves that URL alone for the span of that read. The guard follows the read's loading flag rather than the list
+  // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh.
+  const [created, setCreated] = useState<{ id: string; reading: boolean } | null>(null);
   useEffect(() => {
-    if (created !== null && accounts.data !== created.before) setCreated(null);
-  }, [accounts.data, created]);
+    if (created === null) return;
+    if (accounts.loading) {
+      if (!created.reading) setCreated({ ...created, reading: true });
+    } else if (created.reading) setCreated(null);
+  }, [accounts.loading, created]);
   // A deleted account's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
   // /accounts does rather than to a detail that never loads.
   useEffect(() => {
-    if (created !== null && accountId === created.id && accounts.data === created.before) return;
+    if (created !== null && accountId === created.id) return;
     if (accounts.data && !selected && accounts.data.length) navigate(`/accounts/${accounts.data[0].id}`, { replace: true });
   }, [accounts.data, accountId, created, navigate, selected]);
 
@@ -166,7 +170,7 @@ export function AccountsPage() {
           accounts.reload();
           notify(`Paired ${preview.email}`);
           if (start !== null && 'id' in start) {
-            setCreated({ before: accounts.data, id: start.id });
+            setCreated({ id: start.id, reading: false });
             navigate(`/accounts/${start.id}`);
           }
         }}
@@ -739,8 +743,10 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
 }
 
 const ID_HINT = 'Lowercase letters, digits, and dashes. It names the account in every log and URL.';
-const ID_UNNAMED = 'none yet, the label needs a letter or digit';
 const ID_TAKEN = 'taken, customize the id';
+const ID_UNNAMED = 'none yet, the label needs a letter or digit';
+// The id line reads a state after `Id:`, where the customized field's hint leads with it as a sentence of its own.
+const sentence = (fragment: string) => `${fragment.charAt(0).toUpperCase()}${fragment.slice(1)}.`;
 
 function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds: ReadonlySet<string>; onClose: () => void; onDone: (done: { kind: 'api_key'; created: Account } | { kind: 'oauth'; start: { id: string; label: string } }) => void; open: boolean }) {
   const [kind, setKind] = useState<'api_key' | 'oauth'>('oauth');
@@ -831,7 +837,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
           {ID_HINT}
         </p>
       ) : (
-        <Field label="Id" hint={unnamed ? `${ID_HINT} ${ID_UNNAMED}` : taken ? `${ID_HINT} ${ID_TAKEN}` : ID_HINT}>
+        <Field label="Id" hint={unnamed ? `${sentence(ID_UNNAMED)} ${ID_HINT}` : taken ? `${sentence(ID_TAKEN)} ${ID_HINT}` : ID_HINT}>
           <Input value={customId} onChange={(e) => setCustomId(e.target.value)} placeholder={unnamed ? '' : derived.id} className="mono" aria-invalid={taken || undefined} />
         </Field>
       )}
@@ -946,7 +952,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
             <Button variant="ghost" onClick={dismiss}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!callback.trim() || busy || expired} onClick={submit}>
+            <Button variant="primary" disabled={!session || !callback.trim() || busy || expired} onClick={submit}>
               {busy ? 'Checking…' : 'Submit'}
             </Button>
           </>
@@ -996,7 +1002,9 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
             <PairingExpiry remaining={remaining} expired={expired} ready={session !== null} />
           </div>
           <Field label="Paste the URL your browser landed on, or the code">
-            <Input value={callback} onChange={(e) => setCallback(e.target.value)} placeholder={`${session?.redirectUri ?? 'http://localhost:…/callback'}?code=…&state=…`} className="mono" />
+            {/* Remounted as the session lands so the autofocus runs then: the paste is the dialog's one typed step,
+                and there is nothing to paste before the link exists. */}
+            <Input key={session ? 'ready' : 'pending'} value={callback} onChange={(e) => setCallback(e.target.value)} placeholder={`${session?.redirectUri ?? 'http://localhost:…/callback'}?code=…&state=…`} className="mono" autoFocus={session !== null} />
           </Field>
           {session && (
             <p className="muted">

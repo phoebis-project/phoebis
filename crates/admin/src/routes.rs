@@ -905,9 +905,11 @@ async fn pairing_callback(
     .into_response()
 }
 
-/// Commits a pairing, after four checks that all have to hold at once. Every one of them refuses rather
-/// than repairs, and every refusal drops the pending bundle, so no path through here leaves a credential
-/// behind that a later call could commit.
+/// Commits a pairing. An existing row passes four checks that all have to hold at once. A row the start
+/// reserved with `new` is written by the one create, which the store refuses when another slot holds the
+/// identity or a create took the id meanwhile. Every one of them refuses rather than repairs, and every
+/// refusal drops the pending bundle, so no path through here leaves a credential behind that a later call
+/// could commit.
 async fn pairing_confirm(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,

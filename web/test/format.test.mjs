@@ -30,6 +30,13 @@ test('a day tick prints the date in the zone named, and the local time where the
   assert.equal(fmtDayTick(at, 'America/Los_Angeles'), 'Sep 15 17:00', 'the zone passed is the zone printed, with the hour the boundary falls at there');
   assert.equal(fmtDayTick(at, 'Asia/Kolkata'), 'Sep 16 05:30');
   assert.equal(fmtDayTick(at), 'Sep 16', "the browser's zone when none is named, UTC here");
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtDayTick(at, 'America/Los_Angeles'), /^Sep 15 05:00\sPM$/, 'the time format reaches the tick where the boundary carries a clock');
+    assert.equal(fmtDayTick(at, 'UTC'), 'Sep 16', 'a boundary at midnight stays the date alone on either clock');
+  } finally {
+    setTimeFormat('24h');
+  }
 });
 
 test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12 AM on the 12-hour one, never 24', () => {

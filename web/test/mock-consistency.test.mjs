@@ -379,7 +379,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
     // among them is the slot the story pinned its fork on.
-    const live = s.sessions.filter((x) => !x.historical);
+    const listed = s.sessions.filter((x) => !x.historical);
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
     assert.equal(forks.length, 2, `${forks.length} forks are listed`);
     const pairs = forks.map((fork) => {
@@ -391,8 +391,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const other = pairs.filter((p) => p.fork.accountId !== p.base.accountId);
     assert.equal(same.length, 1, "one fork sits on its base's account");
     assert.equal(other.length, 1, 'one fork sits on another account than its base');
-    assert.deepEqual([same[0].fork.sessionId, same[0].base.sessionId], [live[5].sessionId, live[3].sessionId], 'the same-account fork and its base');
-    assert.deepEqual([other[0].fork.sessionId, other[0].base.sessionId], [live[2].sessionId, live[1].sessionId], 'the other-account fork and its base');
+    assert.deepEqual([same[0].fork.sessionId, same[0].base.sessionId], [listed[5].sessionId, listed[3].sessionId], 'the same-account fork and its base');
+    assert.deepEqual([other[0].fork.sessionId, other[0].base.sessionId], [listed[2].sessionId, listed[1].sessionId], 'the other-account fork and its base');
   });
 
   test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {

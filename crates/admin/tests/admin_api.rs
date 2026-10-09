@@ -1593,6 +1593,52 @@ async fn an_account_held_by_a_429_lists_its_hold_deadline() {
 }
 
 #[tokio::test]
+async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_the_hold_deadline() {
+    use common::{get, json, login, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    // The profile is the one read the poll's path makes ahead of a usage reading, so its 429 is the first thing
+    // the account's entry records.
+    assert!(
+        h.usage.profile("business").await.is_err(),
+        "the first read meets the profile 429"
+    );
+    let held = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(held["error"], "no usage fetched yet", "{held}");
+    let until = held["held_until"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("the hold's deadline rides the block: {held}"));
+    assert!(until > NOW, "{held}");
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+    assert!(
+        held["windows"].as_array().is_some_and(Vec::is_empty),
+        "no reading landed: {held}"
+    );
+
+    h.clock_cell.store(until, Ordering::SeqCst);
+    let past = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert!(
+        past["held_until"].is_null(),
+        "past the hold the deadline leaves the block: {past}"
+    );
+    assert_eq!(
+        past["poll"]["next_attempt_at"],
+        serde_json::Value::Null,
+        "{past}"
+    );
+}
+
+#[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
@@ -2609,6 +2655,33 @@ async fn a_start_with_new_whose_identity_another_slot_holds_leaves_no_row() {
     );
     let business = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(business["state"], "ready");
+}
+
+#[tokio::test]
+async fn a_confirm_whose_create_the_store_refuses_answers_500_and_leaves_no_row() {
+    use common::{get, json, login, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    store.debug_fail_next_credential_commit();
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 500);
+    assert_eq!(json(confirmed).await["error"], "storage failure");
+    assert_eq!(
+        get(&app, "/admin/accounts/fresh", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "the refused create left no row"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
 }
 
 #[tokio::test]

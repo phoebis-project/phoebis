@@ -381,7 +381,7 @@ impl Store {
         Ok(generation)
     }
 
-    /// The seam `debug_fail_next_credential_commit` arms, checked before either commit's transaction.
+    /// The seam `debug_fail_next_credential_commit` arms, checked before each commit's transaction.
     pub(crate) fn fail_injected_commit(&self) -> Result<(), StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         if self

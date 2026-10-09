@@ -930,13 +930,7 @@ async function poolRoutingCards(theme) {
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
   }
-  // The margin line draws at the field's value, and the seeded pool may store none, so one is typed where the field
-  // opened empty, and the field is left again so the measure below reads it at rest rather than focused.
-  const marginField = dialog.locator('input[aria-label="Shed ahead of pace (%)"]');
-  if ((await marginField.count()) === 1 && (await marginField.inputValue()) === '') {
-    await marginField.fill('50');
-    await marginField.blur();
-  }
+  // The margin line draws at the field's value, which opens at the default of 20 for a pool that stores none.
   await settle();
   const measure = () =>
     dialog.evaluate((el) => {
@@ -1775,8 +1769,7 @@ async function keysPageMenus(theme) {
  * listener hint at the gaps its styles give it, 10 px under the block and 14 px over the variable list (the list's own
  * top margin), so a hint that drifts toward or away from either neighbour fails. The hint reads at the subtitle's size,
  * the size the page's other hints take.
- * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
- * limits and the admin secret's badge read as lines of the same list.
+ * About's lines run in their order at the Storage path line's type and one gap between every two.
  */
 async function settingsOrder(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
@@ -2022,8 +2015,9 @@ async function quotaChips(theme) {
 /**
  * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
  * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
- * current bar lays its used fill out at the share the page computed, within a pixel. Only the mock pass draws the
- * section.
+ * current bar lays its used fill out at the share the page computed, within a pixel, and the lane label's ink reads
+ * at 4.5:1 or better over every tone's fill, which the mock pass demands a fill of each tone for, since the story
+ * fills bars in all three. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2035,7 +2029,10 @@ async function quotaLaneChips(theme) {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
       fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
       // The label starts where the fill starts, so each tone's fill is read under the label of its own bar.
-      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => ({ background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(el.parentElement.querySelector('.lane__label') ?? el.parentElement).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null })),
+      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => {
+        const bar = el.closest('.lane__bar');
+        return { background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null };
+      }),
     };
   });
   const lanes = read.chips;
@@ -3635,7 +3632,9 @@ async function sessionsTableFits(theme) {
  * box counts whole, its padding included. A flex container's items are
  * one run of boxes with their gaps (a Standing cell's badges), and a form control is its box whatever its display (a
  * select's options draw no boxes of their own). An out-of-flow child (a screen-reader-only description, a select's
- * chevron) takes no room in its cell and is left out. Two or more fill
+ * chevron) takes no room in its cell and is left out. A fit cell whose wrapping row of flex items reaches a second
+ * line (a Standing cell's badges stacked) fails, since the one-run read measures a stacked run at the column's width
+ * and would pass it. Two or more fill
  * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
  * exists, else its parent element. `fixed` counts the leading columns that keep a width of their own (the Sessions
  * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
@@ -3683,6 +3682,20 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
     };
     const classOf = (c) => (c.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c.classList.contains('col-fill') ? 'fill' : 'none');
     const hundredths = (n) => Math.round(n * 100) / 100;
+    // A row of flex items that wraps is the one way a cell's items reach a second line, so only a wrapping row
+    // container is read, and its lines are counted off the items' boxes: an item whose top sits at or under the box
+    // before it starts a line. Items of unequal height on one line (a meter beside its figure) keep distinct tops, so
+    // the tops alone would read a line too many.
+    const linesOf = (c) => {
+      const wraps = (n) => {
+        const s = getComputedStyle(n);
+        return ['flex', 'inline-flex'].includes(s.display) && s.flexDirection.startsWith('row') && s.flexWrap !== 'nowrap';
+      };
+      const flex = [c, ...c.children].find(wraps);
+      if (!flex) return 1;
+      const boxes = [...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect());
+      return boxes.filter((b, i) => i > 0 && b.top >= boxes[i - 1].bottom - 1).length + 1;
+    };
     const columns = ths.map((th, i) => {
       const cells = [th, ...rows.map((r) => r.children[i])];
       const needs = cells.map((c) => {
@@ -3694,6 +3707,7 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
         cls: classOf(th),
         label: th.textContent?.trim() ?? '',
         need: hundredths(Math.max(...needs)),
+        stacked: cells.slice(1).filter((c) => linesOf(c) > 1).length,
         width: hundredths(th.getBoundingClientRect().width),
       };
     });
@@ -3709,6 +3723,7 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
     } else if (c.cls !== 'fit' && c.cls !== 'fill') say(`${named(c, i)} carries ${c.cls === 'both' ? 'both classes' : 'neither col-fit nor col-fill'}`);
     if (c.cellsOff > 0) say(`${c.cellsOff} cells of ${named(c, i)} lack the header's class`);
     if (i >= fixed && c.cls === 'fit' && Math.abs(c.width - c.need) > 1) say(`${named(c, i)} is ${c.width}px wide against its content's ${c.need}px`);
+    if (i >= fixed && c.cls === 'fit' && c.stacked > 0) say(`${c.stacked} cells of ${named(c, i)} stack their items on more than one line`);
   });
   const fills = read.columns.slice(fixed).filter((c) => c.cls === 'fill');
   if (JSON.stringify(fills.map((c) => c.label)) !== JSON.stringify(fill)) say(`the fill columns read ${JSON.stringify(fills.map((c) => c.label))}, not ${JSON.stringify(fill)}`);
@@ -4144,7 +4159,7 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
-        await tableColumns(theme, 'dashboard', '.dash__recent', ['Key']);
+        await tableColumns(theme, '', '.dash__recent', ['Key']);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);

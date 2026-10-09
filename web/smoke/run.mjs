@@ -120,13 +120,18 @@ const columnsMarked = (name, table, fill) => {
     missing: [table ? JSON.stringify(read.heads) : 'no table', JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
   });
 };
+/** Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the hover. */
+const fillTitles = (name, table) => {
+  const cells = [...(table?.querySelectorAll('tbody td.col-fill') ?? [])];
+  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '')).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
+  results.push({ name, ok: cells.length > 0 && off.length === 0, missing: [`${cells.length} fill cells`, ...off.slice(0, 5)] });
+};
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
-/** A dialog's button by its label. */
 const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
 /** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
 const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-/** The discard question while it is up: the topmost open dialog, which the question's own modal makes it; null otherwise. */
+/** The discard question while it is up, the topmost open dialog (the question's own modal makes it so), or null. */
 const discardQuestion = (root) => {
   const last = [...root.querySelectorAll('dialog[open]')].pop();
   return last && (last.textContent ?? '').includes('Discard changes?') ? last : null;
@@ -477,6 +482,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
 columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
+fillTitles('/ every Key cell of the recent requests table opens its title with its own text', m.container.querySelector('.dash__recent'));
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -1000,6 +1006,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     missing: [...backoff.map((b) => b.textContent?.trim() ?? ''), JSON.stringify(backoffTitle)],
   });
 }
+// The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
+// chips and fills to be read against: the cards and the lanes draw the three windows in one order.
+const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
+const cardTone = (label, window) => cardToneOf.get(label)?.[['5h', '7d', 'fable'].indexOf(window)] ?? 'no card chip';
 await quotaSection(m, 'Quota windows');
 {
   const panel = m.container.querySelector('#quota-windows');
@@ -1029,6 +1039,10 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     ok: withShare.length > 0 && withoutShare.length > 0 && withShare.every((c) => ['tl-chip--good', 'tl-chip--low', 'tl-chip--warn'].includes(c.tone) && c.pct === 'none') && withoutShare.every((c) => c.tone === 'none' && c.pct === 'none'),
     missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
   });
+  // A lane chip without a share carries no tone where the card chip of that window reads absent.
+  const laneChipTones = [...m.container.querySelectorAll('.lane')].flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
+  const chipOff = laneChipTones.filter((c) => c.tone !== cardTone(c.label, c.window)).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
+  results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
@@ -1072,6 +1086,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
   const accounts = await api.listAccounts();
   const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
+  const toneOf = (fill) => [...(fill?.classList ?? [])].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null;
   // The page's span: the weekly zoom opens three days before today's midnight and runs two weeks, the 5-hour zoom one
   // day before and three days.
   const fillOf = (label, windowId, days) => {
@@ -1083,7 +1098,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const to = from + (parseFloat(bar?.style.width ?? 'NaN') / 100) * days * DAY;
     const period = (w?.periodHours ?? 0) * 3_600_000;
     const usedEnd = Date.parse(w?.resetsAt ?? '') - period + Math.min(1, w?.utilization ?? 0) * period;
-    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
+    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, tone: toneOf(fills[0]), want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
   };
   const weekly = fillOf('primary', '7d', 14);
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the weekly zoom", ok: weekly.fills === 1 && Math.abs(weekly.drawn - weekly.want) <= 0.5, missing: [JSON.stringify(weekly)] });
@@ -1091,9 +1106,11 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
     const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
     const bar = l.querySelector('.lane__bar--live');
-    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), tone: toneOf(bar?.querySelector('.lane__used')), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
   });
   const withShare = lanes.filter((l) => l.share);
+  const fillOff = withShare.filter((l) => l.tone !== cardTone(l.label, '7d')).map((l) => `${l.label}: ${l.tone} where the card chip reads ${cardTone(l.label, '7d')}`);
+  results.push({ name: "/quota each live bar's fill on the weekly zoom carries the tone of the same account's 7-day card chip", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
   const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
   results.push({
     name: '/quota no two live bars of windows at different shares fill alike',
@@ -1108,6 +1125,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   zoom('Weekly');
   await m.settle();
   results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
+  results.push({ name: "/quota the fill of primary's 5-hour bar carries the tone of its 5-hour card chip", ok: session.tone !== null && session.tone === cardTone('primary', '5h'), missing: [String(session.tone), cardTone('primary', '5h')] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
@@ -1668,8 +1686,48 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   });
   // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
   // the page returns to primary for the checks that follow.
-  await api.deleteAccount('fresh-desk').catch(() => undefined);
+  await api.deleteAccount('fresh-desk').catch((e) => {
+    if (e?.status !== 404) throw e;
+  });
   await m.navigate('/accounts/primary');
+  {
+    // A confirm whose reload fails: the list keeps its rows, so the page lands on the first account rather than
+    // holding a URL no row answers, where the detail pane would draw nothing until the next refresh. On a mount of
+    // its own, so the failed read's standing reaches none of the checks that follow.
+    const lost = await mount('/accounts/primary');
+    const openIn = () => [...lost.container.querySelectorAll('dialog[open]')];
+    const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await lost.settle(120);
+    };
+    [...lost.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+    await lost.settle(300);
+    const add = openIn().pop() ?? null;
+    await type(fieldIn(add, 'Label'), 'Fresh lamp');
+    buttonIn(add, 'Start pairing')?.click();
+    await lost.settle(500);
+    const lamp = openIn().pop() ?? null;
+    const lampState = new URLSearchParams((lamp?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+    await type(lamp?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${lampState}`);
+    buttonIn(lamp, 'Submit')?.click();
+    await lost.settle(900);
+    failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable', { quiet: true });
+    buttonIn(lamp, 'Confirm')?.click();
+    await lost.settle(900);
+    const listed = [...lost.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+    results.push({
+      name: '/accounts a confirm whose reload fails lands on the first account with its detail drawn',
+      ok: openIn().length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
+      missing: [`${openIn().length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
+    });
+    lost.unmount();
+    await api.deleteAccount('fresh-lamp').catch((e) => {
+      if (e?.status !== 404) throw e;
+    });
+  }
 
   // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
   dlg = await openAdd();
@@ -1864,7 +1922,7 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
   results.push({
     name: '/accounts/primary the catalog popup reads six columns, sorted by id',
-    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
+    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every(Boolean) && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
     missing: [...heads, ...ids],
   });
   columnsMarked('/accounts the catalog dialog marks Model and Name as its fill columns', listed?.querySelector('table'), ['Model', 'Name']);
@@ -3337,9 +3395,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of
     // the run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The
-    // 7-day windows move a hundredth of that and are read whole: primary's 41% used with 54% elapsed, 13 points
-    // behind. The margin line follows the typed value: 20 points sits at 60% of the track with the band 7.5% wide,
-    // 50 at 75%.
+    // 7-day windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits
+    // minutes away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's
+    // 41% used reads about 54% elapsed and 13 points behind, secondary's 88% about 27% elapsed and 61 points ahead,
+    // nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the typed value: 20 points sits
+    // at 60% of the track with the band 7.5% wide, 50 at 75%.
     const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed, (\d+ points? (ahead|behind)|on pace)$/;
     const atFifty = leadTicks();
     if (percent) setter.call(percent, '20');
@@ -3355,9 +3415,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         atFifty.length === 6 &&
         atFifty.every((title) => leadTitle.test(title ?? '')) &&
         atFifty.some((title) => /^primary: 5-hour 62% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
-        atFifty.includes('primary: 7-day 41% used, 54% elapsed, 13 points behind') &&
-        atFifty.includes('secondary: 7-day 88% used, 27% elapsed, 61 points ahead') &&
-        atFifty.includes('nightly: 7-day 35% used, 75% elapsed, 40 points behind') &&
+        atFifty.some((title) => /^primary: 7-day 41% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
+        atFifty.some((title) => /^secondary: 7-day 88% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
+        atFifty.some((title) => /^nightly: 7-day 35% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
         util?.querySelector('.ubar__track--lead')?.getAttribute('aria-label') === 'Lead over pace by member and window' &&
         JSON.stringify(atTwenty) === '["60%","Shedding margin: 20 points","7.5%"]' &&
         marginLine()?.style.left === '75%',
@@ -3644,61 +3704,63 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     footButton(reopened, 'Cancel')?.click();
     await m.settle(200);
 
-    // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
-    // closes the Move dialog alone; after another pool is picked it asks, Keep editing keeps the pick, and Discard
-    // closes the Move dialog and leaves the pool dialog open.
-    const open = () => [...m.container.querySelectorAll('dialog[open]')];
-    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
-    const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
-    const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-    const pick = async (dialog, value) => {
-      selectSetter.call(destination(dialog), value);
-      destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await m.settle(120);
-    };
-    const outside = async (dialog) => {
-      clickOutside(dialog);
+    {
+      // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
+      // closes the Move dialog alone. After another pool is picked it asks, Keep editing keeps the pick, and Discard
+      // closes the Move dialog and leaves the pool dialog open.
+      const open = () => [...m.container.querySelectorAll('dialog[open]')];
+      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+      const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
+      const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      const pick = async (dialog, value) => {
+        selectSetter.call(destination(dialog), value);
+        destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await m.settle(120);
+      };
+      const outside = async (dialog) => {
+        clickOutside(dialog);
+        await m.settle(200);
+      };
+      const escape = async () => {
+        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+        await m.settle(200);
+      };
+      let move = await openMove();
+      await outside(move);
+      results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
+      move = await openMove();
+      const openedOn = destination(move)?.value;
+      const second = destination(move)?.options[1]?.value;
+      await pick(move, second);
+      await outside(move);
+      const asked = discardQuestion(m.container);
+      results.push({
+        name: '/pools the Move key dialog asks before an outside click discards a changed pick',
+        ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
+        missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
+      });
+      buttonIn(asked, 'Keep editing')?.click();
       await m.settle(200);
-    };
-    const escape = async () => {
-      document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+      results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
+      await outside(move);
+      const askedAgain = discardQuestion(m.container);
+      buttonIn(askedAgain, 'Discard')?.click();
       await m.settle(200);
-    };
-    let move = await openMove();
-    await outside(move);
-    results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
-    move = await openMove();
-    const openedOn = destination(move)?.value;
-    const second = destination(move)?.options[1]?.value;
-    await pick(move, second);
-    await outside(move);
-    const asked = discardQuestion(m.container);
-    results.push({
-      name: '/pools the Move key dialog asks before an outside click discards a changed pick',
-      ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
-      missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
-    });
-    buttonIn(asked, 'Keep editing')?.click();
-    await m.settle(200);
-    results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
-    await outside(move);
-    const askedAgain = discardQuestion(m.container);
-    buttonIn(askedAgain, 'Discard')?.click();
-    await m.settle(200);
-    results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
-    // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
-    move = await openMove();
-    await pick(move, second);
-    await escape();
-    const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
-    await escape();
-    results.push({
-      name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
-      ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
-      missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
-    });
-    footButton(move, 'Cancel')?.click();
-    await m.settle(200);
+      results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
+      move = await openMove();
+      await pick(move, second);
+      await escape();
+      const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
+      if (askedByEscape) await escape();
+      results.push({
+        name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
+        ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
+        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
+      });
+      footButton(move, 'Cancel')?.click();
+      await m.settle(200);
+    }
   }
 
   const laptopIdx = keyRows().map((tr) => tr.children[0]?.textContent?.trim()).indexOf('laptop');
@@ -3863,7 +3925,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
     await m.settle(200);
     {
-      // The pool dialog's outside path: unchanged, a backdrop click closes it at once; after an edit it asks, Keep
+      // The pool dialog's outside path: unchanged, a backdrop click closes it at once. After an edit it asks, Keep
       // editing returns to the edit, and Discard closes. Every close reopens Edit pool all, so the checks after this
       // one read the open dialog they expect.
       const open = () => [...m.container.querySelectorAll('dialog[open]')];
@@ -5992,7 +6054,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.']);
   {
-    // The edit dialog's outside path: unchanged, a backdrop click closes it at once; after a typed change it asks,
+    // The edit dialog's outside path: unchanged, a backdrop click closes it at once. After a typed change it asks,
     // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
     // the checks after this one read the open dialog they expect.
     const open = () => [...m.container.querySelectorAll('dialog[open]')];
@@ -6455,6 +6517,7 @@ m = await mount('/models');
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
   columnsMarked('/models the rules table marks Pattern as its fill column', rulesCard()?.querySelector('table'), ['Pattern']);
+  fillTitles('/models every Pattern cell of the rules table opens its title with its own text', rulesCard()?.querySelector('table'));
   const select = m.container.querySelector('select[aria-label="Key"]');
   if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
   else {
@@ -9289,6 +9352,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
     if (table) read += 1;
     columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
+    fillTitles(`/analytics every group cell of a breakdown table opens its title with its own text: ${title}`, table);
   }
   results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
@@ -9570,6 +9634,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   await tab(m, 'Cache');
   columnsMarked('/analytics the placements table marks Rung as its fill column', m.container.querySelector('.placements-table'), ['Rung']);
+  fillTitles('/analytics every Rung cell of the placements table opens its title with its own text', m.container.querySelector('.placements-table'));
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -9590,6 +9655,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   await tab(m, 'Burn');
   columnsMarked('/analytics the budgets table marks Pool and Account as its fill columns', m.container.querySelector('.budgets-table'), ['Pool', 'Account']);
+  fillTitles('/analytics every Pool and Account cell of the budgets table opens its title with its own text', m.container.querySelector('.budgets-table'));
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
@@ -10874,15 +10940,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     {
       // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
       // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
-      const ths = [...m.container.querySelectorAll('.sessions-table thead th')];
-      const classOf = (c) => (c?.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c?.classList.contains('col-fill') ? 'fill' : 'none');
-      const headClasses = ths.map(classOf);
-      const fills = ths.filter((th) => classOf(th) === 'fill').map((th) => th.textContent?.trim());
-      const cellsOff = rows().flatMap((r) => [...r.children].map((td, i) => (classOf(td) === headClasses[i] ? null : `${named[i] || `cell ${i}`}: ${classOf(td)}`)).filter(Boolean));
+      const read = columnClasses(m.container.querySelector('.sessions-table'));
       results.push({
         name: '/sessions every header cell after the gutter is fit or fill, and Session is the one fill column',
-        ok: headClasses[0] === 'none' && headClasses.slice(1).every((c) => c === 'fit' || c === 'fill') && JSON.stringify(fills) === JSON.stringify(['Session']) && rows().length > 0 && cellsOff.length === 0,
-        missing: [JSON.stringify(headClasses), JSON.stringify(fills), ...cellsOff.slice(0, 5)],
+        ok: read.heads[0] === 'none' && read.heads.slice(1).every((c) => c === 'fit' || c === 'fill') && JSON.stringify(read.fills) === JSON.stringify(['Session']) && read.rows > 0 && read.cellsOff.length === 0,
+        missing: [JSON.stringify(read.heads), JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
       });
     }
     const listed = await api.listSessions();
@@ -11299,10 +11361,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(600);
     const forkCell = cell(rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.sessionId), 'Session');
     const badge = forkCell?.querySelector('.badge--accent');
+    const unheld = `Branched from session ${forked?.forkedFrom} at depth ${forked?.forkDepth}, which this list does not hold`;
+    const describedBy = badge?.getAttribute('aria-describedby');
+    const description = describedBy ? (m.container.querySelector(`[id="${describedBy}"]`)?.textContent ?? null) : null;
     results.push({
-      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link',
-      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null,
-      missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined)],
+      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link, the unheld base on its title and in its description',
+      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
+      missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined), String(description)],
     });
   }
 }
@@ -12831,12 +12896,14 @@ m.unmount();
   });
 
   // A badge outside every host keeps its title alone, so the sweep reads every page for one that lost its description;
-  // the fork marker draws its own badge-styled element rather than a Badge.
+  // the fork marker draws its own badge-styled element rather than a Badge. A badge whose title only repeats its text
+  // (the Keys Status badge) carries no description on purpose, since a reader would say the text twice.
   const loose = [];
   const counts = [];
+  const repeats = (badge) => badge.getAttribute('aria-describedby') === null && badge.getAttribute('title') === badge.textContent?.trim();
   const sweep = (where) => {
     const badges = [...page.container.querySelectorAll('.badge[title]:not(.srow__fork)')];
-    for (const badge of badges) if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
+    for (const badge of badges) if (!describes(badge) && !repeats(badge)) loose.push(`${where}: ${why(badge)}`);
     // The drawer's route draws the list under it too, whose badges would meet the count for a drawer that drew none.
     const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
     counts.push({ onPage: own.length, seen: badges.length, where });

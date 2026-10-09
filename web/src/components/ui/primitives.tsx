@@ -57,8 +57,10 @@ export function useDescription(text: string | undefined): { id: string; sibling:
   return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
 }
 
-export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
-  const described = useDescription(title);
+export function Badge({ tone = 'neutral', children, dot = false, title, describe = true }: { children: ReactNode; describe?: boolean; dot?: boolean; title?: string; tone?: BadgeTone }) {
+  // A title that only repeats the badge's text would have a reader say it twice under a host, so such a caller keeps
+  // the hover and turns the description off.
+  const described = useDescription(describe ? title : undefined);
   // Outside every host the title alone describes the badge: a node beside it would join its parent's text.
   const hosted = described && !described.sibling ? described.id : undefined;
   return (
@@ -322,8 +324,10 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
         // React resets the synthetic event's currentTarget once the handler returns, so the button is read first.
         const button = e.currentTarget;
         // Saying Copied without a write matters most in the secret dialog: the operator could close the only
-        // display of a secret they never received. The command runs inside the click, the user gesture it honors,
-        // and after a rejected write the click's transient activation still covers it.
+        // display of a secret they never received. The command runs inside the click, the user gesture it honors.
+        // After a rejected write it runs in the rejection callback, where it relies on the click's transient
+        // activation still standing: a browser that counts the activation spent answers false, and the button lands
+        // at the failed state rather than claiming the copy.
         if (!navigator.clipboard) {
           setState(copyByCommand(text, button) ? 'copied' : 'failed');
           return;

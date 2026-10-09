@@ -297,8 +297,9 @@ for (const pin of SESSIONS) {
   pin.keepalive.cause = main?.cause ?? null;
 }
 
-// The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...
-// UTC)`: the router lists a holder's session while its last request is inside the session expiry, with that holder's
+// The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
+// with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
+// the session expiry, with that holder's
 // own requests and no pin or recipe. The holder's last request ran on the session the live key holds now, so the row
 // carries that id, and it joins the list after the probe times are filled in, which would otherwise hand it that
 // session's next probe.

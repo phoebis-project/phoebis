@@ -76,6 +76,8 @@ function Handle({ label, min, max, threshold, track }: { label: string; max: num
  */
 export function UtilizationBar({ expert, margin, now, readings, selectBelow }: { expert: boolean; margin: number | null; now: number; readings: MemberReading[]; selectBelow: Threshold | null }) {
   const track = useRef<HTMLDivElement>(null);
+  // The window's length comes off WINDOW_HOURS, the table the decoder sets a reading's periodHours from, so the lead
+  // here is the one the Quota card's pace words print.
   const windows = readings.flatMap((r) =>
     (
       [

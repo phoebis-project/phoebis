@@ -417,7 +417,8 @@ fork badge under its id, `fork of 4ef130f1-90e0… at 3, on another account` whe
 on a different account and `same account` when it is listed on the row's own, 3 being the depth where the two part, with
 the base's account on hover and read out to a screen reader. Following the badge scrolls to the row of the session it
 branched from and marks that row. Where that session is not listed the badge names it alone, as
-`fork of 4ef130f1-90e0…`.
+`fork of 4ef130f1-90e0…`, and where it is listed but either session has no pinned account the badge reads `fork at 3`
+and still follows to the row.
 
 A pool card that keeps caches warm reads the pool's three resolved ceilings in whole hours after its `keepalive` chip:
 `idle 1h · parked 44h · horizon 44h` for a plan pool on the one-hour entry, its 44.1-hour break-even floored to `44h`,

@@ -288,6 +288,7 @@ test('the preview names the closest member when none is ahead', () => {
   const line = (account) => d.shedPreviewLine(d.shedPreview(pool({ members: [member(account.id)] }), [account], [], NOW, SIZED), true);
   assert.equal(line(oauth('one', windowAt('5h', 0.51, 0.5))), 'No member is ahead of pace by the margin: the closest is one, 1 point ahead.');
   assert.equal(line(oauth('even', windowAt('5h', 0.504, 0.5))), 'No member is ahead of pace by the margin: the closest is even, on pace.');
+  assert.equal(line(oauth('close', windowAt('5h', 0.507, 0.5))), 'No member is ahead of pace by the margin: the closest is close, on pace.', 'a lead under a hundredth reads on pace, as the Quota card prints it');
   // An API-key member has no shared window, so a pool of them alone has no closest member.
   const keyed = { id: 'key', kind: 'api_key', label: 'key', windows: [] };
   const none = d.shedPreview(pool({ members: [member('key')] }), [keyed], [], NOW, SIZED);
@@ -327,7 +328,7 @@ test("the preview's share reads as the hot members' aggregate in one unit and as
   const second = account('second', 0.85);
   const heavy = (unit) => [pin('big', 18, false, { accountId: 'second', burnUnit: unit }), pin('small', 2, false, { accountId: 'second', burnUnit: unit })];
   const inDollars = four.map((p) => ({ ...p, burnUnit: 'usd' }));
-  // 7 of 10 and 18 of 20 in one unit sum to 25 of 30; a window share and dollars average their own 70% and 90%.
+  // 7 of 10 and 18 of 20 in one unit sum to 25 of 30, while a window share and dollars average their own 70% and 90%.
   const line = (sessions) => d.shedPreviewLine(replay([hot, second, cool], sessions), true);
   const hot2 = '2 members run ahead of pace by the margin: hot (5-hour, 90 points ahead) and second (5-hour, 85 points ahead).';
   assert.equal(line([...four, ...heavy('window_share')]), `${hot2} A round there would move 3 sessions (1 warm), 83% of the hot members' recent burn together, in window share, to a cool sibling.`);

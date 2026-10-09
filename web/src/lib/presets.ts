@@ -238,10 +238,13 @@ export function shedPreview(
   };
 }
 
-/** A lead over pace in points: "14 points ahead", "1 point behind", or "on pace" where it rounds to no point. */
+/**
+ * A lead over pace in points: "14 points ahead", "1 point behind", or "on pace" under a hundredth, the edge the Quota
+ * card's pace words read.
+ */
 export function leadWords(lead: number): string {
+  if (Math.abs(lead) < 0.01) return 'on pace';
   const points = Math.round(Math.abs(lead) * 100);
-  if (points === 0) return 'on pace';
   return `${points} ${points === 1 ? 'point' : 'points'} ${lead > 0 ? 'ahead' : 'behind'}`;
 }
 

@@ -514,7 +514,11 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                         style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
                         title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
                       >
-                        {b.state === 'live' && share !== null && <span className={`lane__used lane__used--${meterTone(remainingOf(w))}`} style={{ width: `${used}%` }} />}
+                        {b.state === 'live' && share !== null && (
+                          <span className="lane__clip">
+                            <span className={`lane__used lane__used--${meterTone(remainingOf(w))}`} style={{ width: `${used}%` }} />
+                          </span>
+                        )}
                         {b.stop === b.end && b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
                         {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
                       </div>

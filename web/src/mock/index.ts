@@ -30,9 +30,9 @@ const MOCK_SEED = 4_211;
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
 // The routes' own wording, so a page draws the text the router would have sent.
+const ACCOUNT_TAKEN = 'an account with this id exists';
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
-const ACCOUNT_TAKEN = 'an account with this id exists';
 
 /** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
  * moves it and an edit read before it cannot pass. */
