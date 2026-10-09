@@ -439,7 +439,9 @@ together as three presets beside custom: balanced (0.5, 600 s, 900 s, the defaul
 conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move replays the round over the
 pool's own sessions on each member ahead of pace, leaves out the pins of a subscription account on its plan whose tier
 the cost model does not size, which the round still ranks on the model's anchor rates and sheds, and keeps a pin whose
-burn the cost model cannot price in the order unmarked, as the round does.
+burn the cost model cannot price in the order unmarked, as the round does. The Utilization thresholds group draws each
+member's used share and, under it, each window's lead over pace with the shedding margin and the cool band marked, and
+the form's preview names the members ahead of pace by the margin with their window and lead.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the

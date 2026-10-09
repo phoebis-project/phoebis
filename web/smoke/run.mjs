@@ -3191,22 +3191,82 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         migrateSwitch?.getAttribute('aria-checked') === 'true' &&
         migratePercent()?.disabled === false &&
         migratePercent()?.value === '' &&
-        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.'),
+        (util?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.'),
       missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
+    expect('/pools the Utilization thresholds group opens with its intro naming the two windows and the fresh placement', util?.textContent ?? '', [
+      "A window's pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page's.",
+      'A member whose used share runs ahead of the elapsed share by this many points starts a shedding round, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.',
+    ]);
+    // Pool all runs the Pace strategy, so the Strategy field draws its hint, and the Pace floor sits in the Failover group.
+    // The Accounts page link carries its screen-reader note after its words, so the closing sentence is read without its
+    // period.
+    expect('/pools the Pace strategy hint names the Fable week and the 7-day window', [card('Selection')?.textContent ?? '', card('Failover')?.textContent ?? ''].join(' '), [
+      "Pace scores each member by the allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first priority tier that has an eligible account. An unsampled account counts as untouched, and ties are random.",
+      "Each account's windows are on the Accounts page",
+      'Under the Pace strategy, a member with this share or less of the window Pace reads left serves only as the last resort.',
+    ]);
     const percent = migratePercent();
     if (percent) setter.call(percent, '50');
     percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    // The lead ticks share `.ubar__tick` for their size and place, so each track's ticks are read under their own track.
+    const ticks = [...(util?.querySelectorAll('.ubar__track:not(.ubar__track--lead) .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    const leadTicks = () => [...(util?.querySelectorAll('.ubar__track--lead .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    const marginLine = () => util?.querySelector('.ubar__margin');
     results.push({
-      name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
-      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null && util?.querySelector('.ubar__band') === null,
-      missing: [String(percent?.value), ...ticks],
+      name: '/pools the bar draws each member reading with no migrate handle, the lead track its ticks with the margin line and the band, and the percent field holds the typed margin',
+      ok:
+        percent?.value === '50' &&
+        ticks.length === 6 &&
+        ticks.includes('primary: 5-hour 62%') &&
+        util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null &&
+        leadTicks().length === 6 &&
+        marginLine()?.style.left === '75%' &&
+        marginLine()?.getAttribute('title') === 'Shedding margin: 50 points' &&
+        util?.querySelector('.ubar__band') !== null,
+      missing: [String(percent?.value), ...ticks, String(leadTicks().length), String(marginLine()?.style.left), String(marginLine()?.getAttribute('title')), String(util?.querySelector('.ubar__band') !== null)],
+    });
+    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of
+    // the run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The
+    // 7-day windows move a hundredth of that and are read whole: primary's 41% used with 54% elapsed, 13 points
+    // behind. The margin line follows the typed value: 20 points sits at 60% of the track with the band 7.5% wide,
+    // 50 at 75%.
+    const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed, (\d+ points? (ahead|behind)|on pace)$/;
+    const atFifty = leadTicks();
+    if (percent) setter.call(percent, '20');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const atTwenty = [marginLine()?.style.left, marginLine()?.getAttribute('title'), util?.querySelector('.ubar__band')?.style.width];
+    if (percent) setter.call(percent, '50');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({
+      name: "/pools the lead track draws a tick per member and window with the margin line at the field's value",
+      ok:
+        atFifty.length === 6 &&
+        atFifty.every((title) => leadTitle.test(title ?? '')) &&
+        atFifty.some((title) => /^primary: 5-hour 62% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
+        atFifty.includes('primary: 7-day 41% used, 54% elapsed, 13 points behind') &&
+        atFifty.includes('secondary: 7-day 88% used, 27% elapsed, 61 points ahead') &&
+        atFifty.includes('nightly: 7-day 35% used, 75% elapsed, 40 points behind') &&
+        util?.querySelector('.ubar__track--lead')?.getAttribute('aria-label') === 'Lead over pace by member and window' &&
+        JSON.stringify(atTwenty) === '["60%","Shedding margin: 20 points","7.5%"]' &&
+        marginLine()?.style.left === '75%',
+      missing: [...atFifty, JSON.stringify(atTwenty), String(marginLine()?.style.left)],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
     // 0.61, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the cost model cannot price stay.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', [
+      '2 members run ahead of pace by the margin',
+      'nightly (5-hour',
+      'secondary (7-day',
+      'A round there would move',
+      'warm',
+      "of the hot members' recent burn together, in window share",
+      'to a cool sibling',
+      '2 pins the cost model cannot price stay.',
+    ]);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -4423,7 +4483,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
     // count that it ran over laptop's one pin alone.
-    ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the cost model cannot price stays\.$/.test(line),
+    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 1 pin the cost model cannot price stays\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4522,9 +4582,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
-  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
-    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
-  );
+  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.');
   const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
   setter.call(percent(dlg), '20');
   percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -4656,6 +4714,13 @@ m.unmount();
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
+  // The dialog checks run with all's margin cleared, so the story's 90 is typed back: under it no member is hot, and
+  // nightly's 5-hour window, about 71 points ahead at the mock's clock (the figure drifts a point every three minutes
+  // of the run on the moving clock), is the closest.
+  const percent = dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
+  if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '90');
+  percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
   rail(dlg, 'shedding')?.click();
   await m.settle(120);
   const line = () => group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
@@ -4666,7 +4731,7 @@ m.unmount();
   api.getSettings = getSettings;
   results.push({
     name: '/pools the preview says the cost model is loading while the settings read is held',
-    ok: loading === 'The cost model is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
+    ok: loading === 'The cost model is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^No member is ahead of pace by the margin: the closest is nightly, \d+ points ahead\.$/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();

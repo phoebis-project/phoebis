@@ -1710,6 +1710,38 @@
   background: var(--series-4);
 }
 
+/* The lead track's center mark, on pace, drawn first so a tick or the band at the center paints over it. */
+.ubar__track--lead::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  background: var(--ink-2);
+  border-radius: 1px;
+}
+
+.ubar__margin {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 18px;
+  margin-left: -1px;
+  background: var(--serious);
+  border-radius: 1px;
+}
+
+/* Translucent, so the center mark and the track show through where the band starts. */
+.ubar__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--good-soft);
+  opacity: 0.8;
+}
+
 .ubar__handle {
   position: absolute;
   top: 50%;

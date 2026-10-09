@@ -880,6 +880,13 @@ async function poolRoutingCards(theme) {
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
   }
+  // The margin line draws at the field's value, and the seeded pool may store none, so one is typed where the field
+  // opened empty, and the field is left again so the measure below reads it at rest rather than focused.
+  const marginField = dialog.locator('input[aria-label="Shed ahead of pace (%)"]');
+  if ((await marginField.count()) === 1 && (await marginField.inputValue()) === '') {
+    await marginField.fill('50');
+    await marginField.blur();
+  }
   await settle();
   const measure = () =>
     dialog.evaluate((el) => {
@@ -904,10 +911,21 @@ async function poolRoutingCards(theme) {
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
+      // The lead track under the used-share one: each tick and the margin line sit inside it when their centers fall
+      // within its box.
+      const leadTrack = shown(el.querySelector('.ubar__track--lead'));
+      const leadBox = leadTrack?.getBoundingClientRect();
+      const inLead = (node) => {
+        const b = node.getBoundingClientRect();
+        return b.left + b.width / 2 >= leadBox.left - 1 && b.left + b.width / 2 <= leadBox.right + 1;
+      };
+      const leadTicks = leadTrack ? [...leadTrack.querySelectorAll('.ubar__tick')] : [];
+      const marginLine = leadTrack?.querySelector('.ubar__margin');
       return {
         affinityPill: box(idlePill('Session affinity')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
+        lead: leadTrack && leadBox ? { margin: marginLine ? inLead(marginLine) : null, ticks: leadTicks.length, ticksInside: leadTicks.every(inLead) } : null,
         migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
@@ -944,7 +962,10 @@ async function poolRoutingCards(theme) {
   }
   if (!read.handle) say('the utilization bar draws no select-below handle with select-below on');
   else if (!read.handle.inside || read.handle.value === null) say(`the select-below handle sits off its track (${JSON.stringify(read.handle)})`);
-  if (!read.preview || !/^(Would (move|mark)|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.lead) say('the utilization bar draws no lead track');
+  else if (!read.lead.ticksInside) say(`a lead tick sits off its track (${JSON.stringify(read.lead)})`);
+  else if (read.lead.margin !== true) say(`the lead track draws no margin line inside it with shed ahead of pace on (${JSON.stringify(read.lead)})`);
+  if (!read.preview || !/^(\d+ members? runs? ahead of pace|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();

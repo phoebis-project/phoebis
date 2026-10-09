@@ -130,7 +130,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Pace scores each member by the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
@@ -1109,7 +1109,13 @@ export function PoolDialog({
   const memberAccounts = accounts.filter((a) => a.id in form.members);
   const setBudget = (accountId: string, patch: Partial<{ daily: string; monthly: string }>) =>
     setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', monthly: '' }), ...patch } } }));
-  const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
+  const readings = memberAccounts.map((a) => {
+    const shared = (id: '5h' | '7d') => {
+      const w = windowOf(a, id);
+      return w === null ? null : { resetsAt: w.resetsAt, utilization: w.utilization };
+    };
+    return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
+  });
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
   const sized = useMemo(() => (settings.data ? sizedAccounts(accounts, settings.data.subscriptionCosts, 'five_hour') : new Set<string>()), [accounts, settings.data]);
@@ -1622,54 +1628,61 @@ export function PoolDialog({
       </div>
     ),
     utilization: (
-      <div className="cells">
-        <div className="cell--half">
-          <SwitchedNumber
-            label="Shed ahead of pace"
-            numberLabel="Lead over pace (%)"
-            checked={form.shedAheadOn}
-            onChange={(v) => set('shedAheadOn', v)}
-            input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
-            hint={
-              <>
-                A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool under the line minus 5%.
-              </>
-            }
-          />
-        </div>
-        <Expert refused={refusedFields.has('Select below utilization (%)')}>
+      <>
+        <p className="dialog-group__intro">
+          A window&apos;s pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
+        </p>
+        <div className="cells">
           <div className="cell--half">
             <SwitchedNumber
-              label="Select below utilization"
-              numberLabel="Utilization (%)"
-              checked={form.selectBelowOn}
-              onChange={(v) => set('selectBelowOn', v)}
-              input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+              label="Shed ahead of pace"
+              numberLabel="Lead over pace (%)"
+              checked={form.shedAheadOn}
+              onChange={(v) => set('shedAheadOn', v)}
+              input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
               hint={
                 <>
-                  A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
+                  Read on the 5-hour and the 7-day window. A member whose used share runs ahead of the elapsed share by this many points starts a <GroupLink id="shedding">shedding round</GroupLink>, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.
                 </>
               }
             />
           </div>
-        </Expert>
-        <Field
-          label="Member utilization"
-          plain
-          hint={
-            <>
-              Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>.
-              {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
-            </>
-          }
-        >
-          <UtilizationBar
-            expert={handleShown}
-            readings={readings}
-            selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
-          />
-        </Field>
-      </div>
+          <Expert refused={refusedFields.has('Select below utilization (%)')}>
+            <div className="cell--half">
+              <SwitchedNumber
+                label="Select below utilization"
+                numberLabel="Utilization (%)"
+                checked={form.selectBelowOn}
+                onChange={(v) => set('selectBelowOn', v)}
+                input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+                hint={
+                  <>
+                    A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
+                  </>
+                }
+              />
+            </div>
+          </Expert>
+          <Field
+            label="Member utilization"
+            plain
+            hint={
+              <>
+                Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. The lower track reads each window&apos;s lead over pace, from 100 points behind to 100 ahead, with the shedding margin and the cool band under it.
+                {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
+              </>
+            }
+          >
+            <UtilizationBar
+              expert={handleShown}
+              margin={form.shedAheadOn ? form.shedAhead : null}
+              now={now}
+              readings={readings}
+              selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
+            />
+          </Field>
+        </div>
+      </>
     ),
     shedding: (
       <>
@@ -1802,7 +1815,7 @@ export function PoolDialog({
               className="cell--half"
               hint={
                 <>
-                  Under <GroupLink id="selection">Pace</GroupLink>, a member with this share of its window left or less serves only as the last resort.
+                  Under the <GroupLink id="selection">Pace</GroupLink> strategy, a member with this share or less of the window Pace reads left serves only as the last resort.
                 </>
               }
             >
