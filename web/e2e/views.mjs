@@ -3011,19 +3011,19 @@ async function escapeReachesFilter(theme, what, station) {
 /**
  * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the strip and the candidate
  * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
- * kind badge's box, grown by a line for each line a station's badge wraps to, and the strip is as high as its rows. A
- * renewal walks no rung, so the Prefix cell's two chips are read on the first rung placement the page lists. The
- * router's seed places no request by a rung and records no move, so there that check stands down and the shed move's
- * badge colors are the story's alone. A station's popover keeps inside the card at the two viewports and at 700 by 800:
- * the mock pass reads the shed move's Move station (the widest popover), its Cool reading (the widest table) and its
- * striped Pick table, and the fresh placement's Pick station, the seeded router's pass the station its first card's
- * candidates hang from. The open card draws its record's station count at both viewports, and every station's and way
- * out's word holds the card's muted contrast with an idle way out among them, read on the seeded router's first card
- * and on the mock's fresh placement, whose Pick station the mock pass then opens and closes by Enter, Escape, Space and
- * Escape. The shed move's shed station's popover keeps inside the window less 8 px above and below at both viewports
- * and in a window shorter than its content, where it scrolls. One Escape over the open Accounts filter closes a hovered
- * station's popover and the filter's list alike, on the seeded router's first card's host station and on the mock's
- * fresh placement's Pick station.
+ * kind badge's box, grown by a line for each line a station's badge wraps to, with its text inside its pill, and the
+ * strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
+ * placement the page lists. The router's seed places no request by a rung and records no move, so there that check
+ * stands down and the shed move's badge colors are the story's alone. A station's popover keeps inside the card at the
+ * two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest popover), its Cool
+ * reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the seeded router's
+ * pass the station its first card's candidates hang from. The open card draws its record's station count at both
+ * viewports, and every station's and way out's word holds the card's muted contrast with an idle way out among them,
+ * read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock pass then opens
+ * and closes by Enter, Escape, Space and Escape. The shed move's shed station's popover keeps inside the window less 8
+ * px above and below at both viewports and in a window shorter than its content, where it scrolls. One Escape over the
+ * open Accounts filter closes a hovered station's popover and the filter's list alike, on the seeded router's first
+ * card's host station and on the mock's fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -3050,7 +3050,7 @@ async function decisionCard(theme) {
       const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
       const kind = card?.querySelector('.decision-card__verdict > .badge');
       return {
-        badges: [...(strip?.querySelectorAll('.badge') ?? [])].map((b) => ({ box: box(b), lines: lines(b), text: b.textContent })),
+        badges: [...(strip?.querySelectorAll('.badge') ?? [])].map((b) => ({ box: box(b), lines: lines(b), pill: b.closest('.strip-station') ? { client: b.clientWidth, scroll: b.scrollWidth } : null, text: b.textContent })),
         card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
         log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
         reference: kind ? box(kind) : null,
@@ -3108,6 +3108,8 @@ async function decisionCard(theme) {
     // A station's badge wider than its label takes a line more, so its box is the kind badge's grown by an 18 px line.
     const grown = (n) => got.reference?.replace(/\/(\d+)$/, (_, h) => `/${Number(h) + (n - 1) * 18}`);
     for (const b of got.badges.filter((x) => got.reference !== null && x.box !== grown(x.lines))) say(`${where}: the strip's "${b.text}" badge measures ${b.box} on ${b.lines} lines against the kind badge's ${got.reference}`);
+    // The box check reads no width, so a word that runs out of a station's pill is read apart.
+    for (const b of got.badges.filter((x) => x.pill !== null && x.pill.scroll > x.pill.client + 1)) say(`${where}: the station badge "${b.text}" runs ${b.pill.scroll}px of text out of its ${b.pill.client}px pill`);
   }
   if (counts.length === 2 && counts[0] !== counts[1]) say(`the open card draws ${counts[0]} stations at 1280 by 800 and ${counts[1]} at 1440 by 900`);
   // The seed's first card is a placement, whose candidates hang from its pick, or else from the station that decided it.

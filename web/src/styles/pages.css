@@ -2110,10 +2110,10 @@
   text-align: center;
 }
 
-/* A label narrows to the room its neighbors leave it, so a badge wider than its label takes a second line, which the
-   strip's measured label heights count. */
+/* A label narrows to the room its neighbors leave it, so a badge of several words wraps at the label's width, which
+   the strip's measured label heights count. A single word wider than the label keeps its whole pill, centered and
+   standing past the label's edges, since a pill clamped to the label would let the word run out of it. */
 .strip-station .badge {
-  max-width: 100%;
   height: auto;
   white-space: normal;
 }
