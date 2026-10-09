@@ -145,10 +145,9 @@ test("the card draws the strip in the walk's place", async () => {
   assert.ok(strips[0].querySelector(`.strip-station[data-station="${model.host}"]`)?.classList.contains('strip-station--above'), 'the station the candidates hang from carries its label above the line');
 });
 
-/** The fresh placement's card, drawn as the cases above draw theirs, with the strip's pick station. */
-async function freshCard() {
+/** A story decision's card, drawn as the cases above draw theirs, outside every description host. */
+async function storyCard(requestId, seq) {
   const mock = new MockApi();
-  const [requestId, seq] = ['req_ef099b34-453', 1];
   let row;
   let cursor;
   do {
@@ -156,7 +155,7 @@ async function freshCard() {
     row = page.rows.find((r) => r.type === 'decision' && r.requestId === requestId && r.seq === seq);
     cursor = page.nextCursor ?? undefined;
   } while (row === undefined && cursor !== undefined);
-  assert.ok(row, 'the mock holds the fresh placement');
+  assert.ok(row, `the mock holds ${requestId}/${seq}`);
   const placed = await mock.getDecision(requestId, seq);
   api.getDecision = async () => placed;
   const container = document.createElement('div');
@@ -165,6 +164,12 @@ async function freshCard() {
   roots.push(root);
   act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
   await settled();
+  return container;
+}
+
+/** The fresh placement's card with the strip's pick station. */
+async function freshCard() {
+  const container = await storyCard('req_ef099b34-453', 1);
   const pick = container.querySelector('.strip-station[data-step="pick"]');
   assert.ok(pick, 'the strip draws its pick station');
   return { container, pick };
@@ -209,4 +214,23 @@ test('Escape closes a hover-opened popover with the pointer still', async () => 
   assert.equal(document.activeElement, link);
   escape();
   assert.equal(popovers().length, 0, 'Escape closes it with no pointer event between');
+});
+
+test("outside a host a chip's hover is its title alone, so the Prefix cell and a popover row read their chips alone", async () => {
+  // The static placement's chosen member holds the rung's entry, whose hash chip both the Prefix cell and the rung's
+  // popover draw.
+  const container = await storyCard('req_b2bed817-a58', 1);
+  const prefix = container.querySelector('.decision-card__candidates tr.is-chosen .decision-card__prefix');
+  const hash = prefix?.querySelector('.decision-card__hash');
+  assert.ok(hash?.getAttribute('title'), 'the Prefix cell draws the hash chip with its hover');
+  assert.equal(prefix.querySelectorAll('[data-descriptions]').length, 0, `the Prefix cell holds no description node: ${prefix.textContent}`);
+  assert.equal(hash.getAttribute('aria-describedby'), null, 'the hash chip points at no node');
+  const rows = [];
+  for (const station of container.querySelectorAll('.strip-station[data-step^="rung:"]')) {
+    act(() => station.click());
+    for (const dd of document.body.querySelectorAll('.strip-popover dd')) rows.push({ chips: [...dd.querySelectorAll('.chip')].map((c) => c.textContent).join(''), nodes: dd.querySelectorAll('[data-descriptions]').length, text: dd.textContent, titled: dd.querySelectorAll('.chip[title]').length });
+    act(() => station.click());
+  }
+  assert.ok(rows.some((r) => r.titled > 0), 'a rung popover draws a titled chip in a row');
+  for (const r of rows) assert.deepEqual([r.nodes, r.text], [0, r.chips], `a popover row reads its chips alone: ${r.text}`);
 });

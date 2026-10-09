@@ -7654,11 +7654,12 @@ m.unmount();
       verdict: b.querySelector('.badge')?.textContent ?? '',
     }));
   /**
-   * A key pressed where focus stands, or on `target`, as the keyboard checks below press one. jsdom fires no click for
-   * the key, so a check reads what the key's own handler did.
+   * A key pressed where focus stands, or on `target`, as the keyboard checks below press one, `init` adding a modifier
+   * such as `shiftKey`. jsdom fires no click and moves no focus for the key, so a check reads what the key's own
+   * handler did.
    */
-  const pressKey = async (page, key, target = document.activeElement) => {
-    target?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+  const pressKey = async (page, key, target = document.activeElement, init = {}) => {
+    target?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...init }));
     await page.settle(150);
   };
   const leavesOf = (card) =>
@@ -8233,27 +8234,38 @@ m.unmount();
     card?.querySelector('.decision-card__sentence')?.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
     await page.settle(50);
     seen.push(`a click outside: ${open().length} open`);
+    // A hover marks no anchor expanded and leaves focus on the control that held it, opening and closing alike.
+    const resting = card?.querySelector('.decision-card__sentence a') ?? null;
+    resting?.focus();
+    const rest = () => `aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}, aria-controls ${pick?.getAttribute('aria-controls') ?? null}, focus kept ${resting !== null && document.activeElement === resting}`;
     pick?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
     await page.settle(150);
-    seen.push(`hovered: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}`);
-    escape();
-    await page.settle(50);
-    seen.push(`Escape: ${open().length} open`);
+    seen.push(`hovered: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}, ${rest()}`);
+    await pressKey(page, 'Escape');
+    seen.push(`Escape: ${open().length} open, ${rest()}`);
     results.push({
       name: '/routing-log Escape closes a pinned popover, a click outside closes it too, and Escape closes a hover-opened one',
-      ok: JSON.stringify(seen) === JSON.stringify(['clicked: 1 open, pinned true, selected true', 'Escape: 0 open, selected false', 'clicked again: 1 open', 'a click outside: 0 open', 'hovered: 1 open, pinned false', 'Escape: 0 open']),
+      ok:
+        JSON.stringify(seen) ===
+        JSON.stringify([
+          'clicked: 1 open, pinned true, selected true',
+          'Escape: 0 open, selected false',
+          'clicked again: 1 open',
+          'a click outside: 0 open',
+          'hovered: 1 open, pinned false, aria-expanded null, aria-controls null, focus kept true',
+          'Escape: 0 open, aria-expanded null, aria-controls null, focus kept true',
+        ]),
       missing: seen,
     });
     page.unmount();
   }
   {
     // The strip by keyboard and by ear on the fresh placement and the shed move: the buttons' names in the record's
-    // order, Enter into the pick's popover and Escape back to the station, a pinned popover closing once focus leaves
-    // it and its station, and a drawing that says nothing. jsdom moves no focus on Tab, so a Tab out is a focus on the
-    // next station.
+    // order, Enter or Space into the pick's popover, Escape and Shift+Tab back to the station, a pinned popover closing
+    // once focus leaves it and its station or Tab passes its last link, and a drawing that says nothing.
     const named = (el) => (el === null || el === document.body ? 'the body' : (el.getAttribute('aria-label') ?? el.className ?? el.tagName));
-    const seen = { enter: [], escape: [], names: [], svg: [], tab: [] };
-    const held = { enter: true, escape: true, names: true, svg: true, tab: true };
+    const seen = { back: [], blur: [], enter: [], escape: [], names: [], space: [], svg: [], tab: [] };
+    const held = { back: true, blur: true, enter: true, escape: true, names: true, space: true, svg: true, tab: true };
     for (const [what, id] of [
       ['fresh placement', 'req_ef099b34-453'],
       ['shed move', 'req_868264bc-611'],
@@ -8287,10 +8299,34 @@ m.unmount();
       held.escape &&= entered && left === 0 && document.activeElement === pick && pick.getAttribute('aria-expanded') === null;
       seen.escape.push(`${what}: open with focus inside ${entered}, then ${left} open, focus on ${named(document.activeElement)}, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
 
+      // Space pins as Enter does, and Shift+Tab off the popover's root lands back on the station with it still pinned.
+      await pressKey(page, ' ', pick);
+      const spaced = [...document.querySelectorAll('.strip-popover')];
+      const spacedIn = spaced.length === 1 && spaced[0].classList.contains('is-pinned') && spaced[0].contains(document.activeElement) && pick?.getAttribute('aria-expanded') === 'true';
+      held.space &&= spacedIn;
+      seen.space.push(`${what}: ${spaced.length} open, pinned ${spaced[0]?.classList.contains('is-pinned') ?? false}, focus on ${named(document.activeElement)}, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+      await pressKey(page, 'Tab', spaced[0], { shiftKey: true });
+      const back = document.querySelectorAll('.strip-popover').length;
+      held.back &&= spacedIn && document.activeElement === pick && back === 1 && pick.getAttribute('aria-expanded') === 'true';
+      seen.back.push(`${what}: from the popover's root to ${named(document.activeElement)} with ${back} open, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+      await pressKey(page, 'Escape');
+
       // The Eligible station's table links each member's account, and a station follows it on the line.
       const stations = [...(strip?.querySelectorAll('.strip-station') ?? [])];
       const eligible = strip?.querySelector('.strip-station[data-step="eligible"]') ?? null;
       const next = eligible === null ? undefined : stations[stations.indexOf(eligible) + 1];
+      // Focus leaving the station for another control closes the popover it pinned.
+      eligible?.focus();
+      eligible?.click();
+      await page.settle(150);
+      const blurFrom = [...document.querySelectorAll('.strip-popover')].length;
+      const onAnchor = eligible !== null && document.activeElement === eligible;
+      next?.focus();
+      await page.settle(150);
+      const blurTo = document.querySelectorAll('.strip-popover').length;
+      held.blur &&= blurFrom === 1 && onAnchor && next !== undefined && document.activeElement === next && blurTo === 0;
+      seen.blur.push(`${what}: ${blurFrom} pinned with focus on its station ${onAnchor}, then focus on ${named(document.activeElement)} with ${blurTo} open`);
+
       eligible?.click();
       await page.settle(150);
       const pinned = [...document.querySelectorAll('.strip-popover')];
@@ -8298,11 +8334,10 @@ m.unmount();
       const last = links.at(-1) ?? null;
       last?.focus();
       const onLink = last !== null && document.activeElement === last;
-      next?.focus();
-      await page.settle(150);
+      await pressKey(page, 'Tab', last);
       const after = document.querySelectorAll('.strip-popover').length;
       held.tab &&= pinned.length === 1 && pinned[0].classList.contains('is-pinned') && onLink && next !== undefined && document.activeElement === next && after === 0;
-      seen.tab.push(`${what}: ${pinned.length} pinned with ${links.length} links, focus on its last link ${onLink}, then on ${named(document.activeElement)} with ${after} open`);
+      seen.tab.push(`${what}: ${pinned.length} pinned with ${links.length} links, focus on its last link ${onLink}, then Tab to ${named(document.activeElement)} with ${after} open`);
 
       const drawings = [...(strip?.querySelectorAll('svg') ?? [])];
       held.svg &&= drawings.length === 1 && drawings.every((svg) => svg.getAttribute('aria-hidden') === 'true' && (svg.textContent ?? '').trim() === '');
@@ -8313,7 +8348,56 @@ m.unmount();
     results.push({ name: '/routing-log Enter on the pick station opens its popover with focus inside it and the station expanded', ok: held.enter, missing: seen.enter });
     results.push({ name: '/routing-log Escape closes the popover and returns focus to the station', ok: held.escape, missing: seen.escape });
     results.push({ name: "/routing-log Tab from a pinned popover's last link onto the next station closes it", ok: held.tab, missing: seen.tab });
+    results.push({ name: '/routing-log Space on the pick station pins its popover with focus inside it, as Enter does', ok: held.space, missing: seen.space });
+    results.push({ name: "/routing-log Shift+Tab from a pinned popover's root returns focus to its station", ok: held.back, missing: seen.back });
+    results.push({ name: "/routing-log focus leaving a pinned popover's station for another control closes it", ok: held.blur, missing: seen.blur });
     results.push({ name: "/routing-log the strip's drawing is hidden from readers and carries no text", ok: held.svg, missing: seen.svg });
+  }
+  {
+    // Every hover on the strip and in a pinned popover is a description a reader hears: the titled element, or the
+    // leaf button for its chip, names an entry of the log card's description host whose text is the title. The fresh
+    // placement's Pick holds the Pace cells, the static placement's rungs the hash chip and its outcome a titled row,
+    // and the fast failover a leaf whose chip says why the member was passed over.
+    const read = [];
+    const wrong = [];
+    const kinds = new Set();
+    const describes = (where, host, root) => {
+      for (const el of root?.querySelectorAll('[title]') ?? []) {
+        const by = el.closest('.strip-candidate') ?? el;
+        const id = by.getAttribute('aria-describedby');
+        const entry = id ? document.getElementById(id) : null;
+        const kind = by.classList.contains('strip-candidate') ? 'leaf' : el.classList.contains('decision-card__hash') ? 'hash' : el.classList.contains('chip') ? 'chip' : el.tagName.toLowerCase();
+        read.push(kind);
+        if (entry !== null && host !== null && host.contains(entry) && entry.closest('[data-descriptions]') !== null && entry.textContent === el.getAttribute('title')) kinds.add(kind);
+        else wrong.push(`${where}: a ${kind} titled ${JSON.stringify(el.getAttribute('title').slice(0, 60))} names ${id === null ? 'no description' : `${id}, ${entry === null ? 'which is not in the page' : JSON.stringify((entry.textContent ?? '').slice(0, 60))}`}`);
+      }
+    };
+    for (const [what, id, seq, pins] of [
+      ['fresh placement', 'req_ef099b34-453', 1, (strip) => [strip?.querySelector('.strip-station[data-step="pick"]')]],
+      ['static placement', 'req_b2bed817-a58', 1, (strip) => [...(strip?.querySelectorAll('.strip-station[data-step^="rung:"], .strip-terminus.is-taken') ?? [])]],
+      ['fast failover', 'req_4b0e9d17-c31', 2, () => []],
+    ]) {
+      const { card, page } = await story(id, seq);
+      const host = card?.closest('section.card') ?? null;
+      const strip = card?.querySelector('.decision-strip') ?? null;
+      describes(`${what} strip`, host, strip);
+      for (const button of pins(strip)) {
+        button?.click();
+        await page.settle(150);
+        const open = [...document.querySelectorAll('.strip-popover')];
+        if (open.length !== 1) wrong.push(`${what}: ${button?.getAttribute('aria-label')} opened ${open.length} popovers`);
+        describes(`${what} popover ${button?.getAttribute('aria-label')}`, host, open[0]);
+        button?.click();
+        await page.settle(50);
+      }
+      page.unmount();
+    }
+    const wanted = ['dd', 'hash', 'leaf', 'td'];
+    results.push({
+      name: "/routing-log every hover on the strip and in its popovers is described through the log card's host",
+      ok: wrong.length === 0 && wanted.every((k) => kinds.has(k)),
+      missing: [`read ${read.length}: ${[...new Set(read)].join(', ')}, described ${[...kinds].join(', ')}, wanted ${wanted.join(', ')}`, ...wrong.slice(0, 8)],
+    });
   }
   {
     // A Pace pick: the header names the window the record read, each member's Pace cell says on hover what its score

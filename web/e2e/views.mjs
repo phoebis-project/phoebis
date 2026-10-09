@@ -2768,6 +2768,46 @@ async function stripContrast(theme, where) {
   if (!got.words.some((w) => w.kind === 'way out' && w.idle)) say(`no idle way out's word among the ${got.words.length} read`);
 }
 
+/**
+ * Presses Enter, Escape, Space and Escape on a strip station as a keyboard does: Enter and Space each open the
+ * station's popover pinned with the focus inside it and the station expanded, and Escape closes it with the focus back
+ * on the station.
+ */
+async function stationKeys(theme, what, station) {
+  const say = (message) => failures.push(`${theme} /routing-log: ${what}: ${message}`);
+  if ((await station.count()) === 0) {
+    say('no station to press a key on');
+    return;
+  }
+  const read = () =>
+    station.evaluate((el) => {
+      const open = [...document.querySelectorAll('.strip-popover')];
+      const at = document.activeElement;
+      return {
+        controls: el.getAttribute('aria-controls'),
+        expanded: el.getAttribute('aria-expanded'),
+        focus: at === el ? 'station' : open.length === 1 && open[0].contains(at) ? 'popover' : (at?.tagName ?? null),
+        id: open[0]?.id ?? null,
+        open: open.length,
+        pinned: open[0]?.classList.contains('is-pinned') ?? false,
+      };
+    });
+  await station.focus();
+  for (const key of ['Enter', 'Space']) {
+    await page.keyboard.press(key);
+    await advance(CLOCK_STEP_MS);
+    const opened = await read();
+    measurements.push(`${theme} /routing-log ${what} after ${key} ${JSON.stringify(opened)}`);
+    if (opened.open !== 1 || !opened.pinned || opened.focus !== 'popover' || opened.expanded !== 'true' || opened.controls !== opened.id) say(`${key} left ${JSON.stringify(opened)}, not one pinned popover with the focus inside it and the station expanded`);
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+    const closed = await read();
+    measurements.push(`${theme} /routing-log ${what} after Escape ${JSON.stringify(closed)}`);
+    if (closed.open !== 0 || closed.focus !== 'station' || closed.expanded !== null) say(`Escape after ${key} left ${JSON.stringify(closed)}, not the popover closed with the focus on the station`);
+  }
+  await atRest();
+}
+
 /** The popover's viewports: the card's two, and one where the card is wider than the window. */
 const POPOVER_VIEWPORTS = [
   { height: 800, width: 1280 },
@@ -2862,7 +2902,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
  * popover), its Cool reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the
  * seeded router's pass the station its first card's candidates hang from. The open card draws its record's station
  * count at both viewports, and every station's and way out's word holds the card's muted contrast with an idle way out
- * among them, read on the seeded router's first card and on the mock's fresh placement.
+ * among them, read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock
+ * pass then opens and closes by Enter, Escape, Space and Escape.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -3026,6 +3067,7 @@ async function decisionCard(theme) {
   // A placement walks no rule, so its Held for a slot and Refused ways out stand idle.
   await stripContrast(theme, "the fresh placement's card");
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
+  await stationKeys(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */

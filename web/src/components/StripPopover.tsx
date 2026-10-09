@@ -1,4 +1,4 @@
-import { type FocusEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChipView, rowValue } from '@/components/DecisionCard';
 import { HashChip } from '@/components/EntryChips';
@@ -10,6 +10,7 @@ import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/li
 const MAX_WIDTH = 720;
 /** The room the popover keeps from the card's edges, the window's bottom and its anchor. */
 const GAP = 8;
+const TABBABLE = 'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])';
 const WINDOW_COLUMNS: { key: keyof WindowRow; label: string; numeric: boolean }[] = [
   { key: 'window', label: 'Window', numeric: false },
   { key: 'used', label: 'Used', numeric: true },
@@ -37,8 +38,12 @@ export function Described({ children, text }: { children: (describedBy: string |
   );
 }
 
+/** A chip's hover described through the host as a `Badge`'s is. Outside one the title alone describes it. */
 function DescribedChip({ chip, marked }: { chip: Chip; marked?: boolean }) {
-  return <Described text={chip.title}>{(describedBy) => <ChipView chip={chip} describedBy={describedBy} marked={marked} />}</Described>;
+  const described = useDescription(chip.title);
+  // A node beside the chip would join the text of the row or the cell that holds it.
+  const hosted = described && !described.sibling ? described.id : undefined;
+  return <ChipView chip={chip} describedBy={hosted} marked={marked} />;
 }
 
 /** A table cell's hover, described through the host. Outside one the title alone describes it, as the Pace cell's. */
@@ -196,7 +201,8 @@ function Block({ plan }: { plan: PopoverPlan }) {
  * anything absolute inside it: measured at the window's corner, then centered under its anchor 8 px below, kept 8 px
  * inside the part of the card's box on screen, and moved above the anchor where it would pass the window's bottom. A
  * strip redrawn for a record that no longer holds the anchor takes the anchor's button away, and the popover closes
- * with it. A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it.
+ * with it. A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it. Tab
+ * past its end moves on to the strip's next button and Shift+Tab before its start back to the anchor.
  */
 export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -229,10 +235,31 @@ export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan 
   useEffect(() => {
     if (focus) ref.current?.focus({ preventScroll: true });
   }, [anchor, focus]);
-  // A blur naming no element (a click on a button Safari gives no focus) closes nothing, as a menu's does.
+  // A blur naming no element (a click on a button Safari gives no focus, the window losing focus) closes nothing, as a
+  // menu's does.
   const leave = (e: FocusEvent<HTMLDivElement>) => {
     const to = e.relatedTarget;
     if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) onClose(false);
+  };
+  // The box stands at the body's end, after every other stop, so Tab off either end would leave the page or land at
+  // its far end. The keys keep the walk in the strip: on past the anchor, or back onto it.
+  const tab = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return;
+    const root = e.currentTarget;
+    const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)];
+    if (e.shiftKey) {
+      if (e.target !== root && e.target !== stops[0]) return;
+      e.preventDefault();
+      anchor.focus({ preventScroll: true });
+      return;
+    }
+    if (e.target !== (stops.length > 0 ? stops[stops.length - 1] : root)) return;
+    e.preventDefault();
+    let next = anchor.nextElementSibling;
+    while (next !== null && next.tagName !== 'BUTTON') next = next.nextElementSibling;
+    // The anchor stands for the next button when it is the strip's last.
+    ((next as HTMLElement | null) ?? anchor).focus();
+    onClose(false);
   };
   useEffect(() => {
     window.addEventListener('resize', place);
@@ -245,7 +272,7 @@ export function StripPopover({ anchor, bounds, focus, id, onClose, pinned, plan 
   const headId = `${id}-head`;
   const { head } = plan;
   return createPortal(
-    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed' }} onBlur={leave}>
+    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed' }} onBlur={leave} onKeyDown={tab}>
       <div className="strip-popover__head">
         <span className="strip-popover__title" id={headId}>
           {head.account !== null ? rowValue([head.account]) : head.word}

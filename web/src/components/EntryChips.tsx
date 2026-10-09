@@ -4,22 +4,17 @@ import { hashTitle, shortHash, warmUntil } from '@/lib/routingLog';
 
 /**
  * A rung entry's hash: its first eight characters, the rest and any refusing gate on hover. The hover is a description
- * too, through the page's host, or in a node after the chip where no host stands.
+ * too, through the page's host as a `Badge`'s is.
  */
 export function HashChip({ entry }: { entry: PrefixEntry }) {
   const title = hashTitle(entry);
   const described = useDescription(title);
+  // Outside every host the title alone describes the chip: a node beside it would join the cell's text.
+  const hosted = described && !described.sibling ? described.id : undefined;
   return (
-    <>
-      <span className="chip mono decision-card__hash" title={title} aria-describedby={described?.id}>
-        {shortHash(entry.hash)}
-      </span>
-      {described?.sibling && (
-        <span id={described.id} className="sr-only" data-descriptions="">
-          {title}
-        </span>
-      )}
-    </>
+    <span className="chip mono decision-card__hash" title={title} aria-describedby={hosted}>
+      {shortHash(entry.hash)}
+    </span>
   );
 }
 

@@ -39,14 +39,16 @@ both viewports and at 700 by 800 (the Move list, the widest, among them), its wi
 window less 16, the card less 16 and the card's part on screen less 16, its table's heads on at most two lines and
 nothing in it scrolling sideways (the Cool reading's ten columns among them), and the Pick table's rows striped as the
 candidate table's are, every station's and way out's word at the card's muted contrast or better on the open row's tint
-in both themes with an idle way out among them, and the strip's station count the record's steps and placeholders at
-both viewports), the subscription end editor, the catalog popup, the key dialog's Access selects, the Pool select
-against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed
-and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead,
-Cost reference one line at the head's top right), the cost reference, the session table's fit, the session row menu, the
-agent lines, the fork badge's face, the fork link, which is followed once the session list's shot is taken). A
-check that opens an editor, a dialog or a row closes it again before the view's shot, and one that turns a column on
-turns it off again. The script exits non-zero with the list of failures when any of that does not hold.
+in both themes with an idle way out among them, the strip's station count the record's steps and placeholders at both
+viewports, and in the mock pass the fresh placement's Pick station opened by Enter and by Space with the focus inside
+its popover and closed by Escape with the focus back on the station), the subscription end editor, the catalog popup,
+the key dialog's Access selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280
+by 800 and 1440 by 900 (the head's height closed and open, the button on the sentence's last line or flush left on the
+next, the opened paragraph 6 px under the lead, Cost reference one line at the head's top right), the cost reference,
+the session table's fit, the session row menu, the agent lines, the fork badge's face, the fork link, which is
+followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again before
+the view's shot, and one that turns a column on turns it off again. The script exits non-zero with the list of failures
+when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
