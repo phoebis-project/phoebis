@@ -22,6 +22,7 @@ export * from '@/lib/rings';
 export * from '@/lib/routingLog';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';
+export * from '@/lib/stripFacts';
 export * from '@/lib/trend';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';

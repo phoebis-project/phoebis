@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 
 // React reads whether a DOM exists when its module loads, so the window stands before the bundle is imported.
 const { window } = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true });
-for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'getComputedStyle', 'MouseEvent', 'Event']) {
+for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'getComputedStyle', 'MouseEvent', 'KeyboardEvent', 'Event']) {
   Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true });
 }
 globalThis.window = window;
@@ -143,4 +143,70 @@ test("the card draws the strip in the walk's place", async () => {
   assert.equal(strips[0].querySelectorAll('.strip-station').length, model.stations.length, "a station per recorded step and per placeholder the walk's shape expects");
   assert.ok(model.host !== null, 'a placement hangs its candidates from a station');
   assert.ok(strips[0].querySelector(`.strip-station[data-station="${model.host}"]`)?.classList.contains('strip-station--above'), 'the station the candidates hang from carries its label above the line');
+});
+
+/** The fresh placement's card, drawn as the cases above draw theirs, with the strip's pick station. */
+async function freshCard() {
+  const mock = new MockApi();
+  const [requestId, seq] = ['req_ef099b34-453', 1];
+  let row;
+  let cursor;
+  do {
+    const page = await mock.listRoutingLog({ cursor, from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+    row = page.rows.find((r) => r.type === 'decision' && r.requestId === requestId && r.seq === seq);
+    cursor = page.nextCursor ?? undefined;
+  } while (row === undefined && cursor !== undefined);
+  assert.ok(row, 'the mock holds the fresh placement');
+  const placed = await mock.getDecision(requestId, seq);
+  api.getDecision = async () => placed;
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
+  await settled();
+  const pick = container.querySelector('.strip-station[data-step="pick"]');
+  assert.ok(pick, 'the strip draws its pick station');
+  return { container, pick };
+}
+
+const popovers = () => document.body.querySelectorAll('.strip-popover');
+const escape = () => act(() => document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })));
+
+test('a click on the pick station opens one popover, a second click closes it and Escape closes a pinned one', async () => {
+  const { container, pick } = await freshCard();
+  act(() => pick.click());
+  assert.equal(popovers().length, 1, 'one popover opens');
+  const popover = popovers()[0];
+  assert.ok(!container.contains(popover), 'the popover stands outside the card, in the body');
+  assert.ok(popover.classList.contains('is-pinned') && pick.classList.contains('is-selected'), 'a click pins it and marks the station');
+  const title = popover.querySelector('.strip-popover__title');
+  assert.equal(title?.textContent, 'Pick');
+  assert.ok(title.parentElement.querySelector('.badge'), 'the verdict badge stands beside the title');
+  assert.equal(popover.getAttribute('aria-labelledby'), title.id);
+  assert.deepEqual([popover.getAttribute('role'), popover.getAttribute('aria-modal'), popover.getAttribute('tabindex')], ['dialog', 'false', '-1']);
+  assert.ok(popover.classList.contains('strip-popover--table'), 'the pick reads as a table');
+  const accounts = [...popover.querySelectorAll('table tbody tr')].map((tr) => tr.querySelector('td:first-child a')?.textContent ?? null);
+  assert.ok(accounts.length > 0 && accounts.every((a) => a !== null), `each row leads with its account's link: ${accounts.join(', ')}`);
+  act(() => pick.click());
+  assert.equal(popovers().length, 0, 'a second click closes it');
+  assert.ok(!pick.classList.contains('is-selected'));
+  act(() => pick.click());
+  assert.equal(popovers().length, 1);
+  escape();
+  assert.equal(popovers().length, 0, 'Escape closes a pinned popover');
+  assert.equal(container.querySelectorAll('.decision-card__walk').length, 0, 'the walk list is gone');
+});
+
+test('Escape closes a hover-opened popover with the pointer still', async () => {
+  const { container, pick } = await freshCard();
+  // React derives the station's pointer entering from a mouseover that names no element it came from.
+  act(() => pick.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+  assert.equal(popovers().length, 1, 'a hover opens one popover');
+  assert.ok(!popovers()[0].classList.contains('is-pinned') && !pick.classList.contains('is-selected'), 'a hover leaves it unpinned');
+  const link = container.querySelector('a');
+  link.focus();
+  assert.equal(document.activeElement, link);
+  escape();
+  assert.equal(popovers().length, 0, 'Escape closes it with no pointer event between');
 });

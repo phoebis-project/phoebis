@@ -1,7 +1,8 @@
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { DecisionRecord, DecisionSummary, PrefixEntry } from '@/api/types';
+import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { DecisionStrip } from '@/components/DecisionStrip';
+import { EntryChips } from '@/components/EntryChips';
 import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
 import { useAsync } from '@/lib/hooks';
 import {
@@ -14,25 +15,22 @@ import {
   DECISION_KIND_LABEL,
   DECISION_KIND_TONE,
   entityHref,
-  hashTitle,
   type LogLink,
   outcomeRows,
   paceHeader,
   pinRows,
   requestRows,
   settingsRows,
-  shortHash,
   verdictChips,
   verdictSentence,
-  warmUntil,
 } from '@/lib/routingLog';
 
-/** One chip: a value or a key-value pair, the entity it names a link. */
-export function ChipView({ chip }: { chip: Chip }) {
+/** One chip: a value or a key-value pair, the entity it names a link. A popover marks the chip its anchor stands for. */
+export function ChipView({ chip, marked = false }: { chip: Chip; marked?: boolean }) {
   const value = chip.entity ? <Link to={entityHref(chip.entity.kind, chip.entity.id)}>{chip.value}</Link> : chip.href ? <Link to={chip.href}>{chip.value}</Link> : chip.value;
   const label = chip.labelEntity ? <Link to={entityHref(chip.labelEntity.kind, chip.labelEntity.id)}>{chip.label}</Link> : chip.label;
   return (
-    <span className={chip.mono ? 'chip mono' : 'chip'} title={chip.title}>
+    <span className={`${chip.mono ? 'chip mono' : 'chip'}${marked ? ' is-marked' : ''}`} title={chip.title}>
       {label !== undefined && <span className="chip__label">{label}</span>}
       {value}
     </span>
@@ -71,19 +69,6 @@ function PaceCell({ title, value }: { title: string | null; value: string }) {
     <td className="num" title={title ?? undefined} aria-describedby={hosted}>
       {value === '-' ? <span className="muted">-</span> : value}
     </td>
-  );
-}
-
-/** The rung's entry: its hash's first eight characters, the rest on hover, and when it stops being warm. */
-function EntryChips({ entry, now }: { entry: PrefixEntry; now: number }) {
-  const until = warmUntil(entry, now);
-  return (
-    <>
-      <span className="chip mono decision-card__hash" title={hashTitle(entry)}>
-        {shortHash(entry.hash)}
-      </span>
-      {until !== null && <span className="chip decision-card__warm">{until}</span>}
-    </>
   );
 }
 

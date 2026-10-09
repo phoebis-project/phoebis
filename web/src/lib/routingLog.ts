@@ -357,7 +357,7 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 /** A window's name as the windows read elsewhere in the console. */
-const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
+export const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
 /** The registry's word for who moved an account's state. */
 const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', operator: 'by hand', refresh_failed: 'refresh failed' };
@@ -802,11 +802,11 @@ export function compareModels(a: string, b: string): number {
 // pairs. Every chip holds one value or one key-value pair, and every entity it names is a link.
 
 const accountEntity = (id: string): FactEntity => ({ id, kind: 'account' });
-const accountChip = (id: string, label?: string): Chip => ({ entity: accountEntity(id), ...(label === undefined ? {} : { label }), value: id });
+export const accountChip = (id: string, label?: string): Chip => ({ entity: accountEntity(id), ...(label === undefined ? {} : { label }), value: id });
 const modelChip = (id: string, label?: string): Chip => ({ entity: { id, kind: 'model' }, ...(label === undefined ? {} : { label }), mono: true, value: id });
 const sessionChip = (id: string): Chip => ({ href: entityHref('session', id), mono: true, title: id, value: id.slice(0, 8) });
 const requestChip = (id: string): Chip => ({ href: entityHref('request', id), mono: true, value: id });
-const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
+export const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
 
 /** Why a member could not take the request, the hover of the candidate table's verdict chip. */
 export const OBSTACLE_HINT: Record<string, string> = {
@@ -868,7 +868,7 @@ export interface WalkLine {
 }
 
 /** The fact keys of the walk in the console's words. Any other key reads with its underscores as spaces. */
-const WALK_KEY: Record<string, string> = {
+export const WALK_KEY: Record<string, string> = {
   above_ceiling: 'above ceiling',
   ahead_five_hour: '5h ahead',
   ahead_seven_day: '7d ahead',
@@ -886,7 +886,7 @@ const WALK_KEY: Record<string, string> = {
   reset_in_grace: 'reset in',
   worst_bucket: 'worst bucket',
 };
-const keyWord = (key: string) => wordOf(WALK_KEY, key);
+export const keyWord = (key: string) => wordOf(WALK_KEY, key);
 /** The keys whose value names itself, so a member's chip reads `primary eligible`, not `primary standing eligible`. */
 const SELF_NAMED = new Set(['score', 'standing']);
 
@@ -913,7 +913,7 @@ function textWord(key: string, value: string): string {
   }
 }
 
-const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
+export const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
   if (value === null || value === undefined) return 'none';
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   if (typeof value === 'number') return formatFact(value, unitOf(unit), now);
@@ -930,7 +930,7 @@ export const tierOf = (value: unknown): number[] | null => {
 const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
 
 /** A pin's lane is `model|speed|thinking|effort`. The model is the request's own, so the chips name the other three. */
-function laneChips(lane: string): Chip[] {
+export function laneChips(lane: string): Chip[] {
   const parts = lane.split('|');
   if (parts.length !== 4) return [plain(lane, 'lane')];
   const [, speed, thinking, effort] = parts;
@@ -954,7 +954,7 @@ function obstacleChip(text: string, record: DecisionRecord): Chip {
  * A shedding mark is its pin's key, `key/session/agent/model`. The session's prefix and the agent tell a round's marks
  * apart.
  */
-function markChip(text: string): Chip {
+export function markChip(text: string): Chip {
   const [, session = '', agent = ''] = text.split('/');
   return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
 }
@@ -971,7 +971,7 @@ function refusalChips(refusal: { kind: string; reason: string }, version: string
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
 
-function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
+export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
   const v = f.value;
   const members = new Set(record.candidates.map((c) => c.accountId));
   switch (f.key) {
@@ -1004,13 +1004,13 @@ function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
   return [plain(value, keyWord(f.key))];
 }
 
-const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'rung:content': 'content', 'rung:static': 'static', 'rung:with_main': 'with_main' };
+export const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'rung:content': 'content', 'rung:static': 'static', 'rung:with_main': 'with_main' };
 
 /**
  * A rung line's entry: on a match the one the rung accepted on the member it took, on any other line the deepest entry
  * a member's gate refused. A placement beside the main conversation names no entry.
  */
-function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
+export function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
   const rung = own(RUNG_OF, s.step) ? RUNG_OF[s.step] : undefined;
   if (rung === undefined) return undefined;
   if (rung === 'with_main' || s.verdict === 'not_run') return null;
@@ -1115,7 +1115,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
 
 const WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
 /** A reading's age, whole seconds under a minute. */
-const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
+export const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };

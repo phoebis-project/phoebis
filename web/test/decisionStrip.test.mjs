@@ -451,3 +451,260 @@ test("a label's measured height moves the leaf rows below it and the track's bra
   assert.ok(shedModel.stations.every((s) => shed.stations[s.id].y === shedCounted.stations[s.id].y + down && shed.stations[s.id].x === shedCounted.stations[s.id].x));
   assert.equal(shed.height, shedCounted.height + down);
 });
+
+/** The story's decisions, and the holds and the exhaustion after a hold its cards are read beside. */
+const STORY = [
+  ...['e5a1c093-4d7', 'f3b6d218-85a', '0b7c2d94-e61', '1eaa9bc1-a18', '868264bc-611', 'a1f04c2e-7b3', 'b72e9d05-c14', 'c90d3f61-a28', 'd4e8a7b2-916', 'da52d141-a5a', 'c41d0311-200', 'ef099b34-453', 'b2bed817-a58', '6c3a9e27-5b1', 'e0a4c6f2-118', '51d0e2b8-7a0', '31f0b7c2-6e1', '9a07c4e1-d55', 'f8085653-422'].map((id) => `req_${id}/1`),
+  ...['1d9c3e55-0b2', '3b8e51f4-0a9', '69e30548-32e', '2e7c90a1-6d4', '4b0e9d17-c31'].flatMap((id) => [`req_${id}/1`, `req_${id}/2`]),
+  'req_e8b7eb13-060/1',
+  'req_e8b7eb13-060/2',
+  'req_77634945-72b/2',
+];
+const chipText = (c) => (c.label ? `${c.label} ${c.value}` : c.value);
+const rowsOf = (plan) => (plan.block.kind === 'groups' ? plan.block.groups.flatMap((g) => g.rows) : plan.block.kind === 'table' ? plan.block.table.loose : []);
+const readRows = (plan) => rowsOf(plan).map((r) => [r.label, r.chips.map(chipText)]);
+const planOf = (record, anchor) => d.anchorPlan(anchor, modelOf(record), record, undefined, NOW);
+const stationPlan = (record, id) => planOf(record, { id, kind: 'station' });
+
+/** Every popover the strip opens over `record`: each station, each leaf and each drawn terminus, with what it stands for. */
+function popoversOf(record) {
+  const m = modelOf(record);
+  const firedAt = record.walk.findIndex((s) => s.step.startsWith('move:') && s.verdict === 'fired');
+  const stations = m.stations.map((s) => {
+    const at = s.id === 'move' ? firedAt : s.index;
+    const step = at === null || at < 0 ? null : record.walk[at];
+    const cut = s.id !== 'move' && step !== null && s.step.startsWith('move:') && step.verdict === 'not_run' && firedAt >= 0 && s.index > firedAt;
+    return { anchor: { id: s.id, kind: 'station' }, cut, name: s.id, station: s, step, word: s.head };
+  });
+  const leaves = m.leaves.map((leaf, index) => ({ anchor: { index, kind: 'leaf' }, leaf, name: `leaf ${index}`, step: null, word: leaf.accountId ?? leaf.badge }));
+  const termini = m.termini.filter((t) => t.drawn).map((terminus) => ({ anchor: { id: terminus.kind, kind: 'terminus' }, name: terminus.kind, step: null, terminus, word: terminus.word }));
+  return { m, popovers: [...stations, ...leaves, ...termini] };
+}
+
+/** The spec's inventory of popovers, the first row a popover matches naming its renderer. */
+const INVENTORY = [
+  ['a rule a fired rule cut short', (x) => x.cut === true, 'chips'],
+  ['Rest of the walk', (x) => x.station?.step === 'selection', 'sentence'],
+  ['a placeholder', (x) => x.station !== undefined && x.step === null, 'sentence'],
+  ['an idle terminus', (x) => x.terminus?.state === 'idle', 'sentence'],
+  ['a recorded step that did not run, with no facts', (x) => x.step?.verdict === 'not_run' && x.step.facts.length === 0, 'sentence'],
+  ['a taken terminus', (x) => x.terminus?.state === 'taken', 'outcome'],
+  ['the "and N more" leaf', (x) => x.leaf !== undefined && x.leaf.more > 0, 'table'],
+  ['a leaf', (x) => x.leaf !== undefined, 'candidate'],
+  ['a partition station', (x) => x.station?.step === 'partitions', 'list'],
+  ['Admission, Bound, Exhausted, Probe, Renew', (x) => ['admission', 'bound', 'exhausted', 'probe', 'renew'].includes(x.station?.step), 'list'],
+  ['Cap filter, Cool reading, Eligible', (x) => ['cap_filter', 'cool', 'eligible'].includes(x.station?.step), 'table'],
+  ['Hold', (x) => x.station?.step === 'hold', 'hold'],
+  ['Move', (x) => x.station?.id === 'move', 'list'],
+  ['Pick', (x) => x.station?.step === 'pick', 'table'],
+  ['Pin', (x) => x.station?.step === 'pin', 'list'],
+  ['a rung', (x) => x.station?.step.startsWith('rung:') === true, 'rung'],
+  ['Shed', (x) => x.station?.step === 'move:shed', 'list'],
+  ['the other four rules', (x) => x.station?.step.startsWith('move:') === true, 'list'],
+];
+
+/** The labels a fact's rows read: its word, "on" for the account a step acted on, the lane's three parts. */
+const labelsOf = (f) => (f.key === 'account_id' ? ['on'] : f.key === 'lane' ? ['speed', 'thinking', 'effort'] : [d.keyWord(f.key)]);
+
+test("every popover of the story's records takes the inventory's renderer and places every fact", async () => {
+  const seen = new Set();
+  for (const id of STORY) {
+    const record = await recordOf(id);
+    const { m, popovers } = popoversOf(record);
+    for (const x of popovers) {
+      const where = `${id} ${x.name}`;
+      const plan = d.anchorPlan(x.anchor, m, record, undefined, NOW);
+      const row = INVENTORY.find(([, matches]) => matches(x));
+      assert.ok(row, `${where} has an inventory row`);
+      seen.add(row[0]);
+      assert.equal(plan.renderer, row[2], `${where} is ${row[0]}`);
+      assert.equal(plan.head.word, x.word, `${where} heads with its word`);
+      assert.ok(plan.unplaced.every((u) => u.key === 'hash' && plan.renderer === 'rung' && u.reason !== ''), `${where} sets aside only a rung's hash: ${JSON.stringify(plan.unplaced)}`);
+      const set = new Set(plan.unplaced.map((u) => u.key));
+      for (const f of x.step?.facts ?? []) {
+        if (set.has(f.key)) continue;
+        if (plan.renderer === 'table') {
+          const placed = f.accountId === null ? plan.block.table.loose.some((r) => r.label === d.keyWord(f.key)) : plan.block.table.rows.find((r) => r.account.value === f.accountId)?.cells[f.key] != null;
+          assert.ok(placed, `${where} places ${f.key} of ${f.accountId ?? 'the step'}`);
+        } else {
+          const labels = rowsOf(plan).map((r) => r.label);
+          assert.ok(labelsOf(f).every((l) => labels.includes(l)), `${where} places ${f.key} as ${labelsOf(f).join(', ')} among ${labels.join(', ')}`);
+        }
+      }
+    }
+  }
+  // The story's records reach every row of the inventory but the "and N more" leaf, which twelve candidates reach below.
+  assert.deepEqual(INVENTORY.map(([what]) => what).filter((what) => !seen.has(what)), ['the "and N more" leaf']);
+});
+
+test("the pick's score column reads the Pace cell under the Pace header", async () => {
+  let rows = 0;
+  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1']) {
+    const record = await recordOf(id);
+    const { table } = stationPlan(record, 'pick').block;
+    const score = table.columns.find((c) => c.key === 'score');
+    assert.deepEqual([score.label, score.numeric], [d.paceHeader(record), true], id);
+    const scored = record.walk.find((s) => s.step === 'pick').facts.filter((f) => f.key === 'score');
+    assert.deepEqual(table.rows.map((r) => r.account.value), scored.map((f) => f.accountId), id);
+    for (const r of table.rows) {
+      const cells = d.candidateCells(record.candidates.find((c) => c.accountId === r.account.value), record, NOW);
+      assert.deepEqual(r.cells.score, { text: cells.pace, title: cells.paceTitle }, `${id} ${r.account.value}`);
+      rows += 1;
+    }
+    assert.deepEqual(table.loose.map((r) => r.label), ['strategy', 'tier'], id);
+    assert.deepEqual(table.loose[0].chips.map(chipText), ['strategy Pace'], id);
+  }
+  assert.ok(rows > 2, `${rows} scores read`);
+});
+
+test("the pin's three groups and the shed's three groups hold their keys", async () => {
+  const groupsOf = (plan) => plan.block.groups.map((g) => [g.label, g.rows.map((r) => r.label)]);
+  const renewal = await recordOf('req_f8085653-422/1');
+  assert.deepEqual(groupsOf(stationPlan(renewal, 'pin')), [['Lookup', ['found', 'on', 'epoch']], ['Age', ['idle', 'refresh age']], ['Warmth', ['warmth', 'cause', 'marked']]]);
+
+  const SHED = [
+    ['Windows', ['ahead_five_hour', 'elapsed_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'cooldown', 'window_share_fast']],
+    ['Round', ['margin', 'threshold', 'round', 'marked', 'marks']],
+    ['Destinations', ['destinations', 'no_destination']],
+  ];
+  const expected = (record) => {
+    const keys = record.walk.find((s) => s.step === 'move:shed').facts.map((f) => f.key);
+    return SHED.map(([label, group]) => [label, group.filter((k) => keys.includes(k)).map(d.keyWord)]).filter(([, rows]) => rows.length > 0);
+  };
+  const shedMove = await recordOf('req_868264bc-611/1');
+  const fired = stationPlan(shedMove, 'move:shed');
+  assert.deepEqual(groupsOf(fired), expected(shedMove));
+  assert.deepEqual(groupsOf(fired).map(([label]) => label), ['Windows', 'Round', 'Destinations']);
+  // The Move station draws the fired rule's list.
+  assert.deepEqual(stationPlan(shedMove, 'move').block, fired.block);
+
+  const round = await recordOf('req_1eaa9bc1-a18/1');
+  const ran = stationPlan(round, 'move:shed');
+  assert.deepEqual(groupsOf(ran), expected(round));
+  const marks = ran.block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'marks');
+  assert.equal(marks.chips.length, round.outcome.shedMarks.length);
+  assert.deepEqual(marks.chips.map((c) => [c.label, new URLSearchParams(c.href.split('?')[1]).get('session')]), round.outcome.shedMarks.map((mk) => ['mark', mk.sessionId]));
+});
+
+test("the rung's entry rows read the matched entry and never the deeper refused one", async () => {
+  const record = await recordOf('req_b2bed817-a58/1');
+  const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
+  const match = chosen.prefix.staticMatch;
+  assert.ok(chosen.prefix.static.depth > match.depth && chosen.prefix.static.refusedBy !== null, 'the member holds a deeper refused entry beside the match');
+  const plan = stationPlan(record, 'rung:static');
+  const entry = plan.block.groups.find((g) => g.label === 'Entry');
+  assert.deepEqual(entry.rows.map((r) => r.label), ['hash', 'depth', 'prefix', 'written', 'TTL', 'live', 'on']);
+  assert.equal(entry.rows[0].entry, match);
+  assert.deepEqual(entry.rows.slice(1).map((r) => r.chips.map(chipText)), [[`depth ${match.depth}`], [`prefix ${d.fmtCompact(match.prefixTokens)}`], [`written ${d.formatFact(match.writtenAt, 'time', NOW)}`], [`TTL ${d.formatFact(match.ttlMs, 'ms', NOW)}`], [`live ${match.live ? 'yes' : 'no'}`], [`on ${chosen.accountId}`]]);
+  assert.ok(!JSON.stringify(plan).includes(chosen.prefix.static.hash), 'the deeper refused entry is nowhere in the plan');
+  assert.deepEqual(plan.unplaced, [{ key: 'hash', reason: 'drawn from the entry' }]);
+});
+
+test("the hold's rows are place, on, slot and bound", async () => {
+  for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_e8b7eb13-060/1', 'strategy pick']]) {
+    const record = await recordOf(id);
+    const on = record.outcome.hold.accountId;
+    const member = record.candidates.find((c) => c.accountId === on);
+    assert.deepEqual(readRows(stationPlan(record, 'hold')), [['place', [`place ${place}`]], ['on', [`on ${on}`]], ['slot', [`slot ${member.inFlight} of ${member.inFlightCap}`]], ['bound', ['bound 1 min']]], id);
+  }
+  // The session pin's exemption holds no slot back, so its step carries no bound.
+  const base = await recordOf('req_ef099b34-453/1');
+  const exempt = built(base, [...base.walk, step('hold', 'placed', [fact('place', 'session_pin'), fact('account_id', 'primary', null, 'primary')])], 'placed');
+  const primary = exempt.candidates.find((c) => c.accountId === 'primary');
+  assert.deepEqual(readRows(stationPlan(exempt, 'hold')), [['place', ['place session pin']], ['on', ['on primary']], ['slot', [`slot ${primary.inFlight} of ${primary.inFlightCap}`]]]);
+});
+
+test("a candidate's windows table has a row per reported window and one for a key account", async () => {
+  const words = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable', worst_bucket: 'worst bucket' };
+  let keys = 0;
+  for (const id of ['req_f8085653-422/1', 'req_ef099b34-453/1']) {
+    const record = await recordOf(id);
+    const m = modelOf(record);
+    m.leaves.forEach((leaf, index) => {
+      const plan = planOf(record, { index, kind: 'leaf' });
+      const member = record.candidates.find((c) => c.accountId === leaf.accountId);
+      const cells = d.candidateCells(member, record, NOW);
+      const reported = Object.keys(member.windows);
+      assert.equal(plan.block.windows.length, reported.length, `${id} ${member.accountId}`);
+      assert.deepEqual(new Set(plan.block.windows.map((w) => w.window)), new Set(reported.map((w) => words[w])));
+      for (const w of plan.block.windows) {
+        const reading = member.windows[Object.keys(words).find((k) => words[k] === w.window)];
+        assert.deepEqual([w.used, w.left, w.source, w.age], [d.fmtPct(reading.utilization), d.fmtPct(1 - reading.utilization), reading.source, d.ageWord(reading.ageMs)]);
+      }
+      if (member.kind === 'api_key') {
+        keys += 1;
+        assert.deepEqual(plan.block.windows.map((w) => w.window), ['worst bucket']);
+      }
+      const out = member.verdict === 'out';
+      assert.deepEqual([plan.head.account.value, plan.head.word, plan.head.tone, plan.head.chip.value], [member.accountId, member.accountId, leaf.tone, out ? cells.verdict.chip.value : cells.verdict.badge]);
+      assert.deepEqual(plan.block.chips.slice(0, 3).map(chipText), [`plan ${cells.plan}`, `tier ${cells.tier}`, `in flight ${cells.inFlight}`]);
+      assert.equal(plan.block.chips.find((c) => c.label === 'Pace')?.title ?? null, member.pace === null ? null : cells.paceTitle);
+    });
+  }
+  assert.ok(keys > 0, 'a key account is among the leaves');
+});
+
+test("the taken terminus's rows equal the outcome rows", async () => {
+  for (const id of ['req_f8085653-422/1', 'req_69e30548-32e/1', 'req_51d0e2b8-7a0/1', 'req_e0a4c6f2-118/1']) {
+    const record = await recordOf(id);
+    const m = modelOf(record);
+    for (const t of m.termini.filter((x) => x.drawn)) {
+      const plan = planOf(record, { id: t.kind, kind: 'terminus' });
+      if (t.state !== 'taken') {
+        assert.deepEqual([plan.renderer, plan.block.text, plan.head.badge], ['sentence', d.SENTENCE.notReached, null], `${id} ${t.kind}`);
+        continue;
+      }
+      const rows = d.outcomeRows(record, NOW).map((r) => ({ chips: r.chips, label: r.label, ...(r.title === undefined ? {} : { title: r.title }) }));
+      assert.ok(rows.length > 0);
+      assert.deepEqual(rowsOf(plan), rows, `${id} ${t.kind}`);
+      assert.deepEqual([plan.head.badge, plan.head.tone], [t.badge, t.tone]);
+    }
+  }
+});
+
+test('every list row carries its chips', async () => {
+  let rows = 0;
+  for (const id of STORY) {
+    const record = await recordOf(id);
+    const { m, popovers } = popoversOf(record);
+    for (const x of popovers) {
+      for (const r of rowsOf(d.anchorPlan(x.anchor, m, record, undefined, NOW))) {
+        rows += 1;
+        assert.ok(r.label !== '' && (r.chips.length > 0 || r.entry !== undefined), `${id} ${x.name}: ${r.label} carries chips`);
+      }
+    }
+  }
+  assert.ok(rows > 100, `${rows} rows read`);
+});
+
+test('a rule a fired rule cut short reads the rules that did not run with its own marked, and the steps with no facts their sentences', async () => {
+  const record = await recordOf('req_da52d141-a5a/1');
+  const later = ['move:overage', 'move:return_to_plan', 'move:drain', 'move:shed'];
+  later.forEach((rule, i) => {
+    const plan = stationPlan(record, rule);
+    assert.deepEqual([plan.renderer, plan.block.chips.map(chipText), plan.block.marked], ['chips', ['overage', 'return to plan', 'drain', 'shed'], i], rule);
+  });
+  assert.equal(stationPlan(record, 'renew').block.text, d.SENTENCE.placeholder);
+  const refusal = await recordOf('req_e0a4c6f2-118/1');
+  assert.equal(stationPlan(refusal, 'selection').block.text, d.SENTENCE.rest);
+  const withMain = await recordOf('req_52f62e67-839/1');
+  assert.deepEqual([stationPlan(withMain, 'rung:static').block.text, stationPlan(withMain, 'pick').block.text], [d.SENTENCE.notRun, d.SENTENCE.placeholder]);
+});
+
+test('the and-N-more leaf is a table of the remaining candidates', async () => {
+  const base = await recordOf('req_ef099b34-453/1');
+  const chosen = base.candidates.find((c) => c.verdict === 'chosen');
+  const others = base.candidates.filter((c) => c !== chosen);
+  const copies = Array.from({ length: 11 }, (_, i) => ({ ...others[i % others.length], accountId: `member-${i + 1}` }));
+  const record = { ...base, candidates: [...copies, chosen] };
+  const m = modelOf(record);
+  const plan = d.anchorPlan({ index: 8, kind: 'leaf' }, m, record, undefined, NOW);
+  assert.deepEqual([plan.renderer, plan.head.word, plan.head.badge], ['table', 'and 4 more', null]);
+  const { table } = plan.block;
+  assert.deepEqual(table.columns.map((c) => c.label), ['Tier', '5h', '7d', 'Fable', 'In flight', d.paceHeader(record), 'Prefix', 'Verdict']);
+  assert.deepEqual(table.rows.map((r) => r.account.value), ['member-8', 'member-9', 'member-10', 'member-11']);
+  for (const r of table.rows) {
+    const cells = d.candidateCells(record.candidates.find((c) => c.accountId === r.account.value), record, NOW);
+    assert.deepEqual([r.cells.tier.text, r.cells.in_flight.text, r.cells.pace.text], [cells.tier, cells.inFlight, cells.pace]);
+  }
+});

@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, stationModel, SwitchedNumber, tick, walkLines, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, stationModel, STEP_NAME, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -7656,8 +7656,37 @@ m.unmount();
   const leavesOf = (card) =>
     [...(card?.querySelectorAll('.decision-strip .strip-candidate') ?? [])].map((b) => ({ account: b.querySelector('.strip-candidate__account')?.textContent ?? '', badge: b.querySelector('.badge')?.textContent ?? '', chosen: b.classList.contains('is-chosen') }));
   const terminiOf = (card) => [...(card?.querySelectorAll('.decision-strip .strip-terminus') ?? [])].map((b) => ({ badge: b.querySelector('.badge')?.textContent ?? null, kind: b.dataset.terminus, taken: b.classList.contains('is-taken') }));
-  /** A step's fact chips as `label value`, off the record through the lib, since the strip draws none of them. */
-  const chipsOf = (record, row, stepName) => (walkLines(record, row).find((l) => l.step === stepName)?.chips ?? []).map((c) => (c.label ? `${c.label} ${c.value}` : c.value));
+  /**
+   * Opens a strip button's popover by a click, as a reader does, and answers the one popover the body holds then. A
+   * second click closes it again, and the checks read the popover as it stood.
+   */
+  const popoverOf = async (page, button) => {
+    button?.click();
+    await page.settle(150);
+    const open = document.querySelectorAll('.strip-popover');
+    const popover = open.length === 1 ? open[0] : null;
+    if (popover !== null) {
+      button.click();
+      await page.settle(50);
+    }
+    return popover;
+  };
+  /** A table popover's cell: the row whose first cell links the account, under the head that words the fact's key. */
+  const cellOf = (popover, accountId, column) => {
+    const at = [...(popover?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent === keyWord(column));
+    const tr = [...(popover?.querySelectorAll('tbody tr') ?? [])].find((r) => r.querySelector('td a')?.textContent === accountId);
+    return at < 0 ? null : (tr?.children[at] ?? null);
+  };
+  /** A list row of a popover, or of one of its groups, by its label: the chips of its `dd` as `label value`. */
+  const popoverRowOf = (popover, label) => {
+    const row = [...(popover?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === label);
+    return row ? [...row.querySelectorAll('dd .chip')].map(chipWords) : null;
+  };
+  /** The chips renderer's chips, the one kind of popover that is a row of chips alone. */
+  const chipsOf = (popover) => [...(popover?.querySelectorAll(':scope > .chips > .chip') ?? [])].map(chipWords);
+  const groupOfPopover = (popover, label) => [...(popover?.querySelectorAll('.strip-popover__group') ?? [])].find((g) => g.querySelector('h5')?.textContent === label) ?? null;
+  const rowsRead = (popover) => [...(popover?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent}: ${[...r.querySelectorAll('dd .chip')].map(chipWords).join(' / ')}`).join(' | ');
+  const stationButton = (card, id) => card?.querySelector(`.decision-strip .strip-station[data-station="${id}"]`) ?? null;
   /**
    * A strip word's horizontal span as the component placed it: jsdom lays nothing out, so the inline position is what
    * a check can read.
@@ -7718,10 +7747,69 @@ m.unmount();
     });
   };
 
+  /** The renderer the spec's inventory names for a strip button's popover, spelled here to hold the strip to it. */
+  const inventoryOf = (record, model, button) => {
+    if (button.classList.contains('strip-candidate')) return model.leaves[Number(button.dataset.leaf)]?.more > 0 ? 'table' : 'candidate';
+    if (button.classList.contains('strip-terminus')) return button.classList.contains('is-taken') ? 'outcome' : 'sentence';
+    const s = model.stations.find((x) => x.id === button.dataset.station);
+    if (s === undefined) return null;
+    const firedAt = record.walk.findIndex((w) => w.step.startsWith('move:') && w.verdict === 'fired');
+    const step = s.id === 'move' ? record.walk[firedAt] : s.index === null ? undefined : record.walk[s.index];
+    if (s.id !== 'move' && s.step.startsWith('move:') && step?.verdict === 'not_run' && firedAt >= 0 && s.index > firedAt) return 'chips';
+    if (s.step === 'selection' || step === undefined || (step.verdict === 'not_run' && step.facts.length === 0)) return 'sentence';
+    if (['cap_filter', 'cool', 'eligible', 'pick'].includes(s.step)) return 'table';
+    if (s.step === 'hold') return 'hold';
+    if (s.step.startsWith('rung:')) return 'rung';
+    return s.known ? 'list' : 'chips';
+  };
+  /** The head a strip button's popover reads: the step's whole word, Move, a partition's own word, an account, a way out. */
+  const headOf = (model, button) => {
+    if (button.classList.contains('strip-candidate')) {
+      const leaf = model.leaves[Number(button.dataset.leaf)];
+      return leaf?.accountId ?? leaf?.badge ?? null;
+    }
+    if (button.classList.contains('strip-terminus')) return model.termini.find((t) => t.kind === button.dataset.terminus)?.word ?? null;
+    const s = model.stations.find((x) => x.id === button.dataset.station);
+    return s === undefined ? null : s.id === 'move' ? 'Move' : s.id.startsWith('partitions:') ? s.head : (STEP_NAME[s.step] ?? s.step);
+  };
+  /**
+   * Every station, leaf and terminus of the open card opens one popover by a click: its class names the inventory's
+   * renderer, its title the button's head, every list row holds a label and chips, and its inline width bound is the
+   * least of 720 px, the window less 16 and the card less 16, which jsdom's empty boxes floor at 0.
+   */
+  const popoversOpen = async (what, page, card, record, row) => {
+    const model = stationModel(record, row, CLOCK_ORIGIN);
+    const buttons = [...(card?.querySelectorAll('.decision-strip .strip-station, .decision-strip .strip-candidate, .decision-strip .strip-terminus') ?? [])];
+    const wrong = [];
+    for (const button of buttons) {
+      const name = button.getAttribute('aria-label');
+      const popover = await popoverOf(page, button);
+      if (popover === null) {
+        wrong.push(`${name}: no popover, or more than one`);
+        continue;
+      }
+      scan(`${what} popover ${name}`, popover);
+      const renderer = inventoryOf(record, model, button);
+      const title = popover.querySelector('.strip-popover__title')?.textContent ?? null;
+      const rows = [...popover.querySelectorAll('.kv__row')];
+      const bound = `${Math.min(720, window.innerWidth - 16, Math.max(0, (card?.getBoundingClientRect().width ?? 0) - 16))}px`;
+      if (!popover.classList.contains(`strip-popover--${renderer}`)) wrong.push(`${name}: ${popover.className}, not ${renderer}`);
+      if (title === null || title !== headOf(model, button)) wrong.push(`${name}: the title reads ${title}, not ${headOf(model, button)}`);
+      if (!rows.every((r) => (r.querySelector('dt')?.textContent ?? '') !== '' && r.querySelector('dd .chip') !== null)) wrong.push(`${name}: a row without its label or its chips: ${rowsRead(popover)}`);
+      if (popover.style.maxWidth !== bound) wrong.push(`${name}: max width ${popover.style.maxWidth}, not ${bound}`);
+    }
+    results.push({
+      name: `/routing-log every station, leaf and terminus of the ${what}'s card opens a popover of its renderer with its head and its rows`,
+      ok: buttons.length > 0 && wrong.length === 0 && document.querySelectorAll('.strip-popover').length === 0,
+      missing: [`${buttons.length} buttons`, ...wrong.slice(0, 8)],
+    });
+  };
+
   {
     const { card, page, panel, record, row: summary } = await story('req_f8085653-422');
     scan('renewal', card);
     stripDrawn('renewal', card, RENEWAL_STATIONS);
+    await popoversOpen('renewal', page, card, record, summary);
     const stations = stationsOf(card);
     // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
     const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
@@ -7729,6 +7817,11 @@ m.unmount();
     const fires = stubsOf(card, 'fires');
     const renew = stations.at(-1);
     const row = rowOf(page, 'req_f8085653-422/1');
+    // Each rule's popover lists the facts it read, the pin's reads its idle age under Age, and Renew's its account.
+    const rules = [];
+    for (const s of moves) rules.push(await popoverOf(page, s.button));
+    const pin = await popoverOf(page, stationButton(card, 'pin'));
+    const renewed = await popoverOf(page, renew?.button);
     results.push({
       name: "/routing-log the renewal's card reads no rule fired, five move lines and idle",
       ok:
@@ -7736,19 +7829,19 @@ m.unmount();
         card?.querySelector('.decision-card__verdict > .badge')?.textContent === 'renewed' && sentenceOf(card) === `Renewed on [${record.outcome.accountId}]` &&
         verdictChipsOf(card).includes('no rule fired') && verdictChipsOf(card).includes('pin warm') &&
         moves.length === 5 && moves.every((s) => s.state === 'is-taken' && s.verdict === 'no' && centerOf(s.button) >= spanOf(bracket).from && centerOf(s.button) <= spanOf(bracket).to) &&
-        ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].every((name) => chipsOf(record, summary, name).length > 0) &&
+        rules.length === 5 && rules.every((p) => p !== null && p.querySelectorAll('.kv__row').length > 0 && [...p.querySelectorAll('.kv__row')].every((r) => r.querySelector('dd .chip') !== null)) &&
         fires.length === 5 && fires.every((w) => moves.some((s) => parseFloat(w.style.left) > centerOf(s.button) && parseFloat(w.style.left) < centerOf(s.button) + 20)) &&
         !stations.some((s) => s.state === 'is-idle') && renew?.step === 'Renew' && renew.verdict === 'renewed' && renew.state === 'is-taken' && renew.second.length === 0 && renew.button.classList.contains('strip-station--above') &&
         JSON.stringify(terminiOf(card)) === JSON.stringify([{ badge: 'renewed', kind: 'chosen', taken: true }]) &&
-        chipsOf(record, summary, 'Pin').some((c) => c.startsWith('idle ')) && stations.every((s, i) => s.button.dataset.index === String(i)),
-      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...stations.map((s) => `${s.button.dataset.index} ${s.step} ${s.verdict} (${s.state}): ${s.second.join(' / ')}`), `${fires.length} fires stubs`, bracket?.textContent ?? 'no Moves bracket', JSON.stringify(terminiOf(card))],
+        (popoverRowOf(groupOfPopover(pin, 'Age'), 'idle') ?? []).some((c) => c.startsWith('idle ')) && stations.every((s, i) => s.button.dataset.index === String(i)),
+      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...stations.map((s) => `${s.button.dataset.index} ${s.step} ${s.verdict} (${s.state}): ${s.second.join(' / ')}`), `${fires.length} fires stubs`, bracket?.textContent ?? 'no Moves bracket', JSON.stringify(terminiOf(card)), `Pin: ${rowsRead(pin)}`, ...rules.map((p) => rowsRead(p))],
     });
     // The re-made drawer check: a renewal reads as the pin continued, renewed in place on the account it was on.
     const out = outcomeOf(card);
     results.push({
       name: '/routing-log a card reads a renewed pin as continued',
-      ok: renew?.step === 'Renew' && chipsOf(record, summary, 'Renew').includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !stations.some((s) => s.step === 'Pick'),
-      missing: [JSON.stringify(out['Pin written']), renew ? `${renew.step}: ${chipsOf(record, summary, 'Renew').join(' / ')}` : 'no station'],
+      ok: renew?.step === 'Renew' && (popoverRowOf(renewed, 'on') ?? []).includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !stations.some((s) => s.step === 'Pick'),
+      missing: [JSON.stringify(out['Pin written']), renew ? `${renew.step}: ${rowsRead(renewed)}` : 'no station'],
     });
     results.push({
       name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
@@ -7798,11 +7891,15 @@ m.unmount();
     const { card, page, record, row } = await story('req_b2bed817-a58');
     scan('static placement', card);
     stripDrawn('static placement', card, modelPairs(record, row));
+    await popoversOpen('static placement', page, card, record, row);
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
-    // The strip draws no entry chip, so the static rung's entry is read off the record as the walk derives it.
-    const entry = walkLines(record, row).find((l) => l.step === 'Rung: static')?.hash ?? null;
+    // The static rung's popover draws the entry it took in its Entry group.
+    const rung = await popoverOf(page, rungs.at(-1)?.button);
+    const entry = groupOfPopover(rung, 'Entry');
+    const hash = entry?.querySelector('.decision-card__hash');
+    const warm = entry?.querySelector('.decision-card__warm');
     const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
     const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
     const mine = prefixCell(chosen.accountId);
@@ -7813,11 +7910,11 @@ m.unmount();
         JSON.stringify(rungs.map((s) => `${s.step} ${s.verdict}`)) === JSON.stringify(['content none', 'with main none', 'static match']) &&
         rungs.every((s) => centerOf(s.button) >= spanOf(groupOf(card, 'Rungs')).from && centerOf(s.button) <= spanOf(groupOf(card, 'Rungs')).to) && rungs.at(-1)?.button.classList.contains('is-decisive') &&
         chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
-        entry?.hash.slice(0, 8) === chosen.prefix.staticMatch.hash.slice(0, 8) && entry.hash === chosen.prefix.staticMatch.hash && entry.hash.length === 64 && until(entry) === until(chosen.prefix.staticMatch) &&
+        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
         mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
         refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
-        !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
-      missing: [...rungs.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, `Rung: ${s.step}`).join(' / ')}`), entry ? `${entry.hash} ${until(entry)}` : 'no entry', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+        !`${card?.textContent ?? ''}${rung?.textContent ?? ''}`.includes(chosen.prefix.static.hash.slice(0, 8)),
+      missing: [...rungs.map((s) => `${s.step} ${s.verdict}`), rungs.at(-1)?.step ?? 'no static rung', rowsRead(rung), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
     });
     // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
     // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.
@@ -7841,21 +7938,27 @@ m.unmount();
     const { card, page, record, row } = await story('req_da52d141-a5a');
     scan('spent move', card);
     stripDrawn('spent move', card, modelPairs(record, row));
+    await popoversOpen('spent move', page, card, record, row);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
     const cool = stations.find((s) => s.step === 'Cool reading');
-    // The rules after a fired one never ran, so they stand idle on the line while the move rides the track.
+    // The rules after a fired one never ran, so they stand idle on the line while the move rides the track, and each
+    // one's popover names the rules the fired one cut short with its own marked.
     const rules = stations.filter((s) => ['overage', 'return to plan', 'drain', 'shed'].includes(s.step));
     const landed = stations.find((s) => s.step === 'static');
+    const coolReading = await popoverOf(page, cool?.button);
+    const rung = await popoverOf(page, landed?.button);
+    const cut = await popoverOf(page, rules[0]?.button);
     results.push({
       name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
       ok:
         sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
         steps.includes('spent fired') && JSON.stringify(rules.map((s) => s.step)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules.every((s) => s.verdict === 'not run' && s.state === 'is-idle' && !onTrack(s)) &&
-        cool?.verdict === 'preferred' && chipsOf(record, row, 'Cool reading').includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
-        landed?.verdict === 'match' && chipsOf(record, row, 'Rung: static').includes(`on ${record.outcome.accountId}`) &&
+        JSON.stringify(chipsOf(cut)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && cut?.querySelector('.chips > .chip.is-marked')?.textContent === 'overage' &&
+        cool?.verdict === 'preferred' && cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent === 'yes' && steps.includes('Cap filter passed') &&
+        landed?.verdict === 'match' && (popoverRowOf(rung, 'on') ?? []).includes(`on ${record.outcome.accountId}`) &&
         steps.indexOf('spent fired') < steps.indexOf('Move moved') && steps.indexOf('Move moved') < steps.indexOf('Cool reading preferred') && onTrack(stations.find((s) => s.id === 'move')) && onTrack(cool),
-      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`)],
+      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`), `cut short: ${chipsOf(cut).join(' / ')}`, `cool ${cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent}`, `static: ${rowsRead(rung)}`],
     });
     // The re-made drawer check: the move and the rung that placed it read on one card.
     results.push({
@@ -7873,7 +7976,10 @@ m.unmount();
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
       ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
     ]);
+    await popoversOpen('shed move', page, card, record, row);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
+    // The fired rule's popover reads its round in the Round group.
+    const fired = groupOfPopover(await popoverOf(page, shed?.button), 'Round');
     const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
     const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
     // The moved row's tone reads on the card's verdict badge, the strip's Move station and the terminus it reached.
@@ -7887,17 +7993,20 @@ m.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
     stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
+    await popoversOpen('shedding round', round.page, round.card, round.record, round.row);
     const ran = stationsOf(round.card).find((s) => s.step === 'shed');
-    // The strip draws no chip, so the marks' session links are read off the chips the walk derives for the round.
-    const marks = (walkLines(round.record, round.row).find((l) => l.step === 'Shed')?.chips ?? []).filter((c) => c.label === 'mark');
+    // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
+    const roundGroup = groupOfPopover(await popoverOf(round.page, ran?.button), 'Round');
+    const marksRow = [...(roundGroup?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'marks');
+    const marks = [...(marksRow?.querySelectorAll('dd .chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
     const sessions = (round.record.outcome.shedMarks ?? []).map((m) => m.sessionId);
     results.push({
       name: "/routing-log the shed move's card reads the round and its marks",
       ok:
-        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && chipsOf(record, row, 'Shed').includes('round within dwell') && chipsOf(record, row, 'Shed').includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
-        ran?.verdict === 'no' && chipsOf(round.record, round.row, 'Shed').includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
-        JSON.stringify(marks.map((c) => params(c.href).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(`${c.label}${c.value}`)),
-      missing: [shed ? `${shed.step} ${shed.verdict}: ${chipsOf(record, row, 'Shed').join(' / ')}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? chipsOf(round.record, round.row, 'Shed').join(' / ') : 'no round station'],
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
+        ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+      missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station'],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
@@ -7906,16 +8015,18 @@ m.unmount();
     const { card, page, record, row } = await story('req_69e30548-32e', 1);
     scan('hold', card);
     stripDrawn('hold', card, modelPairs(record, row));
+    await popoversOpen('hold', page, card, record, row);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
-    const chips = chipsOf(record, row, 'Hold');
+    const held = await popoverOf(page, hold?.button);
     const out = outcomeOf(card);
     const bound = record.outcome.hold?.boundMs;
     results.push({
       name: "/routing-log the hold's card reads its place and bound",
       ok:
         sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && JSON.stringify(hold.second) === JSON.stringify(['cohort', 'bound 1 min']) &&
-        chips.includes('place cohort') && chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
-      missing: [sentenceOf(card), hold ? `${hold.verdict}: ${hold.second.join(' / ')}` : 'no hold station', chips.join(' / '), JSON.stringify(out.Hold)],
+        (popoverRowOf(held, 'place') ?? []).includes('place cohort') && (popoverRowOf(held, 'on') ?? []).includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && (popoverRowOf(held, 'bound') ?? []).includes('bound 1 min') &&
+        JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
+      missing: [sentenceOf(card), hold ? `${hold.verdict}: ${hold.second.join(' / ')}` : 'no hold station', rowsRead(held), JSON.stringify(out.Hold)],
     });
     // The held-on member is at its cap, which its chip says beneath the badge.
     const heldOn = candidateRows(card).find((tr) => tr.classList.contains('is-chosen'));
@@ -7929,6 +8040,7 @@ m.unmount();
     scan('placement after the hold', placed);
     const second = await api.getDecision('req_69e30548-32e', 2);
     stripDrawn('placement after the hold', placed, modelPairs(second, undefined));
+    await popoversOpen('placement after the hold', page, placed, second, undefined);
     const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the account a hold waited on and how long it waited',
@@ -7942,16 +8054,19 @@ m.unmount();
     const { card, page, record, row } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
     stripDrawn('strategy hold', card, modelPairs(record, row));
+    await popoversOpen('strategy hold', page, card, record, row);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
+    const held = await popoverOf(page, hold?.button);
     results.push({
       name: "/routing-log a held card reads the hold's place on the strategy's pick",
-      ok: record.outcome.hold?.cohort === null && hold?.second[0] === 'strategy pick' && chipsOf(record, row, 'Hold').includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
-      missing: [hold ? hold.second.join(' / ') : 'no hold station', chipsOf(record, row, 'Hold').join(' / '), JSON.stringify(outcomeOf(card).Hold)],
+      ok: record.outcome.hold?.cohort === null && hold?.second[0] === 'strategy pick' && (popoverRowOf(held, 'place') ?? []).includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
+      missing: [hold ? hold.second.join(' / ') : 'no hold station', rowsRead(held), JSON.stringify(outcomeOf(card).Hold)],
     });
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
     const second = await api.getDecision('req_e8b7eb13-060', 2);
     stripDrawn('placement after a strategy hold', after, modelPairs(second, undefined));
+    await popoversOpen('placement after a strategy hold', page, after, second, undefined);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
@@ -7966,6 +8081,7 @@ m.unmount();
     const { card, page, record, row } = await story(id, seq);
     scan('exhaustion after a hold', card);
     stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
+    await popoversOpen('exhaustion after a hold', page, card, record, row);
     results.push({
       name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
       ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
@@ -7977,17 +8093,20 @@ m.unmount();
     const { card, page, record, row } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
     stripDrawn('exhaustion', card, modelPairs(record, row));
+    await popoversOpen('exhaustion', page, card, record, row);
     const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
-    // The story's obstacles name no account, so each one's chip is keyed `obstacle`.
-    const drawn = chipsOf(record, row, 'Exhausted').filter((c) => c.startsWith('obstacle ')).map((c) => c.slice('obstacle '.length));
+    // The story's obstacles name no account, so each one's chip is keyed `obstacle`, and its hover says why.
+    const exhausted = await popoverOf(page, line?.button);
+    const obstacles = [...(exhausted?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'obstacles');
+    const drawn = [...(obstacles?.querySelectorAll('dd .chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => chipWords(c).replace(/^obstacle /, ''));
     results.push({
       name: "/routing-log the exhaustion's card reads the obstacles in order",
       ok:
         sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools#${record.request.poolId}` && line?.verdict === 'exhausted' &&
         weighed.length > 0 && JSON.stringify(drawn) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
         JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
-      missing: [line ? `${line.step} ${line.verdict}` : 'no station', chipsOf(record, row, 'Exhausted').join(' / '), JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+      missing: [line ? `${line.step} ${line.verdict}` : 'no station', rowsRead(exhausted), JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
     });
     // No member was eligible, so the walk stops at Eligible with none, the one none the scheme reads as a refusal.
     const eligible = card?.querySelector('.decision-strip .strip-station[data-station="eligible"] .badge');
@@ -8002,7 +8121,12 @@ m.unmount();
     const { card, page, record, row } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
     stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
+    await popoversOpen('refusal', page, card, record, row);
     const stations = stationsOf(card);
+    // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
+    const admission = await popoverOf(page, stationButton(card, 'admission'));
+    const rest = await popoverOf(page, stationButton(card, 'selection'));
+    const reason = popoverRowOf(admission, 'reason') ?? [];
     const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
     for (const f of folds) f.open = true;
     await page.settle(50);
@@ -8012,10 +8136,11 @@ m.unmount();
       name: "/routing-log the refusal's card reads two lines and Pin not looked up",
       ok:
         record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
-        JSON.stringify(stations.map((s) => [s.step, s.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(chipsOf(record, row, 'Rest of the walk')) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
+        JSON.stringify(stations.map((s) => [s.step, s.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) &&
+        rest?.querySelector('.strip-popover__sentence')?.textContent === 'The rest of the walk did not run: the moves, the rungs and the partitions.' && reason[0] === 'drift hash' &&
         JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
-        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${chipsOf(record, row, 'Admission')[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
-      missing: [...stations.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, s.step).join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${reason[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Admission: ${rowsRead(admission)}`, rest?.textContent ?? 'no rest of the walk popover', JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
     });
     page.unmount();
   }
@@ -8024,6 +8149,7 @@ m.unmount();
     const { card, page, record, row } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
     stripDrawn('probe', card, modelPairs(record, row));
+    await popoversOpen('probe', page, card, record, row);
     const steps = stationsOf(card).map((s) => s.step);
     results.push({
       name: "/routing-log the probe's card is the decision card",
@@ -8036,6 +8162,7 @@ m.unmount();
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
     stripDrawn('failover attempt', card, modelPairs(record, row));
+    await popoversOpen('failover attempt', page, card, record, row);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
       ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
@@ -8060,14 +8187,49 @@ m.unmount();
       ['static', 'none'],
       ['Pick', 'chosen'],
     ]);
+    await popoversOpen('fresh placement', page, card, record, row);
     const stations = stationsOf(card);
     const pick = stations.find((s) => s.step === 'Pick');
+    const lookup = groupOfPopover(await popoverOf(page, stations[0]?.button), 'Lookup');
     results.push({
       name: '/routing-log a card reads a fresh placement',
       ok:
-        sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && stations[0]?.step === 'Pin' && chipsOf(record, row, 'Pin').includes('found none') && pick?.verdict === 'chosen' &&
+        sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && stations[0]?.step === 'Pin' && (popoverRowOf(lookup, 'found') ?? []).includes('found none') && pick?.verdict === 'chosen' &&
         pick.button.classList.contains('strip-station--above') && leavesOf(card).some((l) => l.chosen && l.account === record.outcome.accountId) && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
-      missing: [...stations.map((s) => `${s.step} ${s.verdict}: ${chipsOf(record, row, s.step).join(' / ')}`), JSON.stringify(leavesOf(card))],
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Lookup: ${rowsRead(lookup)}`, JSON.stringify(leavesOf(card))],
+    });
+    page.unmount();
+  }
+  {
+    // A pinned popover closes on Escape and on a click outside it, and one a hover opened closes on Escape while the
+    // pointer rests on its station.
+    const { card, page } = await story('req_ef099b34-453');
+    const pick = stationButton(card, 'pick');
+    const open = () => [...document.querySelectorAll('.strip-popover')];
+    const escape = () => document.body.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+    const seen = [];
+    pick?.click();
+    await page.settle(150);
+    seen.push(`clicked: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}, selected ${pick?.classList.contains('is-selected')}`);
+    escape();
+    await page.settle(50);
+    seen.push(`Escape: ${open().length} open, selected ${pick?.classList.contains('is-selected')}`);
+    pick?.click();
+    await page.settle(150);
+    seen.push(`clicked again: ${open().length} open`);
+    card?.querySelector('.decision-card__sentence')?.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+    await page.settle(50);
+    seen.push(`a click outside: ${open().length} open`);
+    pick?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+    await page.settle(150);
+    seen.push(`hovered: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}`);
+    escape();
+    await page.settle(50);
+    seen.push(`Escape: ${open().length} open`);
+    results.push({
+      name: '/routing-log Escape closes a pinned popover, a click outside closes it too, and Escape closes a hover-opened one',
+      ok: JSON.stringify(seen) === JSON.stringify(['clicked: 1 open, pinned true, selected true', 'Escape: 0 open, selected false', 'clicked again: 1 open', 'a click outside: 0 open', 'hovered: 1 open, pinned false', 'Escape: 0 open']),
+      missing: seen,
     });
     page.unmount();
   }
@@ -8104,6 +8266,7 @@ m.unmount();
     const { card, page, record, row } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
     stripDrawn('fast failover', card, modelPairs(record, row));
+    await popoversOpen('fast failover', page, card, record, row);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
     results.push({
@@ -8118,14 +8281,17 @@ m.unmount();
     const { card, page, record, row } = await story('req_52f62e67-839');
     scan('with main placement', card);
     stripDrawn('with main placement', card, modelPairs(record, row));
+    await popoversOpen('with main placement', page, card, record, row);
     const line = stationsOf(card).find((s) => s.step === 'with main');
-    // A placement beside the main conversation names no entry, which the walk's line for the rung carries as none.
-    const entry = walkLines(record, row).find((l) => l.step === 'Rung: with main')?.hash ?? null;
+    // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
+    const rung = await popoverOf(page, line?.button);
     const read = outcomeOf(card)['Cache read'] ?? [];
     results.push({
       name: '/routing-log a card reads a placement with the main conversation against the input, since it promised no size',
-      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && entry === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
-      missing: [line ? `${line.step} ${line.verdict}: ${chipsOf(record, row, 'Rung: with main').join(' / ')}` : 'no station', JSON.stringify(entry), JSON.stringify(read)],
+      ok:
+        record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && rung !== null && groupOfPopover(rung, 'Entry') === null && rung.querySelector('.decision-card__hash') === null &&
+        read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
+      missing: [line ? `${line.step} ${line.verdict}: ${rowsRead(rung)}` : 'no station', JSON.stringify(read)],
     });
     page.unmount();
   }

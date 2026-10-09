@@ -32,8 +32,8 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 export { stationModel } from '@/lib/decisionStrip';
 export { fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
-// A step's facts as chips, which the strip draws none of, so a card check reads them off the record.
-export { walkLines } from '@/lib/routingLog';
+// The walk's words, so a card check reads a popover's column and its title as the console words them.
+export { keyWord, STEP_NAME } from '@/lib/routingLog';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

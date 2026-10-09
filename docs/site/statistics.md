@@ -485,7 +485,13 @@ eight. The three ways out stand at the line's end (Chosen, Held for a slot, Refu
 filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way out its outcome names. A step
 the record does not carry is drawn dashed before the decisive station and reads "not run" after it. A refusal's walk is
 two stations, the admission refused and the rest of the walk not run, with the reason on the verdict line and in the
-outcome.
+outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover: a table of the members
+for the eligibility, the cool reading, the cap filter and the pick (whose scores read as the Pace column does), a
+grouped list for the pin (lookup, age, warmth) and the shed (windows, round, destinations), a rung's entry (the
+boundary's hash as its first eight characters with the whole hash on hover, its depth, prefix, write, TTL with the
+warm-until time and the gate that refused it), a hold's place, account, slot and bound, a candidate's plan, tier, slots,
+Pace and windows, the outcome's rows on the terminus the decision reached, and for a rule a fired rule cut short the
+names of the rules that did not run. Every list row is a label with its chips, and a step that did not run says so.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines

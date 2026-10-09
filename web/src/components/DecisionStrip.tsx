@@ -1,9 +1,11 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView } from '@/components/DecisionCard';
+import { StripPopover } from '@/components/StripPopover';
 import { Badge } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
+import { anchorPlan } from '@/lib/stripFacts';
 
 /** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
 export type StripAnchor = { kind: 'station'; id: string } | { kind: 'leaf'; index: number } | { kind: 'terminus'; id: TerminusKind };
@@ -27,14 +29,19 @@ const PAINT_ORDER: Record<PathState, number> = { idle: 0, inferred: 1, taken: 2 
 const keyOf = (a: StripAnchor) => (a.kind === 'leaf' ? `leaf:${a.index}` : `${a.kind}:${a.id}`);
 const sameHeights = (a: LabelHeights, b: LabelHeights) => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, h]) => b[id] === h);
 const classes = (...names: (string | false)[]) => names.filter(Boolean).join(' ');
+/** The popover keeps inside the card the strip stands in, or inside the strip where it stands alone. */
+const boundsOf = (el: HTMLElement) => el.closest<HTMLElement>('.decision-card') ?? el.closest<HTMLElement>('.decision-strip') ?? el;
 
 /**
  * The walk as a subway strip: the model from the record, the layout from the slot's width (at least 640 px, re-read on
- * a resize debounced at 120 ms), one SVG for the lines and a button per station, leaf and terminus. `onOpen` is the
- * popover's hook. `selected` marks the anchor whose popover is pinned.
+ * a resize debounced at 120 ms), one SVG for the lines and a button per station, leaf and terminus, each opening the
+ * popover of its facts. One popover is open at a time: a hover opens it, a click pins it and marks its anchor, and a
+ * click outside, a click on another anchor or Escape closes it.
  */
-export function DecisionStrip({ now, onOpen, record, row, selected }: { now: number; onOpen?: (anchor: StripAnchor) => void; record: DecisionRecord; row: DecisionSummary; selected?: StripAnchor | null }): JSX.Element {
+export function DecisionStrip({ now, record, row }: { now: number; record: DecisionRecord; row: DecisionSummary }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const popoverId = `${id}-popover`;
   const [width, setWidth] = useState(MIN_WIDTH);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -80,8 +87,42 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
     }
     if (!sameHeights(next, measured)) setMeasured(next);
   }, [counted, measured]);
-  const picked = selected ? keyOf(selected) : null;
-  const open = (anchor: StripAnchor) => () => onOpen?.(anchor);
+  const [open, setOpen] = useState<{ anchor: StripAnchor; pinned: boolean } | null>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const anchorRef = (anchor: StripAnchor) => (el: HTMLButtonElement | null) => {
+    if (el === null) buttons.current.delete(keyOf(anchor));
+    else buttons.current.set(keyOf(anchor), el);
+  };
+  // A hover opens a popover while none is pinned. A click pins it, or closes the one its anchor already pinned.
+  const enter = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned ? o : { anchor, pinned: false }));
+  const leave = (anchor: StripAnchor) => () => setOpen((o) => (o !== null && !o.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : o));
+  const pin = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : { anchor, pinned: true }));
+  const handlers = (anchor: StripAnchor) => ({ onClick: pin(anchor), onMouseEnter: enter(anchor), onMouseLeave: leave(anchor), ref: anchorRef(anchor) });
+  const pinned = open?.pinned ? open.anchor : null;
+  useEffect(() => {
+    if (pinned === null) return undefined;
+    const onOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const anchors = [...buttons.current.values()];
+      if (!document.getElementById(popoverId)?.contains(target) && !anchors.some((b) => b.contains(target))) setOpen(null);
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [pinned, popoverId]);
+  // Captured on the document ahead of every other handler, so a dialog around the card never takes the key too.
+  useEffect(() => {
+    if (open === null) return undefined;
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(null);
+    };
+    document.addEventListener('keydown', onEscape, true);
+    return () => document.removeEventListener('keydown', onEscape, true);
+  }, [open]);
+  const picked = pinned === null ? null : keyOf(pinned);
   // The line's stations left to right, then the track's, so Tab walks the strip in the record's order.
   const stations = [...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')];
   const termini = model.termini.flatMap((t) => {
@@ -90,6 +131,9 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
   });
   // A move's continuation leaves its terminus a narrower margin than a line does, so the word stacks over the badge.
   const stacked = model.branch?.kind === 'move';
+  // The anchor's button from the last draw: one the new draw leaves out closes its popover as it leaves the document.
+  const anchorEl = open === null ? undefined : buttons.current.get(keyOf(open.anchor));
+  const popover = open === null || anchorEl === undefined ? null : { anchor: anchorEl, at: open.anchor, pinned: open.pinned };
   return (
     <div className="decision-strip" ref={ref}>
       <div className="decision-strip__surface" style={{ height: layout.height, minWidth: MIN_WIDTH }} data-y0={layout.y0} data-leaves={model.leaves.length} data-stations={model.stations.length}>
@@ -124,7 +168,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
               data-index={i}
               aria-label={stationName(s)}
               style={{ left: p.x - label.width / 2, top: label.top, width: label.width }}
-              onClick={open(anchor)}
+              {...handlers(anchor)}
             >
               <span className="strip-station__word">{s.word}</span>
               {s.badge !== '' && <Badge tone={s.tone}>{s.badge}</Badge>}
@@ -167,7 +211,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
               data-leaf={i}
               aria-label={leafName(l)}
               style={{ left: p.x, top: p.y - LEAF_HALF }}
-              onClick={open(anchor)}
+              {...handlers(anchor)}
             >
               {l.accountId !== null && <span className="strip-candidate__account">{l.accountId}</span>}
               <Badge tone={l.tone}>{l.badge}</Badge>
@@ -186,7 +230,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
               data-terminus={t.kind}
               aria-label={terminusName(t)}
               style={{ left, maxWidth: layout.width - left, top: p.y - (stacked ? TERMINUS_LINE_HALF : TERMINUS_ROW_HALF) }}
-              onClick={open(anchor)}
+              {...handlers(anchor)}
             >
               <span className="strip-terminus__word">{t.word}</span>
               {t.state === 'taken' && t.badge !== null && <Badge tone={t.tone}>{t.badge}</Badge>}
@@ -194,6 +238,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
           );
         })}
       </div>
+      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} id={popoverId} now={now} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
     </div>
   );
 }
