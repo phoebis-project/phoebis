@@ -1134,6 +1134,13 @@ export interface AnalyticsGroup {
   incomplete: number;
   keptWarm: { requests: number; tokens: number } | null;
   key: string;
+  /**
+   * An earlier holder's creation in Unix milliseconds under the key grouping, 0 for one with no creation time. Null
+   * for the live key, for every other dimension and for a group folded from request rows.
+   */
+  keyCreatedAt: number | null;
+  /** The key's id for a key group the route answered, so the label is built in the viewer's zone; null otherwise. */
+  keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
   probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };

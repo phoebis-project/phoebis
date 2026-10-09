@@ -110,6 +110,12 @@ export function fmtAbsolute(isoTime: string | null): string {
   });
 }
 
+/** `fmtAbsolute` to the minute: "Sep 14, 2026, 09:31" under the 24-hour format, "09:31 AM" under the 12-hour one. */
+export function fmtMinute(isoTime: string | null): string {
+  if (!isoTime) return '-';
+  return new Date(isoTime).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short', year: 'numeric' });
+}
+
 /** A budget period ends on a UTC day boundary, so its end drops the seconds and the year `fmtAbsolute` prints. */
 export function fmtPeriodEnd(isoTime: string): string {
   return new Date(isoTime).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' });
@@ -132,19 +138,30 @@ export function fmtDayShort(ms: number, timeZone?: string): string {
   return new Date(ms).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone });
 }
 
+/**
+ * A day tick in `timeZone` (the browser's when none is named): the date, and the time beside it where the instant
+ * is not midnight there, so a bucket boundary that is not local midnight says when it falls.
+ */
+export function fmtDayTick(ms: number, timeZone?: string): string {
+  const day = fmtDayShort(ms, timeZone);
+  // Midnight is read on the 24-hour clock whatever the time format, so it compares as one string.
+  const clock = new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', timeZone });
+  return clock === '00:00' ? day : `${day} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', timeZone })}`;
+}
+
 export function fmtHourTick(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
 /**
- * The analytics label of a key generation no live key holds, as the router renders it. Generation 0, the rows the
- * ledger left unstamped, and a generation that is no instant carry no creation time; `toISOString` would throw on
- * the second.
+ * The analytics label of a key generation no live key holds, built here for the route's groups and the fold's alike
+ * so both paths print one shape, the creation minute in the viewer's zone. Generation 0, the rows the ledger left
+ * unstamped, and a generation that is no instant carry no creation time; `toISOString` would throw on the second.
  */
 export const earlierHolderLabel = (id: string, generation: number): string => {
   const created = new Date(generation);
   if (generation === 0 || Number.isNaN(created.getTime())) return `${id} (deleted)`;
-  return `${id} (deleted, created ${created.toISOString().slice(0, 16).replace('T', ' ')} UTC)`;
+  return `${id} (deleted, created ${fmtMinute(created.toISOString())})`;
 };
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */

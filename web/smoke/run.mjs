@@ -9747,7 +9747,56 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const unfiltered = trafficRows();
     const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
-    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    // The run is UTC and the time format the settings' default, so the minute reads on the 24-hour clock.
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created [A-Z][a-z]{2} \d{2}, \d{4}, \d{2}:\d{2}( [AP]M)?\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    {
+      // The month's buckets are six hours wide from 00:00 UTC. The runner's zone is UTC, so a tick on midnight there
+      // is the date alone and a tick on another boundary carries its time, and under a zone where 00:00 UTC is 17:00
+      // the evening before, every tick carries the local time beside the viewer's date. Recharts draws an axis only
+      // inside a sized container, so each read mounts its own page under the burn checks' measure, and the zone goes
+      // back to UTC before anything else renders.
+      const measure = window.HTMLElement.prototype.getBoundingClientRect;
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+      };
+      const monthAxis = async () => {
+        const page = await mount('/analytics');
+        [...page.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === '30d')?.click();
+        await page.settle(700);
+        const read = {
+          label: page.container.querySelector('#traffic .recharts-xAxis .recharts-label')?.textContent?.trim() ?? '',
+          ticks: [...page.container.querySelectorAll('#traffic .recharts-xAxis .recharts-cartesian-axis-tick text')].map((t) => t.textContent?.trim() ?? ''),
+        };
+        page.unmount();
+        return read;
+      };
+      let utc = { label: '', ticks: [] };
+      let zoned = { label: '', ticks: [] };
+      try {
+        utc = await monthAxis();
+        process.env.TZ = 'America/Los_Angeles';
+        zoned = await monthAxis();
+      } finally {
+        process.env.TZ = 'UTC';
+        window.HTMLElement.prototype.getBoundingClientRect = measure;
+      }
+      await tab(m, 'Burn');
+      const headTitle = [...m.container.querySelectorAll('.budgets-table thead th')].find((th) => th.textContent?.trim() === 'Period ends')?.getAttribute('title') ?? 'no title';
+      await tab(m, 'Traffic');
+      results.push({
+        name: "/analytics the day ticks print the viewer's date with the time where the boundary is not local midnight, the axis says days start at 00:00 UTC, and the budgets head says a period ends at midnight UTC",
+        ok:
+          utc.label === 'days start at 00:00 UTC' &&
+          utc.ticks.length > 0 &&
+          utc.ticks.every((t) => /^[A-Z][a-z]{2} \d{2}( (06|12|18):00)?$/.test(t)) &&
+          utc.ticks.some((t) => /^[A-Z][a-z]{2} \d{2}$/.test(t)) &&
+          zoned.ticks.length > 0 &&
+          zoned.ticks.every((t) => /^[A-Z][a-z]{2} \d{2} (05|11|17|23):00$/.test(t)) &&
+          zoned.ticks.some((t) => / 17:00$/.test(t)) &&
+          headTitle === 'a period ends at midnight UTC',
+        missing: [`axis: ${utc.label}`, `utc: ${utc.ticks.join(', ')}`, `zoned: ${zoned.ticks.join(', ')}`, `head title: ${headTitle}`],
+      });
+    }
     {
       // The mock's raw rows rather than the page's sums of them: an hour both generations filled would still
       // split into two key groups, so only the rows show it. The runner's zone is UTC, so the holder's day reads

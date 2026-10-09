@@ -171,6 +171,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     incomplete,
     keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens: sum(counted, (r) => r.keptWarm.tokens) },
     key,
+    keyCreatedAt: null,
+    keyId: null,
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
@@ -202,6 +204,17 @@ const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
   return earlierHolderLabel(id, Number(generation));
 };
 
+/**
+ * The holder a key group names beside its label, as the route answers it: the id, and an earlier holder's generation
+ * as its creation instant. The live key and the reserved id carry no instant, and every other dimension carries null.
+ */
+const holderOf = (key: string, groupBy: AnalyticsGroupBy): Pick<AnalyticsGroup, 'keyCreatedAt' | 'keyId'> => {
+  if (groupBy !== 'key') return { keyCreatedAt: null, keyId: null };
+  if (!key.includes('@')) return { keyCreatedAt: null, keyId: key };
+  const [id, generation] = key.split('@');
+  return { keyCreatedAt: Number(generation), keyId: id };
+};
+
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const named = q.userAgentGroups ?? [];
   // A pattern list names the groups under the client dimension; every client none of them names falls under
@@ -209,7 +222,7 @@ export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGrou
   const of = q.groupBy === 'user_agent' && named.length ? (r: HourlyRollup) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
-  return [...buckets.entries()].map(([key, list]) => groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {

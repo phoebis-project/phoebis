@@ -8,7 +8,7 @@ import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
-import { fmtDate } from '@/lib/format';
+import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { isFastScope } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey } from '@/lib/windows';
@@ -639,12 +639,18 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const s = rec(g.savings);
   const t = rec(g.tokens);
   const c = rec(g.cost);
+  const keyId = strOrNull(g.key_id);
+  const keyCreatedAt = numOrNull(g.key_created_at);
   return {
     attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cost: { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) }, costUsd: num(g.cost_usd),
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
-    incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
+    incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), keyCreatedAt, keyId,
+    // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
+    // holder's members, and keeps the wire's label where the route alone knows it (a live key's id, the reserved id's
+    // `unattributed`).
+    label: keyId !== null && keyCreatedAt !== null ? earlierHolderLabel(keyId, keyCreatedAt) : str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),

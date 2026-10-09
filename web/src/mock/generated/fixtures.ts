@@ -516,6 +516,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "key": "desktop",
           "label": "desktop",
+          "key_id": "desktop",
           "requests": 5,
           "succeeded": 3,
           "rate_limited": 0,
@@ -867,6 +868,8 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "key": "desktop@940000",
           "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+          "key_id": "desktop",
+          "key_created_at": 940000,
           "requests": 1,
           "succeeded": 1,
           "rate_limited": 0,
@@ -2746,6 +2749,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "key": "desktop",
               "label": "desktop",
+              "key_id": "desktop",
               "requests": 2,
               "succeeded": 1,
               "rate_limited": 0,
@@ -3096,6 +3100,8 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "key": "desktop@940000",
               "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+              "key_id": "desktop",
+              "key_created_at": 940000,
               "requests": 1,
               "succeeded": 1,
               "rate_limited": 0,
@@ -3449,6 +3455,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "key": "desktop",
               "label": "desktop",
+              "key_id": "desktop",
               "requests": 3,
               "succeeded": 2,
               "rate_limited": 0,

@@ -20,7 +20,7 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
 
@@ -1311,13 +1311,14 @@ function CostByGroup({ axis, points, groupBy, groupSlot, loading }: { axis: Time
 const UNFILTERED_NOTE = '; the filters above do not apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
- * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their day ticks print
- * the UTC date and the axis says so once; hour ticks stay local, as the tooltips do.
+ * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
+ * viewer's date with the local time beside it where the boundary is not local midnight, and the axis names the
+ * boundary once; hour ticks stay local, as the tooltips do.
  */
 function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
   if (bucketMs < 6 * HOUR) return { tickFormatter: (v) => fmtHourTick(v) };
   // The label sits under the last tick, so the axis grows a line taller than its 30 px to keep the two apart.
-  return { height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'UTC days' }, tickFormatter: (v) => fmtDayShort(v, 'UTC') };
+  return { height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
 }
 
 type SpeedRow = { at: number; fast: number; standard: number };
@@ -1678,7 +1679,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
               <th className="col-fill">Account</th>
               <th className="col-fit">Spent</th>
               <th className="right col-fit">Budget</th>
-              <th className="col-fit">Period ends</th>
+              <th className="col-fit" title="a period ends at midnight UTC">Period ends</th>
             </tr>
           </thead>
           <tbody>

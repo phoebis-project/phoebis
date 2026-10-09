@@ -567,12 +567,14 @@ request folds under the reserved value alongside a keepalive credit, and a reque
 reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
 `standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
 as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
-with the key that spent them. The earlier holder is labeled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
-and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
-client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
-token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects
-nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*`
-as two groups, every other agent under `other`.
+with the key that spent them. The earlier holder is labeled `<id> (deleted, created Sep 14, 2026, 09:31)`, the date and
+time it was created at minute precision in your zone, or `<id> (deleted)` when the ledger holds no creation time for
+it. The client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the
+folded token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`)
+selects nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups, every other agent under `other`. The charts' day ticks print the date in your zone,
+with the time beside a tick where a bucket boundary is not midnight there, and the axis says that days start at 00:00
+UTC.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
