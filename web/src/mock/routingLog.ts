@@ -486,6 +486,9 @@ function pickOf(candidates: RecordCandidate[], chosen: string | null, strategy: 
   return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: top, unit: unit(winner) }, tierSize: tier.length };
 }
 
+/** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
+const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+
 /** The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads. */
 function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { facts: WalkFact[]; left: RecordCandidate[] } {
   const facts: WalkFact[] = [];
@@ -498,10 +501,9 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { fact
     } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
   };
   if (r.canonicalModel.includes('fable')) {
-    // A model with a week of its own draws on both shared windows too. A member spent on any of them is out rather
-    // than passed over, so this partition never falls through. An `allow` pool keeps one whose extra usage the record
-    // reads as unblocked, and a member without a credits reading is not funded.
-    const spent = (c: RecordCandidate) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (c.windows[w]?.utilization ?? 0) >= 1);
+    // A spent member is out rather than passed over, so this partition never falls through. An `allow` pool keeps one
+    // whose extra usage the record reads as unblocked, and a member without a credits reading is not funded.
+    const spent = (c: RecordCandidate) => spentForFable((w) => c.windows[w]?.utilization);
     const funded = (c: RecordCandidate) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
     const kept = left.filter((c) => !spent(c) || funded(c));
     facts.push(fact('spent', left.length - kept.length));
@@ -900,9 +902,11 @@ function derivedSpecs(r: RequestLog): Spec[] {
       holds.push({ accountId: waitedOn, attempt, cohort: null, heldMs: bound });
     }
     // Past the bound the relay passes each account it could hold on over and selects again, so the selection that
-    // answers finds every one of them attempted and nothing eligible.
+    // answers finds every one of them attempted and nothing eligible. A Fable request's spent member drops before the
+    // cap, so it takes no hold and is never passed over. The windows are the ones the answering record reads.
     const fast = r.shape.requestedSpeed === 'fast';
-    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null);
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, onAt + bound, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
+    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null && !spent(id));
     const passedOver = [...new Set([...attempted, ...(waitedOn ? [waitedOn] : []), ...servable])];
     specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: passedOver, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
   };

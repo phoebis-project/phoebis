@@ -69,7 +69,10 @@ async function decisionsOf(s) {
   return records.filter((r) => r !== null);
 }
 
-/** The set a record's partitions narrow: a move's destinations (the cap filter's facts name them), else the eligible members. */
+/**
+ * The set a record's partitions narrow: a move's destinations (the cap filter's facts name them), else the eligible
+ * members.
+ */
 function narrowedSetOf(r) {
   const capFilter = r.walk.find((w) => w.step === 'cap_filter');
   const among = capFilter ? new Set(capFilter.facts.map((f) => f.accountId)) : null;
@@ -402,6 +405,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const records = await decisionsOf(s);
     assert.ok(records.length > 20);
+    // Two run-outs keep a member out on a cooldown or a credits block at the moment the bound ran out, which would name
+    // the exhaustion after that block, while the story's row reports the accounts at their cap, an untimed answer.
+    const untimedBesideABlock = new Set(['req_48db1b37-495/3', 'req_151f3e2e-d99/2']);
     const seen = { exhausted: 0, held: 0, ranOut: 0 };
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
@@ -432,6 +438,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           assert.equal(r.walk.find((w) => w.step === 'eligible')?.verdict, 'none', walk);
           assert.ok(r.candidates.every((c) => c.obstacle !== null), `${id}: a member left eligible`);
           for (const h of r.request.holds) assert.equal(r.candidates.find((c) => c.accountId === h.accountId)?.obstacle?.name, 'attempted', `${id}: ${h.accountId}`);
+          // The exhaustion is named after the members' obstacles, and with every member attempted that reads untimed.
+          assert.equal(r.outcome.exhaustion?.kind, 'untimed', id);
+          assert.equal(r.candidates.every((c) => c.obstacle.name === 'attempted'), !untimedBesideABlock.has(id), `${id}: ${r.candidates.map((c) => `${c.accountId} ${c.obstacle.name}`).join(', ')}`);
         }
       } else {
         // A rung places the request itself, and the strategy picks only where no rung matched.
@@ -490,6 +499,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { pace: { remaining: all.paceFloor } })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 1]]);
     // A token count takes no slot, so the cap keeps every member, even with each at it.
     assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]);
+    // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
+    // the account the request waits on or passes over.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
   });
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
