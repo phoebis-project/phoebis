@@ -318,7 +318,7 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
-            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(new Date(loadedAt).toISOString())}; Refresh reads up to now`}>
+            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(new Date(loadedAt).toISOString())}. Refresh reads up to now`}>
               Refresh
             </Button>
             <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />

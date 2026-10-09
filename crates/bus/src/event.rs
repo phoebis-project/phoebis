@@ -454,54 +454,6 @@ impl Event {
     }
 }
 
-/// What the keepalive engine learns from the companion about a session, sent on the lifecycle channel when a
-/// consumer is wired. Not an `Event`: it belongs to no request, and the request bus drops under pressure while these
-/// must not.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SessionLifecycle {
-    AgentReleased {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-    },
-    AgentStarted {
-        key_id: String,
-        session_id: String,
-        agent_id: String,
-    },
-    /// The companion is still attending the session, which is a sign of life rather than a turn: the idle
-    /// clock reads requests alone, and this only keeps the session from being forgotten.
-    Heartbeat {
-        key_id: String,
-        session_id: String,
-    },
-    MainParked {
-        key_id: String,
-        session_id: String,
-    },
-    MainResumed {
-        key_id: String,
-        session_id: String,
-    },
-    SessionEnded {
-        key_id: String,
-        session_id: String,
-    },
-    SessionStarted {
-        key_id: String,
-        session_id: String,
-    },
-}
-
-pub type LifecycleSender = tokio::sync::mpsc::UnboundedSender<SessionLifecycle>;
-pub type LifecycleReceiver = tokio::sync::mpsc::UnboundedReceiver<SessionLifecycle>;
-
-/// Unbounded, because the producer holds the engine's lock while it sends and these are the few transitions of
-/// a session rather than a stream of its traffic.
-pub fn lifecycle_channel() -> (LifecycleSender, LifecycleReceiver) {
-    tokio::sync::mpsc::unbounded_channel()
-}
-
 /// Request headers no consumer may see, mirroring the relay's outbound rule so that what keepalive replays is
 /// what the caller sent. It holds the relay's `NEVER_COPIED` set (a unit test in crates/relay/src/headers.rs
 /// asserts the two agree, since the bus may not depend on the relay), the credentials, and the framing headers

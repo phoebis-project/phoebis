@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
@@ -335,6 +335,24 @@ export function decodeCacheTtl(v: unknown): PoolCacheTtl {
   };
 }
 
+const decodeRange = (v: unknown): Range => {
+  const r = rec(v);
+  return { max: num(r.max), min: num(r.min) };
+};
+
+/** A pool with no member answers null, and so does a row from a router that resolves nothing. */
+export function decodeKeepaliveResolved(v: unknown): Pool['keepaliveResolved'] {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = rec(v);
+  return {
+    breakEvenSeconds: decodeRange(r.break_even_seconds),
+    horizonSeconds: decodeRange(r.horizon_seconds),
+    idleSeconds: decodeRange(r.idle_seconds),
+    idleShare: decodeRange(r.idle_share),
+    parkedSeconds: decodeRange(r.parked_seconds),
+  };
+}
+
 export function decodePool(v: unknown): Pool {
   const p = rec(v);
   const k = rec(p.keepalive);
@@ -351,10 +369,9 @@ export function decodePool(v: unknown): Pool {
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
     keepalive: {
-      capWindowSharePerDay: numOrNull(k.probe_cap_window_share_per_day), coldProbeLimit: num(k.cold_probe_limit), costCapUsdPerDay: numOrNull(k.probe_cost_cap_usd_per_day), enabled: bool(k.enabled), jitterSeconds1h: num(k.jitter_seconds_1h), jitterSeconds5m: num(k.jitter_seconds_5m),
-      leadSeconds1h: num(k.lead_seconds_1h), leadSeconds5m: num(k.lead_seconds_5m), maxIdleSeconds: num(k.max_idle_seconds), maxIdleTicks: num(k.max_idle_ticks), netNegativeGraceProbes: num(k.net_negative_grace_probes),
-      retryMaxSeconds: num(k.retry_max_seconds), retrySeconds: num(k.retry_seconds), stopWhenNetNegative: bool(k.stop_when_net_negative), warmSubagents: bool(k.warm_subagents, true),
+      enabled: bool(k.enabled), maxIdleSeconds: num(k.max_idle_seconds), maxParkedSeconds: numOrNull(k.max_parked_seconds), scheduledHorizonSeconds: numOrNull(k.scheduled_horizon_seconds),
     },
+    keepaliveResolved: decodeKeepaliveResolved(p.keepalive_resolved),
     // A row without the key fields reads as the store's defaults.
     keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
     members: list(p.members).map(rec).map((m) => ({
@@ -636,7 +653,6 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const g = rec(v);
   const h = rec(g.histograms);
   const p = rec(g.percentiles);
-  const s = rec(g.savings);
   const t = rec(g.tokens);
   const c = rec(g.cost);
   return {
@@ -646,10 +662,10 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },
-    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
+    probeCostUsd: num(g.probe_cost_usd), probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
-    savings: { grossUsd: num(s.gross_usd), probeCostUsd: num(s.probe_cost_usd), wastedProbeReasons: record(WASTED_PROBE_REASONS, s.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(s.wasted_probe_usd), wastedProbes: num(s.wasted_probes) },
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
+    wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };
 }
 export const decodeAnalyticsPoint = (v: unknown): AnalyticsPoint => ({ at: isoOr(rec(v).at, epoch), groups: list(rec(v).groups).map(decodeAnalyticsGroup) });
@@ -701,8 +717,8 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked'] as const;
-const agentState = (v: unknown): Session['keepalive']['state'] => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
+export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const satisfies readonly KeepaliveState[];
+const agentState = (v: unknown): KeepaliveState | null => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
 export const GUARD_VERDICT_VALUES = ['auxiliary', 'foreign', 'rearm', 'restart'] as const;
 const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
 
@@ -712,26 +728,71 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netFiveHourShare: numOrNull(k.net_five_hour_share), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
-export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cap_reached', 'cold_probes', 'cooled', 'evicted', 'expired', 'idle_limit', 'ledger_behind', 'net_negative', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
-export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
+/** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
+export const RECIPE_CAUSE_VALUES = ['affinity_too_short', 'agent_released', 'agent_unknown', 'awaiting_cache_evidence', 'awaiting_request', 'awaiting_selection', 'budget', 'bus_gap', 'cooled', 'evicted', 'expired', 'expired_at_restart', 'fixed_thinking', 'forced_tool', 'headers_too_large', 'horizon', 'idle_limit', 'ineligible_credential', 'instance_replaced', 'invalid_cache_control', 'invalid_model', 'invalid_probe_usage', 'invalid_request', 'keepalive_off', 'key_opted_out', 'lease_expired', 'ledger_behind', 'missing_account', 'no_cache_evidence', 'no_probe_cache_evidence', 'opted_out', 'overage', 'owner_mismatch', 'parked_limit', 'partial_cache_coverage', 'paused', 'pool_disabled', 'probe_authentication_error', 'probe_pool_exhausted', 'probe_quota_exhausted', 'probe_retry_limit', 'probe_transport_error', 'probing', 'reauth', 'released', 'repeated_cold_probe', 'request_canceled', 'request_failed', 'request_limit', 'request_rejected', 'request_too_large', 'reset', 'retryable_probe_error', 'scheduled', 'session_ended', 'session_expired', 'slow_probe', 'storage_limit', 'structured_output', 'unexpected_output', 'unsupported_probe', 'unsupported_shape'] as const satisfies readonly RecipeCause[];
+const recipeCause = (v: unknown): RecipeCause | null => RECIPE_CAUSE_VALUES.find((x) => x === str(v)) ?? null;
+export const RECIPE_STATE_VALUES = ['ended', 'held', 'not_retained', 'paused', 'retained'] as const satisfies readonly RecipeState[];
+export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const satisfies readonly ParkKind[];
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), netFiveHourShare: num(r.net_five_hour_share), netUsd: num(r.net_usd), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
+  return {
+    accountId: strOrNull(r.account_id),
+    agentId: str(r.agent_id),
+    agentState: agentState(r.agent_state) ?? 'unknown',
+    cause: recipeCause(r.cause) ?? 'scheduled',
+    creditedToday: num(r.credited_today),
+    deadline: isoOrNull(r.deadline),
+    keyId: str(r.key_id),
+    lastGuard: guardVerdict(r.last_guard),
+    lastProbeAt: isoOrNull(r.last_probe_at),
+    lastRequestAt: isoOrNull(r.last_request_at),
+    model: str(r.model),
+    nextProbeAt: isoOrNull(r.next_probe_at),
+    parkKind: PARK_KIND_VALUES.find((x) => x === str(r.park_kind)) ?? null,
+    poolId: str(r.pool_id),
+    probesToday: num(r.probes_today),
+    sessionId: str(r.session_id),
+    state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'retained',
+    ttlSeconds: num(r.ttl_seconds),
+    wakeAt: isoOrNull(r.wake_at),
+  };
 }
 
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   const o = rec(v);
   const p = rec(o.probes_24h);
-  return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, busGaps: num(o.bus_gaps), costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), held: num(p.held), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) } };
+  const l = rec(o.limits);
+  const limit = (x: unknown) => ({ count: num(rec(x).count), max: num(rec(x).max) });
+  const pools = Array.isArray(o.pools) ? o.pools.map(rec) : [];
+  return {
+    agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) },
+    busGaps: num(o.bus_gaps),
+    expiredBetweenTurns24h: num(o.expired_between_turns_24h),
+    limits: { agents: limit(l.agents), retainedBytes: limit(l.retained_bytes), sessions: limit(l.sessions) },
+    pools: pools.map((q) => ({
+      credited24h: num(q.credited_24h),
+      idleReturns: (Array.isArray(q.idle_returns) ? q.idle_returns.map(rec) : []).map((b) => ({ fromSeconds: num(b.from_seconds), reached: num(b.reached), returned: num(b.returned), toSeconds: numOrNull(b.to_seconds) })),
+      poolId: str(q.pool_id),
+      probes24h: num(q.probes_24h),
+      wasted24h: num(q.wasted_24h),
+      wastedReasons24h: record(WASTED_PROBE_REASONS, q.wasted_reasons_24h, emptyWastedProbeReasons),
+    })),
+    probes24h: { failed: num(p.failed), held: num(p.held), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
+  };
 }
 
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 
-const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
-const price = (model: string, m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model });
+const priceCells = (m: Rec): PriceCells => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
+const price = (model: string, m: Rec): ModelPrice => ({
+  ...priceCells(m),
+  fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null,
+  longContext: m.long_context && typeof m.long_context === 'object' ? { ...priceCells(rec(m.long_context)), over: num(rec(m.long_context).over) } : null,
+  model,
+});
 /**
  * The instant a table's free-text `effective` date parses to, or null. A text that is not a date is kept as sent rather
  * than throwing, which would fail the whole settings answer and every page that reads it. Only text opening with an
@@ -842,14 +903,12 @@ const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] =
 
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
-  const k = rec(s.keepalive);
   const l = rec(s.listeners);
   const store = rec(s.storage);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
-    keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
@@ -903,7 +962,7 @@ export const encodePool = (i: PoolInput) => ({
   cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
-  keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
+  keepalive: { enabled: i.keepalive.enabled, max_idle_seconds: i.keepalive.maxIdleSeconds, max_parked_seconds: i.keepalive.maxParkedSeconds, scheduled_horizon_seconds: i.keepalive.scheduledHorizonSeconds },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })), shed_ahead_of_pace: i.shedAheadOfPace,
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, select_below_utilization: i.selectBelowUtilization,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,

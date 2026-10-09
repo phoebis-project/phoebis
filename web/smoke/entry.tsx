@@ -31,7 +31,8 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { fmtCompact, fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { keyWord, STEP_NAME } from '@/lib/routingLog';

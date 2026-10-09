@@ -63,7 +63,7 @@ test('a pool creation refuses the values a pool edit refuses', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));
-  await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, coldProbeLimit: 0 }, name: 'cold' }), refusedAs(400, 'keepalive.cold_probe_limit must be between 1 and 20, not 0'));
+  await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, maxParkedSeconds: 59 }, name: 'cold' }), refusedAs(400, 'keepalive.max_parked_seconds must be between 60 and 604800, not 59'));
   await assert.rejects(() => api.createPool({ ...all, bodyCaptureHours: 100_000, name: 'hoard' }), refusedAs(400, 'body_capture_hours exceeds stats.body_capture_max_hours'));
   assert.equal((await api.listPools()).some((p) => ['cold', 'hoard', 'short'].includes(p.id)), false);
 });
@@ -174,8 +174,8 @@ test('a pool answers its keys from the key registry', async () => {
 });
 
 const staleAs = (message) => (e) => e instanceof d.ApiError && e.status === 409 && e.message === message && e.code === 'stale_edit';
-const POOL_STALE = 'the pool changed while it was being edited; reload and try again';
-const KEY_STALE = 'the key changed while it was being edited; reload and try again';
+const POOL_STALE = 'the pool changed while it was being edited, so reload and try again';
+const KEY_STALE = 'the key changed while it was being edited, so reload and try again';
 const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
 
 /** The route's token: the row's incarnation above the 42 bits of its stamp. */

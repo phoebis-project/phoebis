@@ -8,23 +8,29 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, LifecycleSender, Outcome,
-    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
+    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
+    RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
+use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
-use phoebis_relay::Relay;
+use phoebis_relay::{CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
-use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
+use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy, FIVE_MINUTES_MS, MAX_WORKERS};
-use crate::probe::{run_job, wasted_label, ProbeJob};
+use crate::breakeven::{
+    resolve, resolve_pool, shipped_tightest, Ceilings, FactorRows, ResolvedCeilings,
+};
+use crate::config::{
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
+};
+use crate::persist::Dirty;
+use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::{gross_saving, settlement_unit};
 use crate::usage::ProbeUsage;
+use crate::view::{recipe_state, RecipeState};
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
 
@@ -33,7 +39,9 @@ pub const MAIN_AGENT: &str = "main";
 
 pub type SessionKey = (String, String);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Busy,
@@ -66,26 +74,72 @@ impl AgentState {
     }
 }
 
+/// What a parked agent waits on: a background task of its own, a scheduled wakeup, or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParkKind {
+    Background,
+    Both,
+    Scheduled,
+}
+
+impl ParkKind {
+    pub fn parse(s: &str) -> Option<ParkKind> {
+        Some(match s {
+            "background" => ParkKind::Background,
+            "both" => ParkKind::Both,
+            "scheduled" => ParkKind::Scheduled,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParkKind::Background => "background",
+            ParkKind::Both => "both",
+            ParkKind::Scheduled => "scheduled",
+        }
+    }
+}
+
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
 /// cache. The label the wasted count carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Wasted {
     ColdReturn,
     Evicted,
     Expired,
+    Horizon,
     IdleLimit,
+    ParkedLimit,
     Released,
     Replaced,
     SessionEnded,
 }
 
 impl Wasted {
+    /// Every label, so a reader lists the ones no probe carried at zero rather than leaving them out.
+    pub const ALL: [Wasted; 9] = [
+        Wasted::ColdReturn,
+        Wasted::Evicted,
+        Wasted::Expired,
+        Wasted::Horizon,
+        Wasted::IdleLimit,
+        Wasted::ParkedLimit,
+        Wasted::Released,
+        Wasted::Replaced,
+        Wasted::SessionEnded,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Wasted::ColdReturn => "cold_return",
             Wasted::Evicted => "evicted",
             Wasted::Expired => "expired",
+            Wasted::Horizon => "horizon",
             Wasted::IdleLimit => "idle_limit",
+            Wasted::ParkedLimit => "parked_limit",
             Wasted::Released => "released",
             Wasted::Replaced => "replaced",
             Wasted::SessionEnded => "session_ended",
@@ -117,13 +171,14 @@ reasons! {
     AwaitingSelection => "awaiting_selection",
     Budget => "budget",
     BusGap => "bus_gap",
-    CapReached => "cap_reached",
     Cooled => "cooled",
     Evicted => "evicted",
     Expired => "expired",
+    ExpiredAtRestart => "expired_at_restart",
     FixedThinking => "fixed_thinking",
     ForcedTool => "forced_tool",
     HeadersTooLarge => "headers_too_large",
+    Horizon => "horizon",
     IdleLimit => "idle_limit",
     IneligibleCredential => "ineligible_credential",
     InstanceReplaced => "instance_replaced",
@@ -136,12 +191,12 @@ reasons! {
     LeaseExpired => "lease_expired",
     LedgerBehind => "ledger_behind",
     MissingAccount => "missing_account",
-    NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",
     NoProbeCacheEvidence => "no_probe_cache_evidence",
     OptedOut => "opted_out",
     Overage => "overage",
     OwnerMismatch => "owner_mismatch",
+    ParkedLimit => "parked_limit",
     PartialCacheCoverage => "partial_cache_coverage",
     Paused => "paused",
     PoolDisabled => "pool_disabled",
@@ -167,14 +222,28 @@ reasons! {
     SlowProbe => "slow_probe",
     StorageLimit => "storage_limit",
     StructuredOutput => "structured_output",
-    SubagentsOff => "subagents_off",
     UnexpectedOutput => "unexpected_output",
     UnsupportedProbe => "unsupported_probe",
     UnsupportedShape => "unsupported_shape",
 }
 
+/// A cause leaves the engine as its word, the one the counters and the stored payload already key it by.
+impl serde::Serialize for Reason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
+/// two never disagree on where a day ends.
+pub(crate) fn utc_day(ms: i64) -> i64 {
+    ms.div_euclid(DAY_MS)
+}
+
 /// What an observation does to the agent's recipe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Guard {
     Auxiliary,
@@ -216,6 +285,109 @@ pub fn guard(
     Guard::Foreign
 }
 
+/// The lower bounds of the ten idle-age buckets, in seconds: 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then
+/// 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32 hours, and above.
+pub const IDLE_AGE_BOUNDS_SECONDS: [u64; 10] = [
+    0, 300, 900, 1_800, 3_600, 7_200, 14_400, 28_800, 57_600, 115_200,
+];
+
+/// The bucket of an idle window `age_ms` old. An age below zero, from a clock that stepped back, reads as the first.
+pub fn idle_age_bucket(age_ms: i64) -> usize {
+    IDLE_AGE_BOUNDS_SECONDS
+        .iter()
+        .rposition(|&bound| age_ms >= bound as i64 * 1_000)
+        .unwrap_or(0)
+}
+
+/// One idle-age bucket of a pool: the idle windows of main that reached the bucket's start, and those whose next
+/// request from main continued the same prefix inside the bucket.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IdleReturnBucket {
+    pub reached: u64,
+    pub returned: u64,
+}
+
+/// One pool's counters, a bucket per bound of `IDLE_AGE_BOUNDS_SECONDS`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IdleReturns {
+    pub buckets: [IdleReturnBucket; 10],
+}
+
+/// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix main's
+/// last admitted request carried when the window opened (kept apart from the recipe, so a return is judged against it
+/// after a ceiling discarded the recipe and on a pool that retains none), the moment a prompt announced the return,
+/// when one has, and the pool the window counts under, fixed at the open so a key that moves pools mid-window keeps
+/// the window's buckets in one pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IdleEpisode {
+    pub started: i64,
+    pub bucket: Option<usize>,
+    pub anchor: Option<(String, String)>,
+    pub prompt_at: Option<i64>,
+    pub pool_key: String,
+}
+
+/// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's tail hash.
+/// The chain is the only evidence, and the request's class is none: a refreshing class whose chain lacks the tail
+/// hash answers false where `guard` re-arms it, as do a request with no chain and an absent anchor.
+pub fn continues_prefix(anchor: Option<(&str, &str)>, boundaries: &[String]) -> bool {
+    anchor.is_some_and(|(_, tail)| boundaries.iter().any(|boundary| boundary == tail))
+}
+
+/// Raises `reached` in the buckets after `counted` up to `bucket`. A tick and the request that ends a window both
+/// count through here, and `counted` is the fence that keeps them from raising one bucket twice for one window. A
+/// bucket at or below the fence raises nothing: the wall clock can step back, and a tick can take the lock with a
+/// later `now` than a request or a report that read the clock before it.
+fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usize) {
+    let from = counted.map_or(0, |c| c + 1);
+    for counter in counters.buckets.iter_mut().take(bucket + 1).skip(from) {
+        counter.reached += 1;
+    }
+}
+
+/// The pool a window counts under, read once at its open: the pool the session's key is in now, read as
+/// `refresh_policy` reads it, else the agent's own pool id, else the pinned account's own id for an account outside
+/// every pool, so no window counts under the empty key, which no pool row reads. The key comes first because the
+/// agent's pool id is a copy only an admitted selection or a retained recipe's tick refreshes.
+fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
+    snapshot
+        .key(&agent.key_id)
+        .and_then(|key| snapshot.pool(&key.pool_id))
+        .map(|pool| pool.id.clone())
+        .or_else(|| (!agent.pool_id.is_empty()).then(|| agent.pool_id.clone()))
+        .or_else(|| agent.account.clone())
+}
+
+/// Opens main's idle window when none is counted and main is idle or parked, from a start past the floor. The report
+/// that moves main there opens it, so a prompt inside the same second still ends a window, and the tick opens the
+/// ones a presence, a park's end or a load left unopened. True when a window opened.
+pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -> bool {
+    if main.idle_episode.is_some()
+        || matches!(
+            main.state,
+            AgentState::Busy | AgentState::Released | AgentState::Unknown
+        )
+    {
+        return false;
+    }
+    let start = main.idle_window_start();
+    if main.idle_window_floor.is_some_and(|floor| start <= floor) {
+        return false;
+    }
+    // One lookup per window, so a key that moves pools takes its next window with it.
+    let Some(pool_key) = idle_returns_key(snapshot, main) else {
+        return false;
+    };
+    main.idle_episode = Some(IdleEpisode {
+        started: start,
+        bucket: None,
+        anchor: main.last_prefix.clone(),
+        prompt_at: None,
+        pool_key,
+    });
+    true
+}
+
 /// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
 pub type SavingsUnit = phoebis_routing::BurnUnit;
 
@@ -245,30 +417,6 @@ impl Funding {
     }
 }
 
-/// The two balances of an agent; a settlement lands in the unit of the attempt it settles, the plan side as the
-/// share of the account's 5-hour window.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Net {
-    pub five_hour_share: f64,
-    pub usd: f64,
-}
-
-impl Net {
-    pub fn in_unit(&self, unit: SavingsUnit) -> f64 {
-        match unit {
-            SavingsUnit::Usd => self.usd,
-            SavingsUnit::WindowShare => self.five_hour_share,
-        }
-    }
-
-    pub(crate) fn add(&mut self, unit: SavingsUnit, delta: f64) {
-        match unit {
-            SavingsUnit::Usd => self.usd += delta,
-            SavingsUnit::WindowShare => self.five_hour_share += delta,
-        }
-    }
-}
-
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
@@ -276,8 +424,6 @@ pub struct EngineParts {
     /// same value the relay's `Limits` gets, so the probe gate and the selector read one account the same way.
     pub cooldown_fallback: Duration,
     pub ledger: Ledger,
-    /// Where the companion's reports go when a consumer is wired; `None` when nothing is listening, as in the binary.
-    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     /// The relay's per-body bound: the largest body a recipe may retain, so every request the relay accepts is
     /// retainable.
@@ -287,17 +433,25 @@ pub struct EngineParts {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
-    /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
-    /// saving is a share of, and the budgets a restart resumes.
+    /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe is a share
+    /// of, and the sessions and recipes a restart resumes.
     pub store: Arc<Store>,
-    /// The subscription cost model, for a probe or a kept-warm saving on a plan-funded attempt.
+    /// The subscription cost model, for a probe on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
+    /// The schedule's leads, jitters and retry limits: `KeepaliveTiming::for_start()` in the binary, and a test's
+    /// own numbers where it asserts exact times.
+    pub timing: KeepaliveTiming,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EngineStats {
     pub agents: usize,
     pub bus_gaps: u64,
+    /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
+    /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
+    pub late_updates: u64,
+    /// The sessions `max_sessions` bounds: an ended session keeps its entry until the expiry and holds no slot.
+    pub live_sessions: usize,
     pub retained_bytes: usize,
     pub running_probes: usize,
     pub sessions: usize,
@@ -321,7 +475,19 @@ pub(crate) struct Session {
     pub owner_id: Option<String>,
     pub last_report_at: i64,
     pub last_real_at: Option<i64>,
+    /// A session the load restored from a save that held it attended keeps the attended reading of the ceilings until
+    /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
+    /// within its lease, and a parked recipe must not be discarded as idle before it can.
+    pub restored_until: Option<i64>,
     pub agents: BTreeMap<String, Agent>,
+}
+
+impl Session {
+    /// Whether the ceilings read the session as attended at `now`: as the mod's lease says, or as the save said for
+    /// one lease length after a load.
+    pub(crate) fn attended_at(&self, now: i64) -> bool {
+        self.attended || self.restored_until.is_some_and(|until| now < until)
+    }
 }
 
 pub(crate) struct Agent {
@@ -334,18 +500,42 @@ pub(crate) struct Agent {
     /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
     /// worker that started on the old one must not touch the new one's bookkeeping.
     pub incarnation: u64,
+    /// Written through `set_state`, which ends the park on any move out of `Parked`.
     pub state: AgentState,
+    // The park the last `parked` report described, cleared with `park_began` on every move out of `Parked`, so a
+    // reader never finds a park on an agent that is not parked.
+    pub deadline: Option<i64>,
+    pub park_kind: Option<ParkKind>,
+    pub wake_at: Option<i64>,
+    /// When the current park was reported, kept across a repeated `parked` of the same kind.
+    pub park_began: Option<i64>,
+    /// When a deadline or a wake passed without a request: the idle window restarts here. No report clears it,
+    /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
+    /// request.
+    pub park_ended_at: Option<i64>,
+    /// The open idle window of main, `None` while none is counted.
+    pub idle_episode: Option<IdleEpisode>,
+    /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
+    /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
+    /// A close that restarts the window on purpose (a request, presence, a park's end, a revival) clears it: the
+    /// floor orders starts, and a clock that stepped back before the restart is no ordering.
+    pub idle_window_floor: Option<i64>,
+    /// The static and tail hash of main's last admitted request, retained or not, which the next idle window judges a
+    /// return against.
+    pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
-    /// When the entry the recipe keeps warm expires; the due time is this less the pool's lead and jitter.
+    /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
     pub expires: Option<i64>,
-    /// The share of the pool's jitter this schedule takes, rolled once per schedule so the due time holds
-    /// still between ticks while the pool's tuning may change under it.
+    /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
+    /// still between ticks.
     pub jitter_frac: f64,
     /// An outstanding backoff after a failed probe; the due time is the later of it and the expiry's.
     pub retry_at: Option<i64>,
-    /// The pool's policy as of the last admission or tick, so a due time never needs the registry.
+    /// The pool's policy as of the last admission or tick, so the ceilings never need the registry.
     pub policy: KeepalivePolicy,
+    /// The engine's timing, held here so a due time and a retry never need the engine.
+    pub timing: KeepaliveTiming,
     pub last_activity: i64,
     pub cache_started: i64,
     pub ttl_ms: i64,
@@ -371,11 +561,8 @@ pub(crate) struct Agent {
     pub probes: u64,
     pub migrations: u64,
     pub usage: ProbeUsage,
-    /// The savings ledger of this agent: the running net the pause rule reads, the grace probes left under a
-    /// negative net, and every probe since the last real request with the entry it wrote (settled as wasted when
-    /// the recipe stops, and the newest of them the coverage the next request reads).
-    pub net: Net,
-    pub grace_left: u32,
+    /// Every probe since the last real request with the entry it wrote, settled as wasted when the recipe stops, and
+    /// the newest of them the coverage the next request reads.
     pub unanswered: Vec<UnansweredProbe>,
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
@@ -385,22 +572,45 @@ pub(crate) struct Agent {
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
     pub last_stop: Option<Wasted>,
+    /// Main's last presence report: when the person was last seen at the terminal.
+    pub last_presence_at: Option<i64>,
+    pub last_probe_at: Option<i64>,
+    /// The probes sent on `counters_day`, the UTC day both counts are for.
+    pub probes_today: u64,
+    /// The requests credited as kept warm on `counters_day`.
+    pub credited_today: u64,
+    pub counters_day: i64,
 }
 
 impl Agent {
-    pub(crate) fn new(id: &str, key_id: &str, incarnation: u64, now: i64) -> Agent {
+    pub(crate) fn new(
+        id: &str,
+        key_id: &str,
+        incarnation: u64,
+        now: i64,
+        timing: KeepaliveTiming,
+    ) -> Agent {
         Agent {
             id: id.into(),
             key_id: key_id.into(),
             key_generation: 0,
             incarnation,
             state: AgentState::Busy,
+            deadline: None,
+            park_kind: None,
+            wake_at: None,
+            park_began: None,
+            park_ended_at: None,
+            idle_episode: None,
+            idle_window_floor: None,
+            last_prefix: None,
             generation: 0,
             current: None,
             expires: None,
             jitter_frac: 0.0,
             retry_at: None,
             policy: KeepalivePolicy::default(),
+            timing,
             last_activity: now,
             cache_started: now,
             ttl_ms: 0,
@@ -418,24 +628,27 @@ impl Agent {
             probes: 0,
             migrations: 0,
             usage: ProbeUsage::default(),
-            net: Net::default(),
-            grace_left: 0,
             unanswered: Vec::new(),
             kept: Vec::new(),
             last_real_at: None,
             last_stop: None,
+            last_presence_at: None,
+            last_probe_at: None,
+            probes_today: 0,
+            credited_today: 0,
+            counters_day: utc_day(now),
         }
     }
 
-    /// When the next probe is due: the entry's expiry less the pool's lead and this schedule's share of the
+    /// When the next probe is due: the entry's expiry less the timing's lead and this schedule's share of the
     /// jitter, or the outstanding backoff, whichever is later. `None` while nothing is armed.
     pub(crate) fn due_at(&self) -> Option<i64> {
         if self.paused {
             return None;
         }
         let from_expiry = self.expires.map(|expires| {
-            let jitter = (self.policy.jitter_ms(self.ttl_ms) as f64 * self.jitter_frac) as i64;
-            expires - self.policy.lead_ms(self.ttl_ms) - jitter
+            let jitter = (self.timing.jitter_ms(self.ttl_ms) as f64 * self.jitter_frac) as i64;
+            expires - self.timing.lead_ms(self.ttl_ms) - jitter
         });
         match (from_expiry, self.retry_at) {
             (None, None) => None,
@@ -443,11 +656,114 @@ impl Agent {
         }
     }
 
+    /// The due time a reader is shown: none while the recipe sits under one of the two holds placed ahead of the
+    /// gate, `horizon` and a disabled pool, which withhold every probe until they end or the entry lapses. The
+    /// scheduler reads `due_at`, so a withheld probe is still counted once.
+    pub(crate) fn next_probe_at(&self) -> Option<i64> {
+        if matches!(self.reason, Reason::Horizon | Reason::PoolDisabled) {
+            return None;
+        }
+        self.due_at()
+    }
+
+    /// Where main's idle window starts now: the later of its last activity and a park's end without a request.
+    pub(crate) fn idle_window_start(&self) -> i64 {
+        self.park_ended_at
+            .map_or(self.last_activity, |ended| ended.max(self.last_activity))
+    }
+
+    /// Every close of an idle window: the window start in force at the close becomes the floor the next window's start
+    /// has to pass. A prompt answered by a local command moves the start without closing the window, so the
+    /// episode's own `started` can lie behind it. A closer that moves the start calls this first.
+    pub(crate) fn close_idle_episode(&mut self) -> Option<IdleEpisode> {
+        let episode = self.idle_episode.take()?;
+        self.idle_window_floor = Some(episode.started.max(self.idle_window_start()));
+        Some(episode)
+    }
+
+    /// The expiry stays, so the lapse still drops the prompt when the entry goes cold, as it does for a held recipe.
     pub(crate) fn pause(&mut self) {
         self.paused = true;
-        self.expires = None;
         self.retry_at = None;
     }
+
+    /// Starts both day counts over when `now` falls on a later UTC day than the one they count. Only the two events
+    /// they count call it, so no tick resets them: `counts_today` reads a passed day as zero instead.
+    fn roll_counters_day(&mut self, now: i64) {
+        let day = utc_day(now);
+        if self.counters_day != day {
+            self.counters_day = day;
+            self.probes_today = 0;
+            self.credited_today = 0;
+        }
+    }
+
+    pub(crate) fn count_probe(&mut self, now: i64) {
+        self.roll_counters_day(now);
+        self.last_probe_at = Some(now);
+        self.probes_today += 1;
+    }
+
+    pub(crate) fn count_credit(&mut self, now: i64) {
+        self.roll_counters_day(now);
+        self.credited_today += 1;
+    }
+
+    /// The day's probes and credits as of `now`, zero once the UTC day they count has passed: a recipe that neither
+    /// probed nor earned a credit since midnight reads the new day without waiting for either event.
+    pub(crate) fn counts_today(&self, now: i64) -> (u64, u64) {
+        if self.counters_day == utc_day(now) {
+            (self.probes_today, self.credited_today)
+        } else {
+            (0, 0)
+        }
+    }
+
+    /// Every state write. A move to any state but `Parked` ends the park, so a stale park never outlives it.
+    pub(crate) fn set_state(&mut self, state: AgentState) {
+        self.state = state;
+        if state != AgentState::Parked {
+            self.park_kind = None;
+            self.wake_at = None;
+            self.deadline = None;
+            self.park_began = None;
+        }
+    }
+
+    /// Drops the part of a park whose return has come without a request: a deadline the harness stopped the command
+    /// at, or a wake that passed. True when nothing is left of the park, which is when it ended.
+    pub(crate) fn pass_park(&mut self, now: i64) -> bool {
+        let Some(kind) = self.park_kind else {
+            return false;
+        };
+        let mut kind = Some(kind);
+        if self.deadline.is_some_and(|deadline| deadline <= now) {
+            self.deadline = None;
+            kind = match kind {
+                Some(ParkKind::Background) => None,
+                Some(ParkKind::Both) => Some(ParkKind::Scheduled),
+                other => other,
+            };
+        }
+        if self.wake_at.is_some_and(|wake| wake <= now) {
+            self.wake_at = None;
+            kind = match kind {
+                Some(ParkKind::Scheduled) => None,
+                Some(ParkKind::Both) => Some(ParkKind::Background),
+                other => other,
+            };
+        }
+        self.park_kind = kind;
+        kind.is_none()
+    }
+}
+
+/// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    Probe,
+    Hold(Reason),
+    End(Reason),
 }
 
 /// What the agent's previous recipe had proved when this request arrived, taken at admission and consumed with
@@ -457,10 +773,8 @@ impl Agent {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
-    /// The unit the covering probe's cost settled in, so the credit it earns settles in the same one; a probe the
-    /// cost model cannot price falls the unit back to dollars along with the cost, so the two never split. `None`
-    /// when the account it warmed left the registry before the probe landed, in which case the credit never fires
-    /// (`same_account` cannot match a gone account either).
+    /// The unit the covering probe's cost settled in. `None` when the account it warmed left the registry before the
+    /// probe landed, in which case the credit never fires (`same_account` cannot match a gone account either).
     pub unit: Option<SavingsUnit>,
     pub model: String,
     /// The covering recipe's speed, which the credited request's has to match.
@@ -511,12 +825,16 @@ struct Skipped {
     account: Option<String>,
     canonical_model: String,
     fast: bool,
+    state: RecipeState,
 }
 
 /// One probe the next real request has not answered yet: what it cost and the unit it settled in, the lineage a
 /// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UnansweredProbe {
+    /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
+    /// settlement of this probe can be told from a repeat of it.
+    pub id: String,
     pub cost: f64,
     pub unit: Option<SavingsUnit>,
     pub account: Option<String>,
@@ -546,7 +864,7 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    fn of(agent: &Agent, probe: &UnansweredProbe) -> Kept {
+    pub(crate) fn of(agent: &Agent, probe: &UnansweredProbe) -> Kept {
         Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
@@ -558,7 +876,7 @@ impl Kept {
         }
     }
 
-    fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
+    pub(crate) fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
         Settlement {
             key: key.clone(),
             key_generation: self.key_generation,
@@ -586,7 +904,6 @@ pub(crate) enum Unanswered {
 }
 
 pub(crate) struct Inner {
-    pub lifecycle: Option<LifecycleSender>,
     pub sessions: BTreeMap<SessionKey, Session>,
     /// Request id to the agent following it.
     pub pending: HashMap<String, (SessionKey, String)>,
@@ -595,21 +912,36 @@ pub(crate) struct Inner {
     pub agents: usize,
     pub running: usize,
     pub closed: bool,
-    /// Probe cost per pool for the current UTC day, and the day it was summed for.
-    pub spent_today: BTreeMap<String, f64>,
-    /// The share of each subscription account's 5-hour window its probes consumed on the current UTC day, the
-    /// band inside each probe's price; rolled at midnight beside `spent_today`.
-    pub share_spent_today: BTreeMap<String, f64>,
-    pub spent_day: i64,
     pub settlements: Vec<Settlement>,
-    /// Due probes a gate withheld this tick, ledgered as skipped.
-    pub skipped: Vec<(SessionKey, String)>,
+    /// The settlements the load queued, held until a save has dropped their probes from the agents: a failed save
+    /// then sends nothing to the ledger, and a restart before a landed save settles each probe once rather than twice.
+    pub settlements_after_save: Vec<Settlement>,
+    /// Due probes a gate withheld this tick, ledgered as skipped, each with the recipe state the hold left, read under
+    /// the lock that placed it: a real request between the tick and the flush would otherwise file a gate's skip
+    /// under the state it moved the recipe to.
+    pub skipped: Vec<(SessionKey, String, RecipeState)>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that
     /// backlog cannot be trusted: the terminal event of any request among them may be one the gap dropped.
     pub gap_backlog: usize,
     pub next_incarnation: u64,
+    /// The engine's timing, copied onto every agent it creates.
+    pub timing: KeepaliveTiming,
+    /// The idle-age counters by pool id. Never pruned while the engine runs, so a pool that leaves keeps the counts
+    /// it already took until the restart.
+    pub idle_returns: BTreeMap<String, IdleReturns>,
+    /// The rows changed or removed since their last acknowledged save, each under the revision of its latest change.
+    pub dirty: Dirty,
+    /// Bumped by every touch, so a save that lands after a newer change still knows which change it carried.
+    pub revision: u64,
+    /// Whether the last save failed, so a failing registry is logged once per streak rather than every flush.
+    pub persist_failing: bool,
+    /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
+    /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over.
+    pub unreadable_tiers: BTreeSet<String>,
+    /// The request events and reports refused after the quiesce.
+    pub late_updates: u64,
 }
 
 pub struct Engine {
@@ -622,15 +954,21 @@ pub struct Engine {
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
     /// Cheap enough to keep in every build; only the reader is gated.
     router_view_calls: AtomicU64,
-    /// The accounts whose last tier read failed. The scheduler reads every tier on each tick, so it warns when a
-    /// failing streak starts rather than once a second for as long as the registry stays unreadable.
-    unreadable_tiers: Mutex<BTreeSet<String>>,
+    /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
+    /// overlap and an older batch never reaches the store after a newer one.
+    pub(crate) flush_lock: Mutex<()>,
+    /// How many flushes have entered, counted before the flush lock, so a test can hold a save and know a second
+    /// flush is queued behind it. Cheap enough to keep in every build, so only the reader is gated.
+    pub(crate) persist_entries: AtomicU64,
+    /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
+    /// Cheap enough to keep in every build, so only the reader is gated.
+    pub(crate) persist_snapshots: AtomicU64,
+    /// Woken as either count rises, which is what a test's wait on them waits on.
+    pub(crate) persist_progress: Notify,
 }
 
 impl Engine {
-    pub fn new(mut parts: EngineParts) -> Arc<Engine> {
-        // `Inner` holds the only sender, so `close` dropping it is the channel ending for the consumer.
-        let lifecycle = parts.lifecycle.take();
+    pub fn new(parts: EngineParts) -> Arc<Engine> {
         // Every read of a stored policy the bounds now refuse answers keepalive off; the operator learns which pool
         // and why once, here, rather than from a tick that reads it every second.
         for pool in parts.router.snapshot().pools() {
@@ -643,13 +981,16 @@ impl Engine {
             }
         }
         Arc::new(Engine {
-            inner: Mutex::new(Inner::empty(lifecycle)),
+            inner: Mutex::new(Inner::empty(parts.timing)),
             parts,
             cancel: CancellationToken::new(),
             idle: Notify::new(),
             workers: TaskTracker::new(),
             router_view_calls: AtomicU64::new(0),
-            unreadable_tiers: Mutex::new(BTreeSet::new()),
+            flush_lock: Mutex::new(()),
+            persist_entries: AtomicU64::new(0),
+            persist_snapshots: AtomicU64::new(0),
+            persist_progress: Notify::new(),
         })
     }
 
@@ -673,15 +1014,48 @@ impl Engine {
         self.lock().reasons.clone()
     }
 
+    /// The counters per pool id, for the overview and the flush.
+    pub fn idle_returns(&self) -> BTreeMap<String, IdleReturns> {
+        self.lock().idle_returns.clone()
+    }
+
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {
             agents: inner.agents,
             bus_gaps: inner.bus_gaps,
+            late_updates: inner.late_updates,
+            live_sessions: inner.sessions.values().filter(|s| !s.ended).count(),
             retained_bytes: inner.retained,
             running_probes: inner.running,
             sessions: inner.sessions.len(),
         }
+    }
+
+    /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
+    /// member.
+    /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an API-key
+    /// member the dollar rows.
+    pub fn resolve_pool_ceilings(
+        &self,
+        pool: &PoolRow,
+        accounts: &[AccountRow],
+    ) -> Option<ResolvedCeilings> {
+        let mut fundings: Vec<Funding> = Vec::new();
+        for account in accounts {
+            let funding = Funding::of(account.kind, false);
+            if !fundings.contains(&funding) {
+                fundings.push(funding);
+            }
+        }
+        resolve_pool(
+            &KeepalivePolicy::from_json(&pool.keepalive_json),
+            &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
+            &pool.model_rules,
+            &fundings,
+            &FactorRows::of(&self.parts.pricing.current(), &self.parts.tables),
+            &self.parts.timing,
+        )
     }
 
     /// The lease and expiry sweep. Every entry point runs it first, so a session is never read as live past
@@ -705,18 +1079,7 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
-            // A session ends once on the channel, so one already announced by the companion gets none here; the
-            // rest end now, as they would at the expiry, since nothing will report for them again.
-            if !inner.sessions[&key].ended {
-                inner.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
         }
-        // The ends above are the channel's last messages: with the sender gone a consumer's `recv()` returns `None`
-        // once it has drained them, which is what its shutdown can join on.
-        inner.lifecycle = None;
         inner.sessions.clear();
         inner.pending.clear();
         inner.agents = 0;
@@ -728,9 +1091,8 @@ impl Engine {
 impl Inner {
     /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
     /// is named, so a field this struct gains needs no second literal to keep in step.
-    pub(crate) fn empty(lifecycle: Option<LifecycleSender>) -> Inner {
+    pub(crate) fn empty(timing: KeepaliveTiming) -> Inner {
         Inner {
-            lifecycle,
             sessions: BTreeMap::new(),
             pending: HashMap::new(),
             reasons: BTreeMap::new(),
@@ -738,27 +1100,24 @@ impl Inner {
             agents: 0,
             running: 0,
             closed: false,
-            spent_today: BTreeMap::new(),
-            share_spent_today: BTreeMap::new(),
-            spent_day: 0,
             settlements: Vec::new(),
+            settlements_after_save: Vec::new(),
             skipped: Vec::new(),
             bus_gaps: 0,
             gap_backlog: 0,
             next_incarnation: 0,
-        }
-    }
-
-    /// A send never blocks and a closed receiver is a consumer that shut down first, which loses nothing worth a log
-    /// line.
-    pub(crate) fn emit(&self, event: SessionLifecycle) {
-        if let Some(tx) = &self.lifecycle {
-            let _ = tx.send(event);
+            timing,
+            idle_returns: BTreeMap::new(),
+            dirty: Dirty::default(),
+            revision: 0,
+            persist_failing: false,
+            late_updates: 0,
+            unreadable_tiers: BTreeSet::new(),
         }
     }
 
     /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
-    /// they show.
+    /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
     pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         if let Some(agent) = self
             .sessions
@@ -768,6 +1127,7 @@ impl Inner {
             agent.reason = reason;
         }
         *self.reasons.entry(reason).or_default() += 1;
+        self.touch_agent(key, agent_id);
     }
 
     /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
@@ -809,6 +1169,7 @@ impl Inner {
     /// probe's as resolutions followed it. A probe sent while the request was open is not among them: it pays for
     /// the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
+        self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -846,6 +1207,7 @@ impl Inner {
         wasted: Option<Wasted>,
         unanswered: Unanswered,
     ) {
+        self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -882,6 +1244,260 @@ impl Inner {
         }
         for kept in std::mem::take(&mut agent.kept) {
             self.settlements.push(kept.settle(key, label));
+        }
+    }
+
+    /// A gate's hold on a retained recipe. One hold withholds one probe, whatever number of ticks it spans: the
+    /// production ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000 withheld probes
+    /// for the one it actually withheld. A hold that begins before the due time has withheld nothing yet, so the
+    /// skip waits for the due time to pass. The due time is read after the policy refresh, so the pool's current
+    /// policy decides whether a probe was due, and a probe already in flight was not withheld.
+    pub(crate) fn hold(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let began = agent.reason != reason;
+        let counted = agent.hold_counted && !began;
+        let was_due = !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
+        // A hold spans every tick it lasts, so only a change is written: a held recipe would otherwise rewrite its
+        // sealed prompt at every flush.
+        let moved = agent.hold_counted != (counted || was_due);
+        agent.hold_counted = counted || was_due;
+        if !counted && was_due {
+            let state = recipe_state(reason, agent.paused);
+            self.skipped
+                .push((key.clone(), agent_id.to_string(), state));
+        }
+        if began {
+            self.set_reason(key, agent_id, reason);
+        } else if moved {
+            self.touch_agent(key, agent_id);
+        }
+    }
+
+    /// The probes sent since the last real request, settled under `label` the way a discard settles them, with the
+    /// recipe kept: a hold that retains the prompt still writes off what it paid for.
+    pub(crate) fn settle_unanswered(&mut self, key: &SessionKey, agent_id: &str, label: Wasted) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let probes = std::mem::take(&mut agent.unanswered);
+        if probes.is_empty() {
+            return;
+        }
+        for probe in &probes {
+            self.settlements
+                .push(Kept::of(agent, probe).settle(key, label));
+        }
+        self.touch_agent(key, agent_id);
+    }
+
+    /// The entry is dead at its expiry and the lead already places the due time ahead of it, so a probe past it warms
+    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its unanswered probes wasted,
+    /// and the next real request re-arms it. A probe already in flight was sent in time and settles on its own answer,
+    /// a hold that already ledgered the probe it withheld is not counted again, and the skip takes the recipe's speed
+    /// before the discard drops the recipe. While the request the observation follows is still open, the recipe is
+    /// held unprobed instead: its completion earns its credit and decides the probes it kept, and the next tick lapses
+    /// it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done with the recipe.
+    fn lapse(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        now: i64,
+        lapsed: &mut Vec<Skipped>,
+    ) -> bool {
+        let agent = &self.sessions[key].agents[agent_id];
+        let Some(expires) = agent
+            .expires
+            .filter(|expires| !agent.in_flight && now >= *expires)
+        else {
+            return false;
+        };
+        if agent
+            .current
+            .as_ref()
+            .is_some_and(|o| self.pending.contains_key(&o.id))
+        {
+            return true;
+        }
+        if agent.paused {
+            tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
+                "a paused keepalive recipe's entry expired, so its prompt was dropped");
+            self.drop_paused_prompt(key, agent_id);
+            return true;
+        }
+        tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
+            "a keepalive recipe lapsed before its probe, so the probe was skipped");
+        if !agent.hold_counted {
+            lapsed.push(Skipped {
+                key: key.clone(),
+                key_generation: agent.key_generation,
+                pool_id: agent.pool_id.clone(),
+                account: agent.account.clone(),
+                canonical_model: agent.canonical_model.clone(),
+                fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+                // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
+                state: recipe_state(Reason::Expired, agent.paused),
+            });
+        }
+        self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
+        true
+    }
+
+    /// The lapse of a paused recipe. The pause withheld every probe and holds until the next real request, so the agent
+    /// keeps its pause bit and its reason for the view's `paused`, and only the prompt the cold entry made worthless
+    /// leaves, with the probes it paid for settled under `expired`. No probe was due, so no skip is ledgered.
+    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str) {
+        self.touch_agent(key, agent_id);
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        if let Some(observation) = agent.current.take() {
+            self.pending.remove(&observation.id);
+            self.retained -= observation.recipe.size;
+        }
+        agent.expires = None;
+        agent.last_stop = Some(Wasted::Expired);
+        for probe in std::mem::take(&mut agent.unanswered) {
+            self.settlements
+                .push(Kept::of(agent, &probe).settle(key, Wasted::Expired));
+        }
+        for kept in std::mem::take(&mut agent.kept) {
+            self.settlements.push(kept.settle(key, Wasted::Expired));
+        }
+    }
+
+    /// A deadline or a wake that passed ends that part of the park, and a park with nothing left ended without a
+    /// request: the idle window restarts here and main reads idle. The mod reports the same end with `idle` when its
+    /// heartbeat sees it first, and whichever comes first records it. Main's end is the engine's own move out of
+    /// parked, which no report repeats.
+    pub(crate) fn end_passed_park(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let park = (agent.park_kind, agent.deadline, agent.wake_at);
+        if !agent.pass_park(now) {
+            if park != (agent.park_kind, agent.deadline, agent.wake_at) {
+                self.touch_agent(key, agent_id);
+            }
+            return;
+        }
+        // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
+        agent.close_idle_episode();
+        agent.idle_window_floor = None;
+        agent.park_ended_at = Some(now);
+        if agent.id != MAIN_AGENT {
+            agent.park_began = None;
+            self.touch_agent(key, agent_id);
+            return;
+        }
+        agent.set_state(AgentState::Idle);
+        self.touch_agent(key, agent_id);
+    }
+
+    /// Advances main's idle window on every attended session: opens one where none is counted and raises `reached`
+    /// up to the window's current bucket. It reads the sessions, never the retained recipes, so a session whose
+    /// recipe a ceiling discarded, or that never sent a request, still reaches the later buckets. A busy main keeps
+    /// its window and counts nothing, and a window whose return a prompt announced waits for the request.
+    pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+        let mut opened: Vec<SessionKey> = Vec::new();
+        let mut raised: Vec<(SessionKey, String)> = Vec::new();
+        for (key, session) in self.sessions.iter_mut() {
+            if session.ended || !session.attended {
+                continue;
+            }
+            let Some(main) = session.agents.get_mut(MAIN_AGENT) else {
+                continue;
+            };
+            if matches!(
+                main.state,
+                AgentState::Busy | AgentState::Released | AgentState::Unknown
+            ) {
+                continue;
+            }
+            if open_idle_episode(main, snapshot) {
+                opened.push(key.clone());
+            }
+            let Some(episode) = main.idle_episode.as_mut() else {
+                continue;
+            };
+            if episode.prompt_at.is_some() {
+                continue;
+            }
+            let bucket = idle_age_bucket(now - episode.started);
+            // Only a window that crossed into a new bucket is written, so an idle session costs no save per tick.
+            if episode.bucket.is_none_or(|counted| bucket > counted) {
+                raised.push((key.clone(), episode.pool_key.clone()));
+            }
+            raise_reached(
+                self.idle_returns
+                    .entry(episode.pool_key.clone())
+                    .or_default(),
+                episode.bucket,
+                bucket,
+            );
+            episode.bucket = Some(episode.bucket.map_or(bucket, |counted| counted.max(bucket)));
+        }
+        for key in opened {
+            self.touch_agent(&key, MAIN_AGENT);
+        }
+        for (key, pool) in raised {
+            self.touch_agent(&key, MAIN_AGENT);
+            self.touch_pool(&pool);
+        }
+    }
+
+    /// Main's request ends its open idle window: the buckets the window crossed since the last tick count as reached,
+    /// and the bucket of its age counts a return when the request continues the prefix the window opened on. The age
+    /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
+    /// pass before the request arrives.
+    pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
+        let Some(main) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(MAIN_AGENT))
+        else {
+            return;
+        };
+        let Some(episode) = main.close_idle_episode() else {
+            return;
+        };
+        // Never below the fence: the window already counted as reaching it, so its return is read there.
+        let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
+            .max(episode.bucket.unwrap_or(0));
+        let counters = self
+            .idle_returns
+            .entry(episode.pool_key.clone())
+            .or_default();
+        let raised = episode.bucket.is_none_or(|counted| bucket > counted);
+        raise_reached(counters, episode.bucket, bucket);
+        let anchor = episode
+            .anchor
+            .as_ref()
+            .map(|(static_hash, tail)| (static_hash.as_str(), tail.as_str()));
+        let returned = continues_prefix(anchor, boundaries);
+        if returned {
+            counters.buckets[bucket].returned += 1;
+        }
+        self.touch_agent(key, MAIN_AGENT);
+        if raised || returned {
+            self.touch_pool(&episode.pool_key);
         }
     }
 
@@ -924,27 +1540,39 @@ impl Inner {
     /// A resolution that landed after a recipe was retained moved the router's pins and model cooldowns to the
     /// dated id; the recipe follows, so the gate finds them and the next request's credit compares like names.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
-        for session in self.sessions.values_mut() {
-            for agent in session.agents.values_mut() {
+        let mut followed: Vec<(SessionKey, String)> = Vec::new();
+        for (key, session) in self.sessions.iter_mut() {
+            for (agent_id, agent) in session.agents.iter_mut() {
+                let mut moved = false;
                 if let Some(dated) = canonical.get(&agent.canonical_model) {
                     agent.canonical_model = dated.clone();
+                    moved = true;
                 }
                 if let Some(prior) = agent.current.as_mut().and_then(|o| o.prior.as_mut()) {
                     if let Some(dated) = canonical.get(&prior.model) {
                         prior.model = dated.clone();
+                        moved = true;
                     }
                 }
                 for kept in &mut agent.kept {
                     if let Some(dated) = canonical.get(&kept.canonical_model) {
                         kept.canonical_model = dated.clone();
+                        moved = true;
                     }
                 }
                 for probe in &mut agent.unanswered {
                     if let Some(dated) = canonical.get(&probe.model) {
                         probe.model = dated.clone();
+                        moved = true;
                     }
                 }
+                if moved {
+                    followed.push((key.clone(), agent_id.clone()));
+                }
             }
+        }
+        for (key, agent_id) in followed {
+            self.touch_agent(&key, &agent_id);
         }
     }
 
@@ -1004,22 +1632,6 @@ impl Inner {
         true
     }
 
-    /// The cap is a budget per UTC day, so the day the sum was taken for is carried with it and the first
-    /// writer past midnight starts it over. Every writer of `spent_today` rolls under the same lock it
-    /// charges: a probe that completes after midnight would otherwise land on yesterday's sum and have its
-    /// charge cleared by the next tick. True when it rolled, so the caller deletes the stored days before it
-    /// once the lock is released.
-    pub(crate) fn roll_day(&mut self, now: i64) -> bool {
-        let day = now.div_euclid(86_400_000);
-        if self.spent_day < day {
-            self.spent_today.clear();
-            self.share_spent_today.clear();
-            self.spent_day = day;
-            return true;
-        }
-        false
-    }
-
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
         let lapsed: Vec<SessionKey> = self
             .sessions
@@ -1036,7 +1648,13 @@ impl Inner {
             *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.attended = false;
+                // A lapse is no return, so main's window ends here.
+                if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
+                    main.close_idle_episode();
+                }
             }
+            self.touch_session(&key);
+            self.touch_agent(&key, MAIN_AGENT);
         }
         let expired: Vec<SessionKey> = self
             .sessions
@@ -1055,15 +1673,8 @@ impl Inner {
                 );
             }
             self.agents -= agents.len();
-            // A session whose companion reported its end was announced then; the entry outlives the report
-            // only so a result still in flight finds it, and the channel carries one end, not two.
-            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
-            if !announced {
-                self.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
+            self.forget_session(&key);
+            self.sessions.remove(&key);
         }
     }
 
@@ -1090,13 +1701,8 @@ impl Inner {
                 );
             }
             self.agents -= agents.len();
-            let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
-            if !announced {
-                self.emit(SessionLifecycle::SessionEnded {
-                    key_id: key.0.clone(),
-                    session_id: key.1.clone(),
-                });
-            }
+            self.forget_session(&key);
+            self.sessions.remove(&key);
         }
     }
 }
@@ -1108,22 +1714,25 @@ pub struct AgentStatus {
     pub cache_ttl_ms: i64,
     pub canonical_model: String,
     pub cold: u32,
+    pub counters_day: i64,
+    pub credited_today: u64,
+    pub deadline: Option<i64>,
     pub failures: u32,
-    pub grace_left: u32,
     pub idle_ticks: u64,
     pub in_flight: bool,
     pub last_activity: i64,
     pub migrations: u64,
-    pub net_five_hour_share: f64,
-    pub net_usd: f64,
     pub next_probe_at: Option<i64>,
+    pub park_kind: Option<ParkKind>,
     pub paused: bool,
     pub probe_usage: ProbeUsage,
     pub probes: u64,
+    pub probes_today: u64,
     pub reason: Reason,
     pub request_generation: u64,
     pub state: AgentState,
     pub unanswered: usize,
+    pub wake_at: Option<i64>,
 }
 
 /// The engine's bus task. Every event is handed to `observe` under the lock; nothing here awaits while holding
@@ -1215,22 +1824,25 @@ impl Engine {
             cache_ttl_ms: agent.ttl_ms,
             canonical_model: agent.canonical_model.clone(),
             cold: agent.cold,
+            counters_day: agent.counters_day,
+            credited_today: agent.credited_today,
+            deadline: agent.deadline,
             failures: agent.failures,
-            grace_left: agent.grace_left,
             idle_ticks: agent.idle_ticks,
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
-            net_five_hour_share: agent.net.five_hour_share,
-            net_usd: agent.net.usd,
-            next_probe_at: agent.due_at(),
+            next_probe_at: agent.next_probe_at(),
+            park_kind: agent.park_kind,
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
+            probes_today: agent.probes_today,
             reason: agent.reason,
             request_generation: agent.generation,
             state: agent.state,
             unanswered: agent.unanswered.len() + agent.kept.len(),
+            wake_at: agent.wake_at,
         })
     }
 
@@ -1253,13 +1865,16 @@ impl Engine {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let limits = self.parts.limits.clone();
-        let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
+        let key: SessionKey = (key_id, session_id);
         if inner.closed {
+            // A request on a session the engine holds is one the last save can no longer carry.
+            if inner.sessions.contains_key(&key) {
+                inner.late_updates += 1;
+            }
             return;
         }
         inner.expire(now, expiry);
-        let key: SessionKey = (key_id, session_id);
         let Some(session) = inner.sessions.get(&key) else {
             return;
         };
@@ -1293,13 +1908,6 @@ impl Engine {
                 return;
             }
         }
-        let policy = match snapshot.key(&key.0) {
-            Some(row) => snapshot
-                .pool(&row.pool_id)
-                .map(|p| KeepalivePolicy::from_json(&p.keepalive_json))
-                .unwrap_or_default(),
-            None => KeepalivePolicy::default(),
-        };
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
@@ -1330,15 +1938,32 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap()
             .last_guard = Some(verdict);
+        // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
+        // leaves it.
+        inner.touch_agent(&key, &agent_id);
+        // Ahead of the return below, so a foreign request on a new prefix ends the window too. The return is judged
+        // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
+        // has discarded the recipe.
+        if agent_id == MAIN_AGENT && verdict != Guard::Auxiliary {
+            inner.end_idle_episode(&key, &observed.boundaries, now);
+        }
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
-        if agent_id != MAIN_AGENT && !policy.warm_subagents {
-            // The session's last real time still moves: a subagent working is a session in use, which the main
-            // agent's idle limits read.
-            inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
-            inner.discard_keeping_unanswered(&key, &agent_id, Reason::SubagentsOff);
-            return;
+        // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
+        // window judges a return against this request's prefix either way. A request without both hashes leaves none.
+        if agent_id == MAIN_AGENT {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_prefix = observed
+                .static_hash
+                .clone()
+                .zip(observed.boundaries.last().cloned());
         }
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
         // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe wrote
@@ -1363,16 +1988,25 @@ impl Engine {
         };
         let poisoned = inner.gap_backlog > 0;
         inner.discard_keeping_unanswered(&key, &agent_id, Reason::AwaitingSelection);
-        let session = inner.sessions.get_mut(&key).unwrap();
-        session.last_real_at = Some(now);
-        let agent = session.agents.get_mut(&agent_id).unwrap();
+        inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
+        inner.touch_session(&key);
+        let agent = inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap();
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
         }
-        let was = agent.state;
-        agent.state = AgentState::Busy;
+        agent.set_state(AgentState::Busy);
         agent.last_activity = now;
+        // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
+        // the floor at the close, so the floor goes with it. A foreign request, an auxiliary one and one on an
+        // `unknown` main returned above and move no start, so their floor stands.
+        agent.idle_window_floor = None;
         agent.cache_started = now;
         agent.idle_ticks = 0;
         agent.cold = 0;
@@ -1381,20 +2015,6 @@ impl Engine {
         agent.last_real_at = Some(now);
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
-        // A real request grants the grace budget again while either balance is negative: the net only rises on
-        // a request that lands warm, which needs a probe first, and which unit the next one charges is not yet
-        // known here (selection has not run).
-        if agent.net.usd < 0.0 || agent.net.five_hour_share < 0.0 {
-            agent.grace_left = agent.policy.net_negative_grace_probes;
-        }
-        // The engine's own transition out of parked, which no report will repeat: the companion's next busy
-        // report finds the agent already working and says nothing.
-        if agent_id == MAIN_AGENT && was == AgentState::Parked {
-            inner.emit(SessionLifecycle::MainResumed {
-                key_id: key.0.clone(),
-                session_id: key.1.clone(),
-            });
-        }
         if inner.pending.len() >= limits.max_agents {
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
@@ -1450,6 +2070,11 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
             return;
         };
+        // Refused after the quiesce as the completion is, and counted: `live` would refuse it uncounted.
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -1524,6 +2149,10 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&head.request_id).cloned() else {
             return;
         };
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -1538,6 +2167,7 @@ impl Engine {
             // A failed attempt is not evidence about the cache; the next selection re-arms the attempt.
             if observation.attempt == head.attempt && !(200..300).contains(&head.status) {
                 observation.ready = false;
+                inner.touch_agent(&key, &agent_id);
             }
         }
     }
@@ -1554,6 +2184,10 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&chunk.request_id).cloned() else {
             return;
         };
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
         if !inner.live(&key, &agent_id) {
             return;
         }
@@ -1573,6 +2207,13 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
             return;
         };
+        // After the quiesce the last save holds the agent as it stood then, so a completion that lands later earns no
+        // credit and arms nothing. The relay has already answered the client either way.
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
+        inner.touch_agent(&key, &agent_id);
         let read = complete
             .usage
             .as_ref()
@@ -1598,10 +2239,9 @@ impl Engine {
             return;
         }
         inner.pending.remove(&complete.request_id);
-        let mut credited = None;
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
-        let credit = {
+        let credited = {
             let agent = &inner.sessions[&key].agents[&agent_id];
             agent
                 .current
@@ -1623,8 +2263,8 @@ impl Engine {
                     // nothing this request read.
                     let same_speed = prior.fast == fast;
                     // The account that served this request, after any failover, has to be the one the
-                    // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
-                    // saving to claim.
+                    // covering probe warmed. A prefix cached elsewhere by ordinary traffic is no probe's to
+                    // credit.
                     let same_account = prior.account == agent.account;
                     // The probe that covered this recipe may have served on an account the registry has
                     // since dropped, which earns no credit: `same_account` would already exclude it once a
@@ -1645,78 +2285,12 @@ impl Engine {
                             agent.pool_id.clone(),
                             agent.account.clone(),
                             agent.canonical_model.clone(),
-                            unit.unwrap(),
                             fast,
                         )
                     })
                 })
         };
         inner.decide_unanswered(&key, &agent_id, read);
-        if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
-            // The mark says a probe kept this request warm, which is true whatever the tables know; a model the
-            // price table does not list saves dollars at its dearest cells, as its probes cost, and the share is
-            // what the cost model can put a number on, zero where it cannot. The agent's own net settles in the
-            // covering probe's unit, a share of the tier the store names now, priced at this settlement; the
-            // ledger's kept-warm column stays dollars whatever that unit was.
-            let tables = &self.parts.tables;
-            let table = self.parts.pricing.current();
-            let tier = match (unit, account.as_deref()) {
-                (SavingsUnit::WindowShare, Some(account)) => self
-                    .parts
-                    .store
-                    .subscription(account)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.tier),
-                _ => None,
-            };
-            // The request that read the prefix would have paid it as input at the cells of the speed it was
-            // served at, which the answer reports and which can fall short of the speed the recipe asked for.
-            let speed = Speed::of(complete.response.speed.as_deref());
-            let saving_net = gross_saving(
-                unit,
-                &table,
-                tables,
-                tier.as_deref(),
-                &model,
-                read,
-                now,
-                speed,
-            );
-            let saving_ledger = if unit == SavingsUnit::Usd {
-                saving_net.unwrap_or(0.0)
-            } else {
-                gross_saving(
-                    SavingsUnit::Usd,
-                    &table,
-                    tables,
-                    None,
-                    &model,
-                    read,
-                    now,
-                    speed,
-                )
-                .unwrap_or(0.0)
-            };
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
-                .net
-                .add(unit, saving_net.unwrap_or(0.0));
-            credited = Some((
-                read,
-                key_generation,
-                pool_id,
-                account,
-                model,
-                saving_ledger,
-                fast,
-            ));
-        }
         let (ready, armed) = inner.sessions[&key]
             .agents
             .get(&agent_id)
@@ -1760,8 +2334,17 @@ impl Engine {
                 }
             }
         }
+        if credited.is_some() {
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                agent.count_credit(now);
+            }
+        }
         drop(inner);
-        if let Some((read, key_generation, pool_id, account, model, saving, fast)) = credited {
+        if let Some((read, key_generation, pool_id, account, model, fast)) = credited {
             self.record_kept_warm(
                 now,
                 &key,
@@ -1771,10 +2354,8 @@ impl Engine {
                 &model,
                 &complete.request_id,
                 read,
-                saving,
                 fast,
             );
-            self.parts.metrics.observe_saving(&pool_id, saving);
         }
     }
 }
@@ -1844,26 +2425,24 @@ impl Engine {
         // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let (retained_models, rolled) = {
+        let retained_models = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
             }
             inner.expire(now, expiry);
-            inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
-            let rolled = inner.roll_day(now);
-            (
-                inner.anything_retained().then(|| inner.retained_models()),
-                rolled,
-            )
+            let snapshot = self.parts.router.snapshot();
+            inner.drop_sessions_of_dead_keys(&snapshot);
+            inner.advance_idle_episodes(&snapshot, now);
+            inner.anything_retained().then(|| inner.retained_models())
         };
-        if rolled {
-            self.purge_budgets_before(now);
-        }
         let Some(retained_models) = retained_models else {
             return;
         };
         let view = self.router_view(now, retained_models).await;
+        // Built once for the whole tick, outside the lock, so every recipe's ceilings read the same prices and no
+        // recipe rebuilds a table's rows.
+        let rows = FactorRows::of(&self.parts.pricing.current(), &self.parts.tables);
         let (jobs, lapsed) = {
             let mut inner = self.lock();
             if inner.closed {
@@ -1882,9 +2461,9 @@ impl Engine {
                     continue;
                 }
                 let agent = &inner.sessions[&key].agents[&agent_id];
-                // The idle limit and the gate run for every retained recipe, armed or not: a pause clears the
-                // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and the idle
-                // limit could never settle it while the companion keeps reporting.
+                // The ceilings and the gate run for every retained recipe, armed or not: a pause clears the
+                // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and a ceiling
+                // could never settle it while the companion keeps reporting.
                 if agent.current.is_none() {
                     continue;
                 }
@@ -1892,56 +2471,10 @@ impl Engine {
                     .current
                     .as_ref()
                     .is_some_and(|o| o.ready && o.expected > 0);
-                if inner.idle_limited(&key, &agent_id, now) {
-                    inner.discard(
-                        &key,
-                        &agent_id,
-                        Reason::IdleLimit,
-                        wasted_label(Reason::IdleLimit),
-                    );
-                    continue;
-                }
-                // The entry is dead at its expiry and the lead already places the due time ahead of it, so a
-                // probe past it warms nothing: the recipe ends under `expired` rather than being probed, its
-                // unanswered probes wasted, and the next real request re-arms it. A probe already in flight was
-                // sent in time and settles on its own answer; a hold that already ledgered the probe it withheld
-                // is not counted again; and the skip takes the recipe's speed before the discard drops the
-                // recipe. While the request the observation follows is still open, the recipe is held unprobed
-                // instead: its completion earns its credit and decides the probes it kept, and the next tick
-                // lapses it.
-                let agent = &inner.sessions[&key].agents[&agent_id];
-                if let Some(expires) = agent
-                    .expires
-                    .filter(|expires| !agent.in_flight && now >= *expires)
-                {
-                    if agent
-                        .current
-                        .as_ref()
-                        .is_some_and(|o| inner.pending.contains_key(&o.id))
-                    {
-                        continue;
-                    }
-                    tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-                        "a keepalive recipe lapsed before its probe; the probe was skipped");
-                    if !agent.hold_counted {
-                        lapsed.push(Skipped {
-                            key: key.clone(),
-                            key_generation: agent.key_generation,
-                            pool_id: agent.pool_id.clone(),
-                            account: agent.account.clone(),
-                            canonical_model: agent.canonical_model.clone(),
-                            fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
-                        });
-                    }
-                    inner.discard(&key, &agent_id, Reason::Expired, Some(Wasted::Expired));
-                    continue;
-                }
-                let held = {
-                    // One reborrow, so the gate reads the day's spend per pool while it holds the agent:
-                    // the pool it resolves is the one whose budget bounds this probe.
-                    let inner = &mut *inner;
-                    let spent = &inner.spent_today;
-                    let share_spent = &inner.share_spent_today;
+                // Before any hold can short-circuit: a recipe held under `horizon` never reaches the gate, and the
+                // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
+                // reopens the hold and an opt-out discards the prompt the hold retained.
+                let (refreshed, moved) = {
                     let agent = inner
                         .sessions
                         .get_mut(&key)
@@ -1949,38 +2482,124 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    gate(&view, agent, &key.1, spent, share_spent, &self.parts.tables)
+                    let before = (agent.policy.clone(), agent.pool_id.clone());
+                    let refreshed = refresh_policy(&view, agent);
+                    (
+                        refreshed,
+                        before != (agent.policy.clone(), agent.pool_id.clone()),
+                    )
                 };
+                // Read at every tick, so only a change is written.
+                if moved {
+                    inner.touch_agent(&key, &agent_id);
+                }
+                if let Err(Gate::Drop(reason, label)) = refreshed {
+                    inner.discard(&key, &agent_id, reason, Some(label));
+                    continue;
+                }
+                // Ahead of the refresh's hold, so a deadline or a wake that passes while the pool is disabled is
+                // recorded when it passes.
+                inner.end_passed_park(&key, &agent_id, now);
+                if let Err(Gate::Hold(reason)) = refreshed {
+                    if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                        continue;
+                    }
+                    // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
+                    // withholds every probe until the next real request.
+                    if !inner.sessions[&key].agents[&agent_id].paused {
+                        inner.hold(&key, &agent_id, reason, now);
+                    }
+                    continue;
+                }
+                // The refresh's own hold ends at the first tick that finds the pool enabled again, as the probe verdict
+                // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
+                // would read held with no next probe. A recipe whose request has not brought its evidence yet goes
+                // back to waiting for it.
+                if inner.sessions[&key].agents[&agent_id].reason == Reason::PoolDisabled {
+                    let resumed = if ready {
+                        Reason::Scheduled
+                    } else {
+                        Reason::AwaitingCacheEvidence
+                    };
+                    inner.set_reason(&key, &agent_id, resumed);
+                }
+                let verdict = {
+                    let session = &inner.sessions[&key];
+                    let agent = &session.agents[&agent_id];
+                    let ceilings = ceilings_for(agent, &view, &rows, &self.parts.timing);
+                    ceiling(
+                        agent,
+                        session.attended_at(now),
+                        session.last_real_at,
+                        &ceilings,
+                        now,
+                    )
+                };
+                match verdict {
+                    Verdict::End(reason) => {
+                        inner.discard(&key, &agent_id, reason, wasted_label(reason));
+                        continue;
+                    }
+                    Verdict::Hold(reason) => {
+                        // A held recipe still ends at its entry's expiry: a cold body is worth nothing to the wake.
+                        if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                            continue;
+                        }
+                        let agent = &inner.sessions[&key].agents[&agent_id];
+                        let (paused, began) = (agent.paused, agent.reason != reason);
+                        // The probes paid so far kept nothing the wake will read, so they are written off as the
+                        // hold begins. A paused recipe keeps its own reason and is written off on every held tick,
+                        // which finds nothing left after the first.
+                        if began || paused {
+                            if let Some(label) = wasted_label(reason) {
+                                inner.settle_unanswered(&key, &agent_id, label);
+                            }
+                        }
+                        if !paused {
+                            inner.hold(&key, &agent_id, reason, now);
+                        }
+                        continue;
+                    }
+                    Verdict::Probe => {
+                        if inner.sessions[&key].agents[&agent_id].reason == Reason::Horizon {
+                            inner.set_reason(&key, &agent_id, Reason::Scheduled);
+                        }
+                    }
+                }
+                if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                    continue;
+                }
+                let (held, moved) = {
+                    let agent = inner
+                        .sessions
+                        .get_mut(&key)
+                        .unwrap()
+                        .agents
+                        .get_mut(&agent_id)
+                        .unwrap();
+                    let before = (
+                        agent.policy.clone(),
+                        agent.pool_id.clone(),
+                        agent.account.clone(),
+                    );
+                    let held = gate(&view, agent, &key.1);
+                    let after = (
+                        agent.policy.clone(),
+                        agent.pool_id.clone(),
+                        agent.account.clone(),
+                    );
+                    (held, before != after)
+                };
+                if moved {
+                    inner.touch_agent(&key, &agent_id);
+                }
                 match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
                     }
                     Err(Gate::Hold(reason)) => {
-                        // One hold withholds one probe, whatever number of ticks it spans: the production
-                        // ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000
-                        // withheld probes for the one it actually withheld. A hold that begins before the
-                        // due time has withheld nothing yet, so the skip waits for the due time to pass.
-                        // The due time is read after the gate, so the policy the gate just refreshed
-                        // decides whether a probe was due, and a probe already in flight was not withheld.
-                        let agent = &inner.sessions[&key].agents[&agent_id];
-                        let began = agent.reason != reason;
-                        let counted = agent.hold_counted && !began;
-                        let was_due =
-                            !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
-                        if !counted && was_due {
-                            inner.skipped.push((key.clone(), agent_id.clone()));
-                        }
-                        if let Some(agent) = inner
-                            .sessions
-                            .get_mut(&key)
-                            .and_then(|s| s.agents.get_mut(&agent_id))
-                        {
-                            agent.hold_counted = counted || was_due;
-                        }
-                        if began {
-                            inner.set_reason(&key, &agent_id, reason);
-                        }
+                        inner.hold(&key, &agent_id, reason, now);
                         continue;
                     }
                     Ok(()) => {}
@@ -2033,6 +2652,7 @@ impl Engine {
                 agent.in_flight = true;
                 agent.hold_counted = false;
                 agent.probes += 1;
+                agent.count_probe(now);
                 if idle {
                     agent.idle_ticks += 1;
                 }
@@ -2055,6 +2675,7 @@ impl Engine {
                 skip.account.as_deref(),
                 &skip.canonical_model,
                 skip.fast,
+                skip.state,
             );
         }
         for (job, token) in jobs {
@@ -2082,12 +2703,15 @@ impl Engine {
         }
     }
 
-    /// Stops the scheduler, cancels the probes in flight, and waits for their tasks: the caller drains the
-    /// listeners after this, so a probe never outlives the relay it runs through.
-    pub async fn shutdown(&self) {
-        self.close();
+    /// Quiesces, waits for the probes the quiesce cancelled, saves, and only then clears: the last save carries
+    /// everything the engine held at the quiesce, and a flush already in flight finishes first under the flush lock.
+    /// The caller drains the listeners after this, so a probe never outlives the relay it runs through.
+    pub async fn shutdown(self: &Arc<Self>) {
+        self.quiesce();
         self.workers.close();
         self.workers.wait().await;
+        self.flush_persisted().await;
+        self.close();
     }
 }
 
@@ -2103,9 +2727,6 @@ pub(crate) struct RouterView {
     /// on, so a sibling's pin never overwrites an agent's own.
     pub pins: BTreeMap<(String, String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
-    /// A subscription account's own `organization.rate_limit_tier`: an account on a tier the cost model has no capacity
-    /// for settles its probes in dollars, so the stop reads that balance.
-    pub tiers: HashMap<String, String>,
 }
 
 /// What the gate decided for a due recipe: wait with a reason, or drop it with the label its probes settle under.
@@ -2165,31 +2786,6 @@ impl Engine {
             .filter(|(_, e)| e.stands(now, fallback_ms))
             .map(|(id, _)| id)
             .collect();
-        let tiers = snapshot
-            .accounts()
-            .filter(|a| a.kind == AccountKind::Oauth)
-            .filter_map(|a| {
-                let read = self.parts.store.subscription(&a.id);
-                let mut unreadable = self.unreadable_tiers.lock().expect(LOCK_POISONED);
-                let tier = match read {
-                    Ok(row) => {
-                        unreadable.remove(&a.id);
-                        row?.tier?
-                    }
-                    Err(error) => {
-                        if unreadable.insert(a.id.clone()) {
-                            tracing::warn!(
-                                account = %a.id,
-                                %error,
-                                "the account's tier could not be read, so the tier map leaves the account out"
-                            );
-                        }
-                        return None;
-                    }
-                };
-                Some((a.id.clone(), tier))
-            })
-            .collect();
         let mut spends: BTreeMap<(String, String), Vec<MemberSpend>> = BTreeMap::new();
         for row in self.parts.router.member_spends().await.unwrap_or_default() {
             spends
@@ -2216,7 +2812,6 @@ impl Engine {
             overage,
             pins,
             snapshot,
-            tiers,
         }
     }
 
@@ -2251,45 +2846,85 @@ impl Engine {
     }
 }
 
-/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
-/// the recipe goes; `Ok` lets the probe run.
-pub(crate) fn gate(
-    view: &RouterView,
-    agent: &mut Agent,
-    session_id: &str,
-    spent_today: &BTreeMap<String, f64>,
-    share_spent_today: &BTreeMap<String, f64>,
-    tables: &PlanTables,
-) -> Result<(), Gate> {
-    let key_id = agent.key_id.clone();
+/// The head of `gate` as one function both the gate and the step's ceilings call: the key's opt-out drops the
+/// recipe, a disabled pool holds it, and the pool's current policy and id land on the agent, so a horizon raised in
+/// the console reaches a held recipe at the next tick and an opt-out discards a held prompt rather than leaving it
+/// retained.
+pub(crate) fn refresh_policy(view: &RouterView, agent: &mut Agent) -> Result<(), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
-    let Some(key) = view.snapshot.key(&key_id).filter(|k| !k.keepalive_opt_out) else {
+    let Some(key) = view
+        .snapshot
+        .key(&agent.key_id)
+        .filter(|k| !k.keepalive_opt_out)
+    else {
         return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
     };
     let Some(pool) = view.snapshot.pool(&key.pool_id).filter(|p| p.enabled) else {
         return Err(Gate::Hold(Reason::PoolDisabled));
     };
-    let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
-    // The pool's tuning may have changed since admission, and an admin may have moved the key to another
-    // pool without a request following; the due time, the budget, and the probe's own delta all read the pool
-    // the key belongs to now.
-    agent.policy = policy.clone();
+    // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
+    // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
+    // belongs to now.
+    agent.policy = KeepalivePolicy::from_json(&pool.keepalive_json);
     agent.pool_id = key.pool_id.clone();
+    Ok(())
+}
+
+/// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
+/// at the fast cells for a fast recipe, dollars for an account the view lacks) from the tick's rows, its TTL and the
+/// engine's timing. Tables that give no break-even (no priced row, or a free read) fall back to the shipped price
+/// table's tightest row at the recipe's speed, so a ceiling is never unbounded. A timing whose lead is the whole TTL
+/// leaves no probe interval, and nothing is probed.
+pub(crate) fn ceilings_for(
+    agent: &Agent,
+    view: &RouterView,
+    rows: &FactorRows,
+    timing: &KeepaliveTiming,
+) -> Ceilings {
+    let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
+    let funding = match agent
+        .account
+        .as_deref()
+        .and_then(|id| view.snapshot.account(id))
+    {
+        Some(account) if !fast => Funding::of(account.kind, view.overage.contains(&account.id)),
+        _ => Funding::ApiKey,
+    };
+    let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
+    resolve(
+        &agent.policy,
+        rows.factors(funding, &agent.canonical_model, fast),
+        ttl_ms,
+        timing,
+    )
+    .or_else(|| resolve(&agent.policy, shipped_tightest(fast), ttl_ms, timing))
+    .unwrap_or(Ceilings {
+        idle_ms: 0,
+        parked_ms: 0,
+        horizon_ms: 0,
+        break_even_ms: 0,
+        idle_share: 0.0,
+    })
+}
+
+/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
+/// the recipe goes; `Ok` lets the probe run.
+pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Result<(), Gate> {
+    refresh_policy(view, agent)?;
+    let key_id = agent.key_id.clone();
+    let Some(pool) = view.snapshot.pool(&agent.pool_id) else {
+        return Err(Gate::Hold(Reason::PoolDisabled));
+    };
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
-    let due_after_ms = agent.ttl_ms.max(FIVE_MINUTES_MS) - agent.policy.lead_ms(agent.ttl_ms);
+    let due_after_ms = agent.ttl_ms.max(FIVE_MINUTES_MS) - agent.timing.lead_ms(agent.ttl_ms);
     if (pool.affinity_ttl_seconds as i64).saturating_mul(1_000) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
-    if !policy.enabled {
+    if !agent.policy.enabled {
         return Err(Gate::Hold(Reason::KeepaliveOff));
-    }
-    // The operator's switch reaches a recipe armed before it was flipped, the way the key opt-out does: dropped
-    // rather than held, since nothing about a subagent may be probed again until the option comes back.
-    if agent.id != MAIN_AGENT && !policy.warm_subagents {
-        return Err(Gate::Drop(Reason::SubagentsOff, Wasted::Released));
     }
     // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved
     // the agent's own pin between this recipe's last observation and the probe.
@@ -2344,46 +2979,36 @@ pub(crate) fn gate(
     {
         return Err(Gate::Hold(Reason::Budget));
     }
-    // The cap bounds the pool the probe runs under, which the refresh above may have just moved.
-    let spent = spent_today.get(&agent.pool_id).copied().unwrap_or(0.0);
-    if policy
-        .probe_cost_cap_usd_per_day
-        .is_some_and(|cap| spent >= cap)
-    {
-        return Err(Gate::Hold(Reason::CapReached));
-    }
-    let in_overage = view.overage.contains(&account.id);
-    // A fast recipe draws usage credits, so its probes settle in dollars whatever the funding.
-    let default_unit = if fast {
-        SavingsUnit::Usd
-    } else {
-        Funding::of(account.kind, in_overage).unit()
-    };
-    // Decided before the share cap and taken again by the settlement: a probe the cost model cannot price on the
-    // account's tier settles in dollars, so a zero share cap never holds it and the stop reads its dollar balance.
-    let tier = view.tiers.get(&account.id).map(String::as_str);
-    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model);
-    // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
-    // price, so the sum caps against the configured share directly.
-    if let Some(share) = policy.probe_cap_window_share_per_day {
-        if unit == SavingsUnit::WindowShare {
-            let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
-            if share_spent >= share {
-                return Err(Gate::Hold(Reason::CapReached));
-            }
-        }
-    }
-    if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
-        return Err(Gate::Hold(Reason::NetNegative));
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::config::FIVE_MINUTES_MS;
-
     use super::*;
+
+    /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
+    /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
+    #[test]
+    fn wasted_all_holds_every_variant() {
+        let next = |label: Wasted| match label {
+            Wasted::ColdReturn => Wasted::Evicted,
+            Wasted::Evicted => Wasted::Expired,
+            Wasted::Expired => Wasted::Horizon,
+            Wasted::Horizon => Wasted::IdleLimit,
+            Wasted::IdleLimit => Wasted::ParkedLimit,
+            Wasted::ParkedLimit => Wasted::Released,
+            Wasted::Released => Wasted::Replaced,
+            Wasted::Replaced => Wasted::SessionEnded,
+            Wasted::SessionEnded => Wasted::ColdReturn,
+        };
+        let mut walked = vec![Wasted::ColdReturn];
+        let mut label = next(Wasted::ColdReturn);
+        while label != Wasted::ColdReturn && walked.len() <= Wasted::ALL.len() {
+            walked.push(label);
+            label = next(label);
+        }
+        assert_eq!(walked, Wasted::ALL.to_vec());
+    }
 
     #[test]
     fn a_refreshing_class_rearms_whatever_the_chain_says() {
@@ -2450,33 +3075,16 @@ mod tests {
         );
     }
 
-    /// One pool holding one key and two members, subscription account `o` on Max 20x and api_key account `a`,
-    /// with the stop on and no grace, so a negative balance in the unit the next probe settles in holds at once.
-    fn stop_view(o_in_overage: bool) -> RouterView {
-        stop_view_with(o_in_overage, OveragePolicy::Allow, None)
+    /// One pool holding one key and two members, subscription account `o` and api_key account `a`, with keepalive
+    /// on.
+    fn pool_view(o_in_overage: bool) -> RouterView {
+        pool_view_under(o_in_overage, OveragePolicy::Allow)
     }
 
-    /// `stop_view` with the pool's overage policy named, for a case the overage hold has to reach.
-    fn stop_view_under(o_in_overage: bool, overage_policy: OveragePolicy) -> RouterView {
-        stop_view_with(o_in_overage, overage_policy, None)
-    }
-
-    /// `stop_view` with the pool's daily window-share cap at `share_cap`.
-    fn stop_view_capped(o_in_overage: bool, share_cap: Option<f64>) -> RouterView {
-        stop_view_with(o_in_overage, OveragePolicy::Allow, share_cap)
-    }
-
-    /// `stop_view` with the pool's overage policy and daily window-share cap named.
-    fn stop_view_with(
-        o_in_overage: bool,
-        overage_policy: OveragePolicy,
-        share_cap: Option<f64>,
-    ) -> RouterView {
+    /// `pool_view` with the pool's overage policy named, for a case the overage hold has to reach.
+    fn pool_view_under(o_in_overage: bool, overage_policy: OveragePolicy) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
-            stop_when_net_negative: true,
-            net_negative_grace_probes: 0,
-            probe_cap_window_share_per_day: share_cap,
             ..KeepalivePolicy::default()
         };
         let account = |id: &str, kind| phoebis_store::AccountRow {
@@ -2546,96 +3154,7 @@ mod tests {
             },
             pins: BTreeMap::new(),
             snapshot: Arc::new(RegistrySnapshot::from_load(load, [0; 32], 0, 1)),
-            tiers: HashMap::from([("o".to_string(), "default_claude_max_20x".to_string())]),
         }
-    }
-
-    #[test]
-    fn the_net_negative_stop_reads_the_five_hour_share() {
-        let tables = PlanTables::shipped();
-        let gated_on = |view: &RouterView, account: &str, model: &str, net: Net| {
-            let mut agent = Agent::new("main", "k", 1, 0);
-            agent.account = Some(account.into());
-            agent.canonical_model = model.into();
-            agent.ttl_ms = FIVE_MINUTES_MS;
-            agent.net = net;
-            agent.grace_left = 0;
-            gate(
-                view,
-                &mut agent,
-                "s",
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &tables,
-            )
-            .err()
-        };
-        let gated_in = |view: &RouterView, account: &str, net: Net| {
-            gated_on(view, account, "claude-opus-5-5", net)
-        };
-        let gated = |account: &str, o_in_overage: bool, net: Net| {
-            gated_in(&stop_view(o_in_overage), account, net)
-        };
-        let share_short = Net {
-            five_hour_share: -0.01,
-            usd: 0.50,
-        };
-        let dollars_short = Net {
-            five_hour_share: 0.01,
-            usd: -0.50,
-        };
-        assert_eq!(
-            gated("o", false, share_short),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "on plan a negative share holds, whatever the dollars read"
-        );
-        assert_eq!(
-            gated("o", false, dollars_short),
-            None,
-            "on plan a negative dollar balance beside a positive share does not"
-        );
-        for (account, o_in_overage, funding) in [("a", false, "an api key"), ("o", true, "overage")]
-        {
-            assert_eq!(
-                gated(account, o_in_overage, share_short),
-                None,
-                "{funding}: the share never decides off plan"
-            );
-            assert_eq!(
-                gated(account, o_in_overage, dollars_short),
-                Some(Gate::Hold(Reason::NetNegative)),
-                "{funding}: the dollar balance does"
-            );
-        }
-        let tierless = RouterView {
-            tiers: HashMap::new(),
-            ..stop_view(false)
-        };
-        assert_eq!(
-            (
-                gated_in(&tierless, "o", share_short),
-                gated_in(&tierless, "o", dollars_short)
-            ),
-            (None, Some(Gate::Hold(Reason::NetNegative))),
-            "on plan without a tier a probe settles in dollars, so the dollar balance decides"
-        );
-        let unmeasured = |net: Net| gated_on(&stop_view(false), "o", "claude-opus-5", net);
-        assert_eq!(
-            unmeasured(Net {
-                five_hour_share: 0.0,
-                usd: -0.50,
-            }),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "the shipped model has no weight for Opus 5, so its probe settles in dollars and the dollar balance decides"
-        );
-        assert_eq!(
-            unmeasured(Net {
-                five_hour_share: -0.01,
-                usd: 0.0,
-            }),
-            None,
-            "a negative share balance says nothing about a probe that settles in dollars"
-        );
     }
 
     /// An observation whose recipe `make_recipe` built from a body sent in fast mode, or at standard speed.
@@ -2660,65 +3179,26 @@ mod tests {
         }
     }
 
-    /// The gate's answer for `main` pinned on `account` with `net` and no grace, holding a recipe of that speed.
-    fn gated_at(view: &RouterView, account: &str, fast: bool, net: Net) -> Option<Gate> {
-        let mut agent = Agent::new("main", "k", 1, 0);
+    /// The gate's answer for `main` pinned on `account`, holding a recipe of that speed.
+    fn gated_at(view: &RouterView, account: &str, fast: bool) -> Option<Gate> {
+        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
         agent.account = Some(account.into());
         agent.canonical_model = "claude-opus-5-5".into();
-        agent.net = net;
-        agent.grace_left = 0;
         agent.current = Some(observation(fast));
-        gate(
-            view,
-            &mut agent,
-            "s",
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &PlanTables::shipped(),
-        )
-        .err()
-    }
-
-    #[test]
-    fn the_net_negative_stop_reads_the_dollar_balance_for_a_fast_recipe() {
-        let share_short = Net {
-            five_hour_share: -0.01,
-            usd: 0.50,
-        };
-        let dollars_short = Net {
-            five_hour_share: 0.01,
-            usd: -0.50,
-        };
-        let view = stop_view(false);
-        assert_eq!(
-            (
-                gated_at(&view, "o", true, share_short),
-                gated_at(&view, "o", true, dollars_short)
-            ),
-            (None, Some(Gate::Hold(Reason::NetNegative))),
-            "a fast recipe's probes settle in dollars on plan too, so the dollar balance decides"
-        );
-        assert_eq!(
-            (
-                gated_at(&view, "o", false, share_short),
-                gated_at(&view, "o", false, dollars_short)
-            ),
-            (Some(Gate::Hold(Reason::NetNegative)), None),
-            "a standard recipe on the same account still reads the share"
-        );
+        gate(view, &mut agent, "s").err()
     }
 
     #[test]
     fn a_fast_recipe_passes_a_plan_window_hold_takes_no_overage_hold_and_holds_on_a_fast_row() {
         let cooled = |scope: &str, window: &str| RouterView {
             cooled: BTreeMap::from([(("o".to_string(), scope.to_string()), window.to_string())]),
-            ..stop_view(false)
+            ..pool_view(false)
         };
         let plan_window = cooled("account", "five_hour");
         assert_eq!(
             (
-                gated_at(&plan_window, "o", true, Net::default()),
-                gated_at(&plan_window, "o", false, Net::default())
+                gated_at(&plan_window, "o", true),
+                gated_at(&plan_window, "o", false)
             ),
             (None, Some(Gate::Hold(Reason::Cooled))),
             "an account row on a plan window holds the standard recipe alone"
@@ -2726,17 +3206,17 @@ mod tests {
         let fast_row = cooled("fast", "fast");
         assert_eq!(
             (
-                gated_at(&fast_row, "o", true, Net::default()),
-                gated_at(&fast_row, "o", false, Net::default())
+                gated_at(&fast_row, "o", true),
+                gated_at(&fast_row, "o", false)
             ),
             (Some(Gate::Hold(Reason::Cooled)), None),
             "the fast lane's row holds the fast recipe alone"
         );
-        let overage = stop_view_under(true, OveragePolicy::Never);
+        let overage = pool_view_under(true, OveragePolicy::Never);
         assert_eq!(
             (
-                gated_at(&overage, "o", true, Net::default()),
-                gated_at(&overage, "o", false, Net::default())
+                gated_at(&overage, "o", true),
+                gated_at(&overage, "o", false)
             ),
             (None, Some(Gate::Hold(Reason::Overage))),
             "plan overage holds the standard recipe alone"
@@ -2762,11 +3242,11 @@ mod tests {
                         ("o".to_string(), scope.to_string()),
                         window.to_string(),
                     )]),
-                    ..stop_view(false)
+                    ..pool_view(false)
                 };
                 let holds = phoebis_routing::cooldown_holds(scope, window, "claude-opus-5-5", fast);
                 assert_eq!(
-                    gated_at(&view, "o", fast, Net::default()) == Some(Gate::Hold(Reason::Cooled)),
+                    gated_at(&view, "o", fast) == Some(Gate::Hold(Reason::Cooled)),
                     holds,
                     "{scope} at {window}, fast {fast}"
                 );
@@ -2774,70 +3254,6 @@ mod tests {
             }
         }
         assert_eq!(answers.len(), 2, "the table reaches both answers");
-    }
-
-    #[test]
-    fn a_recipe_on_a_model_without_a_weight_gates_in_dollars_and_one_on_a_weighted_model_in_the_share(
-    ) {
-        // The test table leaves Opus 5 without a weight and weighs Opus 5.5.
-        let tables = phoebis_ledger::test_tables::subscription_costs();
-        let gated = |view: &RouterView, model: &str| {
-            let mut agent = Agent::new("main", "k", 1, 0);
-            agent.account = Some("o".into());
-            agent.canonical_model = model.into();
-            agent.ttl_ms = FIVE_MINUTES_MS;
-            agent.current = Some(Observation {
-                id: "obs".into(),
-                attempt: 0,
-                started: 0,
-                recipe: Recipe {
-                    body: Vec::new(),
-                    headers: Vec::new(),
-                    model: model.into(),
-                    ttl_ms: FIVE_MINUTES_MS,
-                    longest_ttl_ms: FIVE_MINUTES_MS,
-                    size: 0,
-                    static_hash: None,
-                    tail_hash: None,
-                    fast: false,
-                },
-                ready: true,
-                expected: 1,
-                ttl_ms: FIVE_MINUTES_MS,
-                prior: None,
-                poisoned: false,
-                dispatched_ms: None,
-            });
-            agent.net = Net {
-                five_hour_share: -0.01,
-                usd: 0.50,
-            };
-            agent.grace_left = 0;
-            gate(
-                view,
-                &mut agent,
-                "s",
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &tables,
-            )
-            .err()
-        };
-        assert_eq!(
-            gated(&stop_view(false), "claude-opus-5"),
-            None,
-            "a model without a weight settles in dollars, so the positive dollar balance decides"
-        );
-        assert_eq!(
-            gated(&stop_view_capped(false, Some(0.0)), "claude-opus-5"),
-            None,
-            "and a zero share cap never holds it"
-        );
-        assert_eq!(
-            gated(&stop_view(false), "claude-opus-5-5"),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "a weighted model settles in the share, so the share balance decides"
-        );
     }
 
     #[test]

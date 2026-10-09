@@ -345,13 +345,10 @@
           "ok": 0,
           "skipped": 0
         },
-        "savings": {
-          "gross_usd": 0.0,
-          "probe_cost_usd": 0.0,
-          "wasted_probes": 0,
-          "wasted_probe_usd": 0.0,
-          "wasted_probe_reasons": {}
-        }
+        "probe_cost_usd": 0.0,
+        "wasted_probes": 0,
+        "wasted_probe_usd": 0.0,
+        "wasted_probe_reasons": {}
       },
       {
         "key": "standard",
@@ -696,13 +693,10 @@
           "ok": 0,
           "skipped": 0
         },
-        "savings": {
-          "gross_usd": 0.0,
-          "probe_cost_usd": 0.0,
-          "wasted_probes": 0,
-          "wasted_probe_usd": 0.0,
-          "wasted_probe_reasons": {}
-        }
+        "probe_cost_usd": 0.0,
+        "wasted_probes": 0,
+        "wasted_probe_usd": 0.0,
+        "wasted_probe_reasons": {}
       }
     ]
   }

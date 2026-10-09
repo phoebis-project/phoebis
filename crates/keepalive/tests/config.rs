@@ -1,12 +1,46 @@
 //! The limits the bootstrap file carries and the policy a pool row carries, with the bounds of each.
 use phoebis_keepalive::{
-    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, LEASE_MS, LEASE_SECONDS,
-    MAX_WORKERS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
+    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, ONE_HOUR_MS,
 };
 use serde_json::json;
 
+/// The timing seam's two variables, which `for_start` reads under the `debug-hooks` feature this test build turns on.
+const TIMING_SEAM: [&str; 2] = [
+    "PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS",
+    "PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS",
+];
+
+/// Unsets the timing seam for its lifetime and puts back what the shell had set, so the defaults read below are
+/// the binary's own whatever a developer's environment holds.
+struct SeamCleared(Vec<(&'static str, Option<String>)>);
+
+impl SeamCleared {
+    fn new() -> SeamCleared {
+        let saved = TIMING_SEAM
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        for name in TIMING_SEAM {
+            std::env::remove_var(name);
+        }
+        SeamCleared(saved)
+    }
+}
+
+impl Drop for SeamCleared {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            if let Some(value) = value {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_default_limits_are_the_specs() {
+    let _seam = SeamCleared::new();
     let limits = KeepaliveLimits::default();
     assert_eq!(
         (
@@ -24,27 +58,13 @@ fn the_default_limits_are_the_specs() {
     );
     let policy = KeepalivePolicy::default();
     assert_eq!(
-        (
-            policy.cold_probe_limit,
-            policy.enabled,
-            policy.jitter_seconds_1h,
-            policy.jitter_seconds_5m,
-            policy.lead_seconds_1h,
-            policy.lead_seconds_5m
-        ),
-        (2, false, 30, 5, 360, 60)
-    );
-    assert_eq!(
-        (
-            policy.max_idle_seconds,
-            policy.max_idle_ticks,
-            policy.net_negative_grace_probes,
-            policy.probe_cost_cap_usd_per_day,
-            policy.retry_max_seconds,
-            policy.retry_seconds,
-            policy.stop_when_net_negative
-        ),
-        (3_600, 0, 2, None, 300, 30, true)
+        policy,
+        KeepalivePolicy {
+            enabled: false,
+            max_idle_seconds: 3_600,
+            max_parked_seconds: None,
+            scheduled_horizon_seconds: None,
+        }
     );
     assert_eq!(policy.validate(3_600), Ok(()));
     assert_eq!(
@@ -52,32 +72,49 @@ fn the_default_limits_are_the_specs() {
         Ok(()),
         "a disabled policy has no affinity requirement"
     );
+    let timing = KeepaliveTiming::default();
     assert_eq!(
         (
-            policy.lead_ms(300_000),
-            policy.lead_ms(3_600_000),
-            policy.jitter_ms(300_000),
-            policy.jitter_ms(3_600_000)
+            timing.lead_5m_ms,
+            timing.lead_1h_ms,
+            timing.jitter_5m_ms,
+            timing.jitter_1h_ms
         ),
         (60_000, 360_000, 5_000, 30_000)
     );
     assert_eq!(
         (
-            policy.retry_ms(),
-            policy.retry_max_ms(),
-            policy.max_idle_ms()
+            timing.cold_probe_limit,
+            timing.failure_limit,
+            timing.retry_ms,
+            timing.retry_max_ms
         ),
-        (30_000, 300_000, Some(3_600_000))
+        (2, 3, 30_000, 300_000)
+    );
+    assert_eq!(
+        (
+            timing.lead_ms(FIVE_MINUTES_MS),
+            timing.lead_ms(ONE_HOUR_MS),
+            timing.jitter_ms(FIVE_MINUTES_MS),
+            timing.jitter_ms(ONE_HOUR_MS)
+        ),
+        (60_000, 360_000, 5_000, 30_000),
+        "each TTL reads its own lead and jitter"
+    );
+    assert_eq!(
+        KeepaliveTiming::for_start(),
+        timing,
+        "the binary starts on the defaults"
     );
     let parsed: KeepalivePolicy = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
     assert!(
-        parsed.enabled && parsed.lead_seconds_5m == 60,
+        parsed.enabled && parsed.max_idle_seconds == 3_600,
         "every absent field takes its default"
     );
-    let text = serde_json::to_string(&parsed).unwrap();
-    assert!(
-        text.contains("\"probe_cost_cap_usd_per_day\":null")
-            && text.contains("\"stop_when_net_negative\":true")
+    assert_eq!(
+        serde_json::to_string(&parsed).unwrap(),
+        r#"{"enabled":true,"max_idle_seconds":3600,"max_parked_seconds":null,"scheduled_horizon_seconds":null}"#,
+        "a null ceiling is written as null"
     );
 }
 
@@ -163,142 +200,50 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
     );
     assert_eq!(policy(|p| p.enabled = true).validate(300), Ok(()));
     assert_eq!(
-        policy(|p| p.cold_probe_limit = 0).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "cold_probe_limit",
-            min: 1,
-            max: 20,
-            value: 0
-        })
-    );
-    assert!(matches!(
-        policy(|p| p.cold_probe_limit = 21).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "cold_probe_limit",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.retry_seconds = 0).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "retry_seconds",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.retry_seconds = 3_601).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "retry_seconds",
-            ..
-        })
-    ));
-    assert_eq!(
-        policy(|p| p.retry_max_seconds = 29).validate_fields(),
-        Err(PolicyError::RetryMaxBelowRetry)
-    );
-    assert!(matches!(
         policy(|p| p.max_idle_seconds = 31_536_001).validate_fields(),
         Err(PolicyError::OutOfRange {
             field: "max_idle_seconds",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.max_idle_ticks = 1_000_001).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "max_idle_ticks",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.lead_seconds_5m = 300).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "lead_seconds_5m",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.lead_seconds_1h = 3_600).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "lead_seconds_1h",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.jitter_seconds_5m = 300).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "jitter_seconds_5m",
-            ..
-        })
-    ));
-    assert!(matches!(
-        policy(|p| p.jitter_seconds_1h = 3_600).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "jitter_seconds_1h",
-            ..
-        })
-    ));
-    // Each value sits inside its own bound; together they reach the TTL they apply to.
-    let five_minutes = policy(|p| {
-        p.lead_seconds_5m = 200;
-        p.jitter_seconds_5m = 100;
-    })
-    .validate_fields();
-    assert_eq!(
-        five_minutes,
-        Err(PolicyError::LeadPlusJitter {
-            lead: "lead_seconds_5m",
-            jitter: "jitter_seconds_5m"
+            min: 0,
+            max: 31_536_000,
+            value: 31_536_001
         })
     );
     assert_eq!(
-        five_minutes.unwrap_err().to_string(),
-        "keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to"
-    );
-    assert_eq!(
-        policy(|p| {
-            p.lead_seconds_1h = 3_000;
-            p.jitter_seconds_1h = 600;
-        })
-        .validate_fields(),
-        Err(PolicyError::LeadPlusJitter {
-            lead: "lead_seconds_1h",
-            jitter: "jitter_seconds_1h"
-        })
-    );
-    assert_eq!(
-        policy(|p| {
-            p.lead_seconds_5m = 199;
-            p.jitter_seconds_5m = 100;
-            p.lead_seconds_1h = 2_999;
-            p.jitter_seconds_1h = 600;
-        })
-        .validate_fields(),
+        policy(|p| p.max_idle_seconds = 0).validate_fields(),
         Ok(()),
-        "a sum a second under the TTL is admitted"
+        "a zero idle window is the break-even"
     );
-    assert!(matches!(
-        policy(|p| p.net_negative_grace_probes = 101).validate_fields(),
-        Err(PolicyError::OutOfRange {
-            field: "net_negative_grace_probes",
-            ..
-        })
-    ));
+    for (value, admitted) in [(59, false), (60, true), (604_800, true), (604_801, false)] {
+        let parked = KeepalivePolicy {
+            max_parked_seconds: Some(value),
+            ..KeepalivePolicy::default()
+        };
+        let horizon = KeepalivePolicy {
+            scheduled_horizon_seconds: Some(value),
+            ..KeepalivePolicy::default()
+        };
+        for (field, refused) in [
+            ("max_parked_seconds", parked.validate_fields()),
+            ("scheduled_horizon_seconds", horizon.validate_fields()),
+        ] {
+            let expected = if admitted {
+                Ok(())
+            } else {
+                Err(PolicyError::OutOfRange {
+                    field,
+                    min: 60,
+                    max: 604_800,
+                    value,
+                })
+            };
+            assert_eq!(refused, expected, "{field} at {value}");
+        }
+    }
     assert_eq!(
-        policy(|p| p.probe_cost_cap_usd_per_day = Some(0.0)).validate_fields(),
-        Err(PolicyError::CapNotPositive)
-    );
-    assert_eq!(
-        policy(|p| p.probe_cost_cap_usd_per_day = Some(-1.0)).validate_fields(),
-        Err(PolicyError::CapNotPositive)
-    );
-    assert_eq!(
-        policy(|p| p.probe_cost_cap_usd_per_day = Some(f64::NAN)).validate_fields(),
-        Err(PolicyError::CapNotPositive)
-    );
-    assert_eq!(
-        policy(|p| p.probe_cost_cap_usd_per_day = Some(2.5)).validate_fields(),
-        Ok(())
+        KeepalivePolicy::parse(&json!({"max_parked_seconds": 59}))
+            .unwrap_err()
+            .to_string(),
+        "keepalive.max_parked_seconds must be between 60 and 604800, not 59"
     );
     assert!(
         matches!(
@@ -307,62 +252,84 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
         ),
         "the dropped Go field is unknown"
     );
+    let removed = KeepalivePolicy::parse(&json!({"enabled": true, "lead_seconds_5m": 90}))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        removed.starts_with("keepalive is not a policy object: unknown field `lead_seconds_5m`"),
+        "a removed field is refused as any unknown field: {removed}"
+    );
     assert!(matches!(
         KeepalivePolicy::parse(&json!([])),
         Err(PolicyError::Shape(_))
     ));
     assert!(
         matches!(
-            KeepalivePolicy::parse(&json!({"cold_probe_limit": 0})),
+            KeepalivePolicy::parse(&json!({"scheduled_horizon_seconds": 0})),
             Err(PolicyError::OutOfRange { .. })
         ),
         "parse applies the field bounds"
     );
+    assert_eq!(
+        KeepalivePolicy::parse(&json!({"max_parked_seconds": null})),
+        Ok(KeepalivePolicy::default()),
+        "a null ceiling is the break-even"
+    );
 }
 
 #[test]
-fn a_retry_ceiling_past_a_week_is_refused() {
-    let policy = |f: fn(&mut KeepalivePolicy)| {
-        let mut p = KeepalivePolicy::default();
-        f(&mut p);
-        p
-    };
+fn a_stored_policy_with_removed_names_reads_as_the_four_fields_and_one_out_of_bounds_reads_as_off()
+{
+    assert_eq!(KeepalivePolicy::from_json("{}"), KeepalivePolicy::default());
+    assert_eq!(
+        KeepalivePolicy::from_json(r#"{"enabled":true,"lead_seconds_5m":90}"#),
+        KeepalivePolicy {
+            enabled: true,
+            ..KeepalivePolicy::default()
+        },
+        "a removed name is ignored and the row stays on"
+    );
+    assert_eq!(
+        KeepalivePolicy::from_json(
+            r#"{"enabled":true,"lead_seconds_5m":0,"max_idle_seconds":900,"max_parked_seconds":7200,"scheduled_horizon_seconds":86400}"#
+        ),
+        KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 900,
+            max_parked_seconds: Some(7_200),
+            scheduled_horizon_seconds: Some(86_400),
+        },
+        "the four known members keep their stored values, whatever the removed ones held"
+    );
+    assert_eq!(
+        KeepalivePolicy::read(r#"{"enabled":true,"probe_enabled":true}"#).map(|p| p.enabled),
+        Ok(true),
+        "the stored read keeps the four members and ignores the rest"
+    );
+    assert_eq!(
+        KeepalivePolicy::from_json(r#"{"enabled":true,"max_parked_seconds":30}"#),
+        KeepalivePolicy::default(),
+        "a stored value outside its bounds turns the row off"
+    );
     assert!(matches!(
-        policy(|p| p.retry_max_seconds = 9_223_372_036_854_776).validate_fields(),
+        KeepalivePolicy::read(r#"{"enabled":true,"max_parked_seconds":30}"#),
         Err(PolicyError::OutOfRange {
-            field: "retry_max_seconds",
+            field: "max_parked_seconds",
             ..
         })
     ));
     assert_eq!(
-        policy(|p| p.retry_max_seconds = 604_800).validate_fields(),
-        Ok(())
-    );
-}
-
-#[test]
-fn a_stored_policy_that_does_not_parse_reads_as_off() {
-    assert_eq!(KeepalivePolicy::from_json("{}"), KeepalivePolicy::default());
-    assert_eq!(
-        KeepalivePolicy::from_json(r#"{"enabled":true,"probe_enabled":true}"#),
+        KeepalivePolicy::from_json(r#"{"enabled":"yes"}"#),
         KeepalivePolicy::default(),
-        "an unknown field turns the row off rather than guessing"
-    );
-    assert_eq!(
-        KeepalivePolicy::from_json(r#"{"enabled":true,"cold_probe_limit":0}"#),
-        KeepalivePolicy::default(),
-        "a stored value outside its bounds turns the row off"
-    );
-    assert_eq!(
-        KeepalivePolicy::from_json(
-            r#"{"enabled":true,"lead_seconds_5m":299,"jitter_seconds_5m":5}"#
-        ),
-        KeepalivePolicy::default(),
-        "a stored lead and jitter that together reach the TTL turn the row off"
+        "a known member of the wrong type turns the row off"
     );
     assert_eq!(
         KeepalivePolicy::from_json("not json"),
         KeepalivePolicy::default()
     );
-    assert!(KeepalivePolicy::from_json(r#"{"enabled":true,"lead_seconds_5m":90}"#).enabled);
+    assert_eq!(
+        KeepalivePolicy::from_json("[true]"),
+        KeepalivePolicy::default(),
+        "a stored value that is not an object turns the row off"
+    );
 }

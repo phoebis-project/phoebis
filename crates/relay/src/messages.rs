@@ -1402,7 +1402,15 @@ impl Relay {
                     .remove_if(&key.id, key.created_at, &id, seq);
             }
         }
-        climb(&mut identity, &key, boundaries, &self.router);
+        let request_class =
+            crate::identity::header_id(&parts.headers, "x-claude-code-request-class");
+        climb(
+            &mut identity,
+            &key,
+            boundaries,
+            request_class.as_deref(),
+            &self.router,
+        );
         trace
             .observed(
                 Some(&key),
@@ -3087,6 +3095,12 @@ impl Relay {
             .is_some()
             .then(|| ctx.identity.session_id.clone())
             .flatten();
+        // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
+        // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
+        // static boundaries still land, a cache of their own the next probe of the same shape reads.
+        let auxiliary = crate::identity::is_auxiliary(
+            crate::identity::header_id(ctx.caller, "x-claude-code-request-class").as_deref(),
+        );
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
@@ -3108,6 +3122,7 @@ impl Relay {
                 .unwrap_or_default(),
             message_boundaries: ctx
                 .chains
+                .filter(|_| !auxiliary)
                 .map(|c| c.message_boundaries.clone())
                 .unwrap_or_default(),
             static_ttl_ms: ctx.tier_ttls.0,

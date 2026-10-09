@@ -15,7 +15,6 @@ export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   overage: { label: 'Overage and plan end', parent: 'Load' },
   pinning: { label: 'Pinning', parent: 'Routing' },
   placement: { label: 'Placement', parent: 'Routing' },
-  probeTuning: { label: 'Probe tuning', parent: 'Caching' },
   selection: { label: 'Selection', parent: 'Routing' },
   shedding: { label: 'Load shedding', parent: 'Load' },
   utilization: { label: 'Utilization thresholds', parent: 'Load' },

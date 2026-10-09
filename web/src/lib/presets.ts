@@ -27,6 +27,13 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
  */
 export const MIGRATE_BAND = 0.05;
 
+/**
+ * The lead over pace the console proposes when the shed switch turns on: a prediction twenty points ahead of the
+ * elapsed share, whose cool line under `MIGRATE_BAND` is 0.15. The router keeps no default, since the switch is the
+ * operator's choice.
+ */
+export const SHED_AHEAD_OF_PACE_DEFAULT = 0.2;
+
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
 export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
   if (window.resetsAt === null) return window.utilization;
@@ -212,7 +219,7 @@ export function shedPreview(
  */
 export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
-  if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
+  if (table === 'loading') return 'The cost model is loading, and window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';
   const of = preview.averaged

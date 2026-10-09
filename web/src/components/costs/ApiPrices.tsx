@@ -1,8 +1,9 @@
-import type { FastPrice, ModelPrice } from '@/api/types';
+import type { ModelPrice, PriceCells } from '@/api/types';
 import { familyOrder } from '@/lib/costs';
+import { fmtCompact, fmtInt } from '@/lib/format';
 import { TOKEN_TYPES } from './PlanRates';
 
-const CELL: Record<(typeof TOKEN_TYPES)[number]['key'], keyof FastPrice> = {
+const CELL: Record<(typeof TOKEN_TYPES)[number]['key'], keyof PriceCells> = {
   cacheRead: 'cacheReadPerM',
   cacheWrite1h: 'cacheWrite1hPerM',
   cacheWrite5m: 'cacheWrite5mPerM',
@@ -14,11 +15,16 @@ const CELL: Record<(typeof TOKEN_TYPES)[number]['key'], keyof FastPrice> = {
 const fmtPrice = (usd: number) => `$${usd.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
 
 const FAST_MODE = 'What an answer served in fast mode costs. A subscription account pays it from usage credits, not from its window.';
+const LONG_CONTEXT = (over: number) =>
+  `What an attempt whose prompt is longer than ${fmtInt(over)} tokens costs. The prompt is its uncached input, its cache reads and its cache writes together.`;
 
-/** The dollar list prices per million tokens family by family, a fast-mode row under each model with one. */
+/**
+ * The dollar list prices per million tokens family by family, a fast-mode row under each model with one and a row
+ * under each model priced by prompt length at its prices over the threshold.
+ */
 export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
   const rows = familyOrder(prices.map((p) => p.model)).flatMap((model) => prices.filter((p) => p.model === model));
-  const cells = (row: FastPrice) =>
+  const cells = (row: PriceCells) =>
     TOKEN_TYPES.map((t, i) => {
       const usd = row[CELL[t.key]];
       // A model the file prices no cache write for reads a dash there rather than a free write.
@@ -49,10 +55,10 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
           </thead>
           <tbody>
             {rows.flatMap((p, n) => {
-              // A model and its fast-mode row share one stripe.
+              // A model and its sub-rows share one stripe.
               const alt = n % 2 ? 'is-alt' : '';
               return [
-                <tr key={p.model} className={`${alt}${p.fast ? ' has-sub' : ''}`}>
+                <tr key={p.model} className={`${alt}${p.fast || p.longContext ? ' has-sub' : ''}`}>
                   <td className="mono">{p.model}</td>
                   {cells(p)}
                 </tr>,
@@ -61,6 +67,14 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
                       <tr key={`${p.model} fast`} className={`cost-ref__sub ${alt}`}>
                         <td title={FAST_MODE}>fast mode</td>
                         {cells(p.fast)}
+                      </tr>,
+                    ]
+                  : []),
+                ...(p.longContext
+                  ? [
+                      <tr key={`${p.model} long-context`} className={`cost-ref__sub ${alt}`}>
+                        <td title={LONG_CONTEXT(p.longContext.over)}>prompt over {fmtCompact(p.longContext.over)} tokens</td>
+                        {cells(p.longContext)}
                       </tr>,
                     ]
                   : []),

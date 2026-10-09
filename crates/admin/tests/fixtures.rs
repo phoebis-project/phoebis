@@ -83,8 +83,8 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
 const UNPARSED: &str = "body must be a JSON object";
 const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
-/// The route's answer to every bound the console holds and to one past it: the keepalive policy's, with a lead and
-/// its jitter that together reach their TTL, the pool engine's with its in-flight cap, and the model rule count's.
+/// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
+/// engine's with its in-flight cap, and the model rule count's.
 /// The burn window and the source dwell have no ceiling at the route, so the form's open maximum on each has no
 /// answer to mirror and only their floors are probed. A probe that sends another field beside the probed one names
 /// it under `with`, so a replay sends the same body. An admitted probe is written back at once from the list read
@@ -112,68 +112,26 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     );
     let mut table: Vec<Row> = Vec::new();
     for (field, min, max) in [
-        ("cold_probe_limit", 1, 20),
-        ("jitter_seconds_1h", 0, 3_599),
-        ("jitter_seconds_5m", 0, 299),
-        ("lead_seconds_1h", 0, 3_599),
-        ("lead_seconds_5m", 0, 299),
         ("max_idle_seconds", 0, 31_536_000),
-        ("max_idle_ticks", 0, 1_000_000),
-        ("net_negative_grace_probes", 0, 100),
-        ("retry_max_seconds", 1, 604_800),
-        ("retry_seconds", 1, 3_600),
+        ("max_parked_seconds", 60, 604_800),
+        ("scheduled_horizon_seconds", 60, 604_800),
     ] {
-        // The policy refuses a retry ceiling under its base, and a lead and its jitter that together reach their
-        // TTL, either of which would mask a bound's own answer, so each of a pair is probed against the other at
-        // the setting that leaves it alone.
-        let companion = match field {
-            "jitter_seconds_1h" => Some(("lead_seconds_1h", 0)),
-            "jitter_seconds_5m" => Some(("lead_seconds_5m", 0)),
-            "lead_seconds_1h" => Some(("jitter_seconds_1h", 0)),
-            "lead_seconds_5m" => Some(("jitter_seconds_5m", 0)),
-            "retry_max_seconds" => Some(("retry_seconds", 1)),
-            "retry_seconds" => Some(("retry_max_seconds", 604_800)),
-            _ => None,
-        };
         let values = if min > 0 {
             vec![min, min - 1, max, max + 1]
         } else {
             vec![min, max, max + 1]
         };
         for value in values {
-            let mut set = j!({ field: value });
-            let mut stored = j!({ field: pool["keepalive"][field] });
-            let mut with = None;
-            if let Some((other, setting)) = companion {
-                set[other] = j!(setting);
-                stored[other] = pool["keepalive"][other].clone();
-                with = Some(j!({ format!("keepalive.{other}"): setting }));
-            }
             table.push((
                 "/admin/pools/main",
                 POOL_ROUTE,
                 format!("keepalive.{field}"),
                 value,
-                j!({ "keepalive": set }),
-                j!({ "keepalive": stored }),
-                with,
+                j!({ "keepalive": { field: value } }),
+                j!({ "keepalive": { field: pool["keepalive"][field] } }),
+                None,
             ));
         }
-    }
-    for (lead, jitter, ttl) in [
-        ("lead_seconds_1h", "jitter_seconds_1h", 3_600),
-        ("lead_seconds_5m", "jitter_seconds_5m", 300),
-    ] {
-        let value = ttl / 2;
-        table.push((
-            "/admin/pools/main",
-            POOL_ROUTE,
-            format!("keepalive.{lead}"),
-            value,
-            j!({ "keepalive": { lead: value, jitter: ttl - value } }),
-            j!({ "keepalive": { lead: pool["keepalive"][lead], jitter: pool["keepalive"][jitter] } }),
-            Some(j!({ format!("keepalive.{jitter}"): ttl - value })),
-        ));
     }
     for (field, values) in [
         ("burn_window_seconds", &[60, 59][..]),
@@ -385,7 +343,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -1064,7 +1022,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
-        ("keepalive_overview", "/admin/keepalive/overview"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
@@ -1090,6 +1047,39 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
+    // the console to decode. It is read after the others, which show main busy.
+    let request_generation = parts
+        .keepalive
+        .agent_status("desktop", "s1", "main")
+        .unwrap()
+        .request_generation;
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            key_generation,
+            phoebis_keepalive::Event {
+                event: "state".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 2,
+                agent_id: Some("main".into()),
+                state: Some("idle".into()),
+                request_generation: Some(request_generation),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    parts.keepalive.step().await;
+    let response = get(app, "/admin/keepalive/overview", Some(&cookie)).await;
+    assert_eq!(response.status(), 200);
+    hold(
+        &planted,
+        "keepalive_overview",
+        "GET /admin/keepalive/overview",
+        json(response).await,
+    );
     // The web's arithmetic tests work their figures out by hand from the test tables' round numbers, so they read
     // the two envelopes as the settings echo carries them, rendered from the same loader the Rust tests use.
     hold(

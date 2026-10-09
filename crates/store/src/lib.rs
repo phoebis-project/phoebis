@@ -1,7 +1,6 @@
 //! SQLite registry and encrypted credentials.
 
 mod accounts;
-mod budgets;
 mod credentials;
 mod lock;
 mod memory;
@@ -11,6 +10,7 @@ mod schema;
 
 pub mod backup;
 pub mod crypto;
+pub mod keepalive;
 pub mod permissions;
 
 use std::fmt;
@@ -34,10 +34,12 @@ pub use accounts::{
     SubscriptionRow, INFERENCE_HOST,
 };
 pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
-pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
     ResolvedAttempt, Secret,
+};
+pub use keepalive::{
+    keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{

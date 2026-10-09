@@ -1,86 +1,79 @@
-//! What the admin routes read from the engine: one row per session, one per recipe, and the counts the
-//! overview tiles show. Every reason here is a member of a closed set the UI knows.
+//! What the admin routes read from the engine: one row per session, one per agent that has sent a real request, and
+//! the counts the overview tiles show. Every word here is a member of a closed set the UI knows.
 
 use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{Agent, AgentState, Engine, Guard, Reason, Wasted, MAIN_AGENT};
+use crate::engine::{Agent, AgentState, Engine, Guard, ParkKind, Reason, Wasted, MAIN_AGENT};
+use crate::events::{err, EventError};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ViewReason {
-    AffinityTooShort,
-    AwaitingCacheEvidence,
-    Budget,
-    CapReached,
-    ColdProbes,
-    Cooled,
-    Evicted,
-    Expired,
-    IdleLimit,
-    LedgerBehind,
-    NetNegative,
-    Overage,
-    Paused,
-    PoolExhausted,
-    ProbeError,
-    QuotaExhausted,
-    Reauth,
-    Retrying,
-    StorageLimit,
-    UnsupportedShape,
-}
-
-/// The engine's fine-grained reason folded onto the view's vocabulary; `None` means nothing holds the recipe.
-pub fn view_reason(reason: Reason) -> Option<ViewReason> {
-    use Reason::*;
-    Some(match reason {
-        AwaitingRequest | AwaitingSelection | Probing | Scheduled => return None,
-        AffinityTooShort => ViewReason::AffinityTooShort,
-        AwaitingCacheEvidence | NoCacheEvidence | NoProbeCacheEvidence => {
-            ViewReason::AwaitingCacheEvidence
-        }
-        Budget => ViewReason::Budget,
-        CapReached => ViewReason::CapReached,
-        RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
-        Cooled => ViewReason::Cooled,
-        Evicted => ViewReason::Evicted,
-        Expired => ViewReason::Expired,
-        IdleLimit => ViewReason::IdleLimit,
-        LedgerBehind => ViewReason::LedgerBehind,
-        NetNegative => ViewReason::NetNegative,
-        Overage => ViewReason::Overage,
-        Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential
-        | SubagentsOff => ViewReason::Paused,
-        ProbePoolExhausted => ViewReason::PoolExhausted,
-        InvalidProbeUsage
-        | MissingAccount
-        | ProbeAuthenticationError
-        | ProbeRetryLimit
-        | ProbeTransportError
-        | UnexpectedOutput
-        | UnsupportedProbe
-        | RequestCanceled
-        | RequestFailed
-        | RequestRejected => ViewReason::ProbeError,
-        ProbeQuotaExhausted => ViewReason::QuotaExhausted,
-        Reauth => ViewReason::Reauth,
-        RetryableProbeError | SlowProbe => ViewReason::Retrying,
-        StorageLimit | RequestLimit | RequestTooLarge | HeadersTooLarge => ViewReason::StorageLimit,
-        FixedThinking | ForcedTool | InvalidCacheControl | InvalidModel | InvalidRequest
-        | StructuredOutput | UnsupportedShape | OwnerMismatch | AgentUnknown | AgentReleased
-        | BusGap | InstanceReplaced | LeaseExpired | Released | Reset | SessionEnded
-        | SessionExpired => ViewReason::UnsupportedShape,
-    })
-}
-
+/// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecipeState {
-    Armed,
+    Ended,
     Held,
-    Probing,
+    NotRetained,
+    Paused,
+    Retained,
+}
+
+impl RecipeState {
+    /// The word serde writes, for a label that is not serialized through serde.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RecipeState::Ended => "ended",
+            RecipeState::Held => "held",
+            RecipeState::NotRetained => "not_retained",
+            RecipeState::Paused => "paused",
+            RecipeState::Retained => "retained",
+        }
+    }
+}
+
+/// The state a recipe under `reason` reads in. `held` clears on its own or by an operator, `paused` is the engine's
+/// own pause until the next real request, `ended` is a discarded recipe whose agent stays, `not_retained` a request
+/// the engine did not keep, and `retained` a recipe armed, probing or waiting for its evidence. A held or retained
+/// word reads `paused` while the pause bit holds: a pause clears the schedule, and a hold a gate places on a paused
+/// recipe at a later tick re-arms nothing.
+pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
+    use Reason::*;
+    let state = match reason {
+        AwaitingCacheEvidence | AwaitingSelection | LeaseExpired | Probing | Scheduled => {
+            RecipeState::Retained
+        }
+        AwaitingRequest | FixedThinking | ForcedTool | HeadersTooLarge | InvalidCacheControl
+        | InvalidModel | InvalidRequest | NoCacheEvidence | OwnerMismatch | RequestLimit
+        | RequestTooLarge | StorageLimit | StructuredOutput | UnsupportedShape => {
+            RecipeState::NotRetained
+        }
+        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
+        AffinityTooShort | Budget | Cooled | Horizon | IneligibleCredential | KeepaliveOff
+        | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PoolDisabled | Reauth
+        | RetryableProbeError | SlowProbe => RecipeState::Held,
+        InvalidProbeUsage
+        | MissingAccount
+        | PartialCacheCoverage
+        | ProbeAuthenticationError
+        | ProbePoolExhausted
+        | ProbeQuotaExhausted
+        | ProbeRetryLimit
+        | ProbeTransportError
+        | RepeatedColdProbe
+        | RequestCanceled
+        | RequestFailed
+        | RequestRejected
+        | UnexpectedOutput
+        | UnsupportedProbe => RecipeState::Paused,
+        AgentReleased | AgentUnknown | BusGap | Evicted | Expired | ExpiredAtRestart
+        | IdleLimit | InstanceReplaced | KeyOptedOut | OptedOut | ParkedLimit | Released
+        | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
+    };
+    match state {
+        RecipeState::Held | RecipeState::Retained if paused => RecipeState::Paused,
+        state => state,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -93,29 +86,36 @@ pub enum CompanionState {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct RecipeView {
+    /// The account the agent is pinned to.
     pub account_id: Option<String>,
     pub agent_id: String,
+    /// The mod's lifecycle word for the agent.
+    pub agent_state: AgentState,
+    pub cause: Reason,
+    pub credited_today: u64,
+    pub deadline: Option<i64>,
     pub key_id: String,
     /// The guard's verdict on the last request the agent observed, `null` before the first one. Never a hold:
-    /// `auxiliary` and `foreign` both leave the recipe scheduled exactly as `state` and `reason` already say.
+    /// `auxiliary` and `foreign` both leave the recipe scheduled exactly as `state` and `cause` already say.
     pub last_guard: Option<Guard>,
+    pub last_probe_at: Option<i64>,
     pub last_request_at: Option<i64>,
     pub model: String,
-    pub net_five_hour_share: f64,
-    pub net_usd: f64,
     pub next_probe_at: Option<i64>,
+    pub park_kind: Option<ParkKind>,
     pub pool_id: String,
-    pub reason: Option<ViewReason>,
+    pub probes_today: u64,
     pub session_id: String,
     pub state: RecipeState,
     pub ttl_seconds: i64,
+    pub wake_at: Option<i64>,
 }
 
+/// Main's recipe as the session row reads it, every member `null` while main holds none.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
+    pub cause: Option<Reason>,
     pub last_guard: Option<Guard>,
-    pub net_five_hour_share: Option<f64>,
-    pub net_usd: Option<f64>,
     pub next_probe_at: Option<i64>,
     pub state: Option<AgentState>,
 }
@@ -128,6 +128,8 @@ pub struct SessionView {
     pub key_id: String,
     pub key_generation: i64,
     pub keepalive: KeepaliveSummary,
+    /// How long ago main's last presence report arrived, in seconds, `null` before the first one.
+    pub presence_age_seconds: Option<i64>,
     pub session_id: String,
 }
 
@@ -142,35 +144,42 @@ fn holds_recipe(agent: &Agent) -> bool {
     agent.current.as_ref().is_some_and(|o| o.ready)
 }
 
-fn recipe_of(agent: &Agent, key_id: &str, session_id: &str) -> RecipeView {
-    let reason = view_reason(agent.reason);
+fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeView {
+    let (probes_today, credited_today) = agent.counts_today(now);
     RecipeView {
         account_id: agent.account.clone(),
         agent_id: agent.id.clone(),
+        agent_state: agent.state,
+        cause: agent.reason,
+        credited_today,
+        deadline: agent.deadline,
         key_id: key_id.into(),
         last_guard: agent.last_guard,
+        last_probe_at: agent.last_probe_at,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
-        net_five_hour_share: agent.net.five_hour_share,
-        net_usd: agent.net.usd,
-        next_probe_at: agent.due_at(),
+        next_probe_at: agent.next_probe_at(),
+        park_kind: agent.park_kind,
         pool_id: agent.pool_id.clone(),
-        reason,
+        probes_today,
         session_id: session_id.into(),
-        state: if agent.in_flight {
-            RecipeState::Probing
-        } else if reason.is_some() {
-            RecipeState::Held
-        } else {
-            RecipeState::Armed
+        state: match recipe_state(agent.reason, agent.paused) {
+            // A refusal at the selection leaves a held word behind with nothing kept, and a held or retained state
+            // says the prompt is kept. A request still awaiting its selection or its evidence keeps its observation.
+            RecipeState::Held | RecipeState::Retained if agent.current.is_none() => {
+                RecipeState::NotRetained
+            }
+            state => state,
         },
         ttl_seconds: agent.ttl_ms / 1_000,
+        wake_at: agent.wake_at,
     }
 }
 
 impl Engine {
     pub fn sessions(&self) -> Vec<SessionView> {
         self.expire();
+        let now = self.now();
         let inner = self.lock();
         inner
             .sessions
@@ -197,20 +206,27 @@ impl Engine {
                     key_id: s.key_id.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
+                        cause: main.map(|a| a.reason),
                         last_guard: main.and_then(|a| a.last_guard),
-                        net_five_hour_share: main.map(|a| a.net.five_hour_share),
-                        net_usd: main.map(|a| a.net.usd),
-                        next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),
+                        next_probe_at: s.agents.values().filter_map(|a| a.next_probe_at()).min(),
                         state: main.map(|a| a.state),
                     },
+                    presence_age_seconds: s
+                        .agents
+                        .get(MAIN_AGENT)
+                        .and_then(|a| a.last_presence_at)
+                        .map(|at| (now - at).max(0) / 1_000),
                     session_id: s.session_id.clone(),
                 }
             })
             .collect()
     }
 
+    /// One row per agent that has sent a real request, whether or not it holds a recipe now: an ended or a refused
+    /// recipe keeps its row with the cause until the agent's session leaves the engine.
     pub fn recipes(&self) -> Vec<RecipeView> {
         self.expire();
+        let now = self.now();
         let inner = self.lock();
         inner
             .sessions
@@ -218,8 +234,8 @@ impl Engine {
             .flat_map(|s| {
                 s.agents
                     .values()
-                    .filter(|a| holds_recipe(a))
-                    .map(move |a| recipe_of(a, &s.key_id, &s.session_id))
+                    .filter(|a| a.last_real_at.is_some())
+                    .map(move |a| recipe_of(a, &s.key_id, &s.session_id, now))
             })
             .collect()
     }
@@ -244,11 +260,16 @@ impl Engine {
     }
 
     /// The operator's release: every recipe of the session goes, labeled `released`, and the session stays
-    /// registered so its companion keeps reporting.
-    pub fn release(&self, key_id: &str, session_id: &str) -> usize {
+    /// registered so its companion keeps reporting. Refused as `quiesced` once the shutdown has quiesced the engine,
+    /// before any state changes: the final save has read its snapshot by then, and a release it does not carry would
+    /// tell the operator a recipe is gone that the next process restores and probes.
+    pub fn release(&self, key_id: &str, session_id: &str) -> Result<usize, EventError> {
         let key = (key_id.to_string(), session_id.to_string());
         let released = {
             let mut inner = self.lock();
+            if inner.closed {
+                return Err(err("quiesced", 503));
+            }
             let agents: Vec<String> = inner
                 .sessions
                 .get(&key)
@@ -264,7 +285,7 @@ impl Engine {
             held
         };
         self.flush();
-        released
+        Ok(released)
     }
 
     /// A closure the metrics renderer can call on every scrape without the ledger crate depending on this
@@ -286,22 +307,52 @@ impl Engine {
 mod tests {
     use super::*;
 
-    /// Every reason the engine can hold an agent under maps onto the view's vocabulary, or is one of the small
-    /// set that means nothing is held.
+    /// The match over `Reason` has no wildcard, so a reason the engine gains fails to build until the table places
+    /// it. This pins the pause bit's rule over every reason: only a held or retained word moves, and it moves to
+    /// `paused`.
     #[test]
-    fn every_reason_maps_onto_the_view_vocabulary_or_none() {
-        let unheld = [
-            Reason::AwaitingRequest,
-            Reason::AwaitingSelection,
-            Reason::Probing,
-            Reason::Scheduled,
-        ];
+    fn every_reason_maps_onto_one_of_the_five_states() {
         for reason in Reason::ALL {
-            let mapped = view_reason(*reason);
+            let state = recipe_state(*reason, false);
+            let paused = recipe_state(*reason, true);
+            match state {
+                RecipeState::Held | RecipeState::Retained => {
+                    assert_eq!(paused, RecipeState::Paused, "{reason:?}")
+                }
+                _ => assert_eq!(paused, state, "{reason:?}"),
+            }
+        }
+        let mut counts = std::collections::BTreeMap::new();
+        for reason in Reason::ALL {
+            *counts
+                .entry(recipe_state(*reason, false).as_str())
+                .or_insert(0) += 1;
+        }
+        assert_eq!(
+            counts.into_iter().collect::<Vec<_>>(),
+            [
+                ("ended", 15),
+                ("held", 14),
+                ("not_retained", 14),
+                ("paused", 14),
+                ("retained", 5)
+            ]
+        );
+        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
+        assert_eq!(
+            recipe_state(Reason::NoProbeCacheEvidence, false),
+            RecipeState::Held
+        );
+        for state in [
+            RecipeState::Ended,
+            RecipeState::Held,
+            RecipeState::NotRetained,
+            RecipeState::Paused,
+            RecipeState::Retained,
+        ] {
             assert_eq!(
-                mapped.is_none(),
-                unheld.contains(reason),
-                "{reason:?} -> {mapped:?}"
+                serde_json::to_value(state).unwrap(),
+                serde_json::json!(state.as_str())
             );
         }
     }

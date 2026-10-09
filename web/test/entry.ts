@@ -1,6 +1,7 @@
 export * from '@/api/decode';
 export * from '@/api/fold';
 export * from '@/api/http';
+export { accountColor, accountSlots } from '@/components/charts/theme';
 export * from '@/lib/analytics';
 export * from '@/lib/attention';
 export * from '@/lib/autoMode';
@@ -27,7 +28,8 @@ export * from '@/lib/trend';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';
+export { cellsFor, PRICES } from '@/mock/catalog';
 export { liveFeed } from '@/mock/live';
 export { poolById } from '@/mock/pools';
-export { ALL_ROLLUPS, requestById } from '@/mock/requests';
+export { ALL_ROLLUPS, costSplitOf, requestById } from '@/mock/requests';
 export { partitionsOf } from '@/mock/routingLog';

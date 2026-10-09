@@ -39,10 +39,10 @@ pub use select::{
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_decayed, cooldown_holds, is_plan_window, shed_marks, warm, AccountTicket,
-    BurnUnit, CreditsState, EvidenceSource, InFlight, KeyPermit, MemberSpend, OverageEvidence,
-    PinRef, PinUsage, Purged, RateTable, Rates, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY,
+    BurnUnit, CreditsState, EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend,
+    OverageEvidence, PinRef, PinUsage, Purged, RateTable, Rates, RoutingState, SharePricer,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY,
     SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{

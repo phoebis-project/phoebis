@@ -12,11 +12,10 @@ use futures::FutureExt;
 use tokio::sync::mpsc;
 
 pub use event::{
-    header_published, lifecycle_channel, user_agent_of, AccountSelected, AttemptOutcome, AutoMode,
-    ClientFacts, CooldownSet, Event, Fork, Kind, LifecycleReceiver, LifecycleSender,
-    Origin, Outcome, Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, ResponseHead, SessionLifecycle, Usage, BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST,
-    OTHER_CLIENT, USER_AGENT_MAX_BYTES,
+    header_published, user_agent_of, AccountSelected, AttemptOutcome, AutoMode, ClientFacts,
+    CooldownSet, Event, Fork, Kind, Origin, Outcome, Phase, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
+    BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a

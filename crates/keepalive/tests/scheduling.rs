@@ -1,12 +1,10 @@
-//! A due probe waits while its account is cooled, in overage, paused, or reauth-marked, while the pool's cap is
-//! reached, or while the recipe's net is negative past its grace, and runs once the condition clears; the due
-//! time and the idle limits come from the pool's tuning.
+//! A due probe waits while its account is cooled, in overage, paused, or reauth-marked, and runs once the condition
+//! clears. The due time follows the entry's expiry, and the idle limits follow the pool's policy.
 mod common;
 use common::*;
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason, LEASE_MS};
+use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
 use phoebis_ledger::{
-    hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
-    RequestRecord, RollupSelect,
+    hour_of, member_spends, read_rollups, BudgetedMember, PriceTable, RollupSelect,
 };
 use phoebis_relay::Accounting;
 use phoebis_routing::{
@@ -141,7 +139,8 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
         1,
         "the lapse counts the probe it withheld, with no hold behind it"
     );
-    // A fast recipe's skip files under the speed it was retained with, read before the lapse drops the recipe.
+    // A fast recipe's skip files under the account, the pool and the speed it was retained with, read before the
+    // lapse drops the recipe, never under an empty id.
     let mut r = rig(RigSpec::default()).await;
     let fast = BODY.replacen('{', r#"{"speed":"fast","#, 1);
     r.engine.observe(r.observed("fast", "main", &fast));
@@ -163,12 +162,19 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
             read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
         })
         .unwrap();
-    let skipped: Vec<(&str, u64)> = rows
+    let skipped: Vec<(&str, &str, &str, u64)> = rows
         .iter()
         .filter(|row| row.probes_skipped > 0)
-        .map(|row| (row.speed.as_str(), row.probes_skipped))
+        .map(|row| {
+            (
+                row.account_id.as_str(),
+                row.pool_id.as_str(),
+                row.speed.as_str(),
+                row.probes_skipped,
+            )
+        })
         .collect();
-    assert_eq!(skipped, [("fast", 1)]);
+    assert_eq!(skipped, [("a", "main", "fast", 1)]);
 }
 
 /// A hold that outlasts the entry never ends in a probe: once the entry has expired the recipe is held under
@@ -216,10 +222,10 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
 async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_probe() {
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
-            retry_seconds: 60,
-            retry_max_seconds: 60,
-            ..RigSpec::default().policy
+        timing: KeepaliveTiming {
+            retry_ms: 60_000,
+            retry_max_ms: 60_000,
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -310,25 +316,6 @@ async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
         1,
         "only the arming request went out: both refusals stopped at the router"
     );
-}
-
-/// A report lands on the router task's own queue; the state it changes is visible once the handle says so.
-///
-/// The lifetime is named rather than elided: `check` is only ever called with this one borrow of `r`, and an
-/// elided `Fn(&Rig) -> Fut` would desugar to a higher-ranked bound that no borrowing async closure can satisfy.
-async fn settled<'a, F, Fut>(r: &'a Rig, check: F)
-where
-    F: Fn(&'a Rig) -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !check(r).await {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the router never applied the report"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
 }
 
 #[tokio::test]
@@ -559,64 +546,6 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
     );
 }
 
-/// A real request and attempt for `a` in `main`: enough `claude-sonnet-5` input tokens, at the shipped table's
-/// live rate, to price at `usd` dollars, so a spend this test wants is a row the ledger's own rollups carry
-/// rather than a number the test invented.
-fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
-    let rate = PriceTable::shipped()
-        .price("claude-sonnet-5")
-        .expect("the shipped table prices claude-sonnet-5")
-        .input;
-    let request = RequestRecord {
-        id: id.into(),
-        received_at: now,
-        finished_at: Some(now + 500),
-        key_id: Some("desktop".into()),
-        pool_id: Some("main".into()),
-        canonical_model: "claude-sonnet-5".into(),
-        model: "claude-sonnet-5".into(),
-        kind: "inference".into(),
-        origin: "client".into(),
-        outcome: "succeeded".into(),
-        attempts: 1,
-        ..Default::default()
-    };
-    let attempt = AttemptRecord {
-        request_id: id.into(),
-        attempt: 1,
-        account_id: "a".into(),
-        account_kind: "api_key".into(),
-        outcome: "succeeded".into(),
-        input_tokens: Some((usd / rate * 1_000_000.0).round() as u64),
-        ..Default::default()
-    };
-    (request, attempt)
-}
-
-/// Lands a real, priced request for `a` through the ledger's own channel, the path a real request's completion
-/// uses, and waits for the router's view of `a`'s spend to agree: a priced landing is what makes the writer
-/// refresh the router at once, rather than at its next slow poll of the registry for what `with_budget_member`
-/// just changed, so this is safe as the seed each test starts from, before anything else races its timing.
-async fn plant_spend(r: &Rig, id: &str, usd: f64) {
-    let (request, attempts) = spend_of(id, r.now(), usd);
-    r.ledger
-        .record_request(Record::Request {
-            request,
-            attempts: vec![attempts],
-            bodies: None,
-        })
-        .await;
-    settled(r, |r| async move {
-        r.h.router
-            .member_spends()
-            .await
-            .unwrap()
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd >= usd - 0.01)
-    })
-    .await;
-}
-
 /// Lands a second real request straight through the store, without the channel `plant_spend` uses, then reads
 /// `a`'s current-period spend the way the ledger's own background refresh would (the same query, the same rows)
 /// and relays it to the router at once: neither step waits, so a caller racing this against the scheduler
@@ -841,9 +770,9 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
 #[tokio::test]
 async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers() {
     let mut r = armed(RigSpec {
-        policy: KeepalivePolicy {
-            retry_seconds: 10,
-            ..RigSpec::default().policy
+        timing: KeepaliveTiming {
+            retry_ms: 10_000,
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -1048,41 +977,6 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
 }
 
 #[tokio::test]
-async fn turning_warm_subagents_off_drops_an_armed_subagent_recipe_at_the_gate() {
-    let mut r = armed(RigSpec::default()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub-1".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("sub-1").await;
-    assert_eq!(r.status("sub-1").reason, Reason::Scheduled);
-    let mut pool = r.h.store.pool("main").unwrap().unwrap();
-    pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
-        warm_subagents: false,
-        ..RigSpec::default().policy
-    })
-    .unwrap();
-    r.h.store
-        .update_pool(&pool, pool.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("sub-1").reason, r.status("sub-1").probes),
-        (Reason::SubagentsOff, 0),
-        "dropped at the gate, no paid probe"
-    );
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "the main agent's recipe is untouched"
-    );
-}
-
-#[tokio::test]
 async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     let mut r = armed(RigSpec::default()).await;
     r.advance(270_000);
@@ -1149,8 +1043,8 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
         ..RigSpec::default()
     })
     .await;
-    // This test is about the per-agent gate, not the cohort placement default: both agents observe the same
-    // fixture body, so a shared static boundary would otherwise land them on one account.
+    // This test is about the per-agent gate, so it pins the placement it depends on: both agents observe the same
+    // fixture body, and cohort placement would land them on one account through the shared static boundary.
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity.subagent_placement = phoebis_store::SubagentPlacement::ByStrategy;
     r.h.store
@@ -1363,51 +1257,35 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
 }
 
 #[tokio::test]
-async fn the_due_time_follows_the_pools_lead_and_jitter() {
+async fn the_due_time_follows_the_timings_lead_and_jitter() {
+    let timing = KeepaliveTiming {
+        lead_5m_ms: 90_000,
+        jitter_5m_ms: 10_000,
+        lead_1h_ms: 600_000,
+        jitter_1h_ms: 0,
+        ..KeepaliveTiming::default()
+    };
     let mut r = armed(RigSpec {
-        policy: KeepalivePolicy {
-            lead_seconds_5m: 60,
-            jitter_seconds_5m: 5,
-            ..RigSpec::default().policy
-        },
+        timing,
         ..RigSpec::default()
     })
     .await;
     let start = r.now();
     let due = r.status("main").next_probe_at.unwrap();
     assert!(
-        (start + 235_000..=start + 240_000).contains(&due),
-        "cache start plus 240 s less at most 5 s of jitter: {}",
+        (start + 200_000..=start + 210_000).contains(&due),
+        "cache start plus 210 s less at most 10 s of jitter: {}",
         due - start
     );
-    r.advance(234_000);
+    r.advance(199_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 0, "not yet due");
-    r.advance(6_000);
+    r.advance(11_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    // A tuning edit reaches the next due time on the next tick.
-    let mut pool = r.h.store.pool("main").unwrap().unwrap();
-    pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
-        lead_seconds_5m: 120,
-        jitter_seconds_5m: 0,
-        ..RigSpec::default().policy
-    })
-    .unwrap();
-    r.h.store
-        .update_pool(&pool, pool.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    let probed_at = r.now();
-    r.step().await;
-    assert_eq!(r.status("main").next_probe_at, Some(probed_at + 180_000));
     // A one-hour entry takes the one-hour lead.
     let r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            lead_seconds_1h: 360,
-            jitter_seconds_1h: 0,
-            ..RigSpec::default().policy
-        },
+        timing,
         ..RigSpec::default()
     })
     .await;
@@ -1427,18 +1305,15 @@ async fn the_due_time_follows_the_pools_lead_and_jitter() {
     ));
     assert_eq!(
         r.status("main").next_probe_at,
-        Some(r.now() + 3_600_000 - 360_000)
+        Some(r.now() + 3_600_000 - 600_000)
     );
 }
 
 #[tokio::test]
 async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
+    // The expiry ends the session long before the idle window would.
     let mut r = armed(RigSpec {
         session_expiry: std::time::Duration::from_secs(600),
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
         ..RigSpec::default()
     })
     .await;
@@ -1447,12 +1322,8 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
     assert_eq!(r.status("main").probes, 1);
     r.advance(330_000);
     r.step().await;
-    assert_eq!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions
-            .len(),
-        0,
+    assert!(
+        r.engine.sessions().is_empty(),
         "600 s past the last real request the session is gone"
     );
     assert_eq!(

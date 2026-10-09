@@ -7,6 +7,7 @@ export { api } from '@/api';
 export { ApiError, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
 export { DecisionCard } from '@/components/DecisionCard';
+export { ChartTooltip } from '@/components/charts/Tooltip';
 export { MultiSelect } from '@/components/ui/MultiSelect';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
 export { Descriptions, Menu } from '@/components/ui/primitives';

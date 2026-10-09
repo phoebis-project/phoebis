@@ -1,13 +1,15 @@
 //! Probes through the relay's failover loop: what a probe carries, what its result does to the schedule, and
 //! how a late or a failed one is classified; the Go probe suite.
 mod common;
-use std::str::FromStr;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
+use phoebis_keepalive::{
+    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, MAIN_AGENT, MAX_WORKERS,
+};
 use phoebis_relay::Accounting;
 use phoebis_store::AccountState;
 
@@ -34,6 +36,30 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
             },
         }),
     })
+}
+
+/// The cost the ledger's probe rows carry, once the engine's delta has landed: the probe's own request row reaches
+/// the rollups with no cost on it, ahead of that delta, so the wait names the cost rather than the row.
+async fn ledger_probe_cost(r: &Rig) -> f64 {
+    wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let cost: f64 = rows
+            .iter()
+            .filter(|row| row.kind == "probe")
+            .map(|row| row.probe_cost_usd)
+            .sum();
+        (cost > 0.0).then_some(cost)
+    })
+    .await
 }
 
 /// The bus publishes every caller header outside its denylist and the recipe replays all of it, so a header
@@ -206,19 +232,16 @@ async fn a_probe_preserves_routing_and_constraints() {
         r.now() - 270_000,
         "a probe does not renew activity"
     );
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
-    assert!(!snapshot.sessions[0].ended);
+    assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
     let ack = r
         .event(Event {
             event: "heartbeat".into(),
             ..Default::default()
         })
         .unwrap();
+    assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     assert!(
-        jiff::Timestamp::from_str(&ack.lease_expires)
-            .unwrap()
-            .as_millisecond()
-            > lease_before,
+        ack.lease_expires_ms > lease_before,
         "the heartbeats carried the lease past the one the session started with"
     );
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.
@@ -357,7 +380,7 @@ fn the_recipe_keeps_a_client_sent_placeholder_line() {
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
-            max_idle_ticks: 1,
+            max_idle_seconds: 500,
             ..RigSpec::default().policy
         },
         ..RigSpec::default()
@@ -388,48 +411,10 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     );
 }
 
-#[tokio::test]
-async fn idle_seconds_include_parked_time_and_exclude_subagents() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            max_idle_seconds: 60,
-            max_idle_ticks: 1,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    r.observe("worker").await;
-    r.state("main", "parked");
-    r.state("worker", "idle");
-    r.advance_attended(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "a parked main is not under the idle budget"
-    );
-    r.state("main", "idle");
-    r.advance_attended(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("worker").probes),
-        (1, 2),
-        "the idle budget applies to the idle main agent alone"
-    );
-}
-
 /// A probe the router refused with `503 ledger_behind` gives back the idle tick its dispatch counted, so a ledger
-/// catching up never runs the idle limit down: three refusals in a row and the served probe after them count one
-/// tick, and two served idle probes still reach the limit. The refusal is the relay's own, under the rig's
-/// accounting reading, and the probe counts under its own outcome.
+/// catching up never runs the count up: three refusals in a row and the served probe after them count one tick, and
+/// a second served idle probe counts the second. The refusal is the relay's own, under the rig's accounting reading,
+/// and the probe counts under its own outcome.
 #[tokio::test]
 async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
     let behind = Arc::new(AtomicBool::new(false));
@@ -439,10 +424,6 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
             behind: reading.load(Ordering::SeqCst),
         })),
         accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
-            max_idle_ticks: 2,
-            ..RigSpec::default().policy
-        },
         ..RigSpec::default()
     })
     .await;
@@ -465,7 +446,7 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
     assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{account="a",outcome="held"} 3"#)
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="held",pool="main"} 3"#)
             && !text.contains(r#"outcome="failed""#),
         "each refusal counts under its own outcome and none as failed: {text}"
     );
@@ -480,14 +461,11 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
     );
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").idle_ticks, 2, "a second served idle probe");
-    r.advance_attended(270_000);
-    r.step().await;
     let status = r.status("main");
     assert_eq!(
         (status.probes, status.idle_ticks, status.reason),
-        (5, 2, Reason::IdleLimit),
-        "two served idle probes reach the limit: {status:?}"
+        (5, 2, Reason::Scheduled),
+        "a second served idle probe counts the second tick: {status:?}"
     );
     assert_eq!(
         r.up.requests().len(),
@@ -508,10 +486,6 @@ async fn a_hold_while_the_main_agent_is_busy_gives_back_no_tick_its_dispatch_nev
             behind: reading.load(Ordering::SeqCst),
         })),
         accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
-            max_idle_ticks: 4,
-            ..RigSpec::default().policy
-        },
         ..RigSpec::default()
     })
     .await;
@@ -559,12 +533,10 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
         r.engine.stats().retained_bytes > 0,
         "a lapsed lease keeps the recipe"
     );
-    assert!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended,
-        "the companion sees an ended instance"
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Silent,
+        "the lapse leaves the session unattended"
     );
     assert_eq!(
         r.engine
@@ -654,13 +626,6 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
                 (Some("a"), None, 0),
                 "{action}: the late result touched no recipe state: {status:?}"
             );
-            // The upstream served it and the day carries it, so the record it outlived carries it too.
-            let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-            assert!(charged > 0.0, "{action}");
-            assert!(
-                (status.net_usd + charged).abs() < 1e-12,
-                "{action}: the net moved by the probe's cost: {status:?} against {charged}"
-            );
             assert!(
                 !status.in_flight,
                 "{action}: the orphaned result gave the record's slot back"
@@ -688,10 +653,10 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     }
 }
 
-/// A probe whose record a replacement registration of the same agent superseded while it was in flight was still
-/// served and charged to the day, so the record that survives it carries its cost in the net.
+/// A probe whose recipe a release stopped while it was in flight was still served and its ledger row carries its
+/// cost, so with the released record still in the session it settles as wasted at that cost under the release.
 #[tokio::test]
-async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
+async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -709,30 +674,50 @@ async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    // The companion releases the agent and registers it again: the same record under a new generation.
     r.state("main", "released");
-    let generation = r.agent("main").request_generation;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some(MAIN_AGENT.into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
-    .unwrap();
     r.up.release();
     r.engine.wait_idle().await;
     r.pump(None).await;
-    let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-    assert!(charged > 0.0, "the day carries the probe");
+    let charged = ledger_probe_cost(&r).await;
     let status = r.status("main");
     assert_eq!(
         (status.in_flight, status.next_probe_at, status.unanswered),
         (false, None, 0),
-        "{status:?}"
+        "the late result touched no recipe state: {status:?}"
+    );
+    let (wasted, wasted_usd, reasons) = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let mut sum = (0, 0.0, std::collections::BTreeMap::new());
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            sum.0 += row.wasted_probes;
+            sum.1 += row.wasted_probe_usd;
+            for (reason, n) in &row.wasted_probe_reasons {
+                *sum.2.entry(reason.clone()).or_insert(0) += n;
+            }
+        }
+        (sum.0 > 0).then_some(sum)
+    })
+    .await;
+    assert_eq!(
+        (wasted, reasons),
+        (
+            1,
+            std::collections::BTreeMap::from([("released".to_string(), 1)])
+        ),
+        "the orphaned probe settles under the release that left it"
     );
     assert!(
-        (status.net_usd + charged).abs() < 1e-12,
-        "the surviving record's net carries the probe's cost: {status:?} against {charged}"
+        (wasted_usd - charged).abs() < 1e-12,
+        "at the cost its ledger row carries: {wasted_usd} against {charged}"
     );
 }
 
@@ -855,8 +840,8 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
     assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{account="a",outcome="timed_out"} 1"#),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="failed",pool="main"} 1"#),
+        "a probe that never answered counts as failed under its pool: {text}"
     );
     r.up.release();
     // Shutdown with a stalled probe in flight ends inside the drain window: the cancellation wins the select.
@@ -936,12 +921,9 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
 async fn a_migration_does_not_accumulate_a_cold_streak() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
-        // Every probe here is priced, the migrated one included; the net stop would hold the fourth, and this case
-        // is about the cold streak alone.
-        policy: KeepalivePolicy {
+        timing: KeepaliveTiming {
             cold_probe_limit: 3,
-            stop_when_net_negative: false,
-            ..RigSpec::default().policy
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -978,18 +960,13 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
     let text = r
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
-    let other_id = if first == "a" { "b" } else { "a" };
     assert!(
-        text.contains(&format!(
-            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="migrated"}} 1"#
-        )),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#),
+        "the migrated probe's write covers the prefix on its new account: {text}"
     );
     assert!(
-        text.contains(&format!(
-            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="ok"}} 2"#
-        )),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 2"#),
+        "the two probes after it read nothing back: {text}"
     );
     assert_eq!(
         status.account_id.as_deref(),
@@ -1008,15 +985,99 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
     );
 }
 
+/// The series of one family in a scrape of the rig's metrics, in the order the scrape renders them.
+fn series(r: &Rig, family: &str) -> Vec<String> {
+    r.metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+        .lines()
+        .filter(|line| line.starts_with(&format!("{family}{{")))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A probe counts once under its pool: `landed` when it read the prefix back, `cold` when the upstream served it
+/// without that read, and `failed` when the upstream did not serve it.
+#[tokio::test]
+async fn each_probe_counts_once_under_its_pool_as_landed_cold_or_failed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    // The standing answer reads the whole prefix back.
+    r.advance(270_000);
+    r.step().await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json(
+            503,
+            r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
+        ),
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (3, Reason::RetryableProbeError)
+    );
+    assert_eq!(
+        series(&r, "phoebis_keepalive_probes_total"),
+        [
+            r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 1"#,
+            r#"phoebis_keepalive_probes_total{outcome="failed",pool="main"} 1"#,
+            r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#,
+        ]
+    );
+}
+
+/// A probe a gate withholds counts once under its pool and the state the hold leaves the recipe in, however many ticks
+/// the hold spans, and a probe a lapsed entry withholds counts under `ended`, the state the lapse ends the recipe in.
+#[tokio::test]
+async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    over_budget(&r).await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(1_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").probes),
+        (Reason::Budget, 0)
+    );
+    assert_eq!(
+        series(&r, "phoebis_keepalive_skipped_total"),
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#]
+    );
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance(20 * MINUTE);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    assert_eq!(
+        series(&r, "phoebis_keepalive_skipped_total"),
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="ended"} 1"#]
+    );
+}
+
 /// A probe that read nothing and rewrote the whole prefix covers from its own write, and the cold streak still
 /// counts it: a rewrite every probe is a prefix never kept warm, so two in a row pause the recipe at the limit.
 #[tokio::test]
 async fn an_uncovered_rewrite_still_counts_toward_the_cold_probe_limit() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
+        timing: KeepaliveTiming {
             cold_probe_limit: 2,
-            ..RigSpec::default().policy
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -1163,6 +1224,80 @@ async fn probe_outcomes_are_classified() {
     );
 }
 
+/// `a` alone at a monthly budget of 5.0, with 5.01 of priced spend the router's view of `a` reads, so the next tick's
+/// gate holds a probe pinned to `a` under `budget`.
+async fn over_budget(r: &Rig) {
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[phoebis_store::MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(5.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    plant_spend(r, "over-budget", 5.01).await;
+}
+
+/// An exhaustion pauses the recipe until the next real request, while a gate hold keeps it armed for the tick that
+/// finds the hold gone: the `paused` bit tells the two apart, whatever the reason reads.
+#[tokio::test]
+async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    for secret in [A, B] {
+        r.up.push_credential_rule(
+            secret,
+            "/v1/messages",
+            relay_common::json_429_unified(4_600, "five_hour"),
+        );
+    }
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.next_probe_at, status.reason),
+        (true, None, Reason::ProbeQuotaExhausted),
+        "{status:?}"
+    );
+    // Past the accounts' reset the next real request selects one again.
+    r.advance(5_000_000);
+    r.observe("main").await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.reason),
+        (false, Reason::Scheduled),
+        "{status:?}"
+    );
+    assert!(
+        status.next_probe_at.is_some_and(|at| at > r.now()),
+        "the next real request re-arms a probe: {status:?}"
+    );
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    over_budget(&r).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.reason, status.probes),
+        (false, Reason::Budget, 0),
+        "{status:?}"
+    );
+    assert!(
+        status.next_probe_at.is_some(),
+        "the schedule is kept for the tick that finds the budget gone: {status:?}"
+    );
+}
+
 /// A pinned account that disconnects between admission and the probe's own selection leaves the pool with
 /// nothing to serve: the relay answers its untimed exhaustion, and the pause reads that reason rather than the
 /// authentication one a marked account gets.
@@ -1221,60 +1356,21 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     );
 }
 
-/// The day the cap charges against is read under the same lock that charges it, so a charge stamped with a
-/// day before the one already summed must not roll the sum back to it.
 #[tokio::test]
-async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        // The jump across midnight below is many times the default idle budget and the session expiry, and
-        // this case is about the day roll alone.
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
-        session_expiry: std::time::Duration::from_secs(1_000_000_000),
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1, "the day's first charge");
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    // The entry the first probe kept expired long before midnight, so a request re-arms the recipe for the day's
-    // next probe.
-    r.observe("main").await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 2, "the next day's own charge");
-    let after_the_roll = r.engine.spent_today();
-    // Nothing is due at this stamp, so only `roll_day`'s own comparison is exercised: a day already summed
-    // must not read as behind a day that came before it.
-    r.clock
-        .store(NOW + 270_000, std::sync::atomic::Ordering::SeqCst);
-    r.engine.step().await;
-    assert_eq!(
-        r.engine.spent_today(),
-        after_the_roll,
-        "the earlier stamp left the day already summed alone"
-    );
-}
-
-#[tokio::test]
-async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
-    let mut r = rig(RigSpec {
+async fn retries_back_off_by_the_timing_and_pause_at_the_failure_limit() {
+    let timing = KeepaliveTiming {
         // A lead of two minutes leaves room for both retries before the entry expires at 300 s, past which none
         // would be sent.
-        policy: KeepalivePolicy {
-            cold_probe_limit: 3,
-            lead_seconds_5m: 120,
-            retry_seconds: 30,
-            retry_max_seconds: 45,
-            ..RigSpec::default().policy
-        },
+        lead_5m_ms: 120_000,
+        ..RigSpec::default().timing
+    };
+    assert_eq!(
+        (timing.retry_ms, timing.retry_max_ms, timing.failure_limit),
+        (30_000, 300_000, 3),
+        "the rig keeps the spec's backoff"
+    );
+    let mut r = rig(RigSpec {
+        timing,
         ..RigSpec::default()
     })
     .await;
@@ -1291,18 +1387,18 @@ async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
         (1, Some(r.now() + 30_000)),
-        "retry_seconds after the first failure"
+        "30 s after the first failure"
     );
     r.up.push_credential_rule(A, "/v1/messages", server_error());
     r.advance(30_000);
     r.step().await;
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
-        (2, Some(r.now() + 45_000)),
-        "doubled, then capped at retry_max_seconds"
+        (2, Some(r.now() + 60_000)),
+        "doubled after the second"
     );
     r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(45_000);
+    r.advance(60_000);
     r.step().await;
     assert_eq!(
         (
@@ -1523,8 +1619,8 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 }
 
 /// A fast-mode request draws usage credits and no plan window, and its probe replays the body as sent, so the
-/// probe does too: it settles in dollars at the fast cells on an account whose standard traffic spends plan
-/// quota, and the account's window share is untouched.
+/// probe does too: its ledger row prices it in dollars at the fast cells on an account whose standard traffic spends
+/// plan quota.
 #[tokio::test]
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
@@ -1543,28 +1639,10 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
         fast > standard,
         "the fast cells are dearer: {fast} against {standard}"
     );
-    let status = r.status("main");
+    let charged = ledger_probe_cost(&r).await;
     assert!(
-        (status.net_usd + fast).abs() < 1e-12,
-        "the probe settled in dollars at the fast cells: {status:?}"
-    );
-    assert_eq!(
-        status.net_five_hour_share, 0.0,
-        "the account's share balance is unchanged"
-    );
-    assert_eq!(
-        r.engine
-            .share_spent_today()
-            .get("o")
-            .copied()
-            .unwrap_or(0.0),
-        0.0,
-        "no window share was spent"
-    );
-    assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - fast).abs() < 1e-12,
-        "the day's dollar figure carries it: {:?}",
-        r.engine.spent_today()
+        (charged - fast).abs() < 1e-12,
+        "the probe's row carries dollars at the fast cells: {charged} against {fast}"
     );
 }
 
@@ -1573,21 +1651,20 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
 #[tokio::test]
 async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
     let (r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
-    let status = r.status("main");
+    let charged = ledger_probe_cost(&r).await;
     assert!(
-        (status.net_usd + standard).abs() < 1e-12 && status.net_five_hour_share == 0.0,
-        "dollars at the standard cells: {status:?}"
+        (charged - standard).abs() < 1e-12,
+        "dollars at the standard cells: {charged} against {standard}"
     );
 }
 
-/// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so it settles in dollars as
-/// on an account the store names no tier for, and the log says why, naming the account and the error.
+/// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so its unit falls back to
+/// dollars as on an account the store names no tier for, and the log says why, naming the account and the error. One
+/// line marks the start of a failing streak, and a restart alone starts the next.
 #[tokio::test]
 async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let captured = Captured::default();
     let _guard = captured.install();
-    let dir = tempfile::tempdir().unwrap();
-    let registry = dir.path().join("router.sqlite");
     // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
     let mut tables = phoebis_ledger::PlanTables::shipped();
     tables
@@ -1595,7 +1672,7 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         .model_weight
         .insert("claude-sonnet-4-5".to_string(), Some(1.0));
     let mut r = rig(RigSpec {
-        registry: Some(registry.clone()),
+        on_disk: true,
         tables,
         ..plan_funded_spec()
     })
@@ -1603,7 +1680,7 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
     r.observe("main").await;
     // The tier reads name the column, and the router serves on from the registry it already loaded.
-    let conn = rusqlite::Connection::open(&registry).unwrap();
+    let conn = rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
     conn.execute_batch(
         "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
     )
@@ -1611,39 +1688,26 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     drop(conn);
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
-    assert_eq!(status.probes, 1);
-    assert!(
-        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "the probe settled in dollars: {status:?}"
-    );
-    assert_eq!(
-        r.engine
-            .share_spent_today()
-            .get("o")
-            .copied()
-            .unwrap_or(0.0),
-        0.0,
-        "no window share was spent"
-    );
-    // Three more ticks with the registry still unreadable, each asking the router and reading every tier.
-    let asked = r.engine.router_views();
-    for _ in 0..3 {
-        r.advance(1_000);
-        r.step().await;
-    }
-    assert_eq!(r.engine.router_views(), asked + 3);
     assert_eq!(r.status("main").probes, 1);
-    let text = captured.text();
-    let settled: Vec<&str> = text
-        .lines()
-        .filter(|line| {
-            line.contains(
-                "the account's tier could not be read, so the settlement falls back to dollars",
-            )
-        })
-        .collect();
-    assert_eq!(settled.len(), 1, "one line for the one settlement:\n{text}");
+    let warnings = || -> Vec<String> {
+        captured
+            .text()
+            .lines()
+            .filter(|line| {
+                line.contains(
+                    "the account's tier could not be read, so the settlement falls back to dollars",
+                )
+            })
+            .map(String::from)
+            .collect()
+    };
+    let settled = warnings();
+    assert_eq!(
+        settled.len(),
+        1,
+        "one line for the one settlement:\n{}",
+        captured.text()
+    );
     assert!(
         settled[0].contains(" WARN ")
             && settled[0].contains("account=o")
@@ -1652,43 +1716,32 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         "{}",
         settled[0]
     );
-    let scheduled: Vec<&str> = text
-        .lines()
-        .filter(|line| {
-            line.contains(
-                "the account's tier could not be read, so the tier map leaves the account out",
-            )
-        })
-        .collect();
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     assert_eq!(
-        scheduled.len(),
-        1,
-        "the scheduler says it once for the failing streak, not once a tick:\n{text}"
+        payload["unanswered"][0]["unit"].as_str(),
+        Some("usd"),
+        "the probe settled in dollars: {}",
+        payload["unanswered"]
     );
-    assert!(
-        scheduled[0].contains("account=o") && !scheduled[0].contains(OAUTH_SECRET),
-        "{}",
-        scheduled[0]
-    );
-    // A read that succeeds ends the streak, so the next failure is a new one and says so.
-    for rename in [
-        "ALTER TABLE accounts RENAME COLUMN subscription_tier_held TO subscription_tier;",
-        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
-    ] {
-        let conn = rusqlite::Connection::open(&registry).unwrap();
-        conn.execute_batch(rename).unwrap();
-        drop(conn);
-        r.advance(1_000);
-        r.step().await;
-    }
+    // The read still fails at the next probe's settlement, which is the same streak.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2);
+    assert_eq!(warnings().len(), 1, "{:?}", warnings());
+    // A restart starts with no streak, so the registry that is still unreadable warns once more.
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    r.advance(270_000);
+    second.step().await;
+    second.wait_idle().await;
     assert_eq!(
-        captured
-            .text()
-            .lines()
-            .filter(|line| line.contains(
-                "the account's tier could not be read, so the tier map leaves the account out"
-            ))
-            .count(),
-        2
+        second
+            .agent_status("desktop", "session", "main")
+            .unwrap()
+            .probes,
+        3
     );
+    assert_eq!(warnings().len(), 2, "{:?}", warnings());
 }

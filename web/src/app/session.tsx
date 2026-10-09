@@ -82,7 +82,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // The queue belongs to the session that ended, so the next login starts with none of its toasts.
       onUnauthorized: () => {
         setQueue([]);
-        setNotice('Your session ended; log in again.');
+        setNotice('Your session ended, so log in again.');
         setProbe('none');
       },
     });
@@ -159,7 +159,7 @@ export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: s
         e instanceof SessionNotKept
           ? 'The router accepted the secret, but the browser kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this site, or a Secure cookie served over plain HTTP.'
           : e instanceof ApiError && e.status === 429
-            ? 'Too many failed logins; try again in a minute.'
+            ? 'Too many failed logins, so try again in a minute.'
             : e instanceof ApiError && e.status === 401
               ? 'That secret does not match.'
               : e instanceof ApiError && e.status === 0

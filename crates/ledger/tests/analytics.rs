@@ -715,7 +715,12 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
         .find(|g| g.key == UNATTRIBUTED)
         .expect("a group of keepalive credits alone stays in the default breakdown");
     assert_eq!(group.kept_warm.requests, 1);
-    assert!(group.savings.gross_usd > 0.0);
+    // The row's saving stays in the rollups, unread: the group a route answers carries no savings figure.
+    let answered = serde_json::to_value(group).unwrap();
+    assert!(
+        answered.get("savings").is_none() && !answered.to_string().contains("gross"),
+        "{answered}"
+    );
 }
 
 #[test]
@@ -2241,6 +2246,7 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
             output: rate,
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),
@@ -2264,6 +2270,7 @@ fn priced_table_distinct(model: &str) -> PriceTable {
             output: per_m(5.0),
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),
@@ -2405,7 +2412,8 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
 
 /// A request and its one attempt, for a pool member's spend: `estimated_usd` is planted at an obviously wrong
 /// figure, so a test that reads the priced sum back at the seeded token count (not the planted figure) proves
-/// `member_spends` recomputes at read time rather than trusting what the attempt was booked at.
+/// `member_spends` recomputes at read time for a model priced one way rather than trusting what the attempt was
+/// booked at.
 #[allow(clippy::too_many_arguments)]
 fn plant_spend(
     db: &LedgerDb,
@@ -3167,6 +3175,63 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
 }
 
 #[test]
+fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main_request() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str,
+                 session: &str,
+                 received_at: i64,
+                 class: &str,
+                 forked_from: Option<&str>,
+                 fork_depth: Option<u32>| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at,
+            finished_at: Some(received_at + 500),
+            key_id: Some("k1".into()),
+            key_generation: 0,
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 0,
+            forked_from: forked_from.map(String::from),
+            fork_depth,
+            request_class: Some(class.into()),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("r0", "s2", 500, "auxiliary", None, None);
+    plant("r1", "s2", 1_000, "main", Some("s1"), Some(3));
+    plant("r2", "s2", 2_000, "main", None, None);
+    let rows = db
+        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].forked_from.as_deref(), rows[0].fork_depth),
+        (Some("s1"), Some(3)),
+        "the fork facts come from the first request that is not auxiliary, the probe ahead of it skipped"
+    );
+
+    // A marker an auxiliary row recorded before the rule stays in that row and never names the session a fork.
+    plant("r3", "s3", 500, "auxiliary", Some("s1"), Some(1));
+    plant("r4", "s3", 1_000, "main", None, None);
+    let rows = db
+        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s3".into())]))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].forked_from.as_deref(), rows[0].fork_depth),
+        (None, None),
+        "an auxiliary row's marker is not the session's"
+    );
+}
+
+#[test]
 fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_identity(
@@ -3213,5 +3278,72 @@ fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
         rows.len(),
         1_000,
         "every session across more than one chunk answers, not only the first chunk's"
+    );
+}
+
+/// An hour's sums carry no per-attempt prompt, so a member's rows on a model priced by prompt length sum at the
+/// dollars they were booked at, while every other group follows the table in force.
+#[test]
+fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_rest() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = ms(2026, 1, 15, 10, 0);
+    // The booked figure is deliberately not what the table prices, so a re-pricing would show.
+    for (id, model, input, booked) in [
+        ("long", "claude-haiku-5-5", 1_001, 7.0),
+        ("plain", "claude-sonnet-5-5", 1_000_000, 999.0),
+    ] {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: ms(2026, 1, 15, 1, 0),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            estimated_usd: Some(booked),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let spend = |table: &PriceTable| {
+        db.read_blocking(|c| member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], now, table))
+            .unwrap()[0]
+            .spent_usd
+    };
+    // The test table's Sonnet 5.5 input is 3 per million: a million tokens re-price at 3, the Haiku 5.5 row at 7
+    // as booked.
+    let table = phoebis_ledger::test_tables::api_prices();
+    assert!(
+        (spend(&table) - (7.0 + 3.0)).abs() < 1e-9,
+        "{}",
+        spend(&table)
+    );
+    // A table in force that doubles Sonnet 5.5's input moves the plain group and leaves the one priced by prompt
+    // length.
+    let doubled = PriceTable::from_yaml(
+        &phoebis_ledger::test_tables::API_PRICES.replacen(
+            "claude-sonnet-5-5: {input: 3,",
+            "claude-sonnet-5-5: {input: 6,",
+            1,
+        ),
+        "test",
+    )
+    .unwrap();
+    assert!(
+        (spend(&doubled) - (7.0 + 6.0)).abs() < 1e-9,
+        "{}",
+        spend(&doubled)
     );
 }

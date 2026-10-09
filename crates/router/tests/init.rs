@@ -200,7 +200,7 @@ fn an_existing_configuration_refuses_before_any_question_on_a_terminal() {
     assert_eq!(out.status.code(), Some(1), "{shown}");
     assert!(
         shown.contains(&format!(
-            "Error: {} already exists; init never overwrites a configuration",
+            "Error: {} already exists, and init never overwrites a configuration",
             config.display()
         )),
         "{shown}"
@@ -246,7 +246,7 @@ fn the_prompt_offers_files_or_none_and_an_existing_file_refuses_in_every_run() {
         &format!("0.0.0.0:0\n\n{refused}\nfiles\ncert.pem\nkey.pem\n"),
     );
     assert_eq!(out.status.code(), Some(0), "{shown}");
-    let prompt = "proxy on 0.0.0.0:0 leaves loopback; tls: files, or none for plain HTTP [none]: ";
+    let prompt = "proxy on 0.0.0.0:0 leaves loopback. tls: files, or none for plain HTTP [none]: ";
     assert_eq!(shown.matches(prompt).count(), 2, "{shown}");
     assert!(shown.contains("answer files or none"), "{shown}");
     // Neither file of the pair exists: `init` reads neither, and takes a relative path against its directory.
@@ -271,7 +271,7 @@ fn the_prompt_offers_files_or_none_and_an_existing_file_refuses_in_every_run() {
     assert_eq!(out.status.code(), Some(0), "{shown}");
     assert!(
         shown.contains(
-            "proxy on 0.0.0.0:0 leaves loopback; tls: files, or none for plain HTTP [none]: "
+            "proxy on 0.0.0.0:0 leaves loopback. tls: files, or none for plain HTTP [none]: "
         ),
         "{shown}"
     );
@@ -284,7 +284,7 @@ fn the_prompt_offers_files_or_none_and_an_existing_file_refuses_in_every_run() {
         assert_eq!(again.status.code(), Some(1), "{}", printed(&again));
         assert!(
             String::from_utf8_lossy(&again.stderr).contains(&format!(
-                "Error: {} already exists; init never overwrites a configuration",
+                "Error: {} already exists, and init never overwrites a configuration",
                 config.display()
             )),
             "{}",
@@ -315,7 +315,7 @@ fn a_second_run_refuses_and_leaves_every_byte() {
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(
         stderr.contains(&format!(
-            "Error: {} already exists; init never overwrites a configuration",
+            "Error: {} already exists, and init never overwrites a configuration",
             config.display()
         )),
         "{stderr}"
@@ -583,7 +583,7 @@ fn the_container_shape_writes_the_compose_directory() {
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("own storage.key by uid 65532 at mode 0400; copy deploy/compose.yaml with the image tag set"),
+        stderr.contains("own storage.key by uid 65532 at mode 0400, and copy deploy/compose.yaml with the image tag set"),
         "{stderr}"
     );
 

@@ -204,8 +204,8 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 22 entries without
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's sixteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 21 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -262,7 +262,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+    if (read.groups !== 16 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 16 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -676,6 +676,56 @@ async function poolChips(theme) {
   }
 }
 
+/**
+ * The first pool card's traffic tooltip under the pointer: three rows, each a key cell, a value and a label in that
+ * order, the key cells on one left edge at the swatch's 12 px, the value cells on one left edge after them, and every
+ * label right of its row's value. A row without a color draws an empty key cell, so its value starts where the colored
+ * rows' values do rather than in the swatch column with the label over its overflow. Each row is a grid of its own, so
+ * a value column is as wide as its row's value and the labels' left edges follow it.
+ */
+async function poolTooltipColumns(theme) {
+  const say = (what) => failures.push(`${theme} /pools tooltip: ${what}`);
+  const chart = page.locator('.pool .pool__chart .recharts-wrapper').first();
+  const tip = page.locator('.pool .pool__chart .chart-tip').first();
+  try {
+    await chart.hover();
+    await tip.waitFor({ state: 'visible', timeout: 5_000 });
+  } catch (error) {
+    say(`the traffic chart drew no tooltip under the pointer (${error instanceof Error ? error.message : String(error)})`);
+    await page.mouse.move(0, 0);
+    return;
+  }
+  await settle();
+  const read = await tip.evaluate((el) => {
+    const edge = (n) => +n.toFixed(2);
+    return [...el.querySelectorAll('.chart-tip__row')].map((row) => {
+      const box = (name) => row.querySelector(`.${name}`)?.getBoundingClientRect() ?? null;
+      const key = box('chart-tip__key');
+      const value = box('chart-tip__value');
+      const label = box('chart-tip__label');
+      return {
+        cells: [...row.children].map((c) => c.className),
+        key: key ? [edge(key.left), edge(key.width)] : null,
+        label: label ? edge(label.left) : null,
+        text: `${row.querySelector('.chart-tip__value')?.textContent ?? ''} ${row.querySelector('.chart-tip__label')?.textContent ?? ''}`.trim(),
+        value: value ? [edge(value.left), edge(value.right)] : null,
+      };
+    });
+  });
+  await page.mouse.move(0, 0);
+  await settle();
+  measurements.push(`${theme} /pools tooltip ${JSON.stringify(read)}`);
+  if (read.length !== 3) {
+    say(`the traffic tooltip draws ${read.length} rows, not three`);
+    return;
+  }
+  const order = JSON.stringify(['chart-tip__key', 'chart-tip__value num', 'chart-tip__label']);
+  if (!read.every((row) => JSON.stringify(row.cells) === order)) say(`the rows' cells read ${JSON.stringify(read.map((row) => row.cells))}, not key, value and label on every row`);
+  if (new Set(read.map((row) => row.key?.[0] ?? null)).size !== 1 || read.some((row) => row.key?.[1] !== 12)) say(`the key cells read ${JSON.stringify(read.map((row) => row.key))}, not one 12 px column`);
+  if (new Set(read.map((row) => row.value?.[0] ?? null)).size !== 1) say(`the value cells start at ${read.map((row) => row.value?.[0] ?? null).join(', ')} px, not on one left edge`);
+  if (read.some((row) => row.value === null || row.label === null || row.label < row.value[1])) say(`a label starts inside its row's value: ${JSON.stringify(read.map((row) => [row.value, row.label]))}`);
+}
+
 /** A rail entry of the open dialog by its exact label; a hint link can hold a rail label inside its own words. */
 const railEntry = (dialog, name) => dialog.locator('.dialog-rail').getByRole('button', { exact: true, name });
 
@@ -760,10 +810,10 @@ async function poolCachingControls(theme) {
   pair.capture = (await dialog.evaluate(read)).capture;
   await railEntry(dialog, 'Keepalive').click();
   await settle();
-  // The subagent switch is drawn whatever keepalive reads; keepalive is turned on so the switch is compared live.
+  // The parked ceiling's switch is drawn whatever keepalive reads, and keepalive is turned on so it is compared live.
   const keepalive = toggle('Keep prompt caches warm');
   if ((await keepalive.count()) === 1 && (await keepalive.getAttribute('aria-checked')) === 'false' && (await keepalive.isEnabled())) await keepalive.click();
-  if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle');
+  if ((await toggle('Max parked (s)').count()) !== 1) say('no parked ceiling toggle');
   const names = { capture: 'capture switch', diagnostics: 'cache diagnostics switch', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
   for (const [key, name] of Object.entries(names)) if (pair[key]) measurements.push(`${theme} /pools ${name} ${JSON.stringify(pair[key])}`);
   const compare = (a, b, keys) => {
@@ -1007,7 +1057,7 @@ async function poolCardLayout(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
 const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Load shedding', 'Failover', 'Cache diagnostics'];
 /**
@@ -1024,12 +1074,10 @@ const POOL_DEPENDENTS = {
     },
   ],
   Keepalive: [
-    { switch: 'Keep prompt caches warm', controls: ['button[role="switch"][aria-label="Also warm subagent caches"]', 'button[role="switch"][aria-label="Stop when probes cost more than they save"]', 'input[aria-label="Grace probes after the net turns negative"]', 'button[role="switch"][aria-label="Daily probe cost cap ($)"]', 'input[aria-label="Daily probe cost cap in dollars"]'] },
-    { switch: 'Stop when probes cost more than they save', controls: ['input[aria-label="Grace probes after the net turns negative"]'] },
-    { switch: 'Daily probe cost cap ($)', controls: ['input[aria-label="Daily probe cost cap in dollars"]'] },
+    { switch: 'Keep prompt caches warm', controls: ['input[type="number"]', 'button[role="switch"][aria-label="Max parked (s)"]', 'button[role="switch"][aria-label="Scheduled horizon (s)"]'] },
+    { switch: 'Max parked (s)', controls: ['input[aria-label="Max parked (s)"]'] },
+    { switch: 'Scheduled horizon (s)', controls: ['input[aria-label="Scheduled horizon (s)"]'] },
   ],
-  // The switch sits in another group, which is chosen to turn it off and back.
-  'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
     { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
     { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
@@ -1131,8 +1179,8 @@ const disabledIn = (dialog, label, selectors) =>
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
- * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
@@ -1200,15 +1248,16 @@ async function poolDialogWalk(theme, mode) {
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
-      const cap = await dialog.evaluate((el) => {
+      const ceilings = await dialog.evaluate((el) => {
         const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Keepalive');
         const near = (a, b) => Math.abs(a - b) <= 1;
-        const switched = section?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched');
         const cells = section?.querySelector('.cells');
         const column = cells ? (cells.getBoundingClientRect().width - parseFloat(getComputedStyle(cells).columnGap)) / 2 : 0;
-        return !switched || cells?.lastElementChild !== switched.parentElement || !near(switched.getBoundingClientRect().width, column) ? `the cost cap is not the last field, one ${column} px column wide` : null;
+        const [parked, horizon] = ['Max parked (s)', 'Scheduled horizon (s)'].map((label) => section?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.closest('.switched'));
+        const shaped = parked && horizon && cells?.lastElementChild === horizon.parentElement && near(parked.getBoundingClientRect().top, horizon.getBoundingClientRect().top);
+        return !shaped || ![parked, horizon].every((s) => near(s.getBoundingClientRect().width, column)) ? `the two switched ceilings are not the last row, each one ${column} px column wide` : null;
       });
-      if (cap) found.push(cap);
+      if (ceilings) found.push(ceilings);
     }
     return { found, line };
   };
@@ -1327,7 +1376,7 @@ async function poolDialogWalk(theme, mode) {
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
     // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
-    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="research"]').fill('');
+    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="shared"]').fill('');
     await settle();
     const dots = await dialog.evaluate((el) =>
       [...el.querySelectorAll('.dialog-rail__parent[data-parent="Pool"], .dialog-rail__group[data-group="identity"]')].map((entry) => {
@@ -1596,8 +1645,9 @@ async function keysPageMenus(theme) {
 
 /**
  * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
- * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
- * sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
+ * listener hint at the gaps its styles give it, 10 px under the block and 14 px over the variable list (the list's own
+ * top margin), so a hint that drifts toward or away from either neighbour fails. The hint reads at the subtitle's size,
+ * the size the page's other hints take.
  * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
  * limits and the admin secret's badge read as lines of the same list.
  */
@@ -1609,11 +1659,11 @@ async function settingsOrder(theme) {
     const cards = [...document.querySelectorAll('.settings > .card')];
     const pre = document.querySelector('pre.snippet');
     const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
-    const group = hint?.nextElementSibling?.matches('.snippet-group') ? hint.nextElementSibling : null;
+    const list = hint?.nextElementSibling?.matches('.envdl') ? hint.nextElementSibling : null;
     const subtitle = cards[0]?.querySelector('.card__subtitle');
     return {
       above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
-      below: hint && group ? Math.round((group.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
+      below: hint && list ? Math.round((list.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
       blockFirst: Boolean(pre && cards[0]?.contains(pre)),
       hintLines: hint ? Math.round(hint.getBoundingClientRect().height / parseFloat(getComputedStyle(hint).lineHeight)) : null,
       hintSize: hint ? getComputedStyle(hint).fontSize : null,
@@ -1640,15 +1690,15 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
   if (offType.length > 0) say(`About's ${offType.join(', ')} read at another type than Storage path's ${storage}`);
   if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
   if (!read.blockFirst) say("the client block's snippet is not in the first card");
-  if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
-  else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);
+  if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
+  else if (read.above !== 10 || read.below !== 14) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, not 10 and 14`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
 }
 
@@ -1990,27 +2040,6 @@ async function recentRowsOneLine(theme) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
     // The cell drops the id's prefix and date, so the title holds the shown text inside the whole id.
     if (cell.cut && !cell.title.includes(cell.text)) failures.push(`${theme} /: the cut Model cell "${cell.text}" does not carry its whole id on the title (${JSON.stringify(cell.title)})`);
-  }
-}
-
-/** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
-async function costCapRows(theme) {
-  const rows = await page.evaluate(() =>
-    [...document.querySelectorAll('.cost-caps__head')].flatMap((head) => {
-      const [left, right] = [...head.children];
-      if (!left || !right) return [];
-      const a = left.getBoundingClientRect();
-      const b = right.getBoundingClientRect();
-      return [{ gap: b.left - a.right, text: `${left.textContent} ${right.textContent}` }];
-    }),
-  );
-  if (!rows.length) {
-    failures.push(`${theme} /sessions: the probe cost tile drew no row to measure`);
-    return;
-  }
-  measurements.push(`${theme} /sessions cost caps ${JSON.stringify(rows)}`);
-  for (const row of rows.filter((r) => r.gap < 6)) {
-    failures.push(`${theme} /sessions: "${row.text}" leaves ${row.gap.toFixed(1)}px between the pool and the amount`);
   }
 }
 
@@ -3758,8 +3787,8 @@ async function sessionRowMenu(theme) {
 
 /**
  * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, and
- * Net closes the line after State. A reason badge wraps inside its own State cell, its left and right edges within the
- * cell's box; its right edge against the table's visible edge is logged beside them.
+ * State closes the line's columns. A cause badge wraps inside its own State cell, its left and right edges within the
+ * cell's box, and its right edge against the table's visible edge is logged beside them.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -3774,13 +3803,16 @@ async function agentLines(theme) {
     const edge = document.querySelector('.sessions-table')?.closest('.table-wrap')?.getBoundingClientRect().right ?? null;
     const head = [...(document.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim());
     const lines = [...document.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => {
-      const state = row.children[6];
+      const state = row.querySelector('.agents__state');
       const cell = state.getBoundingClientRect();
-      const [badge, reason] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+      const [badge, cause] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
       return {
         agent: row.children[0].textContent?.trim(),
         cell: { left: Math.round(cell.left), right: Math.round(cell.right) },
-        reason: reason ? { left: Math.round(reason.left), lines: Math.round(reason.height / badge.height), right: Math.round(reason.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
+        more: Math.round(row.querySelector('.agents__more')?.getBoundingClientRect().right ?? 0),
+        // A line that cannot wrap runs past its box rather than widening it, which the box's own edge never shows.
+        overflows: [...row.querySelectorAll(':scope > span, .agents__more > *')].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.className || el.textContent?.trim().slice(0, 24)),
+        reason: cause ? { left: Math.round(cause.left), lines: Math.round(cause.height / badge.height), right: Math.round(cause.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
         stateRight: badge ? Math.round(badge.right) : null,
       };
     });
@@ -3788,13 +3820,20 @@ async function agentLines(theme) {
   });
   const reasons = read.lines.filter((l) => l.reason !== null);
   measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: reasons.filter((l) => l.reason.right > read.edge).map((l) => l.agent), wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]) })}`);
-  if (read.lines.length > 0 && read.head.slice(-2).join(',') !== 'State,Net') say(`the agent lines end ${JSON.stringify(read.head.slice(-2))}, not State then Net`);
+  if (read.lines.length > 0 && read.head[read.head.length - 1] !== 'State') say(`the agent lines end ${JSON.stringify(read.head.slice(-1))}, not State`);
   if (mock && read.lines.length === 0) say('Expand all opened no agent line');
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
   }
+  // The lifecycle line and the cause's sentence under the columns wrap inside the line rather than past the table.
+  for (const line of read.lines.filter((l) => read.edge !== null && l.more > read.edge)) {
+    say(`agent ${line.agent}'s lifecycle and cause lines end at ${line.more}px, past the table's visible edge at ${read.edge}px`);
+  }
+  for (const line of read.lines.filter((l) => l.overflows.length > 0)) say(`agent ${line.agent}'s line runs past its cells: ${JSON.stringify(line.overflows)}`);
+  const head = await page.evaluate(() => [...(document.querySelector('.agents__row--head')?.children ?? [])].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent?.trim()));
+  if (head.length > 0) say(`the agent lines' head runs past its cells: ${JSON.stringify(head)}`);
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
-    say(`agent ${line.agent}'s reason "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
+    say(`agent ${line.agent}'s cause "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
   }
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();
@@ -3960,7 +3999,6 @@ try {
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {
         await sessionsLead(theme);
-        await costCapRows(theme);
         await costReference(theme);
         await sessionsTableFits(theme);
         await sessionRowMenu(theme);
@@ -3971,6 +4009,7 @@ try {
       if (view.path === '/pools') {
         await expertRow(theme);
         await poolChips(theme);
+        await poolTooltipColumns(theme);
         await poolCachingControls(theme);
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);

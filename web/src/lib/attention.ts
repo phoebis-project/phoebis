@@ -91,7 +91,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return `${what} differs from the pinned build${key ? `, newest refusal from key ${key}` : ''}`;
     }
     case 'writer_degraded':
-      return d.component === 'ledger' ? 'ledger batches are being retried; budgeted members are held back until a batch lands' : 'routing state is kept in memory until the registry file takes writes again';
+      return d.component === 'ledger' ? 'ledger batches are being retried, and budgeted members are held back until a batch lands' : 'routing state is kept in memory until the registry file takes writes again';
     case 'reauth_required':
       return 'serves nothing until its credential is renewed';
     case 'funding_required':

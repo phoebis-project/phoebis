@@ -2,9 +2,11 @@
 //! prompt cache expires, through the relay's own failover loop, so a session that went idle reads warm when it
 //! comes back.
 
+mod breakeven;
 mod config;
 mod engine;
 mod events;
+mod persist;
 mod probe;
 mod recipe;
 mod routes;
@@ -12,27 +14,28 @@ mod savings;
 mod usage;
 mod view;
 
+pub use breakeven::{
+    break_even_ms, factors_for, resolve, BreakEvenFactors, Ceilings, Range, ResolvedCeilings,
+};
 pub use config::{
-    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, FIVE_MINUTES_MS, LEASE_MS,
-    LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
+    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS, PERSIST_INTERVAL,
 };
 pub use engine::{
-    guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,
-    Guard, Net, Reason, SavingsUnit, SessionKey, Wasted, MAIN_AGENT,
+    continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,
+    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, ParkKind, Reason,
+    SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
-pub use events::{
-    decode_query_event, rfc3339, Ack, Event, EventError, Snapshot, SnapshotAgent, SnapshotSession,
-    EVENT_FIELDS,
-};
+pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
-pub use routes::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
+pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
-    view_reason, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,
-    SessionView, ViewReason,
+    recipe_state, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,
+    SessionView,
 };
 
 /// What a probe declares to the relay when the engine sends it: the key it runs under and the key's generation,

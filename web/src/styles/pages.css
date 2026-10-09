@@ -2758,22 +2758,6 @@
 }
 
 /* Settings */
-.snippet-group {
-  margin-bottom: 4px;
-}
-
-.snippet-group__head {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.snippet--sm {
-  font-size: 11.5px;
-}
-
 .envdl {
   display: flex;
   flex-direction: column;
@@ -3023,6 +3007,39 @@
   margin-left: auto;
 }
 
+.pool__ceilings {
+  font-size: 12.5px;
+}
+
+/* The resolved figure or the idle share under a keepalive field's hint, on a line of its own. */
+.keepalive-resolved {
+  display: block;
+  margin-top: 2px;
+}
+
+/* One line per idle-age bucket: the ages, the count and a bar of the rate, in columns wide enough for `16h to 32h`
+   and `999 of 999` so the bars line up down the list. */
+.return-rate__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  list-style: none;
+}
+
+.return-rate__row {
+  display: grid;
+  grid-template-columns: 84px 84px minmax(80px, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.return-rate__age {
+  color: var(--ink-2);
+}
+
 /* The processed list of a saved key, one line per entry with the level it came from. */
 .effective-rules {
   display: flex;
@@ -3069,30 +3086,18 @@
   min-width: 140px;
 }
 
-.cost-caps {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 4px 0 0;
-  list-style: none;
-}
-
-.cost-caps__head {
-  display: flex;
-  justify-content: space-between;
-  /* The pool id and the amount are the two ends of one row: without this a narrow tile runs them together. */
-  gap: 10px;
-  margin-bottom: 4px;
-  font-size: 12.5px;
-}
-
 .stat__value.is-critical {
   color: var(--critical-ink);
 }
 
 .stat__value.is-warning {
   color: var(--warning-ink);
+}
+
+/* The Sessions strip reads its counts beside their caps, "40 MiB of 256 MiB" the longest, which a sixth of the page at
+   1280 px breaks after "of": the tiles take three to a row there, and each value stays on its line. */
+.stat-grid--caps {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 }
 
 /* A read that failed under the tiles or the table: one line between the two, 12px from each, its Try again inline. The
@@ -3111,6 +3116,13 @@
    table scrolls sideways rather than growing three-line rows. */
 .sessions-table td {
   white-space: nowrap;
+}
+
+/* The recipe summary and the presence age run longer than the badges above them, and the default columns have no room
+   for them on one line at 1280 px, so they wrap under their badge rather than widening the column. */
+.sessions-table .srow__presence,
+.sessions-table .srow__summary {
+  white-space: normal;
 }
 
 /* The default columns fit a 990px card at 1280px only with the cells 8px apart; the row's first and last cells keep the
@@ -3193,40 +3205,55 @@
   color: var(--ink-2);
 }
 
+/* The session table keeps its cells on one line, and an agent line's narrow columns, its head and its cause's sentence
+   wrap inside the line instead. */
 .agents {
   display: flex;
   flex-direction: column;
+  white-space: normal;
   border-left: 2px solid var(--accent);
 }
 
-/* The table fits its card collapsed, which leaves State no room of its own once a row opens; the floor gives a reason
-   badge a cell to wrap in, and the open row scrolls sideways for Net instead. */
+/* The floor gives a cause badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(140px, 1fr) 210px;
-  gap: 12px;
+  grid-template-columns: 64px 140px 84px 44px 76px 76px 112px 64px minmax(150px, 1fr);
+  gap: 4px 10px;
   align-items: center;
   padding: 6px 12px;
-}
-
-/* Net closes the line so State keeps its place in a 1280px window. The track holds the common shares of the 5-hour
-   window; the longest, such as -0.000123%, run into the row's padding unclipped, and two balances stack rather than
-   widen it further. */
-.agents__net {
-  display: flex;
-  flex-direction: column;
 }
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
 }
 
-/* A badge keeps its text on one line, so the reason badge after the State badge carries the wrap itself: a long reason
+/* A badge keeps its text on one line, so the cause badge after the state badge carries the wrap itself: a long cause
    wraps inside the State cell rather than running past it. */
-.agents__row > span:nth-child(7) .badge + .badge {
+.agents__state .badge + .badge {
   min-width: 0;
   max-width: 100%;
   white-space: normal;
+}
+
+/* The lifecycle word with the park and the cause's sentence run the line's full width under its columns, so neither
+   takes a column the 1280 px window does not have. */
+.agents__more {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.agents__life {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.agents__cause {
+  margin: 0;
 }
 
 .agents__row--head {
@@ -3860,10 +3887,6 @@
 .hbars--reasons li.hbars__row--top {
   align-items: start;
   padding: 3px 0;
-}
-
-.num.is-negative {
-  color: var(--critical-ink);
 }
 
 /* Observe */

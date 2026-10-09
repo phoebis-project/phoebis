@@ -29,8 +29,8 @@ use crate::select::{
     SelectResult,
 };
 use crate::state::{
-    burn_folded, is_plan_window, mark_holds, AccountTicket, CreditsState, EvidenceSource, InFlight,
-    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    burn_folded, is_plan_window, mark_holds, AccountTicket, BurnUnit, CreditsState, EvidenceSource,
+    InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
     StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE,
 };
@@ -253,9 +253,9 @@ pub struct RouterConfig {
     /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
-    /// The dollar table and the subscription cost model's 5-hour share table the shedding round prices each pin's
-    /// burn through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by.
-    /// The task holds them because neither this crate nor the relay can see the ledger's tables.
+    /// The dollar table and the subscription cost model's 5-hour share table a reader prices each pin's row
+    /// through, and the fast table it prices the pin's fast usage through. A renewal folds tokens and reads none of
+    /// them. The task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,
@@ -275,14 +275,16 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a reader prices a pin's burn through, dollars per token and the subscription cost model's 5-hour
-/// share on its anchor tier per token, and the fast cells a fast renewal is weighed by. All three default to
-/// `RateTable::unit`, so a burn read through the default is a token count and a fast renewal folds unweighed.
+/// The three tables a reader prices a pin's burn through: dollars per token and the subscription cost model's
+/// 5-hour share on its anchor tier per token for the pin's row, and dollars per token at the fast cells for the
+/// pin's fast usage. All three default to `RateTable::unit`, so a burn read through the default is a token count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
     pub five_hour: RateTable,
-    /// Dollars per token at the fast cells; over `dollars` it is the weight a fast renewal folds with.
+    /// Dollars per token at the fast cells, the table a pin's fast usage prices through. A row without fast cells
+    /// carries its own standard and long-context rates here, as the ledger builds it, so a fast answer on such a
+    /// row prices at the set its prompt selects, as it does in the ledger.
     pub fast: RateTable,
 }
 
@@ -296,21 +298,26 @@ impl Default for BurnRates {
     }
 }
 
-/// Per token type, the fast cell over the standard cell of `model`: 1 where the standard rate is 0, since no
-/// weight can carry a charge the standard table prices at nothing, and 1 where either table has no rate for the
-/// type, as for a model with no fast price.
-fn fast_over_standard(rates: &BurnRates, model: &str) -> PinBurn {
-    let (fast, standard) = (rates.fast.rates_for(model), rates.dollars.rates_for(model));
-    let weight = |fast: Option<f64>, standard: Option<f64>| match (fast, standard) {
-        (Some(fast), Some(standard)) if standard != 0.0 => fast / standard,
-        _ => 1.0,
-    };
-    PinBurn {
-        cache_read: weight(fast.cache_read, standard.cache_read),
-        input: weight(fast.input, standard.input),
-        output: weight(fast.output, standard.output),
-        write_1h: weight(fast.write_1h, standard.write_1h),
-        write_5m: weight(fast.write_5m, standard.write_5m),
+impl BurnRates {
+    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage the routing state holds beside its
+    /// row. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
+    /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
+    /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
+    /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
+    /// the banded copy alone: fast usage draws usage credits, never the plan's window. `None` where a type the pin
+    /// burns has no rate.
+    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, fast: &PinBurn) -> Option<f64> {
+        let own =
+            unit.table(self)
+                .price_burn(&pin.model, &unit.read(pin), pin.last_input_tokens)?;
+        match unit {
+            BurnUnit::Usd => Some(
+                own + self
+                    .fast
+                    .price_burn(&pin.model, fast, pin.last_input_tokens)?,
+            ),
+            BurnUnit::WindowShare => Some(own),
+        }
     }
 }
 
@@ -660,6 +667,9 @@ enum Command {
     Coalesced,
     Cooldowns {
         reply: oneshot::Sender<Vec<CooldownRow>>,
+    },
+    FastBurns {
+        reply: oneshot::Sender<HashMap<PinKey, PinBurn>>,
     },
     MemberSpends {
         reply: oneshot::Sender<Vec<MemberSpend>>,
@@ -1113,6 +1123,11 @@ impl RouterHandle {
     }
     pub async fn pins(&self) -> Result<Vec<PinRow>, RouterGone> {
         self.ask(|reply| Command::Pins { reply }).await
+    }
+    /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
+    /// A pin without fast usage has no entry.
+    pub async fn fast_burns(&self) -> Result<HashMap<PinKey, PinBurn>, RouterGone> {
+        self.ask(|reply| Command::FastBurns { reply }).await
     }
     /// The live pins counted per pool by the loop itself, sorted by pool: the metrics scrape reads the counts
     /// rather than a copy of the pin table.
@@ -2403,6 +2418,9 @@ impl Task {
             Command::Pins { reply } => {
                 let _ = reply.send(self.state.pins());
             }
+            Command::FastBurns { reply } => {
+                let _ = reply.send(self.state.fast_burns());
+            }
             Command::PinsByPool { reply } => {
                 let snapshot = self
                     .snapshot
@@ -2853,53 +2871,53 @@ impl Task {
                             ..current
                         };
                         renewed.cache_ttl_ms = cache_ttl_ms;
+                        let mut fast_burn = None;
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
                             // session's burn.
                             renewed.last_refresh_at = now;
                         } else if let Some(usage) = usage {
-                            // Both copies fold whatever the account's kind and nothing is priced here: the
-                            // reader prices the copy its funding selects on the account the pin sits on when it
+                            // Every copy folds whatever the account's kind and nothing is priced here: the
+                            // reader prices the copies its funding selects on the account the pin sits on when it
                             // reads, so leaving overage or moving between tiers needs no reset.
                             let window_ms = self.burn_window_ms(&pin.key_id);
                             // The meter charges a request inside the peak band more, so the banded copy weighs
                             // it by the band at the renewal; dollars cost the same at every hour.
                             let band = self.config.band.at(FIVE_HOUR, now);
                             let at = renewed.burn_at;
-                            let fold = |rate: f64, tokens: u64, weight: f64| {
-                                burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
+                            let prompt =
+                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+                            // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing to
+                            // folds at weight 0 and keeps step with the others.
+                            let folded = |copy: PinBurn, weight: f64| {
+                                let fold = |rate: f64, tokens: u64| {
+                                    burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
+                                };
+                                PinBurn {
+                                    cache_read: fold(copy.cache_read, usage.cache_read),
+                                    input: fold(copy.input, usage.input),
+                                    output: fold(copy.output, usage.output),
+                                    write_1h: fold(copy.write_1h, usage.write_1h),
+                                    write_5m: fold(copy.write_5m, usage.write_5m),
+                                }
                             };
-                            let folded = |copy: PinBurn, w: PinBurn| PinBurn {
-                                cache_read: fold(copy.cache_read, usage.cache_read, w.cache_read),
-                                input: fold(copy.input, usage.input, w.input),
-                                output: fold(copy.output, usage.output, w.output),
-                                write_1h: fold(copy.write_1h, usage.write_1h, w.write_1h),
-                                write_5m: fold(copy.write_5m, usage.write_5m, w.write_5m),
-                            };
-                            let uniform = |w: f64| PinBurn {
-                                cache_read: w,
-                                input: w,
-                                output: w,
-                                write_1h: w,
-                                write_5m: w,
-                            };
-                            // A fast answer is usage credits at the fast cells: the plain copy carries each type
-                            // weighed by fast over standard, so pricing it at the standard table reads the fast
-                            // dollars, and the banded copy, the plan share, only decays.
-                            let plain = if fast {
-                                fast_over_standard(&self.config.rates, &pin.model)
-                            } else {
-                                uniform(1.0)
-                            };
+                            // A fast answer is usage credits: its tokens land in the fast copy the state holds
+                            // beside the row, priced later through the fast table (`BurnRates::fast`), while the
+                            // row's two copies only decay. A standard answer folds into the row's copies, the
+                            // banded one weighed by the band, and the fast copy only decays.
+                            let (plain, fast_weight) = if fast { (0.0, 1.0) } else { (1.0, 0.0) };
                             renewed.burn = folded(renewed.burn, plain);
                             renewed.burn_banded =
-                                folded(renewed.burn_banded, uniform(if fast { 0.0 } else { band }));
+                                folded(renewed.burn_banded, if fast { 0.0 } else { band });
+                            fast_burn = Some(folded(self.state.fast_burn(&key), fast_weight));
                             renewed.burn_at = Some(now);
-                            renewed.last_input_tokens =
-                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+                            renewed.last_input_tokens = prompt;
                         }
                         self.state.put_pin(renewed.clone());
+                        if let Some(fast_burn) = fast_burn {
+                            self.state.set_fast_burn(&key, fast_burn);
+                        }
                         self.state.mark_renewed(&key);
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }

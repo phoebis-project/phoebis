@@ -13,6 +13,37 @@ use std::sync::Mutex;
 /// variables to different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
+/// The binary reads the keepalive's debug timing once, at its start, so a test that waits for a probe a second
+/// after its request keeps the two variables set from before `app::run` until its admin answers. The two such
+/// tests may overlap, so the variables are unset only once the last of them has started.
+static PROBE_SOON: Mutex<usize> = Mutex::new(0);
+
+/// Puts the first probe of a five-minute entry one second after its request, for the binary started next.
+fn probe_soon_on() {
+    let mut starting = PROBE_SOON
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *starting == 0 {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS", "299");
+        std::env::set_var("PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS", "0");
+    }
+    *starting += 1;
+}
+
+/// Called once the binary answers its admin login, which it does only after its start read the timing.
+fn probe_soon_off() {
+    let mut starting = PROBE_SOON
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *starting -= 1;
+    if *starting == 0 {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var("PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS");
+        std::env::remove_var("PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS");
+    }
+}
+
 /// How long a poll waits for the binary's asynchronous pipeline (the routing task, the ledger's writer, an
 /// admin read) to converge. Generous on purpose: the assertion behind it is "it converges", never "within
 /// five seconds", and the loaded workspace run is the case it has to survive.
@@ -2399,14 +2430,15 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "the banded copy weighs the same tokens by the band at the renewal ({band}): {:?}",
         pin.burn_banded
     );
+    let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
     let dollars = phoebis_ledger::PriceTable::shipped()
         .rate_table()
-        .price("claude-opus-5", usage)
+        .price("claude-opus-5", usage, prompt)
         .unwrap();
     assert!(
         (phoebis_ledger::PriceTable::shipped()
             .rate_table()
-            .price_burn("claude-opus-5", &pin.burn)
+            .price_burn("claude-opus-5", &pin.burn, pin.last_input_tokens)
             .unwrap()
             - dollars / 600.0)
             .abs()
@@ -3061,6 +3093,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     );
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
+    probe_soon_on();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -3076,9 +3109,9 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
+    probe_soon_off();
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    // A lead of 299 s on a five-minute entry puts the first probe one second after the request.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0 } })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true } })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -3103,17 +3136,31 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     let resp = req.send().await.unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.text().await.unwrap();
-    // Registered through the companion route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/events?event=session_start&session_id=e2e-warm&instance_id=e2e-instance&sequence=1");
+    // Registered through the keepalive route under the key, so the recipe is retained.
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
+    let registration = serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "e2e-warm",
+        "instance_id": "e2e-instance",
+        "sequence": 1,
+    });
     let ack = client
-        .get(&events)
+        .post(&events)
         .header("authorization", format!("Bearer {secret}"))
+        .json(&registration)
         .send()
         .await
         .unwrap();
     assert_eq!(ack.status(), 200);
     assert_eq!(
-        client.get(&events).send().await.unwrap().status(),
+        client
+            .post(&events)
+            .json(&registration)
+            .send()
+            .await
+            .unwrap()
+            .status(),
         401,
         "no key, no event"
     );
@@ -3133,7 +3180,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
             recipes["recipes"][0]["session_id"].as_str(),
             recipes["recipes"][0]["state"].as_str()
         ),
-        (Some("e2e-warm"), Some("armed"))
+        (Some("e2e-warm"), Some("retained"))
     );
     let log = wait_json(
         &client,
@@ -3196,6 +3243,14 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         overview["probes_24h"]["ok"].as_u64().unwrap() >= 1
             || overview["agents"]["busy"].as_u64() == Some(1)
     );
+    assert_eq!(
+        (
+            overview["limits"]["sessions"]["count"].as_u64(),
+            overview["limits"]["sessions"]["max"].as_u64()
+        ),
+        (Some(1), Some(64)),
+        "the session count beside the cap the file sets"
+    );
     let settings: serde_json::Value = client
         .get(admin("/settings"))
         .send()
@@ -3218,8 +3273,8 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         "{text}"
     );
     assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{account="console",outcome="ok"}"#),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"}"#),
+        "the probe read part of the request's prefix back, so it counts cold under its pool: {text}"
     );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
@@ -3252,188 +3307,6 @@ async fn wait_json(
         Ok(value) => value,
         Err(_) => panic!("{url} stopped answering within {SETTLE:?}"),
     }
-}
-
-/// The companion, unchanged from its own repository, reports to the binary with nothing but the client's own
-/// two variables: the management URL defaults to `ANTHROPIC_BASE_URL`, the token to `CLAUDE_CODE_OAUTH_TOKEN`,
-/// and the session lands under the key those name.
-#[tokio::test]
-async fn the_companion_registers_through_the_binary_under_the_clients_environment() {
-    let Some(companion) = std::env::var_os("PHOEBIS_COMPANION_DIR") else {
-        println!("PHOEBIS_COMPANION_DIR is unset; the companion integration test did not run");
-        return;
-    };
-    let companion = std::path::PathBuf::from(companion);
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
-        },
-    }])
-    .await;
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
-    std::fs::write(
-        dir.path().join("storage.key"),
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    )
-    .unwrap();
-    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
-    let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
-        ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
-    );
-    let cfg_path = dir.path().join("config.yaml");
-    std::fs::write(&cfg_path, yaml).unwrap();
-    let config = {
-        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        phoebis_router::config::load(&cfg_path).unwrap()
-    };
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(phoebis_router::app::run(config, async {
-        let _ = stop_rx.await;
-    }));
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .build()
-        .unwrap();
-    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
-    logged_in(&client, &admin("/session")).await;
-    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true } })).send().await.unwrap().status(), 201);
-    let key: serde_json::Value = client
-        .post(admin("/keys"))
-        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let secret = key["secret"].as_str().unwrap().to_string();
-    // The companion reports only under a Claude Code ancestor; a python binary named `claude` is one.
-    let python = std::path::PathBuf::from(
-        String::from_utf8(
-            std::process::Command::new("python3")
-                .args(["-c", "import sys;print(sys.executable)"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim(),
-    );
-    let fake_claude = dir.path().join("claude");
-    std::fs::copy(&python, &fake_claude).unwrap();
-    let payload =
-        r#"{"session_id":"e2e-companion","hook_event_name":"SessionStart","source":"startup"}"#;
-    let script = format!("import subprocess,sys;sys.exit(subprocess.run([sys.executable,{:?},'report'],input={:?},text=True).returncode)", companion.join("scripts/companion.py").to_str().unwrap(), payload);
-    let state_dir = dir.path().join("state");
-    // Off the runtime thread: the router serves the companion's registration on this same runtime, and a
-    // blocking wait for the child would hold the only thread it has.
-    let output = {
-        let (fake_claude, script, home, state_dir, secret) = (
-            fake_claude.clone(),
-            script.clone(),
-            dir.path().to_path_buf(),
-            state_dir.clone(),
-            secret.clone(),
-        );
-        tokio::task::spawn_blocking(move || {
-            std::process::Command::new(&fake_claude)
-                .args(["-c", &script])
-                .env_clear()
-                .env("PATH", std::env::var("PATH").unwrap_or_default())
-                .env("HOME", &home)
-                .env(
-                    "ANTHROPIC_BASE_URL",
-                    format!("http://127.0.0.1:{proxy_port}"),
-                )
-                .env("CLAUDE_CODE_OAUTH_TOKEN", &secret)
-                .env("CLAUDE_PLUGIN_DATA", &state_dir)
-                .output()
-                .unwrap()
-        })
-        .await
-        .unwrap()
-    };
-    assert!(
-        output.status.success(),
-        "the companion exited {}: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty() && output.stderr.is_empty(),
-        "a hook is silent: {:?}",
-        output
-    );
-    let state = std::fs::read_dir(state_dir.join("lifecycle"))
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|x| x == "json"))
-        .expect("the companion wrote its state");
-    let recorded: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
-    assert_eq!(
-        (recorded["registered"].as_bool(), recorded["error"].as_str()),
-        (Some(true), Some("")),
-        "{recorded}"
-    );
-    assert!(
-        !std::fs::read_to_string(&state).unwrap().contains(&secret),
-        "the key never reaches the state file"
-    );
-    let snapshot = client
-        .get(format!(
-            "http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/snapshot"
-        ))
-        .header("authorization", format!("Bearer {secret}"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(snapshot.status(), 200);
-    let snapshot: serde_json::Value = snapshot.json().await.unwrap();
-    let session = snapshot["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["session_id"] == "e2e-companion")
-        .expect("registered under the key the client's variables name");
-    assert_eq!(
-        (
-            session["instance_id"].as_str(),
-            session["ended"].as_bool(),
-            session["agents"][0]["agent_id"].as_str()
-        ),
-        (
-            Some(recorded["instance"].as_str().unwrap()),
-            Some(false),
-            Some("main")
-        )
-    );
-    let sessions: serde_json::Value = client
-        .get(admin("/sessions"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let row = sessions["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["session_id"] == "e2e-companion")
-        .unwrap();
-    assert_eq!(row["companion"].as_str(), Some("reporting"));
-    let _ = stop_tx.send(());
-    server.await.unwrap().unwrap();
-    up.shutdown().await;
 }
 
 /// The admin listener carries the console as well as the API: its own routes answer JSON and everything else
@@ -3569,6 +3442,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     );
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
+    probe_soon_on();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -3584,10 +3458,9 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
+    probe_soon_off();
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    // A lead of 299 s on a five-minute entry puts the first probe one second after the request, which is what
-    // gives the pass a wasted probe to draw once the release below settles it.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0, "probe_cost_cap_usd_per_day": 4 }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -3614,12 +3487,19 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .unwrap();
     assert_eq!(relayed.status(), 200);
     let _ = relayed.text().await.unwrap();
-    // Registered through the companion route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/events?event=session_start&session_id=e2e-ui&instance_id=e2e-instance&sequence=1");
+    // Registered through the keepalive route under the key, so the recipe is retained.
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
     assert_eq!(
         client
-            .get(&events)
+            .post(&events)
             .header("authorization", format!("Bearer {secret}"))
+            .json(&serde_json::json!({
+                "protocol": 1,
+                "event": "session_start",
+                "session_id": "e2e-ui",
+                "instance_id": "e2e-instance",
+                "sequence": 1,
+            }))
             .send()
             .await
             .unwrap()
@@ -3645,7 +3525,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
             recipes["recipes"][0]["session_id"].as_str(),
             recipes["recipes"][0]["state"].as_str()
         ),
-        (Some("e2e-ui"), Some("armed"))
+        (Some("e2e-ui"), Some("retained"))
     );
     let probes = wait_json(
         &client,
@@ -3673,7 +3553,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|r| r["savings"]["wasted_probes"].as_u64().unwrap_or(0) >= 1)
+                .any(|r| r["wasted_probes"].as_u64().unwrap_or(0) >= 1)
         },
     )
     .await;
