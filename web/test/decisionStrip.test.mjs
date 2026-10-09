@@ -42,6 +42,7 @@ const stationOf = (m, id) => {
 const step = (name, verdict, facts = []) => ({ facts, step: name, verdict });
 const fact = (key, value, unit = null, accountId = null) => ({ accountId, key, unit, value });
 const RULES = ['move:spent', 'move:overage', 'move:return_to_plan', 'move:drain', 'move:shed'];
+const RUNGS_NONE = () => ['rung:content', 'rung:with_main', 'rung:static'].map((r) => step(r, 'none'));
 const PARTITIONS = ['Spent', 'At cap', 'Above ceiling', 'Winding down', 'Floor'];
 const FRESH_LINE = (pin, eligible) => [`Pin: ${pin} (taken)`, `Eligible: ${eligible} (taken)`, ...PARTITIONS.map((w) => `${w} (taken)`)];
 const FIVE_RULES = (verdict, state) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].map((w) => `${w}: ${verdict} (${state})`);
@@ -147,18 +148,24 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(read(refusal), ['Admission: refused (taken)', 'Rest of the walk: not run (idle)']);
   assert.deepEqual([refusal.shape, refusal.decisive, refusal.host, refusal.branch, refusal.brackets, refusal.leaves], ['short', 'admission', null, null, [], []]);
   assert.deepEqual(terminiOf(refusal), THREE_TERMINI(['refused', 'refused']));
+  const refusalLayout = d.layoutStrip(refusal, 958);
+  assert.deepEqual(refusalLayout.paths.filter((p) => p.kind === 'edge' || p.kind === 'curve').map((p) => `${p.kind} ${p.state}`), ['edge idle', 'curve idle', 'curve idle', 'curve taken']);
+  assert.ok(refusalLayout.paths.find((p) => p.kind === 'curve' && p.state === 'taken').d.startsWith(`M${refusalLayout.stations.admission.x} ${refusalLayout.y0} `), 'the taken path runs from the decisive Admission to Refused');
 
   const probe = modelOf(await recordOf('req_c41d0311-200/1'));
   assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)']);
-  assert.deepEqual([probe.decisive, probe.host, probe.branch], ['pick', 'pick', { from: 'move:spent', kind: 'move' }]);
+  assert.deepEqual([probe.shape, probe.decisive, probe.host, probe.branch], ['pinned', 'pick', 'pick', { from: 'move:spent', kind: 'move' }]);
+  assert.deepEqual(terminiOf(probe), PINNED_TERMINI('moved'));
 
   const failover = modelOf(await recordOf('req_1d9c3e55-0b2/2'));
   assert.deepEqual(read(failover), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)']);
   assert.deepEqual([failover.shape, failover.decisive, failover.host, failover.branch], ['fresh', 'rung:static', 'pick', { from: 'rung:static', kind: 'rung' }]);
+  assert.deepEqual(terminiOf(failover), THREE_TERMINI(['chosen', 'placed']));
 
   const overage = modelOf(await recordOf('req_4b0e9d17-c31/2'));
   assert.deepEqual(read(overage), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)']);
-  assert.deepEqual([overage.decisive, overage.host, stationOf(overage, 'pick').second], ['pick', 'pick', ['Pace P0']]);
+  assert.deepEqual([overage.shape, overage.decisive, overage.host, overage.branch, stationOf(overage, 'pick').second], ['fresh', 'pick', 'pick', null, ['Pace P0']]);
+  assert.deepEqual(terminiOf(overage), THREE_TERMINI(['chosen', 'placed']));
   assert.deepEqual(overage.leaves.map((l) => [l.accountId, l.chosen, l.tone]), [['primary', false, 'warning'], ['secondary', false, 'warning'], ['nightly', true, 'accent'], ['overflow', false, 'warning']]);
 
   assert.deepEqual(fresh.leaves.map((l) => [l.accountId, l.badge, l.chosen, l.tone]), [['primary', 'chosen', true, 'accent'], ['secondary', 'out', false, 'warning'], ['nightly', 'eligible', false, 'neutral'], ['overflow', 'out', false, 'warning']]);
@@ -227,6 +234,11 @@ test('a record with no slot step expects the slot its outcome names after its la
   assert.ok(m.stations.filter((s) => s.group !== null).every((s) => s.badge === '' && s.tone === 'neutral' && s.verdict === null));
   assert.deepEqual([d.stationName(stationOf(m, 'pin')), d.stationName(stationOf(m, 'partitions:spent')), d.stationName(stationOf(m, 'rung:content')), d.stationName(stationOf(m, 'exhausted'))], ['Pin, not recorded', 'Spent, not recorded', 'Rung: content, not recorded', 'Exhausted, not run']);
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['refused', 'exhausted']));
+  const layout = d.layoutStrip(m, 958);
+  const curves = layout.paths.filter((p) => p.kind === 'curve');
+  assert.deepEqual(curves.map((p) => p.state), ['idle', 'idle', 'taken']);
+  assert.ok(curves[2].d.startsWith(`M${layout.stations.eligible.x} ${layout.y0} `), 'the taken path runs from the decisive Eligible to Refused');
+  assert.deepEqual(layout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(9).fill('idle')]);
 });
 
 test('a live pin that turned ineligible is decided by its recorded pick, never by a renewal', async () => {
@@ -244,6 +256,33 @@ test('a live pin that turned ineligible is decided by its recorded pick, never b
   assert.deepEqual([exhausted.decisive, exhausted.host], ['exhausted', 'pick']);
   assert.equal(exhausted.stations.some((s) => s.step === 'renew'), false);
   assert.deepEqual(terminiOf(exhausted), ['Chosen: - (idle)', 'Held for a slot: - (idle, not drawn)', 'Refused: exhausted (taken)']);
+
+  // A rung that placed the pinned request afresh leaves the line by its track, as on a fresh placement.
+  const rungWalk = [...head.slice(0, -2), step('rung:with_main', 'match'), step('rung:static', 'not_run')];
+  const rungPlaced = modelOf(built(base, rungWalk, 'placed'));
+  assert.deepEqual([rungPlaced.shape, rungPlaced.decisive, rungPlaced.branch], ['pinned', 'rung:with_main', { from: 'rung:with_main', kind: 'rung' }]);
+  assert.deepEqual(terminiOf(rungPlaced), PINNED_TERMINI('placed'));
+  const rungLayout = d.layoutStrip(rungPlaced, 958);
+  assert.deepEqual([rungLayout.y0, rungLayout.yu], [128, 56]);
+  const rungTrack = rungLayout.paths.filter((p) => p.kind === 'track');
+  assert.deepEqual(rungTrack.map((p) => p.state), ['taken']);
+  assert.ok(rungTrack[0].d.startsWith(`M${rungLayout.stations['rung:with_main'].x} 128 `) && rungTrack[0].d.endsWith(`${rungLayout.termini.chosen.x} 120`), 'the matched rung runs up and on into Chosen');
+  assert.deepEqual(rungLayout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['idle']);
+});
+
+test('a move whose continuation ends in a hold runs its track into the held terminus', async () => {
+  const base = await recordOf('req_ef099b34-453/1');
+  const walk = [step('pin', 'match'), step('eligible', 'match'), step('move:spent', 'fired'), ...RULES.slice(1).map((r) => step(r, 'not_run')), step('cap_filter', 'passed'), step('partitions', 'match'), ...RUNGS_NONE(), step('pick', 'chosen', [fact('strategy', 'pace')]), step('hold', 'held', [fact('place', 'strategy_pick'), fact('bound_ms', 60_000, 'ms')])];
+  const m = modelOf(built(base, walk, 'held'));
+  assert.deepEqual(read(m).slice(7), ['^Move: passed (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', '^Hold: held (taken)', 'Renew: not run (idle)']);
+  assert.deepEqual([m.decisive, m.host], ['hold', 'pick']);
+  assert.deepEqual(terminiOf(m), ['Chosen: - (idle)', 'Held for a slot: held (taken)', 'Refused: - (idle, not drawn)']);
+  const layout = d.layoutStrip(m, 958);
+  const track = layout.paths.filter((p) => p.kind === 'track');
+  assert.deepEqual(track.map((p) => p.state), ['taken']);
+  assert.ok(track[0].d.endsWith(` ${layout.termini.held.y} H${layout.termini.held.x}`), 'the track ends in Held for a slot');
+  assert.deepEqual(layout.termini.held, { x: layout.termini.chosen.x, y: 176 + 36 });
+  assert.deepEqual(layout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['idle', 'idle']);
 });
 
 test('the session-pin cap exemption is decided by its hold after the pick', async () => {
@@ -301,6 +340,12 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.deepEqual([staticLayout.y0, staticLayout.yu], [128, 56]);
   assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken']);
   assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['idle', 'idle', 'idle']);
+  assert.deepEqual(staticLayout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), [...Array(9).fill('taken'), 'idle']);
+
+  const freshRecord = await recordOf('req_ef099b34-453/1');
+  const unpartitioned = modelOf({ ...freshRecord, walk: freshRecord.walk.filter((s) => s.step !== 'partitions') });
+  assert.deepEqual(unpartitioned.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => s.state), Array(5).fill('inferred'));
+  assert.deepEqual(d.layoutStrip(unpartitioned, 958).paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(5).fill('inferred'), ...Array(4).fill('taken')]);
 
   const base = await recordOf('req_f8085653-422/1');
   const walk = [step('pin', 'match'), step('eligible', 'match'), step('move:spent', 'fired'), ...RULES.slice(1).map((r) => step(r, 'not_run')), step('cap_filter', 'dropped'), step('renew', 'renewed')];
@@ -314,4 +359,7 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.equal(track.length, 1);
   assert.ok(track[0].d.endsWith(`${capped.stations.renew.x} 176`), 'the track descends to the line at Renew');
   assert.deepEqual(capped.paths.filter((p) => p.kind === 'curve').map((p) => p.state), ['taken']);
+  // The walk reached Renew down the track, so the line's edge out of the idle Shed stays idle.
+  assert.deepEqual(capped.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', 'taken', 'idle', 'idle', 'idle', 'idle', 'idle']);
+  assert.deepEqual([capped.labels.renew.above, capped.labels.cap_filter.above], [false, true], 'the track comes down into Renew, so its label stays below the line');
 });

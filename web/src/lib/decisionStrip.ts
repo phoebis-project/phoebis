@@ -474,17 +474,25 @@ const sum = (weights: number[]) => weights.reduce((n, w) => n + w, 0);
 const sameGroup = (a: Station, b: Station) => a.group !== null && a.group === b.group;
 const labelWidth = (unit: number) => Math.max(LABEL_MIN, Math.min(unit * 1.02, LABEL_MAX));
 
-/** A curve from a station to a terminus, straight when they share the line. */
-function curve(from: Point, to: Point): string {
-  if (from.y === to.y) return `M${from.x} ${from.y} H${to.x}`;
-  const knee = from.x + (to.x - from.x) * KNEE;
-  return `M${from.x} ${from.y} H${knee - KNEE_EASE} C${knee} ${from.y} ${knee} ${to.y} ${knee + KNEE_EASE} ${to.y} H${to.x}`;
+/** The way on from a point to a terminus: straight when they share a level, else down through the knee. */
+function tail(from: Point, to: Point): string {
+  if (from.y === to.y) return `H${to.x}`;
+  const run = (to.x - from.x) * KNEE;
+  const knee = from.x + run;
+  // A move's track has one unit to its terminus, so at a narrow width the ease would start behind the station.
+  const ease = Math.min(KNEE_EASE, run);
+  return `H${knee - ease} C${knee} ${from.y} ${knee} ${to.y} ${knee + ease} ${to.y} H${to.x}`;
 }
+
+const curve = (from: Point, to: Point) => `M${from.x} ${from.y} ${tail(from, to)}`;
 
 /** A path does not run on from a station the walk never reached. */
 const leaving = (from: Station, into: PathState): PathState => (from.state === 'idle' ? 'idle' : into);
 
-interface Frame { line: Station[]; points: Record<string, Point>; paths: StripPath[]; unit: number; xEnd: number; y0: number; yu: number }
+/**
+ * `into` is the terminus a track carries the taken path into, and `descent` the line station a track comes down into.
+ */
+interface Frame { descent: string | null; into: TerminusKind | null; line: Station[]; points: Record<string, Point>; paths: StripPath[]; unit: number; xEnd: number; y0: number; yu: number }
 
 function edgesAndStubs(line: Station[], points: Record<string, Point>): StripPath[] {
   const paths: StripPath[] = line.slice(1).map((s, i) => ({ d: `M${points[line[i].id].x} ${points[s.id].y} H${points[s.id].x}`, kind: 'edge', state: leaving(line[i], s.state) }));
@@ -500,11 +508,16 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
   const { line, paths, points, unit, xEnd, y0, yu } = f;
   const termini: Partial<Record<TerminusKind, Point>> = {};
   const last = line[line.length - 1];
+  const decisive = model.stations.find((s) => s.id === model.decisive);
   for (const t of model.termini) {
     if (!t.drawn) continue;
     const at = { x: xEnd, y: y0 + TERMINUS_DROP[t.kind] };
     termini[t.kind] = at;
-    if (last !== undefined) paths.push({ d: curve(points[last.id], at), kind: 'curve', state: t.state === 'taken' ? leaving(last, last.state) : 'idle' });
+    // A walk that ends before the slot still reaches its terminus, so the taken path runs there from the station that
+    // decided it, unless a track already carries it there.
+    const runs = t.state === 'taken' && t.kind !== f.into;
+    const from = runs ? (decisive ?? last) : last;
+    if (from !== undefined) paths.push({ d: curve(points[from.id], at), kind: 'curve', state: runs ? leaving(from, from.state) : 'idle' });
   }
   const firstRow = y0 + FIRST_ROW;
   const leaves: Point[] = [];
@@ -519,7 +532,8 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
     });
   }
   const labels: StripLayout['labels'] = {};
-  for (const s of model.stations) labels[s.id] = { above: s.id === model.host || s.level === 'track', width: labelWidth(unit) };
+  // A host the track comes down into keeps its label below the line, clear of the accent entering it from above.
+  for (const s of model.stations) labels[s.id] = { above: s.level === 'track' || (s.id === model.host && s.id !== f.descent), width: labelWidth(unit) };
   const brackets = model.brackets.map((b) => {
     const xs = b.stations.map((id) => points[id].x);
     return { from: Math.min(...xs) - BRACKET_OVERHANG, to: Math.max(...xs) + BRACKET_OVERHANG, word: b.word, y: b.level === 'line' ? y0 - BRACKET_RISE : yu - TRACK_BRACKET_RISE };
@@ -558,7 +572,7 @@ function layoutLine(model: StripModel, width: number): StripLayout {
     const from = points[model.branch.from];
     paths.push({ d: `M${from.x} ${y0} C${from.x} ${YU + BEND} ${from.x} ${YU} ${from.x + CORNER} ${YU} H${xEnd - CORNER} C${xEnd} ${YU} ${xEnd} ${YU + BEND} ${xEnd} ${y0 - INTO_TERMINUS}`, kind: 'track', state: 'taken' });
   }
-  return finish(model, width, { line, paths, points, unit, xEnd, y0, yu: YU });
+  return finish(model, width, { descent: null, into: model.branch?.kind === 'rung' ? 'chosen' : null, line, paths, points, unit, xEnd, y0, yu: YU });
 }
 
 /**
@@ -589,6 +603,7 @@ function layoutMove(model: StripModel, width: number, fired: string): StripLayou
     if (i > 0) x += trackWeights[i - 1] * unit;
     points[s.id] = { x, y: MOVE_YU };
   });
+  const xLast = x;
   if (renewed !== undefined) {
     x += unit;
     points[renewed.id] = { x, y: MOVE_Y0 };
@@ -602,10 +617,15 @@ function layoutMove(model: StripModel, width: number, fired: string): StripLayou
   });
   const line = [...before, ...spread, ...(renewed === undefined ? [] : [renewed])];
   const paths = edgesAndStubs(line, points);
-  const [xTo, yTo] = renewed !== undefined ? [points[renewed.id].x, MOVE_Y0] : [xEnd, MOVE_Y0 - INTO_TERMINUS];
   const xMove = track.length > 0 ? points[track[0].id].x : xFired;
-  paths.push({ d: `M${xFired} ${MOVE_Y0} C${xFired} ${MOVE_YU + CORNER} ${xFired + RISE_LEAN} ${MOVE_YU} ${xMove} ${MOVE_YU} H${xTo - CORNER} C${xTo} ${MOVE_YU} ${xTo} ${MOVE_YU + BEND} ${xTo} ${yTo}`, kind: 'track', state: 'taken' });
-  return finish(model, width, { line, paths, points, unit, xEnd, y0: MOVE_Y0, yu: MOVE_YU });
+  const rise = `M${xFired} ${MOVE_Y0} C${xFired} ${MOVE_YU + CORNER} ${xFired + RISE_LEAN} ${MOVE_YU} ${xMove} ${MOVE_YU}`;
+  const down = (xTo: number, yTo: number) => `H${xTo - CORNER} C${xTo} ${MOVE_YU} ${xTo} ${MOVE_YU + BEND} ${xTo} ${yTo}`;
+  // The continuation ends at the terminus its outcome names, as the line does, or comes down into Renew when the pin
+  // renewed in place.
+  const named = model.termini.find((t) => t.state === 'taken')?.kind ?? 'chosen';
+  const end = renewed !== undefined ? down(points[renewed.id].x, MOVE_Y0) : named === 'chosen' ? down(xEnd, MOVE_Y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: MOVE_YU }, { x: xEnd, y: MOVE_Y0 + TERMINUS_DROP[named] })}`;
+  paths.push({ d: `${rise} ${end}`, kind: 'track', state: 'taken' });
+  return finish(model, width, { descent: renewed?.id ?? null, into: renewed === undefined ? named : null, line, paths, points, unit, xEnd, y0: MOVE_Y0, yu: MOVE_YU });
 }
 
 /** Every coordinate and path the strip draws, for a width the caller floors at 640 px. */
