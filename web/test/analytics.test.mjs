@@ -489,6 +489,21 @@ test("the share lines carry each account's 7-day and week shares per bucket with
   assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }] }, 'no share map, no line');
 });
 
+test('a share line with one priced bucket between two gaps marks it as an isolated slot, which the chart draws as a dot', () => {
+  const at = (h) => new Date(Date.UTC(2026, 8, 16, h)).toISOString();
+  const primary = (costShares) => accountGroup({ costShares, key: 'primary', label: 'primary' });
+  const { data } = d.shareLines([
+    { at: at(11), groups: [primary(null)] },
+    { at: at(12), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] },
+    { at: at(13), groups: [primary(null)] },
+  ]);
+  assert.deepEqual(data.map((r) => r['primary:7d']), [null, 0.05, null], 'the priced bucket sits between two gaps');
+  assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:7d'])), [false, true, false], 'so it is the one isolated slot');
+  assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:week'])), [false, false, false], 'a window never priced marks none');
+  const edge = d.shareLines([{ at: at(11), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] }, { at: at(12), groups: [primary(null)] }]).data;
+  assert.deepEqual(d.isolatedSlots(edge.map((r) => r['primary:7d'])), [true, false], "the range's edge counts as a gap");
+});
+
 test('the session and non-session views agree on the share averages over one mixed-funding request set', () => {
   const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = plan.attempts[plan.attempts.length - 1];

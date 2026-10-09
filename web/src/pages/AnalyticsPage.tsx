@@ -1058,17 +1058,16 @@ type ShareTile = { note: string | undefined; value: string | null };
 /**
  * The three Cost tiles under "Window shares": the named account's 7-day share with its other windows in the note, and
  * the 7-day share per plan-funded request and per 1k plan-funded output tokens. With none or several accounts named
- * the tiles read "per account below", since shares of different accounts' windows do not add, and under another
- * grouping a dash.
+ * the tiles read "per account below" as their value, since shares of different accounts' windows do not add, and
+ * under another grouping a dash.
  */
 function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: AnalyticsGroup | null, loading: boolean): { perRequest: ShareTile; perThousand: ShareTile; sevenDay: ShareTile } {
-  const dash = (note: string): ShareTile => ({ note, value: loading ? null : '-' });
   if (groupBy !== 'account') {
-    const tile = dash('under the account grouping alone');
+    const tile: ShareTile = { note: 'under the account grouping alone', value: loading ? null : '-' };
     return { perRequest: tile, perThousand: tile, sevenDay: tile };
   }
   if (oneAccount === null) {
-    const tile = dash('per account below');
+    const tile: ShareTile = { note: undefined, value: loading ? null : 'per account below' };
     return { perRequest: tile, perThousand: tile, sevenDay: tile };
   }
   const shares = group?.costShares ?? null;
@@ -1091,7 +1090,8 @@ function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: Analyt
 function probeTileOf(unit: AnalyticsUnit, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean): { note: string; value: string | null } {
   if (unit === 'share') {
     if (oneAccount === null) return { note: SHARE_NOTE, value: loading ? null : '-' };
-    const probes = `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
+    // A group folded from request rows measures no probe count, as the dollar branch's savings read there.
+    const probes = group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
     const shares = group?.probeShares ?? null;
     const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) ? null : shareLabel(key, shares[key].cost));
     const sevenDay = named('seven_day');
@@ -1547,12 +1547,13 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
               ]),
             )}
           />
-          {/* The lines leave a null bucket unconnected, so a bucket with no share reads as a gap rather than a slope. */}
+          {/* The lines leave a null bucket unconnected, so a bucket with no share reads as a gap rather than a slope, and
+              a priced bucket with a gap or the range's edge on both sides draws as a dot, as the Burn plan lines do. */}
           {lines.accounts.map((a) => (
-            <Line key={`${a}:7d`} type="monotone" dataKey={`${a}:7d`} stroke={groupSlot(a)} strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Line key={`${a}:7d`} type="monotone" dataKey={`${a}:7d`} stroke={groupSlot(a)} strokeWidth={2} dot={isolatedDot(lines.data.map((r) => r[`${a}:7d`]), groupSlot(a))} isAnimationActive={false} />
           ))}
           {lines.accounts.map((a) => (
-            <Line key={`${a}:week`} type="monotone" dataKey={`${a}:week`} stroke={groupSlot(a)} strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+            <Line key={`${a}:week`} type="monotone" dataKey={`${a}:week`} stroke={groupSlot(a)} strokeWidth={2} strokeDasharray="4 3" dot={isolatedDot(lines.data.map((r) => r[`${a}:week`]), groupSlot(a))} isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>

@@ -1,11 +1,11 @@
 # Browser pass
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
-through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first
-account through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics
-(on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its
-Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts
-the document title, records every console error and page error, and writes a full-page screenshot to
+through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first account
+through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics (on its
+Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its Cache
+warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts the
+document title, records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (the rail's two levels (the indent, the gaps, the hairlines, a parent's color at rest
 and under the pointer), the create marks with and without the refusal dots (a mark's size, weight and ink, 6 px after
@@ -25,12 +25,12 @@ account lines, the Quota cards' poll lines (short of the Refresh pill and inside
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the timeline's chips on
 the Quota windows section, the Quota cards' one height (the head's and the foot's rules at one offset on every card),
 the remaining cards, the error state, the lines under the quota rings, the recent requests' model cells and their
-table's fit, the cost-cap rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted
-entry, the placement and budget tables, the request table's fit, the request pages' widths, walked on a load of their
-own once every view's shot is taken, the speed filter, the traffic cards (each Analytics check
-opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,
-the Unit select in the Cost section's head (inside the head, below the tab strip and inside the viewport at 1280 and
-400 px), the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's
+table's fit, the cost-cap rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the
+placement and budget tables, the request table's fit, the request pages' widths, walked on a load of their own once
+every view's shot is taken, the speed filter, the traffic cards (each Analytics check opens the tab
+it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the Unit
+select in the Cost, Cache and Cache warming heads (inside the head, below the tab strip and inside the viewport at 1280
+and 400 px), the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's
 decision card, which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the
 card at 1280 by 800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on
 the first rung placement the log lists), the subscription end editor, the catalog popup, the key dialog's Access

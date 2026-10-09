@@ -2483,39 +2483,43 @@ async function stickyStrip(theme) {
 }
 
 /**
- * The Unit select in the Cost section's head: inside the head's box, below the tab strip's bottom and inside the
- * viewport at 1280 and 400 px, so the control the head carries beside its meta never slides under the strip or off
- * the edge.
+ * The Unit select in the Cost, Cache and Cache warming heads: inside the head's box, below the tab strip's bottom and
+ * inside the viewport at 1280 and 400 px, so the control a head carries beside its meta, the Cache section's long
+ * one included, never slides under the strip or off the edge.
  */
 async function unitControl(theme) {
   try {
-    if (!(await tabTo(theme, 'Cost'))) return;
-    for (const width of [1280, 400]) {
-      await page.setViewportSize({ height: 800, width });
-      await settle();
-      const read = await page.evaluate(() => {
-        const box = (el) => {
-          if (!el) return null;
-          const b = el.getBoundingClientRect();
-          return { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
-        };
-        const head = document.querySelector('#cost .analytics-section__head');
-        return {
-          head: box(head),
-          select: box(head?.querySelector('select[aria-label="Cost unit"]')?.closest('.select')),
-          strip: Math.round(document.querySelector('.section-bar')?.getBoundingClientRect().bottom ?? NaN),
-          width: document.documentElement.clientWidth,
-        };
-      });
-      measurements.push(`${theme} /analytics unit control at ${width} px ${JSON.stringify(read)}`);
-      if (read.head === null || read.select === null) {
-        failures.push(`${theme} /analytics: at ${width} px the Cost head draws no Unit select`);
-        continue;
+    for (const [label, id] of [['Cost', 'cost'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
+      if (!(await tabTo(theme, label))) continue;
+      for (const width of [1280, 400]) {
+        await page.setViewportSize({ height: 800, width });
+        await settle();
+        const read = await page.evaluate((section) => {
+          const box = (el) => {
+            if (!el) return null;
+            const b = el.getBoundingClientRect();
+            return { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+          };
+          const head = document.querySelector(`#${section} .analytics-section__head`);
+          return {
+            head: box(head),
+            select: box(head?.querySelector('select[aria-label="Cost unit"]')?.closest('.select')),
+            strip: Math.round(document.querySelector('.section-bar')?.getBoundingClientRect().bottom ?? NaN),
+            width: document.documentElement.clientWidth,
+          };
+        }, id);
+        measurements.push(`${theme} /analytics unit control on ${label} at ${width} px ${JSON.stringify(read)}`);
+        if (read.head === null || read.select === null) {
+          failures.push(`${theme} /analytics: at ${width} px the ${label} head draws no Unit select`);
+          continue;
+        }
+        const { head, select } = read;
+        if (select.left < head.left || select.right > head.right || select.top < head.top || select.bottom > head.bottom) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the ${label} head ${JSON.stringify(head)}`);
+        if (Number.isNaN(read.strip) || select.top < read.strip) failures.push(`${theme} /analytics: at ${width} px on ${label} the Unit select's top ${select.top} sits above the tab strip's bottom ${read.strip}`);
+        if (select.left < 0 || select.right > read.width) failures.push(`${theme} /analytics: at ${width} px on ${label} the Unit select ${JSON.stringify(select)} leaves the ${read.width} px viewport`);
       }
-      const { head, select } = read;
-      if (select.left < head.left || select.right > head.right || select.top < head.top || select.bottom > head.bottom) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the Cost head ${JSON.stringify(head)}`);
-      if (Number.isNaN(read.strip) || select.top < read.strip) failures.push(`${theme} /analytics: at ${width} px the Unit select's top ${select.top} sits above the tab strip's bottom ${read.strip}`);
-      if (select.left < 0 || select.right > read.width) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the ${read.width} px viewport`);
+      await page.setViewportSize({ height: 800, width: 1280 });
+      await settle();
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });

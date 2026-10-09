@@ -8836,7 +8836,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     results.push({
       name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named and a dash under another grouping',
-      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', '-', 'per account below'], ['Per request', '-', 'per account below'], ['Per 1k output', '-', 'per account below']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === 'under the account grouping alone'),
+      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', 'per account below', ''], ['Per request', 'per account below', ''], ['Per 1k output', 'per account below', '']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === 'under the account grouping alone'),
       missing: [JSON.stringify(tiles), JSON.stringify(modelTiles)],
     });
     await groupPage(shares, 'account');
@@ -8881,7 +8881,48 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
     });
     shares.unmount();
+    {
+      // One priced bucket between two gaps: the line leaves its null buckets unconnected, so the bucket draws as a dot.
+      const now = Date.now();
+      const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
+      const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
+      const hours = [5, 4, 3].map((h) => new Date(Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000).toISOString());
+      api.getAnalyticsSeries = async () => hours.map((at, i) => ({ at, groups: [{ ...template, costShares: i === 1 ? { five_hour: 0.1, seven_day: 0.05 } : null }] }));
+      const dotted = await mount('/analytics?unit=share#cost');
+      await groupPage(dotted, 'account');
+      const chart = [...dotted.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by account');
+      const dots = chart?.querySelectorAll('.recharts-line-dots .recharts-line-dot').length ?? 0;
+      const curves = chart?.querySelectorAll('.recharts-line-curve').length ?? 0;
+      const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim());
+      results.push({
+        name: '/analytics under Window shares a priced bucket between two gaps draws as a dot on its line',
+        ok: template !== undefined && dots === 1 && curves > 0 && JSON.stringify(legend) === JSON.stringify(['primary (7-day)']),
+        missing: [`template ${template?.key}`, `${dots} dots`, `${curves} curves`, `legend ${JSON.stringify(legend)}`],
+      });
+      dotted.unmount();
+      delete api.getAnalyticsSeries;
+    }
     window.HTMLElement.prototype.getBoundingClientRect = measure;
+    {
+      // A session view folds request rows, which carry no probe count, so the tile's note says so rather than zero.
+      const served = requests.find((r) => r.sessionId !== null && r.status === 200 && r.accountId !== null && r.attempts[r.attempts.length - 1]?.accountKind === 'oauth' && r.attempts[r.attempts.length - 1]?.overageInUse !== true && r.attempts[r.attempts.length - 1]?.response.speed !== 'fast');
+      const session = await mount(`/analytics?session=${encodeURIComponent(served.sessionId)}&key=${encodeURIComponent(`${served.keyId}@${served.keyGeneration}`)}&unit=share#cache-warming`);
+      await groupPage(session, 'account');
+      const filter = [...session.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
+      filter?.querySelector('.mselect__trigger')?.click();
+      await session.settle(150);
+      [...(filter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === served.accountId)?.click();
+      await session.settle(900);
+      const tile = [...session.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      const read = [tile?.querySelector('.stat__value')?.textContent?.trim(), tile?.querySelector('.stat__note')?.textContent?.trim()];
+      const meta = session.container.querySelector('#cache-warming .analytics-section__meta')?.textContent ?? '';
+      results.push({
+        name: '/analytics a session view under Window shares with one account named reads the Probe cost tile as not in the request log',
+        ok: meta.startsWith('From the request log') && JSON.stringify(read) === JSON.stringify(['-', 'not in the request log']),
+        missing: [`served ${served?.id} on ${served?.accountId}`, `meta ${meta.slice(0, 40)}`, `tile ${JSON.stringify(read)}`],
+      });
+      session.unmount();
+    }
   }
   {
     // The story's incomplete desktop stream falls inside the day, so the legend and the desktop row both count it.
