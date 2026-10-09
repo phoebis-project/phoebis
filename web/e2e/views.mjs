@@ -2519,11 +2519,10 @@ function readRequestsTable() {
 }
 
 /**
- * The request list's default columns against its card with the drawer closed: the table's need, its wrap's width and
- * the Cost column's width are recorded at the pass's 1280 by 800. The Client text gives up its room behind an
- * ellipsis, the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room. The
- * fit is recorded rather than asserted until the column width rule applies to this table, here and in the share
- * measure below: the Cost column draws share labels, the widest text it carries.
+ * The request list's default columns against its card with the drawer closed at the pass's 1280 by 800: the table
+ * fits its wrap (its need, its narrowest layout and the columns' widths are recorded), the Client text gives up its
+ * room behind an ellipsis with the whole class on the cell's title, and a TTFB figure never parts from its unit to
+ * make the room. The share measure below reads the same fit with the Cost column's widest text.
  */
 async function requestsTableFits(theme) {
   const read = await readRequestsTable();
@@ -2533,6 +2532,7 @@ async function requestsTableFits(theme) {
     return;
   }
   if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured alone`);
+  if (read.scroll > read.client) failures.push(`${theme} /requests: the table needs ${read.scroll}px of its wrap's ${read.client}px`);
   if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
   for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
   if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
@@ -2544,8 +2544,8 @@ async function requestsTableFits(theme) {
  * request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds
  * one API key account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells
  * whose main line or `.sub` reads one is asserted above zero: a page with no share cell would measure the table
- * without the widest text. The need, the wrap's width and the Cost column's width are recorded; the fit is recorded
- * rather than asserted until the column width rule applies to this table, here and in `requestsTableFits`.
+ * without the widest text. The table fits its wrap, and the need, the wrap's width and the Cost column's width are
+ * recorded.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
@@ -2557,6 +2557,45 @@ async function requestsTableFitsWithShares(theme) {
   }
   if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
   if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a share, so the table is measured without the widest text`);
+  if (read.scroll > read.client) failures.push(`${theme} /requests: with shares the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+}
+
+/**
+ * The request table's text at 1920 by 1080, the mock pass's alone: with the fill column given the free width, no
+ * Client text or agent type is cut, read off each span's own overflow (each keeps its own
+ * ellipsis, so a cut behind the cell's clip still reads on the span), and the table fits its wrap. The time cell is
+ * not read: its id shows twelve characters at every width, whole on its own title. The viewport then returns to the
+ * pass's 1280 by 800.
+ */
+async function requestsTableWide(theme) {
+  const say = (what) => failures.push(`${theme} /requests at 1920 by 1080: ${what}`);
+  await page.setViewportSize({ height: 1080, width: 1920 });
+  await settle();
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('.requests__table');
+    const wrap = table?.closest('.table-wrap');
+    if (!table || !wrap) return null;
+    const spans = (selector) => [...table.querySelectorAll(`tbody ${selector}`)];
+    const cut = (list) => list.filter((s) => s.scrollWidth > s.clientWidth).map((s) => s.textContent ?? '');
+    const agent = spans('.requests__client .sub');
+    const client = spans('.requests__client-text');
+    return {
+      client: wrap.clientWidth,
+      cut: { agent: cut(agent), client: cut(client) },
+      scroll: table.scrollWidth,
+      spans: { agent: agent.length, client: client.length },
+    };
+  });
+  measurements.push(`${theme} /requests at 1920 by 1080 ${JSON.stringify(read)}`);
+  if (read === null) say('no request table to measure');
+  else {
+    if (read.spans.client === 0) say('no Client text to measure');
+    for (const text of read.cut.client) say(`the Client text "${text}" is cut`);
+    for (const text of read.cut.agent) say(`the agent type "${text}" is cut`);
+    if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
 }
 
 /**
@@ -4918,6 +4957,8 @@ try {
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);
+        await tableColumns(theme, 'requests', '.requests__table', ['Client']);
+        if (mock) await requestsTableWide(theme);
         await speedFilter(theme);
       }
       if (view.path === '/routing-log') {

@@ -6519,6 +6519,24 @@ m.unmount();
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
 {
+  // The fill cell holds two lines (the class over the agent type), so each text span carries its own text as its
+  // title rather than the cell, and the id span the row's whole id, which its Details link names.
+  const rows = [...m.container.querySelectorAll('.requests__table tbody tr')];
+  const spans = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client-text, .requests__client .sub')]);
+  const offText = spans.filter((s) => s.getAttribute('title') !== s.textContent).map((s) => `${JSON.stringify(s.textContent)} titled ${s.getAttribute('title') ?? 'nothing'}`);
+  const ids = rows.map((tr) => ({
+    id: tr.querySelector('.requests__links a[href^="/requests/"]')?.getAttribute('href')?.slice('/requests/'.length).split('?')[0] ?? null,
+    shown: tr.querySelector('td .sub.mono')?.textContent?.replace(/…$/, '') ?? '',
+    title: tr.querySelector('td .sub.mono')?.getAttribute('title') ?? null,
+  }));
+  const offId = ids.filter((r) => r.id === null || r.title !== r.id || !r.id.startsWith(r.shown)).map((r) => `${r.id} shown as ${r.shown}, titled ${r.title}`);
+  results.push({
+    name: '/requests every client and agent type span carries its own text as its title, and the id span the whole id',
+    ok: rows.length > 0 && spans.length > 0 && offText.length === 0 && offId.length === 0,
+    missing: [`${rows.length} rows`, `${spans.length} spans`, ...offText.slice(0, 3), ...offId.slice(0, 3)],
+  });
+}
+{
   // Pool, Kind and Transport start hidden, since the drawer names all three, and the control still offers every column.
   const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
   const HIDDEN = ['Pool', 'Kind', 'Transport'];
@@ -6553,6 +6571,10 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   // Transport stays a column the control offers, so its badges draw once it is turned on.
   await turn('Transport');
   expect('/requests turning Transport on through the Columns control draws its SSE badges', m.text(), ['SSE', 'Transport']);
+  // With Kind on as well, every one of the thirteen columns is drawn, so the hidden ones carry their class too.
+  await turn('Kind');
+  columnsMarked('/requests every one of the thirteen columns is fit or fill, with Client the fill', m.container.querySelector('.requests__table'), ['Client']);
+  await turn('Kind');
   await turn('Pool');
   await turn('Transport');
   colsButton()?.click();

@@ -182,7 +182,7 @@ const routingLogHref = (r: RequestLog, now: number) => {
 function CostCell({ request }: { request: RequestLog }) {
   const cell = costCellOf(costUnitOf(request));
   return (
-    <td className="right num" title={cell.title || undefined}>
+    <td className="right num col-fit" title={cell.title || undefined}>
       {cell.main}
       {cell.sub && <span className="sub">{cell.sub}</span>}
     </td>
@@ -369,24 +369,24 @@ export function RequestsPage() {
             <table className="table table--hover requests__table">
               <thead>
                 <tr>
-                  {shown.has('time') && <th>Time</th>}
-                  {shown.has('key') && <th>Key</th>}
-                  {shown.has('pool') && <th>Pool</th>}
-                  {shown.has('account') && <th>Account</th>}
-                  {shown.has('model') && <th>Model</th>}
-                  {shown.has('client') && <th>Client</th>}
-                  {shown.has('kind') && <th>Kind</th>}
-                  {shown.has('transport') && <th>Transport</th>}
-                  {shown.has('status') && <th>Status</th>}
-                  {shown.has('attempts') && <th title="How many attempts the request took, the trail on hover">Attempts</th>}
-                  {shown.has('ttfb') && <th className="right">TTFB</th>}
-                  {shown.has('tokens') && <th className="right">Tokens</th>}
+                  {shown.has('time') && <th className="col-fit">Time</th>}
+                  {shown.has('key') && <th className="col-fit">Key</th>}
+                  {shown.has('pool') && <th className="col-fit">Pool</th>}
+                  {shown.has('account') && <th className="col-fit">Account</th>}
+                  {shown.has('model') && <th className="col-fit">Model</th>}
+                  {shown.has('client') && <th className="col-fill">Client</th>}
+                  {shown.has('kind') && <th className="col-fit">Kind</th>}
+                  {shown.has('transport') && <th className="col-fit">Transport</th>}
+                  {shown.has('status') && <th className="col-fit">Status</th>}
+                  {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
+                  {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
+                  {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
                   {shown.has('cost') && (
-                    <th className="right" title="Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request">
+                    <th className="right col-fit" title="Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request">
                       Cost
                     </th>
                   )}
-                  <th />
+                  <th className="col-fit" />
                 </tr>
               </thead>
               <tbody>
@@ -408,22 +408,22 @@ export function RequestsPage() {
                         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                       >
                         {shown.has('time') && (
-                          <td className="num" title={fmtAbsolute(r.at)}>
+                          <td className="num col-fit" title={fmtAbsolute(r.at)}>
                             {fmtTime(r.at)}
-                            <span className="sub mono">{shortId(r.id, 12)}</span>
+                            <span className="sub mono" title={r.id}>{shortId(r.id, 12)}</span>
                           </td>
                         )}
-                        {shown.has('key') && <td className="mono">{r.keyId ?? '-'}</td>}
-                        {shown.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
-                        {shown.has('account') && <td>{r.accountId ?? '-'}</td>}
+                        {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
+                        {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
+                        {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
                         {shown.has('model') && (
-                          <td className="mono nowrap" title={shortModel(r.model) === r.model ? undefined : r.model}>
+                          <td className="mono nowrap col-fit" title={shortModel(r.model) === r.model ? undefined : r.model}>
                             {shortModel(r.model)}
                           </td>
                         )}
                         {shown.has('client') && (
-                          <td className="mono requests__client" title={r.client ?? undefined}>
-                            {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text">{r.client}</span>}
+                          <td className="mono requests__client col-fill" title={r.client ?? undefined}>
+                            {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text" title={r.client}>{r.client}</span>}
                             {r.agentType && (
                               <span className="sub" title={r.agentType}>
                                 {r.agentType}
@@ -431,14 +431,14 @@ export function RequestsPage() {
                             )}
                           </td>
                         )}
-                        {shown.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}
+                        {shown.has('kind') && <td className="col-fit">{r.kind.replace('_', ' ')}</td>}
                         {shown.has('transport') && (
-                          <td>
+                          <td className="col-fit">
                             <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{r.transport === 'sse' ? 'SSE' : 'JSON'}</Badge>
                           </td>
                         )}
                         {shown.has('status') && (
-                          <td>
+                          <td className="col-fit">
                             <span className="requests__status">
                               <StatusBadge status={r.status} />
                               {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
@@ -446,7 +446,7 @@ export function RequestsPage() {
                           </td>
                         )}
                         {shown.has('attempts') && (
-                          <td>
+                          <td className="col-fit">
                             <span className="requests__attempts">
                               <AttemptCount attempts={r.attempts} />
                               {r.held && (
@@ -457,15 +457,15 @@ export function RequestsPage() {
                             </span>
                           </td>
                         )}
-                        {shown.has('ttfb') && <td className="right num">{fmtMs(r.ttfbMs)}</td>}
+                        {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
                         {shown.has('tokens') && (
-                          <td className="right num">
+                          <td className="right num col-fit">
                             {fmtCompact(tokensTotal(r.usage))}
                             <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
                           </td>
                         )}
                         {shown.has('cost') && <CostCell request={r} />}
-                        <td className="right">
+                        <td className="right col-fit">
                           <span className="requests__links">
                             <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
                               Routing

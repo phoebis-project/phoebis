@@ -386,8 +386,8 @@ an overage, fast mode or API key request). A request whose 200 answer ended shor
 says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream closed
 without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The model column reads
 the family and version, with the whole id on hover. The client column shows the class the router derived from the user
-agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent type
-beneath it on a subagent's turn.
+agent (`claude-code/<entrypoint>` or `other`), whole where the window has the room and cut with an
+ellipsis where it has not, whole on hover, and the agent type beneath it on a subagent's turn.
 One row is one client request however many
 attempts it took: a request of one attempt shows nothing under Attempts, and a failover reads "2 attempts" with the
 trail of account and status on hover, "secondary 429, primary 200" when a 429 on the first account failed over to a 200
