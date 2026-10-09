@@ -46,11 +46,6 @@ interface Spec {
   attempt: number;
   /** The accounts the request tried before this decision. */
   attempted: string[];
-  /**
-   * Set where every member held the request at its cap until the bound ran out: the account it waited on, or null
-   * for none. The router answers it on the bound path rather than walking a placement.
-   */
-  boundOn?: string | null;
   exhaustion?: RecordOutcome['exhaustion'];
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
@@ -498,9 +493,9 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { fact
   const narrow = (key: string, keep: (c: RecordCandidate) => boolean) => {
     const kept = left.filter(keep);
     if (kept.length > 0) {
-      facts.push(fact(key, left.length - kept.length, 'count'));
+      facts.push(fact(key, left.length - kept.length));
       left = kept;
-    } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0, 'count'));
+    } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
   };
   if (r.canonicalModel.includes('fable')) {
     // A model with a week of its own draws on both shared windows too. A member spent on any of them is out rather
@@ -509,7 +504,7 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { fact
     const spent = (c: RecordCandidate) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (c.windows[w]?.utilization ?? 0) >= 1);
     const funded = (c: RecordCandidate) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
     const kept = left.filter((c) => !spent(c) || funded(c));
-    facts.push(fact('spent', left.length - kept.length, 'count'));
+    facts.push(fact('spent', left.length - kept.length));
     left = kept;
   } else facts.push(fact('spent', 'off'));
   // A token count takes no slot, so no cap holds it. With every member at its cap the request is held for a slot and
@@ -596,7 +591,6 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
     walk.push(step('probe', 'passed', facts));
   }
-  if (spec.boundOn !== undefined) walk.push(step('bound', 'exhausted', spec.boundOn === null ? [] : [fact('account_id', spec.boundOn, null, spec.boundOn)]));
   // A live pin a portable request still reaches walks the five rules, and a fired rule names its destinations. A token
   // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
   // renewal instead.
@@ -634,7 +628,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && spec.boundOn === undefined;
+  const placing = spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted';
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r);
@@ -893,9 +887,8 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const pinning = (pool?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null;
   const noPin: Spec['pin'] = pinning ? 'none' : 'pinning_off';
   const at = Date.parse(r.at);
-  // A hold on the cohort's account waits on that account at its cap. One on the strategy's pick, and a request the
-  // bound ran out on, waited with every member at its cap.
-  const atCap = (accountId: string | null) => (accountId === null || pool === undefined ? {} : { [accountId]: pool.inFlightCap });
+  // The engine holds a request only with every member at its cap, whether it waits on its cohort's account or on the
+  // strategy's pick, and a request the bound ran out on waited so too.
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
   const holds: RecordRequest['holds'] = [];
   // Every member was at its cap until the bound ran out, so the router answered the request without a dispatch.
@@ -906,7 +899,12 @@ function derivedSpecs(r: RequestLog): Spec[] {
       specs.push({ ...base, accountId: waitedOn, at: onAt, attempt, attempted, fact: [summaryFact('answer', 429, 'count'), summaryFact('held', bound, 'ms')], hold: { cohort: null, place: 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
       holds.push({ accountId: waitedOn, attempt, cohort: null, heldMs: bound });
     }
-    specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: waitedOn ? [...attempted, waitedOn] : attempted, boundOn: waitedOn, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
+    // Past the bound the relay passes each account it could hold on over and selects again, so the selection that
+    // answers finds every one of them attempted and nothing eligible.
+    const fast = r.shape.requestedSpeed === 'fast';
+    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null);
+    const passedOver = [...new Set([...attempted, ...(waitedOn ? [waitedOn] : []), ...servable])];
+    specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: passedOver, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
   };
   if (r.attempts.length === 0) {
     if (r.errorCode === 'accounts_at_cap') ranOut(1, 1, at, []);
@@ -924,7 +922,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     if (hold) {
       const heldOn = hold.waitedOn[hold.waitedOn.length - 1] ?? a.accountId;
       seq += 1;
-      specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: hold.cohort ? atCap(heldOn) : allAtCap(), kind: 'held', pin: noPin, seq });
+      specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
       holds.push({ accountId: heldOn, attempt: i + 1, cohort: hold.cohort, heldMs: hold.heldMs });
     }
     seq += 1;
