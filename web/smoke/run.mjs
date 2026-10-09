@@ -10010,6 +10010,116 @@ m.unmount();
   });
   page.unmount();
 }
+{
+  // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
+  // sent inside the narrowest of the log's ranges that covers the row's last request. The page's own `now` is a sample
+  // up to five seconds old, so the range is read on the clock at the click, which the last case moves past the sample.
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  // The log's widths, each a minute short for the log's own load after the click, spelled out so the check holds the
+  // page to them.
+  const WIDTHS = [
+    ['1h', HOUR - MINUTE],
+    ['6h', 6 * HOUR - MINUTE],
+    ['24h', 24 * HOUR - MINUTE],
+  ];
+  const rangeAt = (lastRequestAt, at) => (lastRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(lastRequestAt) <= width)?.[0] ?? null));
+  const listed = await api.listSessions();
+  const rowsOf = (page) => [...page.container.querySelectorAll('tbody tr.srow')];
+  const sessionOf = (page, tr) => {
+    const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
+    const key = sessionCell(page, tr, 'Key');
+    const historical = key?.querySelector('.sub') !== null;
+    return listed.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
+  };
+  const toggleMenu = async (page, tr) => {
+    tr?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    return [...(tr?.querySelectorAll('.menu__list button') ?? [])];
+  };
+  const entryOf = async (page, tr) => (await toggleMenu(page, tr)).find((b) => b.textContent?.trim() === 'View in requests');
+  const landing = (page) => {
+    const at = page.location();
+    const params = new URLSearchParams(at.search);
+    return {
+      path: at.pathname,
+      range: params.get('range'),
+      search: params.get('search'),
+      select: page.container.querySelector('select[aria-label="Date range"]')?.value ?? null,
+      typed: page.container.querySelector('input.filters__search')?.value ?? null,
+    };
+  };
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const first = rowsOf(page)[0];
+  const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
+  await toggleMenu(page, first);
+  const quiet = rowsOf(page).find((tr) => Number(sessionCell(page, tr, 'Requests')?.textContent) === 0);
+  const off = await entryOf(page, quiet);
+  await toggleMenu(page, quiet);
+  // A row inside the hour, one past it inside six hours and one past six hours inside a day, where the story has them.
+  const bands = [
+    ['1h', (age) => age <= HOUR],
+    ['6h', (age) => age > HOUR && age <= 6 * HOUR],
+    ['24h', (age) => age > 6 * HOUR && age <= 24 * HOUR],
+  ];
+  const followed = [];
+  for (const [band, holds] of bands) {
+    const tr = rowsOf(page).find((r) => {
+      const s = sessionOf(page, r);
+      return s !== undefined && s.requests > 0 && s.lastRequestAt !== null && holds(CLOCK_ORIGIN - Date.parse(s.lastRequestAt));
+    });
+    if (tr === undefined) continue;
+    const s = sessionOf(page, tr);
+    (await entryOf(page, tr))?.click();
+    await page.settle(300);
+    followed.push({ band, got: landing(page), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  // Unmounted before the next mount, since an unmount puts the clock back to live and `tick` needs it frozen.
+  page.unmount();
+  // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, moved to one
+  // second inside the hour at the mount's instant: two seconds later, at the click, it is past the hour.
+  const { listSessions } = api;
+  const moved = listed.find((s) => s.requests > 0);
+  const isMoved = (s) => moved !== undefined && s.sessionId === moved.sessionId && s.keyId === moved.keyId && s.historical === moved.historical;
+  api.listSessions = async () => (await listSessions.call(api)).map((s) => (isMoved(s) ? { ...s, lastRequestAt: isoAt(CLOCK_ORIGIN - 59 * MINUTE + 1_000) } : s));
+  const later = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const movedRow = rowsOf(later).find((r) => {
+    const s = sessionOf(later, r);
+    return s !== undefined && isMoved(s);
+  });
+  const entry = await entryOf(later, movedRow);
+  tick(2_000);
+  entry?.click();
+  await later.settle(300);
+  const atClick = landing(later);
+  api.listSessions = listSessions;
+  await later.navigate('/sessions');
+  later.unmount();
+  results.push({
+    name: '/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page with the session in its search and the narrowest range that covers its last request',
+    ok:
+      labels.indexOf('View in requests') === labels.indexOf('View in routing log') - 1 &&
+      labels.indexOf('View in requests') > labels.indexOf('View in analytics') &&
+      off !== undefined &&
+      off.disabled &&
+      (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
+      followed.length > 0 &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      movedRow !== undefined &&
+      atClick.path === '/requests' &&
+      atClick.range === '6h' &&
+      atClick.select === '6h',
+    missing: [
+      labels.join('|'),
+      off === undefined ? 'no entry on the row without requests' : `without requests disabled=${off.disabled} title=${off.getAttribute('title')}`,
+      `bands found ${followed.map((f) => f.band).join(',') || 'none'}`,
+      ...followed.map((f) => JSON.stringify(f)),
+      `at the click ${movedRow === undefined ? 'no moved row' : JSON.stringify(atClick)}`,
+    ],
+  });
+}
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
@@ -10306,8 +10416,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same four entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|View in routing log|Release',
+      name: '/sessions the overflow menu carries the same five entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|View in requests|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
     // The routing log reads the session's decisions, which need no ledgered request, so only the two jumps
@@ -10389,7 +10499,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await openMenu(gone);
     results.push({
       name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
+      ok: liveItems.includes('Release') && goneItems.length === 4 && !goneItems.includes('Release'),
       missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();
@@ -10622,6 +10732,39 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     chip?.querySelector('button')?.click();
     await m.settle(400);
     results.push({ name: '/observe session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
+  }
+
+  // The session that holds a released record lists its recipes out of the view's order. Its main line is found by its
+  // Agent cell, since main's badge reads the session's own word, and the words after it never step back.
+  await m.navigate('/sessions');
+  {
+    const holder = (await api.listKeepaliveRecipes()).find((r) => r.agentState === 'released')?.sessionId;
+    const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === holder);
+    row?.click();
+    await m.settle(150);
+    const lines = [...m.container.querySelectorAll('.srow__detail .agents__row:not(.agents__row--head)')].map((l) => ({
+      id: l.firstElementChild?.textContent?.trim() ?? '',
+      title: l.firstElementChild?.getAttribute('title') ?? null,
+      word: l.querySelector('.agents__life .badge')?.textContent?.trim() ?? '',
+    }));
+    const ORDER = ['busy', 'idle', 'parked', 'released'];
+    const after = lines.slice(1);
+    const at = (id) => lines.findIndex((l) => l.id === id);
+    const long = lines.find((l) => l.id === '4f0c2a9e7b61d3c58');
+    results.push({
+      name: '/sessions the recipe lines run main, busy, idle, parked, newest last request first inside a group',
+      ok:
+        lines[0]?.id === 'main' &&
+        JSON.stringify(after.filter((l) => l.word !== 'released').map((l) => l.word)) === JSON.stringify(['busy', 'idle', 'parked']) &&
+        at('b2d8') > 0 &&
+        at('b2d8') < at('4f0c2a9e7b61d3c58') &&
+        after.every((l, i) => ORDER.includes(l.word) && (i === 0 || ORDER.indexOf(l.word) >= ORDER.indexOf(after[i - 1].word))) &&
+        long !== undefined &&
+        long.title === long.id,
+      missing: lines.map((l) => `${l.id} ${l.word}${l.title === l.id ? '' : ` title ${l.title}`}`),
+    });
+    row?.click();
+    await m.settle(150);
   }
 
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.

@@ -12,6 +12,7 @@ export * from '@/lib/costs';
 export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/frame';
+export * from '@/lib/keepalive';
 export * from '@/lib/menu';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';

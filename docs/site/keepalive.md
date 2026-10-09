@@ -403,14 +403,16 @@ hover, and the account cell names the account's kind on hover and to a screen re
 mod's state, `reporting`, `silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person
 was last seen at the terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real
 request: its model, pinned account and TTL, the last request, the last and the next probe, and the probes sent today
-with the requests they kept warm, counted from midnight UTC. The line ends on its state word with the cause beside it,
+with the requests they kept warm, counted from midnight UTC, the lines running main first, then the busy, idle and
+parked agents, newest last request first inside each group. The line ends on its state word with the cause beside it,
 the cause's sentence on hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle
 word for the agent, with a parked agent's park kind and its deadline or wake time
 (`parked · background · deadline in 1h 12m`), and repeats the state's and the cause's sentences. A session's menu
-offers "View in analytics" and "View in observe" once it has ledgered traffic, "View in routing log" whenever the row
-has a routing session, which opens the log on that session's decisions, and Release. The analytics view opens on the
-requests of the key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that
-keeps sending requests stays on it, and its tiles once a minute.
+offers "View in analytics", "View in observe" and "View in requests" once it has ledgered traffic, the last opening the
+request log on the session's requests inside the narrowest of its ranges that covers the session's last request, "View
+in routing log", which opens the log on that session's decisions, and Release.
+The analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions again every
+15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session
 whose first request that is not auxiliary branched from another conversation at depth 2 or deeper carries a `fork at 3`

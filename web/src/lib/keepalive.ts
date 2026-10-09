@@ -1,4 +1,4 @@
-import type { RecipeCause } from '@/api/types';
+import type { KeepaliveRecipe, KeepaliveState, RecipeCause } from '@/api/types';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -134,3 +134,54 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
 };
 
 export const WARNING_CAUSES: RecipeCause[] = ['affinity_too_short', 'budget', 'evicted', 'expired', 'expired_at_restart', 'horizon', 'idle_limit', 'parked_limit', 'storage_limit', 'unsupported_shape'];
+
+/** The engine's name for a session's main conversation. */
+export const MAIN_AGENT = 'main';
+
+/** The lifecycle words in the order a session's lines run after main. `unknown` sits with `parked`, and `released`
+ * closes the list wherever a released record is still listed. */
+const STATE_ORDER: Record<KeepaliveState, number> = { busy: 0, idle: 1, parked: 2, released: 3, unknown: 2 };
+
+/** Newest last request first, an agent without one last. */
+function byLastRequest(a: KeepaliveRecipe, b: KeepaliveRecipe): number {
+  if (a.lastRequestAt === null || b.lastRequestAt === null) return a.lastRequestAt === b.lastRequestAt ? 0 : a.lastRequestAt === null ? 1 : -1;
+  return Date.parse(b.lastRequestAt) - Date.parse(a.lastRequestAt);
+}
+
+/**
+ * A session's agents in the order the Sessions view draws them: main first, then by lifecycle word, inside a word the
+ * newest last request first, an agent without one last, and ties by agent id, so two reads of one list draw one
+ * order. The list handed in is left as it is.
+ */
+export function orderRecipes(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe[] {
+  return [...agents].sort((a, b) => {
+    if (a.agentId === MAIN_AGENT || b.agentId === MAIN_AGENT) return a.agentId === b.agentId ? 0 : a.agentId === MAIN_AGENT ? -1 : 1;
+    return STATE_ORDER[a.agentState] - STATE_ORDER[b.agentState] || byLastRequest(a, b) || a.agentId.localeCompare(b.agentId);
+  });
+}
+
+export type RequestsRange = '1h' | '6h' | '24h';
+
+/** The request log's ranges by name and width, as the Requests page lists them: a page never imports another page. */
+const REQUEST_RANGES: readonly { ms: number; name: RequestsRange }[] = [
+  { ms: 3_600_000, name: '1h' },
+  { ms: 6 * 3_600_000, name: '6h' },
+  { ms: 24 * 3_600_000, name: '24h' },
+];
+
+/**
+ * A minute under each width: the request log measures its window from its own load, a moment after the click that
+ * chose the range, so a last request right at a width's edge would fall out of the window it was picked for.
+ */
+const RANGE_HEADROOM_MS = 60_000;
+
+/**
+ * The narrowest of the request log's ranges that covers a session's last request, measured back from `now` (the
+ * instant of the click, never a sampled one) with the headroom, or null past the widest range or without a last
+ * request, where the page's own default applies.
+ */
+export function requestsRange(lastRequestAt: string | null, now: number): RequestsRange | null {
+  if (lastRequestAt === null) return null;
+  const age = now - Date.parse(lastRequestAt);
+  return REQUEST_RANGES.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
+}

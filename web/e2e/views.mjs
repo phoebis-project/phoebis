@@ -3427,7 +3427,8 @@ async function sessionsTableFits(theme) {
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
  * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its center, and the four entries draw a list 160 px wide and 141 px tall.
+ * item takes a pointer at its center, and the entries draw a list 160 px wide, 32.85 px per entry over 10 px of padding
+ * and borders.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3465,9 +3466,12 @@ async function sessionRowMenu(theme) {
   await atRest();
   measurements.push(`${theme} /sessions row menu ${JSON.stringify(read)}`);
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
+  // 10 px of padding and borders, then 32.85 px per entry (7 px of padding twice over the 13 px font's 1.45 leading),
+  // as the four entries measured 141 px.
+  const height = Math.round(10 + 32.85 * read.items.length);
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
-  if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
+  if (read.list.width !== 160 || read.list.height !== height) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by ${height}px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 

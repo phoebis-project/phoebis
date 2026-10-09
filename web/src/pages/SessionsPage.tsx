@@ -9,8 +9,9 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
+import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, orderRecipes, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -70,16 +71,28 @@ const COUNTS_HINT = 'Probes sent and requests they kept warm since midnight UTC'
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 interface Row {
   account: Account | null;
+  /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */
   agents: KeepaliveRecipe[];
   /** Why a session carries no recipe at all; null while it has one. */
   noRecipe: string | null;
   session: Session;
+  /** The lines the row draws, in the view's order: the summary, the badges and the expanded lines read this list. */
+  shown: KeepaliveRecipe[];
 }
 
 /** One session id can be held by two generations of a key id, so all three name a row. */
 const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
 /** The row's element id, so a fork's badge can link to its base; a session id may hold characters an id may not. */
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
+/**
+ * The request log on the session the client sent, inside the narrowest range that covers its last request, read on
+ * the clock at the click: the page's `now` is a sample up to five seconds old, and the request log measures its
+ * window from its own load.
+ */
+const requestsHref = (trafficSession: string, lastRequestAt: string | null) => {
+  const range = requestsRange(lastRequestAt, clock.now());
+  return `/requests?search=${encodeURIComponent(trafficSession)}${range === null ? '' : `&range=${range}`}`;
+};
 
 const sessionLabel = (session: Session) =>
   shortId(session.sessionId, 13);
@@ -132,7 +145,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
       }
       if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
-    return { account: accountById.get(session.accountId ?? '') ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session };
+    return { account: accountById.get(session.accountId ?? '') ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session, shown: orderRecipes(agents) };
   });
 }
 
@@ -435,22 +448,22 @@ function SessionRows({
   row: Row;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { account, agents, session } = row;
+  const { account, session, shown } = row;
   // The kind gave its badge's width to the fit; the description keeps it within reach of a reader that never hovers.
   const kind = useDescription(visible.has('account') && account ? KIND_HINT[account.kind] : undefined);
-  const summary = stateSummary(agents);
+  const summary = stateSummary(shown);
   // A pin exists only with an account: a request refused before any account served it leaves a row without one.
-  const pinned = agents.filter((a) => a.accountId !== null);
+  const pinned = shown.filter((a) => a.accountId !== null);
   const otherModels = pinned.filter((a) => a.model !== session.model);
   const otherAccounts = pinned.filter((a) => a.accountId !== session.accountId);
   // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
-  const pendingProbe = agents.some((a) => a.state === 'retained' && a.nextProbeAt === null);
+  const pendingProbe = shown.some((a) => a.state === 'retained' && a.nextProbeAt === null);
   // A session known from the ledger or from a registration alone carries no activity of its own, so the last
   // ledgered request stands in for it and the expiry counts from there.
   const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
   const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
-  // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
+  // Analytics, observe and the request log all read the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   const trafficSession = session.sessionId;
   return (
@@ -482,6 +495,7 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
+              { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session.lastRequestAt)) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
@@ -620,7 +634,7 @@ function SessionRows({
                 <span>Nothing is scheduled because {row.noRecipe}.</span>
               </p>
             )}
-            {agents.length > 0 && (
+            {shown.length > 0 && (
               <div className="agents">
                 <div className="agents__row agents__row--head">
                   <span>Agent</span>
@@ -633,7 +647,7 @@ function SessionRows({
                   <span title={COUNTS_HINT}>Probes / credited</span>
                   <span>State</span>
                 </div>
-                {agents.map((a) => (
+                {shown.map((a) => (
                   <div className="agents__row" key={a.agentId}>
                     <span className="mono agents__id" title={a.agentId}>{a.agentId}</span>
                     <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
