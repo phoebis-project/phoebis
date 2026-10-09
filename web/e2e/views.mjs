@@ -1888,9 +1888,16 @@ async function quotaPollLines(theme) {
 }
 
 /**
+ * The card chips' computed tones by name, read on the Accounts section and compared against the lane chips on the
+ * Quota windows section, which the page never draws beside the cards. Empty in the router's pass, which draws no card.
+ */
+let cardTones = {};
+
+/**
  * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
- * longer reset cell may wrap but never runs past its column. The router's seed has no subscription account, so only
+ * longer reset cell may wrap but never runs past its column. Every live window's meter carries its pace mark inside
+ * the meter's horizontal bounds and taller than the track. The router's seed has no subscription account, so only
  * the story's pass has chips to read.
  */
 async function quotaChips(theme) {
@@ -1902,14 +1909,29 @@ async function quotaChips(theme) {
       return Math.round(box.height / line);
     };
     const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' });
+    const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
+      marks: [...document.querySelectorAll('.qcard__windows .meter--marked')].map((meter) => {
+        const track = meter.getBoundingClientRect();
+        const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
+        return { height: mark ? Math.round(mark.height) : null, inside: mark !== null && mark.left >= track.left - 0.5 && mark.right <= track.right + 0.5, left: mark ? Math.round(mark.left - track.left) : null, taller: mark !== null && mark.height > track.height, title: meter.getAttribute('title') ?? '', track: Math.round(track.height) };
+      }),
       resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
+      tones: Object.fromEntries(['good', 'low', 'warn'].map((name) => [name, tone(document.querySelector(`.qcard__windows .qchip--${name}`))])),
     };
   });
   measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
+  cardTones = read.tones;
   if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
+  if (mock && read.marks.length === 0) say('the story has live windows, yet no meter carries a pace mark');
+  if (mock && Object.values(read.tones).some((t) => t === null)) say('the story draws all three card tones, yet one is missing');
+  for (const mark of read.marks) {
+    if (!mark.inside) say(`the pace mark of ${JSON.stringify(mark.title)} stands outside its meter`);
+    if (!mark.taller) say(`the pace mark of ${JSON.stringify(mark.title)} is no taller than its ${mark.track}px track`);
+  }
   for (const chip of read.chips) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
   }
@@ -1928,16 +1950,34 @@ async function quotaChips(theme) {
 
 /**
  * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
- * it on one line. Only the mock pass draws the section.
+ * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
+ * current bar lays its used fill out at the share the page computed, within a pixel. Only the mock pass draws the
+ * section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
-  const lanes = await page.evaluate(() => [...document.querySelectorAll('.tl-chip')].map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' })));
-  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))}`);
+  const read = await page.evaluate(() => {
+    const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'primary');
+    const bar = lane?.querySelector('.lane__bar--live') ?? null;
+    const used = bar?.querySelector('.lane__used') ?? null;
+    return {
+      chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
+      fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+    };
+  });
+  const lanes = read.chips;
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify(read.fill)}`);
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
+  if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
   for (const chip of lanes) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
+    if (chip.tone === null) continue;
+    const card = cardTones[chip.tone];
+    if (!card) say(`the chip ${JSON.stringify(chip.text)} is toned ${chip.tone}, which no card chip drew`);
+    else if (card.background !== chip.background || card.color !== chip.color) say(`the chip ${JSON.stringify(chip.text)} draws ${chip.background} on ${chip.color}, where the ${chip.tone} card chip draws ${card.background} on ${card.color}`);
   }
+  if (mock && read.fill === null) say("primary's current bar draws no used fill");
+  if (read.fill && Math.abs(read.fill.width - (read.fill.share / 100) * read.fill.bar) > 1) say(`primary's used fill is ${read.fill.width}px of its ${read.fill.bar}px bar, where the page computed ${read.fill.share}%`);
 }
 
 /**

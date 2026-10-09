@@ -18,6 +18,33 @@ export const windowOf = (account: Account, id: WindowId) => account.windows.find
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
+const HOUR = 3_600_000;
+
+/** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
+export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
+  if (window.resetsAt === null) return window.utilization;
+  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
+  const elapsed = (lengthMs - (Date.parse(window.resetsAt) - now)) / lengthMs;
+  return window.utilization - Math.min(1, Math.max(0, elapsed));
+}
+
+/** The share of a window's period still to come, 0 to 1. Null without a reset time. */
+export function remainingTimeShare(w: RateLimitWindow, now: number): number | null {
+  if (w.resetsAt === null) return null;
+  const period = w.periodHours * HOUR;
+  const elapsed = (period - (Date.parse(w.resetsAt) - now)) / period;
+  return 1 - Math.min(1, Math.max(0, elapsed));
+}
+
+/** The lead over pace in words, as `aheadOf` reads it: "12% ahead of pace", "5% behind pace", or "on pace" within
+ *  one point (a lead under 0.01). Null without a reset time. */
+export function paceWords(w: RateLimitWindow, now: number): string | null {
+  if (w.resetsAt === null) return null;
+  const lead = aheadOf(w, w.periodHours * HOUR, now);
+  if (Math.abs(lead) < 0.01) return 'on pace';
+  return `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
+}
+
 export const isSubscription = (account: Account) => account.kind === 'oauth';
 
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode

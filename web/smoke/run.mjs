@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -807,6 +807,40 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 {
+  // The mark's offset compares exactly only when the page and the check read one instant, so the check mounts its
+  // own frozen page and leaves the shared mount on the live clock for the checks around it. A card draws its 5h, 7d
+  // and Fable rows, so the walk takes those three per account and finds each row by its chip's name.
+  const at = Date.now();
+  const q = await mount('/quota', { now: at });
+  const rows = [];
+  for (const a of (await api.listAccounts()).filter((x) => x.kind === 'oauth' && (x.windows.length > 0 || x.fableWindow !== null))) {
+    const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === a.label);
+    const windowOf = (id) => a.windows.find((w) => w.id === id) ?? null;
+    for (const [name, w] of [['5h', windowOf('5h')], ['7d', windowOf('7d')], ['Fable', a.fableWindow]]) {
+      const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
+      const meter = chip?.nextElementSibling;
+      const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
+      const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
+      const share = live ? remainingTimeShare(w, at) : null;
+      rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
+    }
+  }
+  const marked = rows.filter((r) => r.want !== null);
+  const off = rows.filter((r) => (r.want === null ? r.marks !== 0 : r.marks !== 1 || r.left !== r.want || !/, (\d+% (ahead of|behind) pace|on pace)$/.test(r.title)));
+  results.push({
+    name: "/quota every live window row draws one pace mark at the window's remaining time share whose title names the lead",
+    ok: marked.length > 0 && rows.some((r) => r.want === null) && off.length === 0,
+    missing: off.map((r) => JSON.stringify(r)),
+  });
+  const titleOf = (name) => rows.find((r) => r.account === 'primary' && r.name === name)?.title ?? 'no title';
+  results.push({
+    name: '/quota the story holds one window ahead of pace and one behind',
+    ok: titleOf('5h').endsWith('ahead of pace') && titleOf('7d').endsWith('behind pace'),
+    missing: [titleOf('5h'), titleOf('7d')],
+  });
+  q.unmount();
+}
+{
   // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
   // grows one card past the rest.
   const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
@@ -979,14 +1013,20 @@ await quotaSection(m, 'Quota windows');
     missing: [JSON.stringify(m.location()), m.container.querySelector('.qcard') ? 'a card is drawn' : 'no card', panel?.querySelector('.timeline') ? 'a timeline' : 'no timeline'],
   });
 }
-expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'plan ends']);
+expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'used', 'past window', 'plan ends']);
 {
   const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
   results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
   const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
   results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
-  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
+  const chips = [...m.container.querySelectorAll('.tl-chip')].map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
+  const withShare = chips.filter((c) => c.text.includes('% left'));
+  const withoutShare = chips.filter((c) => !c.text.includes('% left'));
+  results.push({
+    name: '/quota a timeline chip with a share carries the tone on the chip and none on the percentage',
+    ok: withShare.length > 0 && withoutShare.length > 0 && withShare.every((c) => ['tl-chip--good', 'tl-chip--low', 'tl-chip--warn'].includes(c.tone) && c.pct === 'none') && withoutShare.every((c) => c.tone === 'none' && c.pct === 'none'),
+    missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
+  });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
@@ -1007,16 +1047,65 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
   zoom('5-hour');
   await m.settle();
-  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
+  const liveBarOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label)?.querySelector('.lane__bar--live');
+  const bar = liveBarOf('legacy');
   const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
   const barTitle = bar?.getAttribute('title') ?? 'no bar';
+  // The projected bar has no current sample to fill by, where primary's current 5-hour window on the same zoom has.
+  const fills = [bar?.querySelectorAll('.lane__used').length ?? null, liveBarOf('primary')?.querySelectorAll('.lane__used').length ?? null];
   zoom('Weekly');
   await m.settle();
   results.push({
     name: "/quota an expired window's current bar carries its reset stamp and no share",
-    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
-    missing: [barLabel, barTitle],
+    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%') && fills[0] === 0 && fills[1] === 1,
+    missing: [barLabel, barTitle, `used fills: legacy ${fills[0]}, primary ${fills[1]}`],
   });
+}
+{
+  // The fill is the window's used share placed from the window's start and cut to the drawn bar, so the expectation
+  // reads the bar's span back off its inline style and places the share the same way. The shared mount runs on the
+  // live clock, so the widths compare within half a point.
+  const DAY = 86_400_000;
+  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
+  const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const accounts = await api.listAccounts();
+  const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
+  // The page's span: the weekly zoom opens three days before today's midnight and runs two weeks, the 5-hour zoom one
+  // day before and three days.
+  const fillOf = (label, windowId, days) => {
+    const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === windowId);
+    const bar = laneOf(label)?.querySelector('.lane__bar--live');
+    const fills = [...(bar?.querySelectorAll('.lane__used') ?? [])];
+    const startMs = new Date(Date.now()).setHours(0, 0, 0, 0) - (days === 14 ? 3 : 1) * DAY;
+    const from = startMs + (parseFloat(bar?.style.left ?? 'NaN') / 100) * days * DAY;
+    const to = from + (parseFloat(bar?.style.width ?? 'NaN') / 100) * days * DAY;
+    const period = (w?.periodHours ?? 0) * 3_600_000;
+    const usedEnd = Date.parse(w?.resetsAt ?? '') - period + Math.min(1, w?.utilization ?? 0) * period;
+    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
+  };
+  const weekly = fillOf('primary', '7d', 14);
+  results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the weekly zoom", ok: weekly.fills === 1 && Math.abs(weekly.drawn - weekly.want) <= 0.5, missing: [JSON.stringify(weekly)] });
+  const lanes = [...m.container.querySelectorAll('.lane')].map((l) => {
+    const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
+    const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
+    const bar = l.querySelector('.lane__bar--live');
+    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+  });
+  const withShare = lanes.filter((l) => l.share);
+  const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
+  results.push({
+    name: '/quota no two live bars of windows at different shares fill alike',
+    ok: withShare.length >= 2 && new Set(withShare.map((l) => l.utilization)).size >= 2 && withShare.every((l) => l.fills === 1) && alike.length === 0,
+    missing: [...lanes.map((l) => JSON.stringify(l)), ...alike],
+  });
+  const legend = [...m.container.querySelectorAll('.timeline__legend > span:not(.timeline__note)')].map((s) => s.textContent?.trim() ?? '');
+  results.push({ name: '/quota the legend reads used and past window', ok: JSON.stringify(legend) === JSON.stringify(['current window', 'upcoming', 'used', 'past window', 'now', 'plan ends']), missing: legend });
+  zoom('5-hour');
+  await m.settle();
+  const session = fillOf('primary', '5h', 3);
+  zoom('Weekly');
+  await m.settle();
+  results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so

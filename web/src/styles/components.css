@@ -449,6 +449,22 @@
   transition: width 240ms ease-out;
 }
 
+/* The mark stands past the track's edges, so a marked meter clips nothing. The fill keeps its own radius. */
+.meter--marked {
+  position: relative;
+  overflow: visible;
+}
+
+.meter__mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  border-radius: 1px;
+}
+
 .meter--good {
   background: var(--good-track);
 }

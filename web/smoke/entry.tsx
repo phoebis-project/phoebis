@@ -30,6 +30,8 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumbe
 export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
 export { fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
+// The pace mark's offset, so the check and the meter place it by one arithmetic.
+export { remainingTimeShare } from '@/lib/quota';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

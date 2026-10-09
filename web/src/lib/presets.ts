@@ -1,6 +1,6 @@
 import type { Account, BurnUnit, MemberEligibility, Pool, Session } from '@/api/types';
 import { fmtPct } from './format';
-import { windowOf } from './quota';
+import { aheadOf, windowOf } from './quota';
 import { WINDOW_HOURS } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
@@ -26,14 +26,6 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
  * `margin - MIGRATE_BAND`; an API-key member's bucket reads against 1.0.
  */
 export const MIGRATE_BAND = 0.05;
-
-/** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
-export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
-  if (window.resetsAt === null) return window.utilization;
-  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
-  const elapsed = (lengthMs - (Date.parse(window.resetsAt) - now)) / lengthMs;
-  return window.utilization - Math.min(1, Math.max(0, elapsed));
-}
 
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;

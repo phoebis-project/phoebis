@@ -911,9 +911,9 @@
 }
 
 /*
- * Neutral pill, tone on the number only: the row's color belongs to its lane.
  * One width for every chip in the column, so the labels start and the numbers
- * end on two straight lines whatever the window is called.
+ * end on two straight lines whatever the window is called. A chip with a share
+ * takes its tone whole, as the card chips do.
  */
 .tl-chip {
   display: flex;
@@ -935,16 +935,22 @@
   font-weight: 700;
 }
 
-.tl-chip__pct--good {
+.tl-chip--good {
   color: var(--good-ink);
+  background: var(--good-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--warn {
+.tl-chip--warn {
   color: var(--warning-ink);
+  background: var(--warning-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--low {
+.tl-chip--low {
   color: var(--critical-ink);
+  background: var(--critical-soft);
+  border-color: transparent;
 }
 
 .lane__track {
@@ -974,14 +980,25 @@
   background: color-mix(in srgb, var(--surface-3) 70%, transparent);
 }
 
-/* The share of the current window already spent, so the bar reads as a clock. */
-.lane__elapsed {
+/* The window's used share, in the window's tone, so the bar reads against the now line. */
+.lane__used {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  background: color-mix(in srgb, var(--lane-color) 55%, var(--surface));
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.lane__used--good {
+  background: var(--good);
+}
+
+.lane__used--warn {
+  background: var(--warning);
+}
+
+.lane__used--low {
+  background: var(--critical);
 }
 
 .lane__reset-mark {
@@ -1053,6 +1070,10 @@
 
 .lane__swatch--next {
   border: 1px dashed color-mix(in srgb, var(--series-1) 45%, transparent);
+}
+
+.lane__swatch--used {
+  background: var(--good);
 }
 
 .lane__swatch--past {

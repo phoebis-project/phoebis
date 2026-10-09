@@ -9,7 +9,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, extraUsageState, isExpired, isSubscription, meterTone, planChip, pollReading, remainingOf, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
 type Sort = 'default' | 'soonest';
 
@@ -294,11 +294,13 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
 function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
+  const pace = live ? paceWords(live, now) : null;
+  const reading = live ? `${live.label}: ${fmtPct(remainingOf(live))} left${pace ? `, ${pace}` : ''}` : '';
   return (
     <>
       <WindowChip name={name} window={w} now={now} className="qwin__chip" />
       {live ? (
-        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={`${live.label} remaining`} />
+        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live, now) ?? undefined} />
       ) : (
         <div className="meter meter--thin meter--absent" role="presentation">
           <div className="meter__fill" style={{ width: '100%' }} />
@@ -335,7 +337,8 @@ function spanFor(mode: Mode, offset: number, now: number) {
   return { startMs: start, endMs: start + 14 * DAY, cells: 14, cellMs: DAY };
 }
 
-/** A muted pill: what the window is, and how much of it is left in the meter tone. */
+/** A pill naming the window and how much of it is left, toned by its share as the card chips are. Without a share
+ *  it sits on the grey surface. */
 function LaneChip({ label, window: w, now }: { label: string; now: number; window: RateLimitWindow | null }) {
   if (!w) {
     return (
@@ -353,8 +356,8 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
   }
   const remaining = remainingOf(w);
   return (
-    <span className="tl-chip" title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, resets ${fmtAbsolute(w.resetsAt)}`}>
-      {label} <b className={`tl-chip__pct num tl-chip__pct--${meterTone(remaining)}`}>{fmtPct(remaining)} left</b>
+    <span className={`tl-chip tl-chip--${meterTone(remaining)}`} title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, resets ${fmtAbsolute(w.resetsAt)}`}>
+      {label} <b className="tl-chip__pct num">{fmtPct(remaining)} left</b>
     </span>
   );
 }
@@ -493,9 +496,13 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                     const to = Math.min(b.stop, span.endMs);
                     const wPct = ((to - from) / width) * 100;
                     const showLabel = wPct > (mode === 'session' ? 5 : 9);
-                    // The elapsed share is of the drawn bar, which the range may
-                    // have clipped, not of the whole window.
-                    const elapsed = b.state === 'live' ? ((Math.min(now, to) - from) / (to - from)) * 100 : 0;
+                    // The fill is the window's used share placed from the window's start and cut to the drawn part,
+                    // so a fill past the now line reads as ahead of pace and one short of it as behind. It draws only
+                    // while the sample is current: an expired sample's bar is projected past its reset, and the
+                    // previous window's use would fill a window the sample never read. The now line is the elapsed
+                    // mark.
+                    const usedEnd = b.start + Math.min(1, w.utilization) * period;
+                    const used = b.state === 'live' && share !== null ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
                     return (
                       <div
                         key={b.start}
@@ -503,7 +510,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                         style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
                         title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
                       >
-                        {b.state === 'live' && <span className="lane__elapsed" style={{ width: `${elapsed}%` }} />}
+                        {b.state === 'live' && share !== null && <span className={`lane__used lane__used--${meterTone(remainingOf(w))}`} style={{ width: `${used}%` }} />}
                         {b.stop === b.end && b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
                         {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
                       </div>
@@ -525,7 +532,10 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
           <i className="lane__swatch lane__swatch--next" /> upcoming
         </span>
         <span>
-          <i className="lane__swatch lane__swatch--past" /> elapsed
+          <i className="lane__swatch lane__swatch--used" /> used
+        </span>
+        <span>
+          <i className="lane__swatch lane__swatch--past" /> past window
         </span>
         <span>
           <i className="lane__swatch lane__swatch--now" /> now

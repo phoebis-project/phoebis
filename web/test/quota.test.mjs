@@ -70,3 +70,18 @@ test('a card the poll has not asked yet still names when its snapshot was read',
   assert.deepEqual(reading.lines, [{ text: 'not yet polled', tone: 'muted' }]);
   assert.equal(reading.title, `checked ${d.fmtAbsolute(fetchedAt)}`);
 });
+
+test("the pace words read ahead, behind or on pace from the window's used and elapsed shares", () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const window = (periodHours, utilization, resetsInMs) => ({ id: periodHours === 5 ? '5h' : '7d', label: periodHours === 5 ? '5-hour' : '7-day', observedAt: new Date(now - 40_000).toISOString(), periodHours, resetsAt: resetsInMs === null ? null : new Date(now + resetsInMs).toISOString(), utilization });
+  const session = window(5, 0.62, 2 * HOUR + 14 * MINUTE);
+  assert.equal(d.paceWords(session, now), '7% ahead of pace', '62% used with 55% of the window elapsed');
+  assert.equal(d.paceWords(window(168, 0.41, 77.7 * HOUR), now), '13% behind pace', '41% used with 54% of the week elapsed');
+  assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR), now), 'on pace', 'a lead under a point reads on pace');
+  assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR), now), '1% ahead of pace', 'the smallest lead past a point reads one');
+  assert.equal(d.paceWords(window(5, 0.62, null), now), null, 'a window without a reset time has no pace');
+  assert.equal(d.remainingTimeShare(session, now).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
+  assert.equal(d.remainingTimeShare(window(5, 0.62, null), now), null, 'a window without a reset time has no share still to come');
+});

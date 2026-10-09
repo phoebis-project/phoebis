@@ -138,11 +138,12 @@ export function Card({ children, className = '', title, subtitle, actions, padde
   );
 }
 
-export function Meter({ value, tone, label, thin = false }: { label?: string; thin?: boolean; tone: 'accent' | 'good' | 'low' | 'warn'; value: number }) {
+export function Meter({ value, tone, label, mark, thin = false, title }: { label?: string; /** A share of the track, 0 to 1, where a thin vertical mark is drawn. None without it. */ mark?: number; thin?: boolean; title?: string; tone: 'accent' | 'good' | 'low' | 'warn'; value: number }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 1000) / 10;
   return (
-    <div className={`meter meter--${tone} ${thin ? 'meter--thin' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={label}>
+    <div className={`meter meter--${tone} ${thin ? 'meter--thin' : ''} ${mark !== undefined ? 'meter--marked' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={label} title={title}>
       <div className="meter__fill" style={{ width: `${pct}%` }} />
+      {mark !== undefined && <span className="meter__mark" style={{ left: `${mark * 100}%` }} aria-hidden />}
     </div>
   );
 }
