@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -10798,10 +10798,21 @@ m.unmount();
     const opus = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
     const fast = opus?.nextElementSibling;
     const opusFast = prices.find((p) => p.model === 'claude-opus-5-5')?.fast;
-    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
-    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    // A model can carry a fast row and a prompt row, so a sub-row's model is the nearest plain row above it.
+    const modelOf = (row) => {
+      let at = row;
+      while (at?.classList.contains('cost-ref__sub')) at = at.previousElementSibling;
+      return at;
+    };
+    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => modelOf(r)?.children[0]?.textContent?.trim());
+    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(modelOf(r)) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    const haiku = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const long = prices.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const prompt = haiku?.nextElementSibling;
+    const expectedSubs = familyOrder(prices.filter((p) => p.fast !== null || p.longContext !== null).map((p) => p.model))
+      .flatMap((model) => { const p = prices.find((x) => x.model === model); return [...(p.fast ? [model] : []), ...(p.longContext ? [model] : [])]; });
     results.push({
-      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells",
+      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
       ok:
         JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
         wrong.length === 0 &&
@@ -10809,11 +10820,15 @@ m.unmount();
         fast.children[0]?.textContent === 'fast mode' &&
         opusFast !== null &&
         JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
-        JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
+        long !== null &&
+        prompt?.classList.contains('cost-ref__sub') === true &&
+        prompt.children[0]?.textContent === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(cells(prompt)) === JSON.stringify(priced(long)) &&
+        JSON.stringify(subs) === JSON.stringify(expectedSubs) &&
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
-      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
+      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
   }
 
@@ -11105,6 +11120,44 @@ m.unmount();
         JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
         drawn.opus5.weight.text === 'by window' &&
         drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
+      missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // On the test tables, the Haiku 5.5 row priced by prompt length: a prompt-length sub-row under the model, labeled
+  // from the row's threshold and priced at its cells over it.
+  {
+    const { getSettings } = api;
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const haiku = rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const prompt = haiku?.nextElementSibling;
+    const long = wired.apiPrices.models.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const drawn = {
+      cells: [...(prompt?.children ?? [])].slice(1).map((td) => td.textContent?.trim()),
+      hasSub: haiku?.classList.contains('has-sub') ?? false,
+      label: prompt?.classList.contains('cost-ref__sub') ? prompt.children[0]?.textContent : 'no sub-row',
+      stripe: prompt?.classList.contains('is-alt') === haiku?.classList.contains('is-alt'),
+    };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions API prices list a prompt-length row under a model priced by prompt length, labeled from its threshold and priced at its cells over it',
+      ok:
+        long !== null &&
+        drawn.hasSub &&
+        drawn.label === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(drawn.cells) === JSON.stringify([long.inputPerM, long.cacheReadPerM, long.cacheWrite5mPerM, long.cacheWrite1hPerM, long.outputPerM].map(usd)) &&
+        drawn.stripe,
       missing: [JSON.stringify(drawn)],
     });
   }

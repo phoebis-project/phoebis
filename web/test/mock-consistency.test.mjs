@@ -382,3 +382,24 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
   }
   assert.equal(s.overview.requests24h, s.counted.length, "the dashboard's day keeps its own first hour");
 });
+
+test("the mock prices an answer at the cells its own prompt selects, as the ledger does", async () => {
+  const d = await import('./dist/api.js');
+  const row = d.PRICES.find((p) => p.model === 'claude-haiku-5-5');
+  assert.ok(row.longContext, 'the Haiku 5.5 row carries a long-context set');
+  // The prompt is the four input-side counts together, and `input` is set so the sum lands on the threshold or one over.
+  const usage = (input) => ({ input, cacheRead: 50_000, cacheWrite5m: 15_000, cacheWrite1h: 10_000, output: 1_000, thinking: 0, webFetch: 0, webSearch: 0 });
+  const at = usage(row.longContext.over - 75_000);
+  const over = usage(row.longContext.over - 75_000 + 1);
+  assert.equal(d.cellsFor('claude-haiku-5-5', at), row, 'a prompt of exactly the threshold prices at the standard cells');
+  assert.equal(d.cellsFor('claude-haiku-5-5', over), row.longContext, 'one token more prices at the long-context cells');
+  const split = d.costSplitOf('claude-haiku-5-5', over);
+  assert.ok(near(split.input, (over.input * row.longContext.inputPerM) / 1_000_000), 'the input at the long-context cell');
+  assert.ok(near(split.cacheRead, (over.cacheRead * row.longContext.cacheReadPerM) / 1_000_000), 'the cache read too');
+  assert.ok(near(d.costSplitOf('claude-haiku-5-5', at).input, (at.input * row.inputPerM) / 1_000_000), 'and the threshold itself at the standard cell');
+  // No mock row carries both a fast and a long-context set, so this shows only that a fast answer reads the fast
+  // cells. The fast-before-prompt order is the ledger's, proven by its own
+  // `price_at_selects_the_fast_cells_then_the_long_context_cells_then_the_standard_ones`.
+  const opus = d.PRICES.find((p) => p.model === 'claude-opus-5-5');
+  assert.equal(d.cellsFor('claude-opus-5-5', usage(10_000_000), true), opus.fast, 'a fast answer on a row with fast cells reads the fast cells');
+});

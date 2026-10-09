@@ -396,6 +396,13 @@ pub struct Rates {
     pub output: Option<f64>,
 }
 
+/// The rates of a model's prompts longer than `over` tokens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LongContextRates {
+    pub over: u64,
+    pub rates: Rates,
+}
+
 /// `count` tokens (or tokens a second) at `rate`: nothing burned prices at zero whatever the rate, and a burned
 /// type without a rate has no price.
 fn priced(count: f64, rate: Option<f64>) -> Option<f64> {
@@ -406,10 +413,12 @@ fn priced(count: f64, rate: Option<f64>) -> Option<f64> {
     }
 }
 
-/// A price per token by model and token type; `fallback` prices a model the table does not list.
+/// A price per token by model and token type; `long_context` the second set of the models priced by prompt length,
+/// and `fallback` prices a model the table does not list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateTable {
     pub rows: HashMap<String, Rates>,
+    pub long_context: HashMap<String, LongContextRates>,
     pub fallback: Rates,
 }
 
@@ -418,6 +427,7 @@ impl RateTable {
     pub fn unit() -> RateTable {
         RateTable {
             rows: HashMap::new(),
+            long_context: HashMap::new(),
             fallback: Rates {
                 input: Some(1.0),
                 cache_read: Some(1.0),
@@ -428,14 +438,33 @@ impl RateTable {
         }
     }
 
-    /// The row `listing::row_for` finds for `canonical_model`, else `fallback`.
-    pub fn rates_for(&self, canonical_model: &str) -> Rates {
-        *row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback)
+    /// The row `listing::row_for` finds in `rows` (the exact id before the undated one, as the ledger's `entry`
+    /// resolves it), at its `long_context` rates when that same key carries them and `prompt_tokens` is above
+    /// their `over`, else at its own; `fallback` when `rows` has no key for the model.
+    pub fn rates_for(&self, canonical_model: &str, prompt_tokens: u64) -> Rates {
+        // One key wins for both maps, the exact id before the undated one as the ledger's `entry` resolves it, so
+        // a dated row without the block never prices at the undated row's long-context rates.
+        let key = row_for(canonical_model, |k| {
+            self.rows.get_key_value(k).map(|(key, _)| key)
+        });
+        let Some(key) = key else {
+            return self.fallback;
+        };
+        match self.long_context.get(key) {
+            Some(long) if prompt_tokens > long.over => long.rates,
+            _ => self.rows[key],
+        }
     }
 
-    /// The price of one second of a pin's burn; `None` when a type the pin burns has no rate.
-    pub fn price_burn(&self, canonical_model: &str, burn: &PinBurn) -> Option<f64> {
-        let rates = self.rates_for(canonical_model);
+    /// The price of one second of a pin's burn at the set its `prompt_tokens` select; `None` when a type the pin
+    /// burns has no rate.
+    pub fn price_burn(
+        &self,
+        canonical_model: &str,
+        burn: &PinBurn,
+        prompt_tokens: u64,
+    ) -> Option<f64> {
+        let rates = self.rates_for(canonical_model, prompt_tokens);
         Some(
             priced(burn.input, rates.input)?
                 + priced(burn.cache_read, rates.cache_read)?
@@ -445,9 +474,10 @@ impl RateTable {
         )
     }
 
-    /// Each count times its rate, summed; `None` when a type with a count has no rate.
-    pub fn price(&self, canonical_model: &str, usage: PinUsage) -> Option<f64> {
-        let rates = self.rates_for(canonical_model);
+    /// Each count times its rate at the set `prompt_tokens` select, summed; `None` when a type with a count has no
+    /// rate.
+    pub fn price(&self, canonical_model: &str, usage: PinUsage, prompt_tokens: u64) -> Option<f64> {
+        let rates = self.rates_for(canonical_model, prompt_tokens);
         Some(
             priced(usage.input as f64, rates.input)?
                 + priced(usage.cache_read as f64, rates.cache_read)?
@@ -800,6 +830,13 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// Each pin's fast usage as typed tokens per second over the burn window, folded and decayed beside
+    /// `PinRow::burn` from the same `burn_at`. Kept apart so a reader prices this copy through the fast table
+    /// (`BurnRates::fast`, a row's fast cells whatever the prompt where the row has them) and `burn` at the set the
+    /// pin's last prompt selects, and a prompt that crosses the threshold on such a row reprices the ordinary usage
+    /// alone. Memory only, since the pin's row has no column for it, so a restart reads a pin's fast usage as none
+    /// until its next fast renewal.
+    fast_burn: HashMap<PinKey, PinBurn>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -883,6 +920,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            fast_burn: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             newest_shed,
@@ -973,11 +1011,42 @@ impl RoutingState {
             Some(replaced) => {
                 self.spend_mark(&replaced);
                 self.renewed.remove(&key);
+                self.fast_burn.remove(&key);
             }
             None => {
                 self.renewed.remove(&key);
+                self.fast_burn.remove(&key);
             }
         }
+    }
+
+    /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
+    /// zero for a pin never renewed fast since the router started.
+    pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        self.fast_burn.get(&key).copied().unwrap_or_default()
+    }
+
+    /// Set by the task at each renewal with usage, and by a test that prices a round over fast usage. A copy of
+    /// zeros (a pin whose every renewal was standard) holds no entry, so the map stays as small as the fast pins.
+    pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        if burn == PinBurn::default() {
+            self.fast_burn.remove(&key);
+        } else if self.pins.contains_key(&key) {
+            self.fast_burn.insert(key, burn);
+        }
+    }
+
+    /// Every pin with fast usage, by key, for a reader outside the loop that prices the pins beside their rows.
+    pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
+        self.fast_burn.clone()
     }
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
@@ -1014,6 +1083,7 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
+        self.fast_burn.remove(key);
         self.spend_mark(&pin);
         Some(pin)
     }
@@ -1535,7 +1605,8 @@ impl RoutingState {
     /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
     /// `WindowShare` a burn is the subscription cost model's anchor share per second, which orders the pins as the
-    /// tier's share does; `None` for a pin burning a type its row cannot price.
+    /// tier's share does, and under `Usd` the pin's fast usage counts beside its row's copy, as
+    /// `BurnRates::price_pin` sums them. `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
@@ -1545,15 +1616,17 @@ impl RoutingState {
         now: i64,
         window_ms: i64,
     ) -> (Vec<(PinRow, Option<f64>)>, f64) {
-        let table = unit.table(rates);
         let mut pins: Vec<(PinRow, Option<f64>)> = self
             .pins
             .values()
             .filter(|p| p.account_id == account_id && keep(p))
             .map(|p| {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
-                let burn = table
-                    .price_burn(&p.model, &unit.read(p))
+                // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
+                // pin never renewed with usage carries zero and prices at the standard rates.
+                let fast = self.fast_burn.get(&p.key()).copied().unwrap_or_default();
+                let burn = rates
+                    .price_pin(unit, p, &fast)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -1682,8 +1755,10 @@ impl RoutingState {
             .collect();
         for pin in moved_pins {
             let spelled = pin.key();
-            // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there.
+            // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
+            // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
+            let fast_burn = self.fast_burn.get(&spelled).copied();
             self.take_pin(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
@@ -1704,9 +1779,17 @@ impl RoutingState {
                     self.spend_mark(&replaced);
                 }
                 if renewed {
-                    self.renewed.insert(dated_key);
+                    self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
+                }
+                match fast_burn {
+                    Some(burn) => {
+                        self.fast_burn.insert(dated_key, burn);
+                    }
+                    None => {
+                        self.fast_burn.remove(&dated_key);
+                    }
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -2097,6 +2180,46 @@ mod tests {
     }
 
     #[test]
+    fn a_pins_fast_usage_moves_with_a_rekey_leaves_with_the_pin_and_never_reaches_a_fresh_pin_under_its_key(
+    ) {
+        let (pin, _) = burning("s", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        let fast = PinBurn {
+            input: 2.0,
+            ..PinBurn::default()
+        };
+        state.set_fast_burn(&pin.key(), fast);
+        state.apply_resolution("m", "m-20260101", 0);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert_eq!(
+            state.fast_burns().into_iter().collect::<Vec<_>>(),
+            vec![(dated.clone(), fast)],
+            "the rekey carries the fast usage to the dated id"
+        );
+        state.put_pin(PinRow {
+            epoch: 2,
+            ..pin.clone()
+        });
+        assert_eq!(
+            state.fast_burn(&dated),
+            PinBurn::default(),
+            "a fresh pin under the key starts without the replaced pin's fast usage"
+        );
+        state.set_fast_burn(&dated, fast);
+        state.remove_pin(&dated);
+        assert!(
+            state.fast_burns().is_empty(),
+            "the fast usage leaves with the pin"
+        );
+    }
+
+    #[test]
     fn a_round_marks_in_order_to_the_share_and_never_the_last_pin_or_anything_for_a_zero_target() {
         let four = [
             burning("cold-3", 3.0),
@@ -2177,20 +2300,21 @@ mod tests {
                     output: Some(1.0),
                 },
             )]),
+            long_context: HashMap::new(),
             fallback: RateTable::unit().fallback,
         };
         let input_only = PinBurn {
             input: 3.0,
             ..PinBurn::default()
         };
-        assert_eq!(table.price_burn("claude-guess", &input_only), Some(6.0));
+        assert_eq!(table.price_burn("claude-guess", &input_only, 0), Some(6.0));
         let with_reads = PinBurn {
             input: 3.0,
             cache_read: 1.0,
             ..PinBurn::default()
         };
         assert_eq!(
-            table.price_burn("claude-guess", &with_reads),
+            table.price_burn("claude-guess", &with_reads, 0),
             None,
             "a burned type without a rate"
         );
@@ -2200,7 +2324,8 @@ mod tests {
                 PinUsage {
                     input: 1,
                     ..PinUsage::default()
-                }
+                },
+                0
             ),
             Some(2.0)
         );
@@ -2210,7 +2335,8 @@ mod tests {
                 PinUsage {
                     cache_read: 1,
                     ..PinUsage::default()
-                }
+                },
+                0
             ),
             None
         );
@@ -2220,7 +2346,8 @@ mod tests {
                 PinUsage {
                     cache_read: 1,
                     ..PinUsage::default()
-                }
+                },
+                0
             ),
             Some(1.0),
             "the fallback"
@@ -2261,6 +2388,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            long_context: HashMap::new(),
             fallback: flat(1.0),
         };
         let usage = PinUsage {
@@ -2270,21 +2398,92 @@ mod tests {
             write_1h: 2,
             output: 3,
         };
+        let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
         assert_eq!(
-            table.price("claude-sonnet-4-5-20250929", usage),
+            table.price("claude-sonnet-4-5-20250929", usage, prompt),
             Some(30.0 + 25.0 + 15.0 + 12.0 + 45.0),
             "the dated id prices at the undated sonnet row"
         );
         assert_eq!(
-            table.price("claude-fable-5-1-20260601", usage),
+            table.price("claude-fable-5-1-20260601", usage, prompt),
             Some(50.0 + 50.0 + 25.0 + 20.0 + 75.0),
             "and the dated fable id at its own row, not the fallback"
         );
         assert_eq!(
-            table.price("claude-opus-5-20260101", usage),
+            table.price("claude-opus-5-20260101", usage, prompt),
             Some(10.0 + 100.0 + 4.0 + 2.0 + 3.0),
             "a model no row names prices at the fallback"
         );
+    }
+
+    #[test]
+    fn a_long_context_row_prices_a_prompt_over_its_threshold_at_its_own_rates() {
+        let flat = |r: f64| Rates {
+            input: Some(r),
+            cache_read: Some(r),
+            write_5m: Some(r),
+            write_1h: Some(r),
+            output: Some(r),
+        };
+        // An undated row with a long-context set beside an exact dated row without one: the dated snapshot is
+        // priced its own way.
+        let table = RateTable {
+            rows: HashMap::from([
+                ("claude-haiku-5-5".to_string(), flat(1.0)),
+                ("claude-haiku-5-5-20260101".to_string(), flat(2.0)),
+            ]),
+            long_context: HashMap::from([(
+                "claude-haiku-5-5".to_string(),
+                LongContextRates {
+                    over: 1_000,
+                    rates: flat(5.0),
+                },
+            )]),
+            fallback: flat(10.0),
+        };
+        let one = PinUsage {
+            input: 1,
+            ..PinUsage::default()
+        };
+        assert_eq!(
+            table.price("claude-haiku-5-5", one, 1_000),
+            Some(1.0),
+            "a prompt of exactly `over` reads the row"
+        );
+        assert_eq!(
+            table.price("claude-haiku-5-5", one, 1_001),
+            Some(5.0),
+            "one token more reads the long-context rates"
+        );
+        assert_eq!(
+            table.price("claude-haiku-5-5-20260301", one, 1_001),
+            Some(5.0),
+            "a dated id with no row of its own reads its undated long-context row"
+        );
+        assert_eq!(
+            table.price("claude-haiku-5-5-20260101", one, 1_000),
+            Some(2.0),
+            "an exact dated row wins at the threshold"
+        );
+        assert_eq!(
+            table.price("claude-haiku-5-5-20260101", one, 1_001),
+            Some(2.0),
+            "and over it, the key resolved as `PriceTable::entry` resolves it, never the undated row's long-context rates"
+        );
+        assert_eq!(
+            table.price("gpt-5", one, 1_001),
+            Some(10.0),
+            "an unlisted model reads the fallback whatever its prompt"
+        );
+        let burn = PinBurn {
+            input: 2.0,
+            ..PinBurn::default()
+        };
+        assert_eq!(
+            table.price_burn("claude-haiku-5-5", &burn, 1_001),
+            Some(10.0)
+        );
+        assert!(RateTable::unit().long_context.is_empty());
     }
 
     #[test]

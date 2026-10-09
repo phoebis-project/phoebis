@@ -125,7 +125,8 @@ pub struct RigSpec {
     pub on_disk: bool,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
-    /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text.
+    /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text, and a
+    /// case on a row priced by prompt length hands in the test table.
     pub pricing: PriceTable,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price

@@ -1511,6 +1511,13 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);
   const opus = s.apiPrices.models.find((m) => m.model === 'claude-opus-5-5');
   assert.deepEqual([opus.cacheWrite1hPerM, opus.fast.outputPerM], [rows['claude-opus-5-5'].cache_write_1h, rows['claude-opus-5-5'].fast.output], "a cell and a fast cell read under the file's names");
+  const plainRow = { input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5 };
+  const longContextRow = { ...plainRow, long_context: { over: 1000, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25 } };
+  const withLongContext = d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, content: { ...wire.api_prices.content, models: { ...rows, 'claude-haiku-5-5': longContextRow, 'claude-test-plain': plainRow } } } });
+  const haiku = withLongContext.apiPrices.models.find((m) => m.model === 'claude-haiku-5-5');
+  assert.deepEqual(haiku.longContext, { cacheReadPerM: 0.5, cacheWrite1hPerM: 10, cacheWrite5mPerM: 6.25, inputPerM: 5, outputPerM: 25, over: 1000 }, "a long-context set reads its threshold and its cells under the file's names");
+  assert.equal(haiku.fast, null);
+  assert.equal(withLongContext.apiPrices.models.find((m) => m.model === 'claude-test-plain').longContext, null, 'a row without the block reads null');
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));

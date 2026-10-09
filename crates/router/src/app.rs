@@ -983,12 +983,13 @@ mod tests {
             write_1h: 200,
             output: 500,
         };
+        let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
         let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
         let share = config
             .rates
             .five_hour
-            .price("claude-opus-5-5", usage)
+            .price("claude-opus-5-5", usage, prompt)
             .expect("a priced model");
         let expected = tables
             .share_at(
@@ -1006,12 +1007,15 @@ mod tests {
         assert_ne!(
             share,
             phoebis_routing::RateTable::unit()
-                .price("claude-opus-5-5", usage)
+                .price("claude-opus-5-5", usage, prompt)
                 .expect("a priced model"),
             "the share table, not the unit table's token count"
         );
         assert_eq!(
-            config.rates.five_hour.price("claude-opus-4-8", usage),
+            config
+                .rates
+                .five_hour
+                .price("claude-opus-4-8", usage, prompt),
             None,
             "the share table prices no model the cost model has no weight for"
         );
@@ -1019,7 +1023,7 @@ mod tests {
             config
                 .rates
                 .dollars
-                .price("gpt-5", usage)
+                .price("gpt-5", usage, prompt)
                 .is_some_and(|usd| usd > 0.0),
             "the dollar table keeps its dearest-price fallback"
         );
@@ -1038,7 +1042,7 @@ mod tests {
             (config
                 .rates
                 .dollars
-                .price("claude-sonnet-5", usage)
+                .price("claude-sonnet-5", usage, prompt)
                 .expect("a priced model")
                 - usd)
                 .abs()
@@ -1060,7 +1064,7 @@ mod tests {
             (config
                 .rates
                 .fast
-                .price("claude-opus-5-5", usage)
+                .price("claude-opus-5-5", usage, prompt)
                 .expect("a priced model")
                 - fast_usd)
                 .abs()

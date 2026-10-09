@@ -2430,14 +2430,15 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "the banded copy weighs the same tokens by the band at the renewal ({band}): {:?}",
         pin.burn_banded
     );
+    let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
     let dollars = phoebis_ledger::PriceTable::shipped()
         .rate_table()
-        .price("claude-opus-5", usage)
+        .price("claude-opus-5", usage, prompt)
         .unwrap();
     assert!(
         (phoebis_ledger::PriceTable::shipped()
             .rate_table()
-            .price_burn("claude-opus-5", &pin.burn)
+            .price_burn("claude-opus-5", &pin.burn, pin.last_input_tokens)
             .unwrap()
             - dollars / 600.0)
             .abs()

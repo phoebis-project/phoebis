@@ -41,13 +41,25 @@ impl Speed {
     }
 }
 
-/// One model's row: the standard cells, and the fast cells on a model that serves fast mode.
+/// One model's row: the standard cells, the fast cells on a model that serves fast mode, and the long-context
+/// cells on a model priced by prompt length.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ModelRow {
     #[serde(flatten)]
     pub standard: ModelPrice,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast: Option<ModelPrice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContext>,
+}
+
+/// The prices over the threshold: an attempt whose prompt is longer than `over` tokens prices all five of its
+/// counts at `cells`, the output among them.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct LongContext {
+    pub over: u64,
+    #[serde(flatten)]
+    pub cells: ModelPrice,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -74,14 +86,22 @@ fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
     }
 }
 
+/// The prompt length an attempt is priced by: its uncached input, its cache read and its two cache writes
+/// together, what the API counted as the request's input. The output, the thinking share of it and the tokens a
+/// context edit cleared are not part of it.
+pub fn prompt_tokens(input: u64, cache_read: u64, write_5m: u64, write_1h: u64) -> u64 {
+    input + cache_read + write_5m + write_1h
+}
+
 impl PriceTable {
     pub fn shipped() -> PriceTable {
         PriceTable::from_yaml(SHIPPED_API_PRICES, "shipped")
             .expect("the shipped price table parses")
     }
 
-    /// Refuses a cell that is not a finite non-negative number: a negative or `NaN` price makes every estimate
-    /// negative or `NaN`, which a budget then never trips on.
+    /// Refuses a cell that is not a finite non-negative number, and a `long_context.over` that is zero: a negative
+    /// or `NaN` price makes every estimate negative or `NaN`, which a budget then never trips on, and a zero
+    /// threshold would price every prompt at the long-context cells.
     pub fn from_yaml(text: &str, source: &str) -> Result<PriceTable, LedgerError> {
         // The typed map reads a key as its text and keeps the last of two equal keys, so the untyped pass runs
         // first and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors
@@ -90,7 +110,11 @@ impl PriceTable {
         let file: PriceFile =
             serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
         for (model, row) in &file.models {
-            let blocks = [("", Some(&row.standard)), ("fast.", row.fast.as_ref())];
+            let blocks = [
+                ("", Some(&row.standard)),
+                ("fast.", row.fast.as_ref()),
+                ("long_context.", row.long_context.as_ref().map(|l| &l.cells)),
+            ];
             for (prefix, cells) in blocks {
                 let Some(p) = cells else { continue };
                 let named = [
@@ -105,6 +129,13 @@ impl PriceTable {
                         "model {model}, cell {prefix}{cell} must be a finite non-negative number"
                     )));
                 }
+            }
+            // A zero would price every prompt at the long-context cells, which is a table that should carry them
+            // as its standard ones. Serde already refuses a negative or fractional count before this runs.
+            if row.long_context.as_ref().is_some_and(|l| l.over == 0) {
+                return Err(LedgerError::Yaml(format!(
+                    "model {model}, cell long_context.over must be a whole number of tokens above zero"
+                )));
             }
         }
         Ok(PriceTable {
@@ -133,12 +164,29 @@ impl PriceTable {
         self.entry(canonical_model).map(|(_, row)| &row.standard)
     }
 
-    /// The cells `speed` selects: the `fast` block for a fast answer when the row has one, else the standard cells.
-    pub fn price_at(&self, canonical_model: &str, speed: Speed) -> Option<&ModelPrice> {
-        self.entry(canonical_model).map(|(_, row)| match speed {
-            Speed::Fast => row.fast.as_ref().unwrap_or(&row.standard),
-            Speed::Standard => &row.standard,
+    /// The cells `speed` and `prompt_tokens` select, in this order: the `fast` block for a fast answer on a row
+    /// that has one, else the `long_context` cells when the row has the block and the prompt is longer than its
+    /// `over`, else the standard cells.
+    pub fn price_at(
+        &self,
+        canonical_model: &str,
+        speed: Speed,
+        prompt_tokens: u64,
+    ) -> Option<&ModelPrice> {
+        self.entry(canonical_model).map(|(_, row)| {
+            match (speed, row.fast.as_ref(), row.long_context.as_ref()) {
+                (Speed::Fast, Some(fast), _) => fast,
+                (_, _, Some(long)) if prompt_tokens > long.over => &long.cells,
+                _ => &row.standard,
+            }
         })
+    }
+
+    /// Whether the row `entry` finds for `canonical_model` carries a `long_context` set: such a model's attempts
+    /// cannot be re-priced from a period's token sums, which carry no per-attempt prompt.
+    pub fn priced_by_prompt_length(&self, canonical_model: &str) -> bool {
+        self.entry(canonical_model)
+            .is_some_and(|(_, row)| row.long_context.is_some())
     }
 
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
@@ -147,8 +195,9 @@ impl PriceTable {
         self.entry(canonical_model).map_or("other", |(key, _)| key)
     }
 
-    /// Dollars per token, the routing task's api_key burn unit. A model the table lacks prices at the dearest
-    /// listed rate of each type, so a model the table has not learned never looks cheap to the shedding order.
+    /// Dollars per token, the routing task's api_key burn unit: the standard cells per row and the long-context
+    /// cells of every row that carries them. A model the table lacks prices at the dearest listed standard rate of
+    /// each type, so a model the table has not learned never looks cheap to the shedding order.
     pub fn rate_table(&self) -> phoebis_routing::RateTable {
         let rows = self.per_token_rows(|row| &row.standard);
         let dearest = |of: fn(&phoebis_routing::Rates) -> Option<f64>| {
@@ -161,15 +210,42 @@ impl PriceTable {
             write_1h: Some(dearest(|r| r.write_1h)),
             output: Some(dearest(|r| r.output)),
         };
-        phoebis_routing::RateTable { rows, fallback }
+        let long_context = self
+            .models
+            .iter()
+            .filter_map(|(model, row)| {
+                let long = row.long_context.as_ref()?;
+                Some((
+                    model.clone(),
+                    phoebis_routing::LongContextRates {
+                        over: long.over,
+                        rates: per_token(&long.cells),
+                    },
+                ))
+            })
+            .collect();
+        phoebis_routing::RateTable {
+            rows,
+            long_context,
+            fallback,
+        }
     }
 
-    /// Dollars per token at the fast cells; a model without a `fast` block reads its standard cells, and the
-    /// fallback is `rate_table`'s, so a weight of fast over standard reads 1 wherever no fast price is known.
+    /// Dollars per token at the fast cells, which a fast answer reads whatever its prompt, so a row with a `fast`
+    /// block carries no long-context set here. A row without one reads its standard and long-context rates as
+    /// `rate_table` carries them, the cells `price_at` selects for a fast answer on it, and the fallback is
+    /// `rate_table`'s, so a pin's fast usage on a model the table lacks prices as its row does.
     pub fn fast_rate_table(&self) -> phoebis_routing::RateTable {
+        let dollars = self.rate_table();
+        let long_context = dollars
+            .long_context
+            .into_iter()
+            .filter(|(model, _)| self.models[model].fast.is_none())
+            .collect();
         phoebis_routing::RateTable {
             rows: self.per_token_rows(|row| row.fast.as_ref().unwrap_or(&row.standard)),
-            fallback: self.rate_table().fallback,
+            long_context,
+            fallback: dollars.fallback,
         }
     }
 
@@ -194,7 +270,11 @@ impl PriceTable {
         write_1h: u64,
         output: u64,
     ) -> Option<(f64, CostSplit)> {
-        let p = self.price_at(model, speed)?;
+        let p = self.price_at(
+            model,
+            speed,
+            prompt_tokens(input, cache_read, write_5m, write_1h),
+        )?;
         let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
         let split = CostSplit {
             input_usd: per_m(input, p.input),
@@ -312,11 +392,15 @@ mod tests {
     use crate::record::AttemptRecord;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// The refusal `from_yaml` answers for a file whose one model carries `standard` and, when given, `fast` cells.
-    fn refusal(standard: &str, fast: Option<&str>) -> String {
+    /// The refusal `from_yaml` answers for a file whose one model carries `standard` and, when given, `fast` cells
+    /// and a `long_context` block.
+    fn refusal(standard: &str, fast: Option<&str>, long_context: Option<&str>) -> String {
         let fast = fast.map(|f| format!(", fast: {{{f}}}")).unwrap_or_default();
+        let long_context = long_context
+            .map(|l| format!(", long_context: {{{l}}}"))
+            .unwrap_or_default();
         PriceTable::from_yaml(
-            &format!("effective: 2026-10-04\nmodels:\n  m: {{{standard}{fast}}}\n"),
+            &format!("effective: 2026-10-04\nmodels:\n  m: {{{standard}{fast}{long_context}}}\n"),
             "file",
         )
         .unwrap_err()
@@ -329,7 +413,7 @@ mod tests {
     #[test]
     fn a_negative_price_cell_is_refused_naming_the_model_and_the_cell() {
         assert_eq!(
-            refusal(&CELLS.replace("input: 1", "input: -1"), None),
+            refusal(&CELLS.replace("input: 1", "input: -1"), None, None),
             "pricing table: model m, cell input must be a finite non-negative number"
         );
     }
@@ -337,7 +421,7 @@ mod tests {
     #[test]
     fn a_nan_price_cell_is_refused_naming_the_model_and_the_cell() {
         assert_eq!(
-            refusal(&CELLS.replace("output: 1", "output: .nan"), None),
+            refusal(&CELLS.replace("output: 1", "output: .nan"), None, None),
             "pricing table: model m, cell output must be a finite non-negative number"
         );
     }
@@ -345,7 +429,11 @@ mod tests {
     #[test]
     fn an_infinite_price_cell_is_refused_naming_the_model_and_the_cell() {
         assert_eq!(
-            refusal(&CELLS.replace("cache_read: 1", "cache_read: .inf"), None),
+            refusal(
+                &CELLS.replace("cache_read: 1", "cache_read: .inf"),
+                None,
+                None
+            ),
             "pricing table: model m, cell cache_read must be a finite non-negative number"
         );
     }
@@ -356,9 +444,58 @@ mod tests {
         assert_eq!(
             refusal(
                 CELLS,
-                Some(&CELLS.replace("cache_write_1h: 1", "cache_write_1h: -.inf"))
+                Some(&CELLS.replace("cache_write_1h: 1", "cache_write_1h: -.inf")),
+                None,
             ),
             "pricing table: model m, cell fast.cache_write_1h must be a finite non-negative number"
+        );
+    }
+
+    /// The long-context block repeats the standard cells' names, so its cell is named under `long_context.`.
+    #[test]
+    fn a_bad_long_context_cell_is_refused_under_its_long_context_name() {
+        let block = format!("over: 1000, {}", CELLS.replace("input: 1", "input: -1"));
+        assert_eq!(
+            refusal(CELLS, None, Some(&block)),
+            "pricing table: model m, cell long_context.input must be a finite non-negative number"
+        );
+    }
+
+    /// A zero threshold would price every prompt at the long-context cells, which is a table that should carry
+    /// them as its standard ones.
+    #[test]
+    fn a_zero_threshold_is_refused_naming_long_context_over() {
+        assert_eq!(
+            refusal(CELLS, None, Some(&format!("over: 0, {CELLS}"))),
+            "pricing table: model m, cell long_context.over must be a whole number of tokens above zero"
+        );
+    }
+
+    /// A negative or fractional count is no token count: serde refuses it under the field's path before the rule
+    /// runs.
+    #[test]
+    fn a_negative_or_fractional_threshold_is_refused_under_its_path() {
+        for over in ["-1", "1.5"] {
+            let message = refusal(CELLS, None, Some(&format!("over: {over}, {CELLS}")));
+            assert!(
+                message.starts_with("pricing table: ") && message.contains("long_context.over"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_context_block_missing_a_cell_is_refused_by_serde() {
+        let message = refusal(
+            CELLS,
+            None,
+            Some("over: 1000, input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1"),
+        );
+        assert!(
+            message.starts_with("pricing table: ")
+                && message.contains("long_context")
+                && message.contains("missing field"),
+            "{message}"
         );
     }
 
@@ -444,6 +581,13 @@ mod tests {
                 "{model}: {:?}",
                 row.fast
             );
+            assert!(
+                row.long_context
+                    .as_ref()
+                    .is_none_or(|l| l.over > 0 && finite(&l.cells)),
+                "{model}: {:?}",
+                row.long_context
+            );
         }
         let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
         assert!(
@@ -523,50 +667,196 @@ mod tests {
             input: 1,
             ..phoebis_routing::PinUsage::default()
         };
+        let prompt =
+            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
         assert_eq!(
-            fast.price("claude-opus-5-5", one_input),
+            fast.price("claude-opus-5-5", one_input, prompt(&one_input)),
             Some(20.0 / 1_000_000.0)
         );
         assert_eq!(
-            fast.price("claude-sonnet-5-5", one_input),
-            standard.price("claude-sonnet-5-5", one_input),
+            fast.price("claude-sonnet-5-5", one_input, prompt(&one_input)),
+            standard.price("claude-sonnet-5-5", one_input, prompt(&one_input)),
             "the fast table prices a model without fast cells as the standard table does"
         );
         assert_eq!(
-            fast.price("gpt-5", one_input),
-            standard.price("gpt-5", one_input),
+            fast.price("gpt-5", one_input, prompt(&one_input)),
+            standard.price("gpt-5", one_input, prompt(&one_input)),
             "and an unlisted model at the standard table's fallback, so its weight reads 1"
         );
     }
 
     #[test]
+    fn price_at_selects_the_fast_cells_then_the_long_context_cells_then_the_standard_ones() {
+        // The test table's Haiku 5.5 row: input 1 up to 1,000 prompt tokens and 5 over them, no fast cells.
+        let table = crate::test_tables::api_prices();
+        let input = |speed, prompt| {
+            table
+                .price_at("claude-haiku-5-5", speed, prompt)
+                .unwrap()
+                .input
+        };
+        assert_eq!(
+            input(Speed::Standard, 1_000),
+            1.0,
+            "a prompt of exactly `over` tokens prices at the standard cells"
+        );
+        assert_eq!(
+            input(Speed::Standard, 1_001),
+            5.0,
+            "one token more prices at the long-context cells"
+        );
+        assert_eq!(
+            input(Speed::Fast, 1_001),
+            5.0,
+            "a fast answer on a row without fast cells prices by its prompt"
+        );
+        assert_eq!(
+            table
+                .price_at("claude-sonnet-5-5", Speed::Standard, u64::MAX)
+                .unwrap()
+                .input,
+            3.0,
+            "a row without the block prices a prompt of any length at its standard cells"
+        );
+        // A row the test writes with both blocks: the fast cells win whatever the prompt.
+        let both = PriceTable::from_yaml(
+            "effective: 2026-01-01\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1, \
+             fast: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}, \
+             long_context: {over: 10, input: 3, cache_write_5m: 3, cache_write_1h: 3, cache_read: 3, output: 3}}\n",
+            "test",
+        )
+        .unwrap();
+        assert_eq!(both.price_at("m", Speed::Fast, 11).unwrap().input, 2.0);
+        assert_eq!(both.price_at("m", Speed::Standard, 11).unwrap().input, 3.0);
+        assert_eq!(both.price_at("m", Speed::Standard, 10).unwrap().input, 1.0);
+        let fast = both.fast_rate_table();
+        assert_eq!(
+            (
+                fast.price(
+                    "m",
+                    phoebis_routing::PinUsage {
+                        input: 1,
+                        ..phoebis_routing::PinUsage::default()
+                    },
+                    11
+                ),
+                fast.long_context.is_empty()
+            ),
+            (Some(2.0 / 1_000_000.0), true),
+            "the fast table keeps a row's fast cells with no long-context set beside them"
+        );
+    }
+
+    #[test]
+    fn an_estimate_prices_every_count_at_the_set_the_prompt_selects() {
+        // The test table's Haiku 5.5 row, per million: 1, 1.25, 2, 0.1 and 5 up to 1,000 prompt tokens, and 5,
+        // 6.25, 10, 0.5 and 25 over them. The prompt is the four input-side counts together, 250 each here.
+        let table = crate::test_tables::api_prices();
+        let at = |input| {
+            table
+                .estimate(
+                    "claude-haiku-5-5",
+                    Speed::Standard,
+                    input,
+                    250,
+                    250,
+                    250,
+                    100,
+                )
+                .unwrap()
+        };
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        let (usd, split) = at(250);
+        assert!(
+            close(split.input_usd, 250e-6)
+                && close(split.cache_read_usd, 25e-6)
+                && close(split.cache_write_usd, 812.5e-6)
+                && close(split.output_usd, 500e-6),
+            "{split:?}"
+        );
+        assert!(close(usd, 1_587.5e-6), "{usd}");
+        let (usd, split) = at(251);
+        assert!(
+            close(split.input_usd, 1_255e-6)
+                && close(split.cache_read_usd, 125e-6)
+                && close(split.cache_write_usd, 4_062.5e-6)
+                && close(split.output_usd, 2_500e-6),
+            "one token over the threshold prices every count, the output included, at the long-context cells: \
+             {split:?}"
+        );
+        assert!(close(usd, 7_942.5e-6), "{usd}");
+        assert_eq!(prompt_tokens(1, 2, 3, 4), 10);
+    }
+
+    #[test]
+    fn a_serialized_row_carries_long_context_only_when_the_file_did() {
+        let table = crate::test_tables::api_prices();
+        let haiku = serde_json::to_value(&table.models["claude-haiku-5-5"]).unwrap();
+        assert_eq!(haiku["long_context"]["over"], 1_000);
+        assert_eq!(haiku["long_context"]["output"], 25.0);
+        assert!(serde_json::to_value(&table.models["claude-sonnet-5-5"])
+            .unwrap()
+            .get("long_context")
+            .is_none());
+    }
+
+    #[test]
     fn the_rate_table_prices_one_token_at_the_list_price_over_a_million() {
-        // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku's input at 1; Opus 5.5 the
-        // dearest row, at 10 input and 50 output.
+        // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku 4.5's input at 1; Haiku 5.5's
+        // input at 1 up to 1,000 prompt tokens and 5 over them, with no fast cells; Opus 5.5 the dearest row, at
+        // 10 input and 50 output, its fast input at 20.
         let rates = crate::test_tables::api_prices().rate_table();
         let one = |pick: fn(&mut phoebis_routing::PinUsage)| {
             let mut usage = phoebis_routing::PinUsage::default();
             pick(&mut usage);
             usage
         };
-        let sonnet = |usage| rates.price("claude-sonnet-5-5", usage);
+        let prompt =
+            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
+        let priced = |model: &str, usage: phoebis_routing::PinUsage| {
+            rates.price(model, usage, prompt(&usage))
+        };
+        let sonnet = |usage| priced("claude-sonnet-5-5", usage);
         assert_eq!(sonnet(one(|u| u.input = 1)), Some(3.0 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.cache_read = 1)), Some(0.3 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.write_5m = 1)), Some(3.75 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.write_1h = 1)), Some(6.0 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.output = 1)), Some(15.0 / 1_000_000.0));
         assert_eq!(
-            rates.price("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
+            priced("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
             Some(1.0 / 1_000_000.0),
             "a dated row prices as itself"
         );
+        let haiku = |prompt| rates.price("claude-haiku-5-5", one(|u| u.input = 1), prompt);
         assert_eq!(
-            rates.price("gpt-5", one(|u| u.input = 1)),
+            haiku(1_000),
+            Some(1.0 / 1_000_000.0),
+            "a prompt of exactly `over` prices at the standard cells"
+        );
+        assert_eq!(
+            haiku(1_001),
+            Some(5.0 / 1_000_000.0),
+            "one token more at the long-context cells"
+        );
+        let fast = crate::test_tables::api_prices().fast_rate_table();
+        assert_eq!(
+            fast.price("claude-haiku-5-5", one(|u| u.input = 1), 1_001),
+            Some(5.0 / 1_000_000.0),
+            "a row without fast cells carries its long-context set in the fast table, so a fast answer on it \
+             prices by its prompt as `price_at` does"
+        );
+        assert_eq!(
+            fast.price("claude-opus-5-5", one(|u| u.input = 1), u64::MAX),
+            Some(20.0 / 1_000_000.0),
+            "a row with fast cells prices at them whatever the prompt"
+        );
+        assert_eq!(
+            priced("gpt-5", one(|u| u.input = 1)),
             Some(10.0 / 1_000_000.0),
             "a model the table lacks prices at the dearest listed rate of each type"
         );
         assert_eq!(
-            rates.price("gpt-5", one(|u| u.output = 1)),
+            priced("gpt-5", one(|u| u.output = 1)),
             Some(50.0 / 1_000_000.0),
             "a model the table lacks prices at the dearest listed rate of each type"
         );
@@ -586,6 +876,7 @@ mod tests {
                     output: 15.0,
                 },
                 fast: None,
+                long_context: None,
             },
         );
         models.insert(
@@ -599,6 +890,7 @@ mod tests {
                     output: 5.0,
                 },
                 fast: None,
+                long_context: None,
             },
         );
         let table = PriceTable {
@@ -634,6 +926,7 @@ mod tests {
                 output: 5.0,
             },
             fast: None,
+            long_context: None,
         };
         let table = PriceTable {
             version: "test".into(),
@@ -661,7 +954,7 @@ mod tests {
     #[test]
     fn attempts_are_stamped_with_the_version_and_an_unknown_model_is_counted_once() {
         let table = crate::test_tables::api_prices();
-        // The test table's Haiku row: input 1 and output 5 per million.
+        // The test table's Haiku 4.5 row: input 1 and output 5 per million.
         let want = (1_000.0 * 1.0 + 100.0 * 5.0) / 1_000_000.0;
         let unknown = AtomicU64::new(0);
         let mut attempts = vec![
@@ -696,6 +989,32 @@ mod tests {
                 split
             ),
             (None, 1, CostSplit::default())
+        );
+    }
+
+    /// An attempt whose answer named no cache counts prices its prompt as its input alone.
+    #[test]
+    fn an_attempts_missing_counts_read_as_zero_in_its_prompt_length() {
+        let table = crate::test_tables::api_prices();
+        let unknown = AtomicU64::new(0);
+        let attempt = |input| AttemptRecord {
+            attempt: 1,
+            input_tokens: Some(input),
+            ..Default::default()
+        };
+        let mut under = vec![attempt(1_000)];
+        let mut over = vec![attempt(1_001)];
+        price_attempts(&table, "claude-haiku-5-5", &mut under, &unknown);
+        price_attempts(&table, "claude-haiku-5-5", &mut over, &unknown);
+        assert!(
+            (under[0].input_usd.unwrap() - 1_000e-6).abs() < 1e-12,
+            "{:?}",
+            under[0].input_usd
+        );
+        assert!(
+            (over[0].input_usd.unwrap() - 5_005e-6).abs() < 1e-12,
+            "{:?}",
+            over[0].input_usd
         );
     }
 
@@ -744,5 +1063,15 @@ mod tests {
             matches!(behind_a_locked_parent, Err(LedgerError::Io(_))),
             "a file whose parent grants no search permission"
         );
+    }
+
+    /// A dated id reads its undated row, so it answers as that row does.
+    #[test]
+    fn a_model_is_priced_by_prompt_length_when_its_row_carries_the_block() {
+        let table = crate::test_tables::api_prices();
+        assert!(table.priced_by_prompt_length("claude-haiku-5-5"));
+        assert!(table.priced_by_prompt_length("claude-haiku-5-5-20260101"));
+        assert!(!table.priced_by_prompt_length("claude-sonnet-5-5"));
+        assert!(!table.priced_by_prompt_length("gpt-5"));
     }
 }

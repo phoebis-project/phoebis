@@ -48,10 +48,11 @@ fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
 }
 
-/// The cells `model` prices at for an answer served at `speed`, in the table the rig prices through.
+/// The cells `model` prices at for an answer served at `speed` on a prompt under any threshold, in the table the
+/// rig prices through.
 fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::ModelPrice {
     phoebis_ledger::PriceTable::shipped()
-        .price_at(model, speed)
+        .price_at(model, speed, 0)
         .expect("the rig's table prices the model")
         .clone()
 }
@@ -1993,4 +1994,32 @@ fn opus_body() -> String {
 
 fn body_on(model: &str) -> String {
     BODY.replace("claude-sonnet-4-5", model)
+}
+
+/// A probe costs at the cells its own prompt selects: on a row priced by prompt length, a probe whose answer reads
+/// back more than the threshold costs at the long-context cache read.
+#[tokio::test]
+async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_prompt_selects() {
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let cost = probe_rows(&rows).probe_cost_usd;
+    // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
+    // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.
+    let over = 2_000.0 * 0.5 / 1_000_000.0;
+    let standard = 2_000.0 * 0.1 / 1_000_000.0;
+    assert!((cost - over).abs() < 1e-12, "{cost}");
+    assert!(
+        (cost - standard).abs() > 1e-12,
+        "a lookup that ignores the prompt prices the standard cells: {cost}"
+    );
 }

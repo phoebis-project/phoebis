@@ -63,8 +63,10 @@ A budgeted pool member's spend sums the priced hourly rollups over each period i
 day and the current month, an API-key member's rows whole, a subscription member's metered rows alone (`overage`
 and `fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an
 API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
-waits for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
-traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
+waits for the period to end or its budget to be raised, rather than for a price correction. A member's rows on a model
+priced by prompt length are summed at the dollars they were booked at, since an hour's sums carry no per-attempt prompt.
+The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the
+response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -115,11 +117,19 @@ cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date; an attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
-without them at the standard cells.
+without them at the cells its prompt selects.
+
+A model priced by prompt length carries a `long_context` block, a threshold `over` in tokens and a second set of the
+five cells. An attempt whose prompt is longer than the threshold is priced at that set for all five counts, the output
+included. The prompt is the attempt's uncached input, cache reads and cache writes together, as the answer's usage
+reports them. A fast answer prices at the fast cells whatever its prompt. The shipped table lists Claude Haiku 5.5 with
+both sets.
 
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
-model and the cell (`fast.<cell>` for a fast-mode cell): a negative or `NaN` price would turn every estimate negative
-or `NaN`, which no budget trips on.
+model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the threshold): a
+negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A `long_context.over`
+that is not a whole number of tokens above zero is refused the same way, since a zero would price every prompt at the
+long-context cells.
 
 ## Plan meter
 
@@ -155,6 +165,7 @@ the band, derived from the weight over the capacity:
 | `claude-fable-5-1` | 10 | 6.67% | 1.11% |
 | `claude-opus-5-5` | 2.2 | 1.47% | 0.244% |
 | `claude-sonnet-5-5` | 1.5 | 1.00% | 0.167% |
+| `claude-haiku-5-5` | 0.1 | 0.0667% | 0.0111% |
 | `claude-haiku-4-5` | 1 | 0.667% | 0.111% |
 
 The models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`)

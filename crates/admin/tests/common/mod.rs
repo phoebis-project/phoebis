@@ -122,13 +122,56 @@ pub async fn admin_parts_full() -> Full {
 /// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
 /// wires it: a case that needs the router's own `503 ledger_behind` names a reading it can flip.
 pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, USAGE_TTL, Some(accounting)).await)
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            USAGE_TTL,
+            Some(accounting),
+            None,
+        )
+        .await,
+    )
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, Some(store)).await)
+}
+
+/// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
+pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            USAGE_TTL,
+            None,
+            Some(prices),
+        )
+        .await,
+    )
+}
+
+/// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
+pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            USAGE_TTL,
+            None,
+            Some(prices),
+        )
+        .await,
+    )
 }
 
 fn full_from(parts: Parts) -> Full {
@@ -200,6 +243,7 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
         false,
         None,
         usage_ttl,
+        None,
         None,
     )
     .await;
@@ -693,7 +737,7 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None).await
+    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None, None).await
 }
 
 async fn build_app(
@@ -703,6 +747,7 @@ async fn build_app(
     store: Option<Arc<Store>>,
     usage_ttl: Duration,
     accounting: Option<AccountingSource>,
+    prices: Option<PriceTable>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -827,7 +872,7 @@ async fn build_app(
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceTable::shipped)));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),
