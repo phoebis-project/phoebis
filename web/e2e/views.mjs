@@ -2330,12 +2330,11 @@ async function analyticsTables(theme) {
 }
 
 /**
- * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
- * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
- * the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
+ * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
+ * the columns' widths, the Client text's cut, the TTFB cells' lines, and the Cost cells whose `.sub` reads a share.
  */
-async function requestsTableFits(theme) {
-  const read = await page.evaluate(() => {
+function readRequestsTable() {
+  return page.evaluate(() => {
     const table = document.querySelector('.requests__table');
     const wrap = table?.closest('.table-wrap');
     if (!table || !wrap) return null;
@@ -2351,9 +2350,11 @@ async function requestsTableFits(theme) {
       range.selectNodeContents(el);
       return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
     };
-    const ttfbAt = [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === 'TTFB');
-    // A placeholder row is one cell across the table, so it has no TTFB cell.
-    const ttfb = ttfbAt < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > ttfbAt ? tr.children[ttfbAt] : null)).filter((td) => td !== null);
+    const columnAt = (label) => [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === label);
+    // A placeholder row is one cell across the table, so it has no TTFB or Cost cell.
+    const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
+    const ttfb = cellsOf(columnAt('TTFB'));
+    const shares = cellsOf(columnAt('Cost')).filter((td) => / of (5-hour|7-day)/.test(td.querySelector('.sub')?.textContent ?? '')).length;
     return {
       classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
       client: wrap.clientWidth,
@@ -2362,9 +2363,19 @@ async function requestsTableFits(theme) {
       least,
       rows: table.querySelectorAll('tbody tr').length,
       scroll: table.scrollWidth,
+      shares,
       ttfb: { cells: ttfb.length, split: ttfb.filter((td) => lines(td) > 1).map((td) => td.textContent?.trim() ?? '') },
     };
   });
+}
+
+/**
+ * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
+ * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
+ * the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
+ */
+async function requestsTableFits(theme) {
+  const read = await readRequestsTable();
   measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
   if (read === null) {
     failures.push(`${theme} /requests: no request table to measure`);
@@ -2376,6 +2387,23 @@ async function requestsTableFits(theme) {
   for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
   if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
   for (const text of read.ttfb.split) failures.push(`${theme} /requests: the TTFB cell "${text}" draws its figure and its unit on two lines`);
+}
+
+/**
+ * The default set still fits at 1280 by 800 with share labels in the Cost column, the widest text the column draws
+ * ("0.061% of 7-day" over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds one API key account, whose
+ * rows read dollars. The share count is recorded beside the fit and stands as a guard: every mock row carries the
+ * fixture's null shares until the story prices its own, so the count reads zero here and is asserted once it does.
+ */
+async function requestsTableFitsWithShares(theme) {
+  const read = await readRequestsTable();
+  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, ${read.shares} of ${read.rows} Cost cells read a share`}`);
+  if (read === null) {
+    failures.push(`${theme} /requests: no request table to measure with shares`);
+    return;
+  }
+  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
+  if (read.scroll > read.client) failures.push(`${theme} /requests: with ${read.shares} share cells the request table needs ${read.scroll}px of its card's ${read.client}px`);
 }
 
 /**
@@ -2662,6 +2690,54 @@ async function requestDrawerCompact(theme) {
   if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
   counted("the newest answered request's drawer", got);
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+}
+
+/**
+ * The attempt count's hover card for a row at the table's bottom shows whole: the card is drawn under the body and
+ * placed from the count's box inside the viewport, so `.table-wrap`'s overflow clips none of it. The last row of two
+ * or more attempts on the page is scrolled to the viewport's bottom edge and its count hovered. The mock pass's alone:
+ * the router pass seeds one API key account in a one-member pool, so no row of it has two attempts to hover.
+ */
+async function attemptCardAtTheBottom(theme) {
+  const say = (what) => failures.push(`${theme} /requests attempt card: ${what}`);
+  const counts = page.locator('.requests__table tbody .trail-count');
+  const n = await counts.count();
+  if (n === 0) {
+    say('no row of two or more attempts to hover');
+    return;
+  }
+  const last = counts.nth(n - 1);
+  await last.evaluate((el) => el.closest('tr')?.scrollIntoView({ block: 'end' }));
+  await settle();
+  await last.hover();
+  await settle();
+  const read = await page.evaluate(() => {
+    const count = [...document.querySelectorAll('.requests__table tbody .trail-count')].pop();
+    const card = document.querySelector('body > .trail-pop');
+    const row = count?.closest('tr');
+    const at = { id: row?.querySelector('td .sub.mono')?.textContent ?? null, bottom: row ? Math.round(row.getBoundingClientRect().bottom) : null };
+    if (!card) return { card: null, row: at };
+    const r = card.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {
+      card: { bottom: Math.round(r.bottom), clientHeight: card.clientHeight, height: Math.round(r.height), inside: hit !== null && card.contains(hit), right: Math.round(r.right), scrollHeight: card.scrollHeight, top: Math.round(r.top) },
+      row: at,
+      viewport: { height: window.innerHeight, width: window.innerWidth },
+    };
+  });
+  measurements.push(`${theme} /requests attempt card ${JSON.stringify(read)}`);
+  if (read.card === null) say(`the hover on the row ${read.row.id} drew no card`);
+  else {
+    const { card, viewport } = read;
+    if (card.top < 0) say(`the card's top is at ${card.top}px, above the viewport`);
+    if (card.bottom > viewport.height) say(`the card's bottom is at ${card.bottom}px, under the viewport's ${viewport.height}px`);
+    if (card.right > viewport.width) say(`the card's right edge is at ${card.right}px, past the viewport's ${viewport.width}px`);
+    if (card.scrollHeight !== card.clientHeight) say(`the card's content runs ${card.scrollHeight}px in a box of ${card.clientHeight}px`);
+    if (!card.inside) say('the card is covered at its center');
+  }
+  // The card leaves with the pointer, so the clicks that follow meet the rows alone.
+  await page.mouse.move(0, 0);
+  await settle();
 }
 
 /**
@@ -3821,6 +3897,7 @@ try {
       }
       if (view.path === '/requests') {
         await requestsTableFits(theme);
+        if (mock) await requestsTableFitsWithShares(theme);
         await speedFilter(theme);
       }
       if (view.path === '/routing-log') {
@@ -3840,6 +3917,7 @@ try {
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/requests') await requestDrawerCompact(theme);
+      if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);

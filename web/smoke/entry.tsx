@@ -20,7 +20,7 @@ export { call };
 export { AttentionRows } from '@/components/AttentionRows';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
-export { AttemptTrail } from '@/components/ui/AttemptTrail';
+export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
 // The two cost panels a check mounts alone, on a cost model the mock does not answer.
 export { PeakBand } from '@/components/costs/PeakBand';
 export { PlanRates } from '@/components/costs/PlanRates';

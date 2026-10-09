@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -6087,8 +6087,9 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const asked = drawerRowOf(m, 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
     // The speed chip names itself on its title, since a bare word could be read as the service tier.
     const fast = [...(answer?.querySelectorAll('.chip') ?? [])].find((chip) => chip.textContent?.trim() === 'fast');
-    // The row's own trail says whether an attempt was made, so a drawer that drew no Answer row for one fails.
-    const attempted = tr.querySelector('.trail') !== null;
+    // The row's own attempts say whether one was made, so a drawer that drew no Answer row for one fails.
+    const rowId = tr.querySelector('td .sub.mono')?.textContent ?? '';
+    const attempted = requests.some((r) => r.attempts.length > 0 && `${r.id.slice(0, 12)}…` === rowId);
     servedAs.push(fast ? (fast.getAttribute('title') === "The answer's speed" ? 'fast' : `fast titled ${fast.getAttribute('title')}`) : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
@@ -6104,32 +6105,74 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
   const heldSearch = m.container.querySelector('input.filters__search');
-  const attemptsCellOf = async (id) => {
+  /** The one row a search by id leaves, with the count of rows it left for the message when that is not one. */
+  const rowById = async (id) => {
     setter.call(heldSearch, id);
     heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(700);
-    const cells = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts')];
-    const marker = cells.length === 1 ? cells[0].querySelector(':scope > .badge') : null;
-    return { trail: cells[0]?.querySelector('.trail, .muted')?.textContent?.trim() ?? `${cells.length} rows`, marker: marker?.textContent?.trim() ?? 'no marker', title: marker?.getAttribute('title') ?? null };
+    const rows = [...m.container.querySelectorAll('.requests__table tbody tr')];
+    return { row: rows.length === 1 ? rows[0] : null, rows: rows.length };
+  };
+  // The trail draws in the count's hover card alone, so the cell holds the count, the marker and nothing else.
+  const attemptsCellOf = async (id) => {
+    const { row, rows } = await rowById(id);
+    const cell = row?.querySelector('.requests__attempts') ?? null;
+    const marker = cell?.querySelector(':scope > .badge') ?? null;
+    return { bare: cell !== null && cell.querySelector('.trail, .muted') === null, marker: marker?.textContent?.trim() ?? 'no marker', text: cell?.textContent?.trim() ?? `${rows} rows`, title: marker?.getAttribute('title') ?? null };
   };
   if (servedHeld && heldAtCap) {
     const served = await attemptsCellOf(servedHeld.id);
     const waitedOn = servedHeld.held.cohort ?? servedHeld.held.waitedOn.at(-1);
     results.push({
       name: '/requests a request served after a hold draws the held marker with its wait after its attempts',
-      ok: served.marker === 'held 1.3 s' && served.title === `waited 1,250 ms on ${waitedOn}` && served.trail.startsWith(servedHeld.attempts[0].accountId),
-      missing: [served.trail, served.marker, String(served.title)],
+      ok: served.marker === 'held 1.3 s' && served.title === `waited 1,250 ms on ${waitedOn}` && served.bare && served.text === served.marker,
+      missing: [served.text, served.marker, String(served.title), `bare ${served.bare}`],
     });
     const atCap = await attemptsCellOf(heldAtCap.id);
     results.push({
       name: '/requests a request held with nothing dispatched draws no attempt and the held marker',
-      ok: atCap.trail === 'none' && atCap.marker === `held ${waitText(heldAtCap.held.heldMs)}`,
-      missing: [atCap.trail, atCap.marker],
+      ok: atCap.bare && atCap.text === atCap.marker && atCap.marker === `held ${waitText(heldAtCap.held.heldMs)}`,
+      missing: [atCap.text, atCap.marker, `bare ${atCap.bare}`],
     });
-    setter.call(heldSearch, '');
-    heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
   }
+  // The Cost cell reads a row's native unit: dollars over the funding word for an answer an API key account served,
+  // and the dollar equivalent over "equivalent" for a subscription request whose shares the mock does not price.
+  const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
+  const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
+  const unpricedRow = requests.find((r) => {
+    const a = servedBy(r);
+    return a !== null && a.accountKind === 'oauth' && a.response.speed !== 'fast' && a.overageInUse !== true && r.costShares === null;
+  });
+  results.push({ name: 'fixture: a request an API key account served and a subscription request the mock prices no share for', ok: apiKeyRow !== undefined && unpricedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id)] });
+  const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
+  const costCellOf = async (id) => {
+    const { row, rows } = await rowById(id);
+    const td = costAt < 0 ? null : (row?.children[costAt] ?? null);
+    return { main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : `${rows} rows`, sub: td?.querySelector('.sub')?.textContent?.trim() ?? null, title: td?.getAttribute('title') ?? null };
+  };
+  if (apiKeyRow && unpricedRow) {
+    const billed = await costCellOf(apiKeyRow.id);
+    results.push({ name: "/requests an API key row's Cost cell reads dollars over API key with its title", ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
+    const unpriced = await costCellOf(unpricedRow.id);
+    results.push({ name: '/requests a subscription row the mock prices no share for reads dollars over equivalent', ok: unpriced.main.startsWith('$') && unpriced.sub === 'equivalent' && unpriced.title === 'The cost model prices no share for this request', missing: [unpricedRow.id, JSON.stringify(unpriced)] });
+  }
+  setter.call(heldSearch, '');
+  heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+  // The drawer's Answer row labels the geography, and its cost row reads an API key request's dollars with why.
+  await m.navigate(`/requests/${laptopRow.id}`);
+  await m.settle(300);
+  const geography = drawerChips(drawerRowOf(m, 'Answer')).find((c) => c.label === 'geography');
+  results.push({ name: "/requests the drawer's Answer row names the geography with its label and value", ok: geography !== undefined && geography.value === 'us' && (geography.title ?? '').startsWith('The inference geography'), missing: [JSON.stringify(geography ?? null)] });
+  if (apiKeyRow) {
+    await m.navigate(`/requests/${apiKeyRow.id}`);
+    await m.settle(300);
+    const costRow = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost');
+    const figure = costRow?.querySelector('td:last-child b') ?? null;
+    results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
+  }
+  await m.navigate('/requests');
+  await m.settle(300);
   const heldCheck = '/requests the Held only switch keeps the requests that waited for a slot';
   const heldOnly = m.container.querySelector('.filters button[role="switch"][aria-label="Held only"]');
   if (!heldOnly) controlMissing(heldCheck, 'Held only');
@@ -6189,20 +6232,44 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
 {
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
-  const trails = [...m.container.querySelectorAll('tbody .trail')];
-  // A request answered before any account took it, an exhaustion or a refusal, has no attempt to draw: its row is one
-  // of the requests with none.
-  const bare = [...m.container.querySelectorAll('tbody tr')].filter((tr) => !tr.querySelector('.trail')).map((tr) => tr.querySelector('td .sub.mono')?.textContent ?? '');
-  const unattempted = bare.filter((id) => requests.some((r) => r.attempts.length === 0 && `${r.id.slice(0, 12)}…` === id));
-  results.push({ name: '/requests every row that reached an account carries an attempt trail', ok: trails.length + bare.length === rowsBefore && bare.length > 0 && unattempted.length === bare.length, missing: [String(trails.length), String(rowsBefore), ...bare] });
-  const singles = trails.filter((t) => t.querySelectorAll('.trail__step').length === 1).length;
-  results.push({ name: '/requests a single attempt is one badge', ok: singles >= 1, missing: [String(singles)] });
-  const multi = trails.filter((t) => t.querySelectorAll('.trail__step').length > 1);
-  results.push({ name: '/requests a failover reads as several badges', ok: multi.length >= 1, missing: [String(multi.length)] });
-  const trailText = multi.map((t) => [...t.querySelectorAll('.trail__step')].map((b) => b.textContent?.trim()).join(' '));
-  results.push({ name: '/requests trail badges name account and status', ok: trailText.every((x) => /\w+ \d{3}/.test(x)), missing: trailText.slice(0, 3) });
-  const tip = multi[0]?.getAttribute('title') ?? '';
-  results.push({ name: '/requests trail tooltip lists outcome and cooldown per attempt', ok: /1\..*(failed over|rate limited|succeeded|upstream error)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
+  // A row is paired with its fixture row by the id prefix the time cell shows, so the count is judged against the
+  // attempts the row holds rather than against another cell.
+  const rowOf = (tr) => {
+    const prefix = tr?.querySelector('td .sub.mono')?.textContent ?? '';
+    return requests.find((r) => `${r.id.slice(0, 12)}…` === prefix) ?? null;
+  };
+  const cells = [...m.container.querySelectorAll('tbody tr')].map((tr) => ({ cell: tr.querySelector('.requests__attempts'), count: tr.querySelector('.requests__attempts .trail-count')?.textContent?.trim() ?? null, row: rowOf(tr) }));
+  const many = cells.filter((c) => (c.row?.attempts.length ?? 0) >= 2);
+  const few = cells.filter((c) => (c.row?.attempts.length ?? 0) < 2);
+  const wrongCount = many.filter((c) => c.count !== `${c.row.attempts.length} attempts`);
+  // A cell under two attempts is empty or holds the held marker alone.
+  const markerAlone = (c) => c.cell !== null && [...c.cell.childNodes].every((n) => n.nodeType === 1 && n.classList.contains('badge'));
+  const notBare = few.filter((c) => c.count !== null || !markerAlone(c));
+  const trailsInCells = m.container.querySelectorAll('tbody .trail').length;
+  results.push({
+    name: '/requests a request of two or more attempts reads its count and one of one or none reads nothing',
+    ok: cells.every((c) => c.row !== null) && many.length >= 1 && few.length >= 1 && wrongCount.length === 0 && notBare.length === 0 && trailsInCells === 0,
+    missing: [`${many.length} of two or more, ${few.length} under two, ${trailsInCells} trails in cells`, ...wrongCount.map((c) => `${c.row.id}: ${c.count}`), ...notBare.map((c) => `${c.row?.id}: ${c.cell?.textContent?.trim()}`)].slice(0, 6),
+  });
+  const first = m.container.querySelector('tbody .trail-count');
+  const firstRow = rowOf(first?.closest('tr'));
+  first?.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  await m.settle(100);
+  const card = document.querySelector('body > .trail-pop');
+  const steps = [...(card?.querySelectorAll('.trail__step') ?? [])].map((b) => b.textContent?.trim() ?? '');
+  // Read while the card is drawn: the blur below takes it out of the document, parent and all.
+  const parent = card?.parentElement?.tagName ?? 'none';
+  const inCell = card !== null && (first?.closest('td')?.contains(card) ?? false);
+  first?.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await m.settle(100);
+  const gone = document.querySelector('body > .trail-pop') === null;
+  results.push({
+    name: "/requests the count's hover card holds one badge per attempt naming account and status",
+    ok: card !== null && parent === 'BODY' && !inCell && steps.length === (firstRow?.attempts.length ?? -1) && steps.every((x) => /\w+ \d{3}/.test(x)) && gone,
+    missing: [card === null ? 'no card' : `parent ${parent}, in cell ${inCell}`, `${steps.length} badges for ${firstRow?.attempts.length} attempts`, `gone after focusout ${gone}`, ...steps.slice(0, 3)],
+  });
+  const tip = first?.getAttribute('title') ?? '';
+  results.push({ name: "/requests the count's title lists outcome and cooldown per attempt", ok: /1\..*(failed over|rate limited|succeeded|upstream error)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
 }
 {
   const rowsSelect = [...m.container.querySelectorAll('.pager select')].pop();
@@ -12040,10 +12107,14 @@ m.unmount();
 
   const page = await mount(`/requests/${laptopRow.id}`);
   await page.settle(300);
+  // The trail draws in the count's hover card alone, so the table's first count is focused and the card read.
+  const count = page.container.querySelector('.trail-count');
+  count?.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  await page.settle(100);
   const three = {
     badge: page.container.querySelector('.drawer .badge[title]'),
     row: page.container.querySelector('.drawer dd[title]'),
-    trail: page.container.querySelector('.trail[title]'),
+    trail: document.querySelector('body > .trail-pop .trail[title]'),
   };
   results.push({
     name: 'a titled badge, a key-value row and an attempt trail describe themselves',
@@ -12052,6 +12123,8 @@ m.unmount();
       .filter(([, el]) => !describes(el))
       .map(([kind, el]) => `${kind}: ${why(el)}`),
   });
+  count?.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+  await page.settle(100);
 
   // A node inside a cell would change the cell's text, which the Status, Companion and trail reads take whole.
   const cellOf = (node) => node?.closest('td, .agents__row > span') ?? null;
@@ -12106,7 +12179,15 @@ m.unmount();
   });
   page.unmount();
 
-  // No page draws a trail outside a host, so the fallback is mounted alone.
+  // No page draws a trail or a count outside a host, so each fallback is mounted alone.
+  const loneCount = await mountNode(React.createElement(AttemptCount, { attempts: [{ accountId: 'secondary', cooldownSet: null, index: 0, outcome: 'rate_limited', upstreamStatus: 429 }, { accountId: 'primary', cooldownSet: null, index: 1, outcome: 'succeeded', upstreamStatus: 200 }] }));
+  const countNode = describedBy(loneCount.container.querySelector('.trail-count'));
+  results.push({
+    name: 'a count outside every host describes through a node beside it',
+    ok: countNode !== null && loneCount.container.contains(countNode) && countNode.textContent === loneCount.container.querySelector('.trail-count')?.getAttribute('title'),
+    missing: [why(loneCount.container.querySelector('.trail-count'))],
+  });
+  loneCount.unmount();
   const lone = await mountNode(React.createElement(AttemptTrail, { attempts: [{ accountId: 'primary', cooldownSet: null, index: 0, outcome: 'succeeded', upstreamStatus: 200 }] }));
   const trail = lone.container.querySelector('.trail');
   const node = describedBy(trail);

@@ -87,8 +87,8 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - Observe carries a time-range control: a density strip of requests per minute over the last 30 minutes with a
   two-handle range slider over it. While the end handle sits at now the table stays live; earlier than that it shows
   the ring filtered to the span.
-- The attempts column in the request log and in observe is a trail of badges, one per attempt, reading "account
-  status" in the order the router tried them.
+- The attempts column in the request log is a count of the attempts with the trail of badges on hover, and in observe
+  a trail of badges, one per attempt, reading "account status" in the order the router tried them.
 - Long forms open as a sectioned dialog: a rail of groups beside one group's body, one group shown at a time. The pool
   and key dialogs use it; small dialogs keep the plain `Dialog`.
 - A key always belongs to a pool: the key dialog preselects one and locks it when opened from a pool, and the pool

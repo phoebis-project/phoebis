@@ -1737,13 +1737,31 @@
   white-space: nowrap;
 }
 
-/* The held marker follows the trail at the step size the `.trail__step` rule gives both, so the row reads as one run of
-   badges. */
+/* The held marker follows the count at the step size the `.trail__step` rule gives the card's badges, so the row reads
+   as one run. */
 .requests__attempts {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+}
+
+.trail-count {
+  cursor: default;
+  white-space: nowrap;
+}
+
+/* The count's hover card, drawn under the body in the menu layer. Sized by its content rather than by the room to its
+   right, so the width that moves it inside the viewport holds once it has moved. */
+.trail-pop {
+  position: fixed;
+  z-index: 20;
+  width: max-content;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop);
 }
 
 /* The outcome word follows the status badge at the attempts' step and drops under it where the column is narrow, so

@@ -6,7 +6,7 @@ import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, RequestKind,
 import { Chips } from '@/components/DecisionCard';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
-import { AttemptTrail } from '@/components/ui/AttemptTrail';
+import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
@@ -17,8 +17,9 @@ import { bodyText, highlightJson } from '@/lib/bodies';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
+import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
 
@@ -169,12 +170,45 @@ const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(
  * 400 px, so the head shows this many and its hover keeps the id whole.
  */
 const HEAD_ID_CHARS = 24;
+const GEOGRAPHY_TITLE = 'The inference geography the upstream reported for the answer: global or us. Not available means the model does not take the inference geography parameter.';
 
 /** The log on this request, a quarter hour either side of it. A row with no duration is read as a moment. */
 const routingLogHref = (r: RequestLog, now: number) => {
   const at = Date.parse(r.at);
   return logHref(requestLink(r.id, at, r.durationMs === null ? null : at + r.durationMs, now));
 };
+
+/** The Cost cell: the native unit's main line over its second, every share and the equivalent on the title. */
+function CostCell({ request }: { request: RequestLog }) {
+  const cell = costCellOf(costUnitOf(request));
+  return (
+    <td className="right num" title={cell.title}>
+      {cell.main}
+      {cell.sub && <span className="sub">{cell.sub}</span>}
+    </td>
+  );
+}
+
+/** The drawer's cost row: the share chips with the equivalent muted after them, or the dollars with why. */
+function costRowValue(unit: CostUnit) {
+  switch (unit.kind) {
+    case 'shares':
+      return (
+        <>
+          <Chips chips={unit.shares.map(({ key, share }) => ({ value: shareLabel(key, share) }))} />
+          <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
+        </>
+      );
+    case 'dollars':
+      return <b title={`Billed in dollars: ${FUNDING_WORD[unit.funding]}`}>{fmtUsd(unit.usd)}</b>;
+    case 'unpriced':
+      return (
+        <b title={NO_SHARE_TITLE}>
+          {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
+        </b>
+      );
+  }
+}
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -342,10 +376,14 @@ export function RequestsPage() {
                   {shown.has('kind') && <th>Kind</th>}
                   {shown.has('transport') && <th>Transport</th>}
                   {shown.has('status') && <th>Status</th>}
-                  {shown.has('attempts') && <th>Attempts</th>}
+                  {shown.has('attempts') && <th title="How many attempts the request took, the trail on hover">Attempts</th>}
                   {shown.has('ttfb') && <th className="right">TTFB</th>}
                   {shown.has('tokens') && <th className="right">Tokens</th>}
-                  {shown.has('cost') && <th className="right">Cost</th>}
+                  {shown.has('cost') && (
+                    <th className="right" title="Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request">
+                      Cost
+                    </th>
+                  )}
                   <th />
                 </tr>
               </thead>
@@ -408,7 +446,7 @@ export function RequestsPage() {
                         {shown.has('attempts') && (
                           <td>
                             <span className="requests__attempts">
-                              <AttemptTrail attempts={r.attempts} />
+                              <AttemptCount attempts={r.attempts} />
                               {r.held && (
                                 <Badge tone="neutral" title={heldTitle(r.held)}>
                                   held {fmtMs(r.held.heldMs)}
@@ -424,7 +462,7 @@ export function RequestsPage() {
                             <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
                           </td>
                         )}
-                        {shown.has('cost') && <td className="right num">{fmtUsd(r.costUsd)}</td>}
+                        {shown.has('cost') && <CostCell request={r} />}
                         <td className="right">
                           <span className="requests__links">
                             <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
@@ -610,9 +648,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                   <td>
                     <b>Estimated cost</b>
                   </td>
-                  <td className="right num">
-                    <b>{fmtUsd(r.costUsd)}</b>
-                  </td>
+                  <td className="right num">{costRowValue(costUnitOf(r))}</td>
                 </tr>
               </tbody>
             </table>
@@ -713,7 +749,7 @@ function answerChips(response: AttemptResponse): Chip[] {
   const chips: Chip[] = [];
   if (response.stopReason) chips.push({ value: `stopped: ${response.stopReason}` });
   if (response.speed) chips.push({ title: "The answer's speed", value: response.speed });
-  if (response.inferenceGeo) chips.push({ value: response.inferenceGeo });
+  if (response.inferenceGeo) chips.push({ label: 'geography', title: GEOGRAPHY_TITLE, value: response.inferenceGeo === 'not_available' ? 'not available' : response.inferenceGeo });
   if (response.servedModel) chips.push({ mono: true, value: `served by ${response.servedModel}` });
   if (response.clearedInputTokens !== null && response.clearedInputTokens > 0) chips.push({ value: `${fmtInt(response.clearedInputTokens)} tokens cleared by context edits` });
   if (response.refusalCategory) chips.push({ value: `category: ${response.refusalCategory}` });
