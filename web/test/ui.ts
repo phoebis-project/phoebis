@@ -10,7 +10,7 @@ export { DecisionCard } from '@/components/DecisionCard';
 export { ChartTooltip } from '@/components/charts/Tooltip';
 export { MultiSelect } from '@/components/ui/MultiSelect';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
-export { ConfirmDialog, CopyButton, Dialog, Menu } from '@/components/ui/primitives';
+export { ConfirmDialog, CopyButton, Descriptions, Dialog, Menu } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { useAsync, useNow } from '@/lib/hooks';
 export { fakeClock } from '../smoke/clock';

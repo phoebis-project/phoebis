@@ -273,13 +273,17 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const budget = budgetsAt(pool, a.id, at);
     const sub = a.subscription;
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
-    // Drawn for every member, so a count the story sets moves no later draw.
-    const drawnInFlight = inFlightRng.int(0, 5);
+    // Drawn for every member, so a count the story sets moves no later draw. The account a placement took had a slot
+    // free, since the cap passes a full one over. A token count takes no slot, so it lands on a full account too.
+    const drawn = inFlightRng.int(0, 5);
+    const drawnInFlight = spec.kind === 'placed' && r.kind !== 'count_tokens' && a.id === spec.accountId ? Math.min(drawn, pool.inFlightCap - 1) : drawn;
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
-    const fiveHour = windows.five_hour?.utilization ?? 0;
-    const sevenDay = windows.seven_day;
-    const remaining = a.kind === 'api_key' ? Math.round((1 - (budget[0]?.spentUsd ?? 0) / (budget[0]?.budgetUsd ?? 1)) * 100) / 100 : Math.max(0, 1 - Math.max(fiveHour, sevenDay?.utilization ?? 0));
-    const reset = sevenDay?.reset ?? null;
+    // Pace reads one window as the engine does, chosen by the model alone: the Fable week for a Fable request, else the
+    // 7-day window, one the account has not read counting as untouched. An API key scores by its worst live bucket.
+    const windowName = r.canonicalModel.includes('fable') ? 'seven_day_fable' : 'seven_day';
+    const reading = a.kind === 'api_key' ? windows.worst_bucket : windows[windowName];
+    const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
+    const reset = a.kind === 'api_key' ? null : (reading?.reset ?? null);
     const deadlineMs = [reset ? Date.parse(reset) : null, endsAt].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
     const hours = a.kind === 'api_key' ? null : deadlineMs === null ? 168 : Math.max(1, (deadlineMs - at) / HOUR);
     return {
@@ -296,7 +300,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       kind: a.kind,
       obstacle,
       overage: overage ? { observedAt: iso(at - 40_000), reset: a.overage?.reset ?? null, since: iso(OVERAGE_FROM), source: 'head' } : null,
-      pace: pool.strategy === 'pace' ? { deadline: deadlineMs === null ? null : iso(deadlineMs), end: endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : Math.round((remaining / hours) * 100_000) / 100_000 } : null,
+      pace: pool.strategy === 'pace' ? { deadline: deadlineMs === null ? null : iso(deadlineMs), end: endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : Math.round((remaining / hours) * 100_000) / 100_000, window: a.kind === 'api_key' ? null : windowName } : null,
       partition: null,
       planTier: sub?.rateLimitTier ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
@@ -482,6 +486,55 @@ function pickOf(candidates: RecordCandidate[], chosen: string | null, strategy: 
   return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: top, unit: unit(winner) }, tierSize: tier.length };
 }
 
+/** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
+const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+
+/**
+ * The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads.
+ */
+function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { facts: WalkFact[]; left: RecordCandidate[] } {
+  const facts: WalkFact[] = [];
+  let left = set;
+  const narrow = (key: string, keep: (c: RecordCandidate) => boolean) => {
+    const kept = left.filter(keep);
+    if (kept.length > 0) {
+      facts.push(fact(key, left.length - kept.length));
+      left = kept;
+    } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
+  };
+  if (r.canonicalModel.includes('fable')) {
+    // A spent member is out rather than passed over, so this partition never falls through. An `allow` pool keeps one
+    // whose extra usage the record reads as unblocked, and a member without a credits reading is not funded.
+    const spent = (c: RecordCandidate) => spentForFable((w) => c.windows[w]?.utilization);
+    const funded = (c: RecordCandidate) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
+    const kept = left.filter((c) => !spent(c) || funded(c));
+    facts.push(fact('spent', left.length - kept.length));
+    left = kept;
+  } else facts.push(fact('spent', 'off'));
+  // A token count takes no slot, so no cap holds it. With every member at its cap the request is held for a slot and
+  // the set stays whole for the pick to name the account it waits on.
+  const underCap = left.filter((c) => r.kind === 'count_tokens' || c.inFlight < c.inFlightCap);
+  if (underCap.length === 0 && left.length > 0) facts.push(fact('at_cap', 'held'));
+  else narrow('at_cap', (c) => underCap.includes(c));
+  const ceiling = pool.selectBelowUtilization;
+  if (ceiling === null) facts.push(fact('above_ceiling', 'off'));
+  else narrow('above_ceiling', (c) => c.windows.five_hour === undefined || c.windows.five_hour.utilization < ceiling);
+  narrow('winding_down', (c) => !c.term?.windingDown);
+  if (pool.strategy !== 'pace') facts.push(fact('floor', 'off'));
+  else narrow('floor', (c) => (c.pace?.remaining ?? 1) > pool.paceFloor);
+  return { facts, left };
+}
+
+/**
+ * The five partition facts over `set` as the engine narrows it: each partition keeps the members that pass and counts
+ * the rest. A spent member drops even when none is left. Any other partition that would empty a non-empty set keeps it
+ * whole and reads `fell_through` (`held` for the cap, as the engine words it), and a partition the pool's settings
+ * switch off reads `off`.
+ */
+export function partitionsOf(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): WalkFact[] {
+  return narrowed(set, pool, r).facts;
+}
+
 /** A pin as the routing state holds it while the builder walks the day in order. */
 interface PinState {
   accountId: string;
@@ -578,8 +631,12 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     walk.push(step('renew', 'renewed', [fact('account_id', spec.accountId, null, spec.accountId), fact('lane', laneOf(r)), fact('refresh_stamped', stamps.refresh), fact('hashes_stamped', stamps.hashes)]));
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
-  const placing = spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held';
+  let tierSize = 0;
+  const placing = spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted';
   if (placing) {
+    const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
+    const partitions = narrowed(set, pool, r);
+    walk.push(step('partitions', partitions.left.length > 0 ? 'match' : 'none', partitions.facts));
     const rung = spec.rung ?? null;
     const subagent = r.agentId !== 'main';
     const rungs: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
@@ -599,9 +656,13 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       const reason = r.kind === 'count_tokens' ? 'count' : which === 'with_main' && !subagent ? 'class' : which === 'with_main' && pool.subagentPlacement !== 'with_main' ? 'policy_off' : 'no_entry';
       walk.push(step(name, 'none', [fact('reason', reason)]));
     }
-    if (!matched && spec.kind !== 'held') {
-      walk.push(step('partitions', 'match', [fact('spent', 'off'), fact('at_cap', 0, 'count'), fact('above_ceiling', pool.selectBelowUtilization === null ? 'off' : 0), fact('winding_down', 0, 'count'), fact('floor', 0, 'count')]));
-      pick = pickOf(candidates, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, movedAmong);
+    if (!matched && spec.kind === 'exhausted') walk.push(step('pick', 'none', [fact('strategy', pool.strategy)]));
+    else if (!matched) {
+      // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
+      // the hold rather than a score.
+      const ranked = pickOf(candidates, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, movedAmong);
+      if (spec.kind !== 'held') pick = ranked;
+      tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
       walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...candidates.filter((c) => c.score !== null).map((c) => fact('score', c.score, c.kind === 'api_key' ? 'percent' : 'percent_per_hour', c.accountId))]));
     }
@@ -621,7 +682,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     else if (c.verdict === 'destination') continue;
     else if (c.obstacle !== null) c.verdict = 'out';
     else if (c.rank !== null) c.verdict = 'ranked';
-    else if (pick.tierSize > 0) c.verdict = 'eligible';
+    else if (tierSize > 0) c.verdict = 'eligible';
     else c.verdict = 'not_needed';
   }
 
@@ -727,7 +788,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     score: pick.score,
     seq: spec.seq,
     sessionId: r.sessionId,
-    skipped: spec.kind === 'renewed' ? 0 : candidates.filter((c) => c.accountId !== spec.accountId && (c.obstacle !== null || c.rank !== null)).length,
+    // A hold dispatches nothing, so its row counts the members kept out and none its pick ranked.
+    skipped: spec.kind === 'renewed' ? 0 : candidates.filter((c) => c.accountId !== spec.accountId && (c.obstacle !== null || (spec.kind !== 'held' && c.rank !== null))).length,
     status: dispatched ? (attempt?.upstreamStatus ?? null) : null,
     strategy: pool.strategy,
     tier,
@@ -829,9 +891,8 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const pinning = (pool?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null;
   const noPin: Spec['pin'] = pinning ? 'none' : 'pinning_off';
   const at = Date.parse(r.at);
-  // A hold on the cohort's account waits on that account at its cap. One on the strategy's pick, and a request the
-  // bound ran out on, waited with every member at its cap.
-  const atCap = (accountId: string | null) => (accountId === null || pool === undefined ? {} : { [accountId]: pool.inFlightCap });
+  // The engine holds a request only with every member at its cap, whether it waits on its cohort's account or on the
+  // strategy's pick, and a request the bound ran out on waited so too.
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
   const holds: RecordRequest['holds'] = [];
   // Every member was at its cap until the bound ran out, so the router answered the request without a dispatch.
@@ -842,7 +903,15 @@ function derivedSpecs(r: RequestLog): Spec[] {
       specs.push({ ...base, accountId: waitedOn, at: onAt, attempt, attempted, fact: [summaryFact('answer', 429, 'count'), summaryFact('held', bound, 'ms')], hold: { cohort: null, place: 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
       holds.push({ accountId: waitedOn, attempt, cohort: null, heldMs: bound });
     }
-    specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: waitedOn ? [...attempted, waitedOn] : attempted, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
+    // Past the bound the relay passes each account it could hold on over and selects again, so the selection that
+    // answers finds every one of them attempted and nothing left to place on. A Fable request's spent member drops
+    // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
+    // reads.
+    const fast = r.shape.requestedSpeed === 'fast';
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, onAt + bound, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
+    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null && !spent(id));
+    const passedOver = [...new Set([...attempted, ...(waitedOn ? [waitedOn] : []), ...servable])];
+    specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: passedOver, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
   };
   if (r.attempts.length === 0) {
     if (r.errorCode === 'accounts_at_cap') ranOut(1, 1, at, []);
@@ -860,7 +929,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     if (hold) {
       const heldOn = hold.waitedOn[hold.waitedOn.length - 1] ?? a.accountId;
       seq += 1;
-      specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: hold.cohort ? atCap(heldOn) : allAtCap(), kind: 'held', pin: noPin, seq });
+      specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
       holds.push({ accountId: heldOn, attempt: i + 1, cohort: hold.cohort, heldMs: hold.heldMs });
     }
     seq += 1;

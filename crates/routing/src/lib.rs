@@ -25,7 +25,8 @@ pub use record::{
     LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts,
     PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
     RefusedRequest, RequestFacts, RequestFlags, Score, Settings, ShedPinFacts, ShedRoundFacts,
-    SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
+    SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, PARTITION_VALUES, RECORD_VERSION,
+    WALK_STEPS,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{

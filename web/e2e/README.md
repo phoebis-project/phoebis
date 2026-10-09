@@ -41,21 +41,30 @@ the request table's fit, the request pages' widths, walked on a load of their ow
 speed filter, the traffic cards (each Analytics check opens the tab it reads and returns to
 Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the fast lane, the request drawer,
 which opens once the request list's shot is taken, the routing log's decision card, which opens once the log's shot is
-taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by 800 and 1440 by 900, every verdict
-badge in the kind badge's box, and the chosen row's Prefix chips on the first rung placement the log lists), the
-subscription end editor, the catalog popup and its columns (Model and Name the fills), the Keys table's columns (Name,
-Models and Status the fills) and the badges of its fill cells (each ending inside its cell and cutting its own label
-with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's Access selects, the Pool
-select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
-closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the
-lead, Cost reference one line at the head's top right), the cost reference, the session table's fit and its columns
-(each fit column as wide as its content, the Session column the fill), the session id's width, the session row menu, the
-agent lines, the fork badges (inside their cell and whole),
-the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied
-on the Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's
-secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a row closes it again before
-the view's shot, and one that turns a column on turns it off again. The script exits non-zero with the list of failures
-when any of that does not hold.
+taken (the strip and the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways,
+the table 958 then 1118 px, the strip's drawing as wide as the strip at each width, every station badge in the kind
+badge's box, the station labels clear of the leaf rows and the brackets, the strip's height from its rows, a moved row's
+badge the Move station's color, the chosen row's Prefix chips on the first rung placement the log lists, and a station's
+popover inside the card and the card's part on screen less 8 px either side at both viewports and at 700 by 800 (the
+Move list, the widest, among them), its width bound the least of 720 px, the window less 16, the card less 16 and the
+card's part on screen less 16, its table's heads on at most two lines and nothing in it scrolling sideways (the Cool
+reading's ten columns among them), and the Pick table's rows striped as the candidate table's are, every station's and
+way out's word at the card's muted contrast or better on the open row's tint in both themes with an idle way out among
+them, the strip's station count the record's steps and placeholders at both viewports, and in the mock pass the fresh
+placement's Pick station opened by Enter and by Space with the focus inside its popover and closed by Escape with the
+focus back on the station), the subscription end editor, the catalog popup and its columns (Model and Name the fills),
+the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its
+cell and cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's
+Access selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440
+by 900 (the head's height closed and open, the button on the sentence's last line or flush left on the next, the opened
+paragraph 6 px under the lead, Cost reference one line at the head's top right), the cost reference, the session table's
+fit and its columns (each fit column as wide as its content, the Session column the fill), the session id's width, the
+session row menu, the agent lines, the fork badges (inside their cell and whole),
+the fork link, which is followed once the session list's shot is taken,
+the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
+on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
+row closes it again before the view's shot, and one that turns a column on turns it off again. The script exits non-zero
+with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

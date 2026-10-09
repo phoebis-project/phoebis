@@ -1,7 +1,9 @@
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { DecisionRecord, DecisionSummary, PrefixEntry } from '@/api/types';
-import { Badge, Button, CopyButton, ErrorState, KeyValue } from '@/components/ui/primitives';
+import type { DecisionRecord, DecisionSummary } from '@/api/types';
+import { DecisionStrip } from '@/components/DecisionStrip';
+import { EntryChips } from '@/components/EntryChips';
+import { Badge, Button, CopyButton, ErrorState, KeyValue, useDescription } from '@/components/ui/primitives';
 import { useAsync } from '@/lib/hooks';
 import {
   aroundRequest,
@@ -13,27 +15,25 @@ import {
   DECISION_KIND_LABEL,
   DECISION_KIND_TONE,
   entityHref,
-  hashTitle,
   type LogLink,
   outcomeRows,
+  paceHeader,
   pinRows,
   requestRows,
   settingsRows,
-  shortHash,
   verdictChips,
   verdictSentence,
-  verdictTone,
-  verdictWord,
-  walkLines,
-  warmUntil,
 } from '@/lib/routingLog';
 
-/** One chip: a value or a key-value pair, the entity it names a link. */
-export function ChipView({ chip }: { chip: Chip }) {
+/**
+ * One chip: a value or a key-value pair, the entity it names a link. A popover marks the chip its anchor stands for,
+ * and `describedBy` points at the node that carries its hover for a reader.
+ */
+export function ChipView({ chip, describedBy, marked = false }: { chip: Chip; describedBy?: string; marked?: boolean }) {
   const value = chip.entity ? <Link to={entityHref(chip.entity.kind, chip.entity.id)}>{chip.value}</Link> : chip.href ? <Link to={chip.href}>{chip.value}</Link> : chip.value;
   const label = chip.labelEntity ? <Link to={entityHref(chip.labelEntity.kind, chip.labelEntity.id)}>{chip.label}</Link> : chip.label;
   return (
-    <span className={chip.mono ? 'chip mono' : 'chip'} title={chip.title}>
+    <span className={`${chip.mono ? 'chip mono' : 'chip'}${marked ? ' is-marked' : ''}`} title={chip.title} aria-describedby={describedBy}>
       {label !== undefined && <span className="chip__label">{label}</span>}
       {value}
     </span>
@@ -63,16 +63,15 @@ export function rowValue(chips: Chip[]) {
 
 export const keyValueRows = (rows: CardRow[]) => rows.map((r) => ({ label: r.label, title: r.title, value: rowValue(r.chips) }));
 
-/** The rung's entry: its hash's first eight characters, the rest on hover, and when it stops being warm. */
-function EntryChips({ entry, now }: { entry: PrefixEntry; now: number }) {
-  const until = warmUntil(entry, now);
+/** A member's Pace score with its hover, described through the page's host as a `Badge` is. */
+function PaceCell({ title, value }: { title: string | null; value: string }) {
+  const described = useDescription(title ?? undefined);
+  // Outside every host the title alone describes the cell: a node beside it would join the cell's text.
+  const hosted = described && !described.sibling ? described.id : undefined;
   return (
-    <>
-      <span className="chip mono decision-card__hash" title={hashTitle(entry)}>
-        {shortHash(entry.hash)}
-      </span>
-      {until !== null && <span className="chip decision-card__warm">{until}</span>}
-    </>
+    <td className="num" title={title ?? undefined} aria-describedby={hosted}>
+      {value === '-' ? <span className="muted">-</span> : value}
+    </td>
   );
 }
 
@@ -117,23 +116,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
 
       <section>
         <h4 className="decision-card__title">How the router decided</h4>
-        <ol className="decision-card__walk">
-          {walkLines(record, row).map((l) => (
-            <li key={l.number}>
-              <span className="decision-card__n">{l.number}</span>
-              <span className="decision-card__step">{l.step}</span>
-              <span className="decision-card__verdict-cell">
-                <Badge tone={verdictTone(l.verdict)}>{verdictWord(l.verdict)}</Badge>
-              </span>
-              <span className="chips">
-                {l.chips.map((c, i) => (
-                  <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} />
-                ))}
-                {l.hash && <EntryChips entry={l.hash} now={now} />}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <DecisionStrip now={now} record={record} row={row} />
       </section>
 
       {record.candidates.length > 0 && (
@@ -149,7 +132,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                   <th>7d</th>
                   <th>Fable</th>
                   <th>In flight</th>
-                  <th>Pace</th>
+                  <th>{paceHeader(record)}</th>
                   <th>Prefix</th>
                   <th>Verdict</th>
                 </tr>
@@ -181,7 +164,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                         ))
                       )}
                       <td className="num">{cells.inFlight}</td>
-                      <td className="num">{cells.pace === '-' ? <span className="muted">-</span> : cells.pace}</td>
+                      <PaceCell title={cells.paceTitle} value={cells.pace} />
                       <td className="decision-card__prefix">{cells.prefix.hash ? <EntryChips entry={cells.prefix.hash} now={now} /> : <span className="muted">-</span>}</td>
                       <td className="decision-card__judged">
                         <Badge tone={c.verdict === 'out' ? 'warning' : tinted ? 'accent' : 'neutral'}>{cells.verdict.badge}</Badge>

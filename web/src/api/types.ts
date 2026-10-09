@@ -973,7 +973,7 @@ export interface RecordCandidate {
   kind: 'api_key' | 'oauth';
   obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
-  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number } | null;
+  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
   partition: string | null;
   planTier: string | null;
   /**
