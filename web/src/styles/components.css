@@ -1392,6 +1392,27 @@ textarea.input {
   color: var(--ink-2);
 }
 
+/* A column is either fit (as wide as its widest cell) or fill (the width the fit columns leave, cut with an ellipsis,
+   the whole value on the cell's title). A table that takes the classes marks every column one or the other, so no
+   column is left to the browser's content spread. A column with a fixed width of its own takes neither, since
+   `width: 1%` here would outrank it. Two fill columns share the free width. */
+.table .col-fit {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.table .col-fill {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table td.col-fill .sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Stat tiles */
 /*
  * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the quiet,

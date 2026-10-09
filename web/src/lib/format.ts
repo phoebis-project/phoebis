@@ -151,6 +151,9 @@ export const earlierHolderLabel = (id: string, generation: number): string => {
 export const shortAgent = (ua: string) => (ua.length > 28 ? `${ua.slice(0, 28)}…` : ua);
 export const shortId = (id: string, n = 8) => (id.length > n ? `${id.slice(0, n)}…` : id);
 
+/** The characters a session or conversation id shows where the whole id does not fit a label. */
+export const SESSION_CHARS = 13;
+
 /**
  * A placement's verdict against the response's cache read, the rule the placements route counts hits by: a
  * `content` placement wants the whole prefix it was promised, the others any read at all. Null without a read.

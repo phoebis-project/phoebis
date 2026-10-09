@@ -3400,9 +3400,123 @@ async function sessionsTableFits(theme) {
 }
 
 /**
- * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
- * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its center, and the four entries draw a list 160 px wide and 141 px tall.
+ * Every header cell of `selector` after its `fixed` leading ones carries col-fit or col-fill, the col-fill ones read
+ * `fill` in order, and each row's cell carries its header's class. A fit column is as wide as the larger of its widest
+ * cell's inline content plus that cell's horizontal padding and the cells' `min-width`, within 1 px, the header among
+ * the cells: a block child (a `.sub` line) spans its cell whatever it holds, so it is read by its own inline runs
+ * rather than its box, while an inline child's box counts whole, its padding included. Two or more fill columns are
+ * equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one exists, else its
+ * parent element. `fixed` counts the leading columns that keep a width of their own (the Sessions gutter's 30 px) and
+ * carry neither class. The measurement records every column's class, width and content.
+ */
+async function tableColumns(theme, view, selector, fill, fixed = 0) {
+  const say = (what) => failures.push(`${theme} /${view} ${selector}: ${what}`);
+  const read = await page.evaluate((sel) => {
+    const table = document.querySelector(sel);
+    if (!table) return null;
+    const wrap = table.closest('.table-wrap') ?? table.parentElement;
+    const ths = [...table.querySelectorAll('thead th')];
+    // A detail row spans the table with one cell, so only the rows shaped like the head are read.
+    const rows = [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length);
+    const inline = (display) => display.startsWith('inline') || display === 'contents';
+    const inlineWidth = (el) => {
+      let widest = 0;
+      let run = [];
+      const flush = () => {
+        if (run.length === 0) return;
+        const range = document.createRange();
+        range.setStartBefore(run[0]);
+        range.setEndAfter(run[run.length - 1]);
+        widest = Math.max(widest, range.getBoundingClientRect().width);
+        run = [];
+      };
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) run.push(node);
+        else if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        else if (inline(getComputedStyle(node).display)) run.push(node);
+        else {
+          flush();
+          widest = Math.max(widest, inlineWidth(node));
+        }
+      }
+      flush();
+      return widest;
+    };
+    const classOf = (c) => (c.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c.classList.contains('col-fill') ? 'fill' : 'none');
+    const hundredths = (n) => Math.round(n * 100) / 100;
+    const columns = ths.map((th, i) => {
+      const cells = [th, ...rows.map((r) => r.children[i])];
+      const needs = cells.map((c) => {
+        const s = getComputedStyle(c);
+        return Math.max(inlineWidth(c) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight), parseFloat(s.minWidth) || 0);
+      });
+      return {
+        cellsOff: cells.slice(1).filter((c) => classOf(c) !== classOf(th)).length,
+        cls: classOf(th),
+        label: th.textContent?.trim() ?? '',
+        need: hundredths(Math.max(...needs)),
+        width: hundredths(th.getBoundingClientRect().width),
+      };
+    });
+    return { client: wrap.clientWidth, columns, rows: rows.length, scroll: table.scrollWidth };
+  }, selector);
+  measurements.push(`${theme} /${view} ${selector} columns ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px over ${read.rows} rows: ${JSON.stringify(read.columns.map((c) => [c.label, c.cls, c.width, c.need]))}`}`);
+  if (read === null) return say('no table to measure');
+  const named = (c, i) => c.label || `column ${i}`;
+  read.columns.forEach((c, i) => {
+    if (i < fixed) {
+      if (c.cls !== 'none') say(`${named(c, i)} keeps a width of its own yet carries col-${c.cls}`);
+    } else if (c.cls !== 'fit' && c.cls !== 'fill') say(`${named(c, i)} carries ${c.cls === 'both' ? 'both classes' : 'neither col-fit nor col-fill'}`);
+    if (c.cellsOff > 0) say(`${c.cellsOff} cells of ${named(c, i)} lack the header's class`);
+    if (i >= fixed && c.cls === 'fit' && Math.abs(c.width - c.need) > 1) say(`${named(c, i)} is ${c.width}px wide against its content's ${c.need}px`);
+  });
+  const fills = read.columns.slice(fixed).filter((c) => c.cls === 'fill');
+  if (JSON.stringify(fills.map((c) => c.label)) !== JSON.stringify(fill)) say(`the fill columns read ${JSON.stringify(fills.map((c) => c.label))}, not ${JSON.stringify(fill)}`);
+  if (fills.length > 1 && Math.max(...fills.map((c) => c.width)) - Math.min(...fills.map((c) => c.width)) > 1) say(`the fill columns are ${fills.map((c) => c.width).join(' and ')}px wide, not equal`);
+  if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+}
+
+/**
+ * The Session column shows more of a session id than the thirteen characters a label cuts at: with the default columns
+ * at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis alone
+ * cuts, and the cell's content width holds more than thirteen of its characters (the router's seed names its sessions
+ * in thirteen characters, so the characters shown, the smaller of the id's length and that room, are recorded rather
+ * than asserted);
+ * the id is monospace, so one character's width is read off the line's first eight, which are never behind the
+ * ellipsis.
+ */
+async function sessionIdWidth(theme) {
+  const say = (what) => failures.push(`${theme} /sessions id width: ${what}`);
+  const read = await page.evaluate(() => {
+    const at = [...document.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+    const cells = [...document.querySelectorAll('.sessions-table tbody tr.srow')].map((r) => r.children[at]).filter(Boolean);
+    const lineOf = (td) => td.querySelector('.srow__id');
+    const cell = cells[0];
+    if (!cell) return null;
+    const line = lineOf(cell);
+    const text = line?.firstChild;
+    if (!line || !text || text.nodeType !== Node.TEXT_NODE) return { line: line ? 'no text node' : 'absent', title: cell.getAttribute('title') };
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, Math.min(8, text.data.length));
+    const perChar = range.getBoundingClientRect().width / Math.min(8, text.data.length);
+    const s = getComputedStyle(cell);
+    const content = cell.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+    const fits = Math.floor(content / perChar);
+    return { content: Math.round(content), fits, length: text.data.length, line: 'drawn', perChar: Math.round(perChar * 100) / 100, shown: Math.min(text.data.length, fits), text: text.data, title: cell.getAttribute('title') };
+  });
+  measurements.push(`${theme} /sessions id width ${JSON.stringify(read)}`);
+  if (read === null) return say('no session row to measure');
+  if (read.line !== 'drawn') return say(`the first row's Session cell draws ${read.line === 'absent' ? 'no id line' : 'an id line without a text node'}`);
+  if (read.text !== read.title) say(`the id line reads ${JSON.stringify(read.text)}, not the whole id ${JSON.stringify(read.title)} the cell's title carries`);
+  if (read.fits <= 13) say(`the cell's ${read.content}px hold ${read.fits} characters, not more than thirteen`);
+}
+
+/**
+ * A Sessions row's menu closes the row, so its list opens leftward from the trigger: aligned to the trigger's left
+ * edge it would run past the table wrap's right edge, which clips it. The trigger sits in the row's last cell, the
+ * list's right edge lies at or left of the wrap's, each item takes a pointer at its center, and the four entries draw
+ * a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3420,6 +3534,7 @@ async function sessionRowMenu(theme) {
     const list = lists[0];
     const box = list.getBoundingClientRect();
     const edge = wrap.getBoundingClientRect();
+    const cell = document.querySelector('.sessions-table tbody tr.srow .menu__trigger')?.closest('td') ?? null;
     const items = [...list.querySelectorAll('[role="menuitem"]')].map((item) => {
       const b = item.getBoundingClientRect();
       const x = Math.round(b.left + b.width / 2);
@@ -3429,6 +3544,7 @@ async function sessionRowMenu(theme) {
     });
     return {
       items,
+      last: cell !== null && cell === cell.parentElement?.lastElementChild,
       list: { height: Math.round(box.height), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) },
       lists: 1,
       placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
@@ -3440,7 +3556,8 @@ async function sessionRowMenu(theme) {
   await atRest();
   measurements.push(`${theme} /sessions row menu ${JSON.stringify(read)}`);
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
-  if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
+  if (!read.last) say("the trigger sits in a cell other than the row's last");
+  if (read.list.right > read.wrap.right) say(`the list ends at ${read.list.right}px, right of the table wrap's edge at ${read.wrap.right}px`);
   if (read.items.length === 0) say('the list draws no item');
   if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
@@ -3492,47 +3609,99 @@ async function agentLines(theme) {
 }
 
 /**
- * The Sessions table's fork badge against the row's other badges: the fork badge
- * measures the box the Companion and Cache warming badges do
- * and sits on the session id's line. Both seeds record a fork, so both passes measure the fork
- * badge; only the mock's pass fails when none is drawn.
+ * The Sessions table's fork badge against the row's other badges: it sits under the session id's line in the face of
+ * the Companion and Cache warming badges (its height is free, since it wraps its words when the column is narrower
+ * than they are). Both seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when
+ * none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
   const read = await page.evaluate(() => {
-    const badge = (el) => {
+    const face = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}`;
     };
     const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim());
     const companion = heads.indexOf('Companion');
     const warming = heads.indexOf('Cache warming');
     const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
-    // The badge is centered on the id's line when the two share it, and sits below it when the cell wrapped.
-    const beside = (() => {
-      const label = fork?.closest('td')?.firstChild;
+    // The badge sits under the id's line, so its middle lies below that line's bottom.
+    const below = (() => {
+      const label = fork?.closest('td')?.querySelector('.srow__id');
       if (!fork || !label) return null;
-      const range = document.createRange();
-      range.selectNodeContents(label);
-      const line = range.getBoundingClientRect();
+      const line = label.getBoundingClientRect();
       const box = fork.getBoundingClientRect();
-      const middle = (box.top + box.bottom) / 2;
-      return middle > line.top && middle < line.bottom;
+      return (box.top + box.bottom) / 2 > line.bottom;
     })();
+    const rowBadge = rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean);
     return {
-      beside,
-      forkBadge: badge(fork),
-      rowBadge: badge(rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean)),
+      below,
+      forkBadge: face(fork),
+      rowFace: face(rowBadge),
     };
   });
   measurements.push(`${theme} /sessions fork mark ${JSON.stringify(read)}`);
   if (read.forkBadge === null) {
     if (mock) say('the story forks a session, yet no fork badge is drawn');
   } else {
-    if (read.forkBadge !== read.rowBadge) say(`the fork badge measures ${read.forkBadge} against the row badge's ${read.rowBadge}`);
-    if (read.beside !== true) say('the fork badge wraps under the session id rather than sitting beside it');
+    if (read.forkBadge !== read.rowFace) say(`the fork badge reads in ${read.forkBadge} against the row badge's ${read.rowFace}`);
+    if (read.below !== true) say("the fork badge sits on the session id's line rather than under it");
+  }
+}
+
+/**
+ * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
+ * center, with the default columns.
+ * The badge sits under the id and wraps its words when the column is narrower than they are, so
+ * its height is free and its width is what the measurement records beside its cell's. The story forks two sessions
+ * beside their bases, so the mock pass requires two links; the router pass measures the links its seed draws and
+ * records their count.
+ */
+async function sessionForkBadges(theme) {
+  const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const links = [...document.querySelectorAll('.sessions-table a.srow__fork')].map((a) => {
+        // A fork row can sit under the fold at 800 px, where no point of the viewport reaches it, so each link is
+        // brought into view for its hit test; the page is scrolled back to its top after.
+        a.scrollIntoView({ block: 'center' });
+        const td = a.closest('td');
+        const s = getComputedStyle(td);
+        const cell = td.getBoundingClientRect();
+        const box = a.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        const r = (n) => Math.round(n * 10) / 10;
+        return {
+          bottom: r(box.bottom),
+          cell: { bottom: r(cell.bottom), left: r(cell.left + parseFloat(s.paddingLeft)), right: r(cell.right - parseFloat(s.paddingRight)), width: r(cell.width) },
+          clickable: hit !== null && a.contains(hit),
+          cut: a.scrollWidth > a.clientWidth,
+          left: r(box.left),
+          lines: Math.round(box.height / parseFloat(getComputedStyle(a).lineHeight)),
+          right: r(box.right),
+          text: a.textContent?.trim(),
+          width: r(box.width),
+        };
+      });
+      window.scrollTo(0, 0);
+      return links;
+    });
+  for (const [set, on] of [
+    ['the default columns', false],
+  ]) {
+    const links = await read();
+    measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}`);
+    if (mock && links.length !== 2) say(`${links.length} fork links are drawn with ${set}, not the story's two`);
+    for (const l of links) {
+      const name = `"${l.text}" with ${set}`;
+      if (!(l.width > 0)) say(`${name} has no width`);
+      if (l.left < l.cell.left - 0.5 || l.right > l.cell.right + 0.5) say(`${name} runs from ${l.left} to ${l.right}px, outside its cell's content from ${l.cell.left} to ${l.cell.right}px`);
+      if (l.bottom > l.cell.bottom + 0.5) say(`${name} ends at ${l.bottom}px, under its cell's bottom at ${l.cell.bottom}px`);
+      if (l.cut) say(`${name} cuts its words`);
+      if (!l.clickable) say(`${name} takes no pointer at its center`);
+    }
   }
 }
 
@@ -3734,9 +3903,12 @@ try {
         await costCapRows(theme);
         await costReference(theme);
         await sessionsTableFits(theme);
+        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1);
+        await sessionIdWidth(theme);
         await sessionRowMenu(theme);
         await agentLines(theme);
         await sessionForkMark(theme);
+        await sessionForkBadges(theme);
         await probeBarSlots(theme);
       }
       if (view.path === '/pools') {

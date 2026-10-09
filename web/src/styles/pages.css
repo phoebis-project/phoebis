@@ -2898,10 +2898,22 @@
   font-family: var(--font-sans);
 }
 
-/* The Session cell is monospace for the id; the fork badge reads as the other badges do. */
-.srow__fork {
-  margin-left: 6px;
+/* The id line alone: the column's free width cuts a long id with an ellipsis, the whole id on the cell's title. */
+.srow__id {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Session cell is monospace for the id; the fork badge reads as the other badges do. It sits on the line under the
+   id and wraps its words when the column is narrower than they are, so a cut id never clips it or its link. */
+.sessions-table .srow__fork {
+  max-width: 100%;
+  margin-top: 2px;
   font-family: var(--font-sans);
+  text-align: left;
+  white-space: normal;
 }
 
 .srow[aria-current='true'] td {

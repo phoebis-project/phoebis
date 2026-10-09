@@ -10234,7 +10234,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
   const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
-  const COLUMNS = ['Key', 'Session', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
+  // The optional columns the control offers: the Session column is the row's identity and is always drawn.
+  const COLUMNS = ['Key', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
   const HIDDEN = ['Last request', 'Agents', 'Next probe'];
   {
     // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
@@ -10251,16 +10252,16 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       ok:
         JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
         offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
-        JSON.stringify(shown) === JSON.stringify(['', '', ...COLUMNS.filter((c) => !HIDDEN.includes(c))]) &&
+        JSON.stringify(shown) === JSON.stringify(['', 'Session', ...COLUMNS.filter((c) => !HIDDEN.includes(c)), '']) &&
         label === `Columns (${COLUMNS.length - HIDDEN.length})` &&
         m.container.querySelector('.cols-popover') === null,
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
     });
   }
   results.push({
-    name: '/sessions the first data cell holds the actions menu',
-    ok: rows().length > 0 && rows().every((r) => r.children[1]?.querySelector('.menu__trigger') !== null && r.children[1]?.textContent?.trim() === '···'),
-    missing: rows().slice(0, 3).map((r) => r.children[1]?.innerHTML ?? 'no cell'),
+    name: '/sessions the Session header is the first with text and the last cell of every row holds the menu',
+    ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
+    missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
   await showColumn(m, 'Next probe');
@@ -10347,7 +10348,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const all = heads();
     results.push({
       name: '/sessions no longer carries an Epoch, a Created or an Expires column',
-      ok: JSON.stringify(all) === JSON.stringify(['', '', ...COLUMNS]) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
+      ok: JSON.stringify(all) === JSON.stringify(['', 'Session', ...COLUMNS, '']) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
       missing: all,
     });
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
@@ -10396,26 +10397,65 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const named = heads();
     const sessionAt = named.indexOf('Session');
+    results.push({ name: '/sessions the Session column leads after the gutter and Key follows it', ok: sessionAt === 1 && named.indexOf('Key') === 2, missing: named });
+    {
+      // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
+      // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
+      const ths = [...m.container.querySelectorAll('.sessions-table thead th')];
+      const classOf = (c) => (c?.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c?.classList.contains('col-fill') ? 'fill' : 'none');
+      const headClasses = ths.map(classOf);
+      const fills = ths.filter((th) => classOf(th) === 'fill').map((th) => th.textContent?.trim());
+      const cellsOff = rows().flatMap((r) => [...r.children].map((td, i) => (classOf(td) === headClasses[i] ? null : `${named[i] || `cell ${i}`}: ${classOf(td)}`)).filter(Boolean));
+      results.push({
+        name: '/sessions every header cell after the gutter is fit or fill, and Session is the one fill column',
+        ok: headClasses[0] === 'none' && headClasses.slice(1).every((c) => c === 'fit' || c === 'fill') && JSON.stringify(fills) === JSON.stringify(['Session']) && rows().length > 0 && cellsOff.length === 0,
+        missing: [JSON.stringify(headClasses), JSON.stringify(fills), ...cellsOff.slice(0, 5)],
+      });
+    }
     const listed = await api.listSessions();
-    const cellOf = (r) => ({ label: r.children[sessionAt]?.firstChild?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
-    const forked = listed.find((s) => s.forkedFrom !== null);
-    const forkRow = forked ? rows().find((r) => cellOf(r).title === forked.sessionId && cell(r, 'Key')?.textContent === forked.keyId) : undefined;
-    const link = forkRow?.children[sessionAt]?.querySelector('a.badge');
-    const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
+    // The cell's id line, while the whole id rides the cell's title.
+    const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
+    // A row is its key, its holder and its session id, the three the route keys a session by.
+    const sessionOf = (r) => listed.find((s) => s.sessionId === cellOf(r).title && s.keyId === cell(r, 'Key')?.firstChild?.textContent && s.historical === (cell(r, 'Key')?.querySelector('.sub') !== null));
+    // The story forks two sessions, each beside its base: one on the base's own account, one on another. The badge
+    // reads the relation off the two listed rows' Account cells, names the base's account label on the title and
+    // describes itself to a reader that never hovers.
+    const accountLabel = new Map((await api.listAccounts()).map((a) => [a.id, a.label]));
+    const rowOf = (s) => rows().find((r) => sessionOf(r) === s);
+    const accountOf = (r) => cell(r, 'Account')?.querySelector('a')?.textContent?.trim() ?? null;
+    const forks = listed
+      .filter((s) => s.forkedFrom !== null)
+      .map((s) => {
+        const row = rowOf(s);
+        const base = listed.find((b) => b.sessionId === s.forkedFrom && b.keyId === s.keyId);
+        const baseRow = base ? rowOf(base) : undefined;
+        const link = row?.children[sessionAt]?.querySelector('a.badge');
+        const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
+        const described = link?.getAttribute('aria-describedby');
+        return {
+          base,
+          baseRow,
+          description: described ? m.container.querySelector(`[id="${described}"]`)?.textContent ?? null : null,
+          link,
+          relation: row && baseRow && accountOf(row) !== null && accountOf(baseRow) !== null ? (accountOf(row) === accountOf(baseRow) ? 'same account' : 'on another account') : null,
+          session: s,
+          target,
+          title: link?.getAttribute('title') ?? '',
+        };
+      });
+    const badgeWords = (f) => `fork of ${f.session.forkedFrom.slice(0, 13)}… at ${f.session.forkDepth}, ${f.relation}`;
+    const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
+    const wrongFork = forks.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
+    const wrongTarget = forks.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
     results.push({
-      name: '/sessions a forked session carries a fork badge that links to its base session\'s row',
-      ok:
-        forked !== undefined &&
-        link?.textContent?.trim() === `fork at ${forked.forkDepth}` &&
-        link.classList.contains('badge--accent') &&
-        (link.getAttribute('title') ?? '').includes(forked.forkedFrom) &&
-        target?.tagName === 'TR' &&
-        cellOf(target).title === forked.forkedFrom &&
-        cell(target, 'Key')?.textContent === forked.keyId,
-      missing: [String(forked?.sessionId), link?.outerHTML ?? 'no link', target?.textContent?.slice(0, 80) ?? 'no target row'],
+      name: '/sessions each fork badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
+      ok: forks.length === 2 && forks.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
+      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
     });
+    const same = forks.find((f) => f.relation === 'same account');
+    const target = same?.target ?? null;
     const expandedBefore = m.container.querySelectorAll('.srow__detail').length;
-    link?.click();
+    same?.link?.click();
     await m.settle(150);
     results.push({
       name: '/sessions following a fork link marks the base row current and leaves the forked row closed',
@@ -10433,7 +10473,11 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await m.settle(120);
     return [...(row?.querySelectorAll('.menu__list button') ?? [])];
   };
-  results.push({ name: '/sessions keeps the row to one overflow menu', ok: [...(busyRow()?.querySelectorAll('td button') ?? [])].length === 1, missing: [...(busyRow()?.querySelectorAll('td button') ?? [])].map((b) => b.textContent?.trim() ?? '') });
+  results.push({
+    name: '/sessions keeps the row to one overflow menu, in its last cell',
+    ok: [...(busyRow()?.querySelectorAll('td button') ?? [])].length === 1 && busyRow()?.lastElementChild?.querySelector('button.menu__trigger') !== null,
+    missing: [...(busyRow()?.querySelectorAll('td button') ?? [])].map((b) => b.textContent?.trim() ?? ''),
+  });
   {
     const items = await openMenu(barren);
     results.push({

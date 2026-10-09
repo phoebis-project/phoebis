@@ -1266,12 +1266,20 @@ function identifyRequests() {
     Object.assign(r, { forkDepth: null, forkedFrom: null });
   }
   // A session's oldest row is its first request, and the rows run newest first, so the last one set per session
-  // stays. The fork is a turn the log lists, never a probe, and its base another session the story seeds.
-  const base = SESSION_IDS[1];
+  // stays. A fork is a turn the log lists, never a probe, and its base another session the story seeds. Both forks
+  // are pinned by identity, so neither moves with the load instant and the two never land on one row.
   const oldest = new Map<string, RequestLog>();
   for (const r of REQUESTS) if (r.sessionId !== null && r.keyId !== 'ci' && !STORY_IDS.has(r.id)) oldest.set(r.sessionId, r);
-  const first = [...oldest.values()].find((r) => r.kind === 'inference' && r.sessionId !== SESSION_IDS[0] && r.sessionId !== base);
-  if (first) Object.assign(first, { forkDepth: 3, forkedFrom: base });
+  const turnOf = (sessionId: string) => {
+    const r = oldest.get(sessionId);
+    return r?.kind === 'inference' ? r : undefined;
+  };
+  // A fork on another account than its base's, so the Sessions table reads "on another account".
+  const first = turnOf(SESSION_IDS[2]);
+  if (first) Object.assign(first, { forkDepth: 3, forkedFrom: SESSION_IDS[1] });
+  // A second fork on its base's own account, so the Sessions table reads both relations.
+  const second = turnOf(SESSION_IDS[5]);
+  if (second) Object.assign(second, { forkDepth: 2, forkedFrom: SESSION_IDS[3] });
 }
 
 /**
