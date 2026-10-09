@@ -57,7 +57,7 @@ a Claude Code plugin that runs inside the client's own process. The mod reports 
 ceiling and switch is a pool field or a constant of the router. It installs from its marketplace, inside Claude Code:
 
 ```text
-/plugin marketplace add daystrom-labs/phoebis-keepalive
+/plugin marketplace add daystrom-labs/phoebis-marketplace
 /plugin install phoebis-keepalive@phoebis
 ```
 
