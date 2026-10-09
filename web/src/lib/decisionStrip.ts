@@ -426,8 +426,8 @@ export interface StripLayout {
   height: number;
   /** A station label's box: `top` its upper edge, `height` from the label's lines. */
   labels: Record<string, { above: boolean; height: number; top: number; width: number }>;
-  /** A leaf's right edge on its row. */
-  leaves: Point[];
+  /** A leaf's right edge on its row, and the widest it draws so its left edge stays inside the strip. */
+  leaves: (Point & { maxWidth: number })[];
   paths: StripPath[];
   stations: Record<string, Point>;
   termini: Partial<Record<TerminusKind, Point>>;
@@ -479,6 +479,13 @@ const ROW_FOOT = 4;
 const BELOW_LINE = 104;
 const TICK = 14;
 const LEAF_GAP = 16;
+// The room a leaf keeps from the strip's left edge, which the strip cannot scroll to.
+const LEAF_EDGE = 8;
+/**
+ * The story's widest leaf measures 325 px in Chromium (an "out" badge and a 28-character obstacle chip), so a host this
+ * far from the strip's left edge keeps it whole past the gap and the edge's room. A wider leaf cuts its account short.
+ */
+export const LEAF_ROOM = 350;
 /** A leaf is centered on its row and 24 px tall. */
 export const LEAF_HALF = 12;
 // The label box the strip's stylesheet draws: its near edge 12 px off the station's center, a 16 px line for the name
@@ -487,6 +494,9 @@ const LABEL_OFFSET = 12;
 const LABEL_LINE = 16;
 const LABEL_BADGE = 22;
 const LABEL_GAP = 3;
+// A label is centered on its station, so one this much narrower than the way to its nearest neighbor shares no pixel
+// with that neighbor's, and a click on its words opens its own popover.
+const LABEL_CLEAR = 4;
 const BRACKET_OVERHANG = 14;
 const BRACKET_RISE = 36;
 // A track bracket clears the labels the track's stations carry above it.
@@ -514,11 +524,12 @@ function tail(from: Point, to: Point): string {
 const curve = (from: Point, to: Point) => `M${from.x} ${from.y} ${tail(from, to)}`;
 
 /**
- * A taken curve from a station the line runs on past. It drops from the circle at once and runs below the idle
- * stations and their labels, at the Refused terminus's depth, so no accent lies along an idle station or edge.
+ * A taken curve from a station the walk runs on past. It drops from the circle at once and runs below the line at
+ * `y0`, at the Refused terminus's depth, from a track station as from a line one, so no accent lies along an idle
+ * station, its label, an edge or the line's own idle curve into a terminus.
  */
-function drop(from: Point, to: Point): string {
-  const lane = Math.max(to.y, from.y + TERMINUS_DROP.refused);
+function drop(from: Point, to: Point, y0: number): string {
+  const lane = Math.max(to.y, y0 + TERMINUS_DROP.refused);
   const into = lane === to.y ? `H${to.x}` : `H${to.x - CORNER} C${to.x} ${lane} ${to.x} ${lane} ${to.x} ${lane - CORNER} V${to.y + TERMINUS_RADIUS}`;
   return `M${from.x} ${from.y + RADIUS} V${lane - CORNER} C${from.x} ${lane} ${from.x} ${lane} ${from.x + CORNER} ${lane} ${into}`;
 }
@@ -568,19 +579,23 @@ function finish(model: StripModel, width: number, f: Frame, measured: LabelHeigh
     if (from === undefined) continue;
     const drops = runs && from !== last;
     if (drops) dropFrom = from.id;
-    paths.push({ d: drops ? drop(points[from.id], at) : curve(points[from.id], at), kind: 'curve', state: runs ? leaving(from, from.state) : 'idle' });
+    paths.push({ d: drops ? drop(points[from.id], at, y0) : curve(points[from.id], at), kind: 'curve', state: runs ? leaving(from, from.state) : 'idle' });
   }
   const labels: StripLayout['labels'] = {};
+  // A host the track comes down into keeps its label below the line, clear of the accent entering it from above. A
+  // station a taken curve drops from carries its label above, clear of the drop.
+  const aboveOf = (s: Station) => s.level === 'track' || (s.id === model.host && s.id !== f.descent) || s.id === dropFrom;
   for (const s of model.stations) {
-    // A host the track comes down into keeps its label below the line, clear of the accent entering it from above. A
-    // station a taken curve drops from carries its label above, clear of the drop.
-    const above = s.level === 'track' || (s.id === model.host && s.id !== f.descent) || s.id === dropFrom;
+    const above = aboveOf(s);
     const height = heightOf(s);
     const p = points[s.id];
-    labels[s.id] = { above, height, top: above ? p.y - LABEL_OFFSET - height : p.y + LABEL_OFFSET, width: labelWidth(unit) };
+    // The unit spaces stations by their groups alone, so two a unit apart, or the rules a move spreads below its track,
+    // stand closer than the unit's label is wide.
+    const near = model.stations.reduce((n, o) => (o !== s && o.level === s.level && aboveOf(o) === above ? Math.min(n, Math.abs(points[o.id].x - p.x)) : n), Infinity);
+    labels[s.id] = { above, height, top: above ? p.y - LABEL_OFFSET - height : p.y + LABEL_OFFSET, width: Math.min(labelWidth(unit), near - LABEL_CLEAR) };
   }
   let firstRow = y0 + FIRST_ROW;
-  const leaves: Point[] = [];
+  const leaves: StripLayout['leaves'] = [];
   if (model.host !== null && model.leaves.length > 0) {
     const host = points[model.host];
     // The fan drops from the circle, or from a label below the line past its bottom edge, the rows moving down when
@@ -598,7 +613,7 @@ function finish(model: StripModel, width: number, f: Frame, measured: LabelHeigh
     paths.push({ d: `M${host.x} ${top} V${rows[rows.length - 1]}`, kind: 'fan', state: 'idle' });
     model.leaves.forEach((l, i) => {
       paths.push({ d: l.chosen ? `M${host.x} ${top} V${rows[i]} H${host.x - TICK}` : `M${host.x} ${rows[i]} H${host.x - TICK}`, kind: 'tick', state: l.chosen ? 'taken' : 'idle' });
-      leaves.push({ x: host.x - LEAF_GAP, y: rows[i] });
+      leaves.push({ maxWidth: host.x - LEAF_GAP - LEAF_EDGE, x: host.x - LEAF_GAP, y: rows[i] });
     });
   }
   const brackets = model.brackets.map((b) => {
@@ -636,7 +651,15 @@ function layoutLine(model: StripModel, width: number, measured: LabelHeights | u
     if (i > 0) x += weights[i - 1] * unit;
     points[s.id] = { x, y: y0 };
   });
-  const xEnd = x + end * unit;
+  let xEnd = x + end * unit;
+  // A leaf runs left from its host, so a short line moves right until the widest leaf fits there, as far as the
+  // termini's margin allows.
+  const host = model.host !== null && model.leaves.length > 0 ? points[model.host] : undefined;
+  const shift = host === undefined ? 0 : Math.min(Math.max(0, LEAF_ROOM - host.x), Math.max(0, width - RIGHT - xEnd));
+  if (shift > 0) {
+    for (const p of Object.values(points)) p.x += shift;
+    xEnd += shift;
+  }
   const paths = edgesAndStubs(line, points);
   if (model.branch?.kind === 'rung') {
     const from = points[model.branch.from];
@@ -701,7 +724,7 @@ function layoutMove(model: StripModel, width: number, fired: string, measured: L
     // A rung that matched before the track's last leaves the later rungs unrun, so the taken path drops from it as from
     // a line's decisive station, and the track runs on past it idle.
     const from = points[track[decided].id];
-    paths.push({ d: `${rise} H${from.x} ${drop(from, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`, kind: 'track', state: 'taken' });
+    paths.push({ d: `${rise} H${from.x} ${drop(from, { x: xEnd, y: y0 + TERMINUS_DROP[named] }, y0)}`, kind: 'track', state: 'taken' });
     paths.push({ d: `M${from.x} ${yu} ${end}`, kind: 'track', state: 'idle' });
   } else paths.push({ d: `${rise} ${end}`, kind: 'track', state: 'taken' });
   return finish(model, width, { descent: renewed?.id ?? null, into: renewed === undefined ? named : null, line, paths, points, unit, xEnd, y0, yu }, measured);

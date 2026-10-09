@@ -2110,6 +2110,14 @@
   text-align: center;
 }
 
+/* A label narrows to the room its neighbors leave it, so a badge wider than its label takes a second line, which the
+   strip's measured label heights count. */
+.strip-station .badge {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+}
+
 /* Above the line the badge keeps to its node, so the second line stays clear of the stub words beside the host. */
 .strip-station--above .strip-station__second {
   order: 1;
@@ -2166,6 +2174,13 @@
   transform: translateX(-100%);
 }
 
+/* A leaf no wider than the room left of its host cuts its account short, and its name and popover keep the whole id. */
+.strip-candidate__account {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .strip-candidate.is-chosen {
   background: var(--accent-soft);
   border-color: var(--accent);
@@ -2204,12 +2219,14 @@
 }
 
 /* A station's popover sits over the card in the body, outside the card's rules, so it sets the card's type itself.
-   An unpinned one lets the pointer through to the strip, and a pinned one takes it so its table scrolls. The width
-   bound is the window's, which the component tightens to the card's. */
+   An unpinned one lets the pointer through to the strip, and a pinned one takes it so it and its table scroll. The
+   width bound is the window's, which the component tightens to the card's, and the component bounds its height by the
+   window's. */
 .strip-popover {
   position: fixed;
   z-index: 20;
   max-width: min(720px, 100vw - 16px);
+  overflow-y: auto;
   padding: 10px 12px;
   font-size: 13px;
   background: var(--surface);

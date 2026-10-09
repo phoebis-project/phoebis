@@ -138,17 +138,21 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
     document.addEventListener('mousedown', onOutside);
     return () => document.removeEventListener('mousedown', onOutside);
   }, [pinned, popoverId]);
-  // Captured on the document ahead of every other handler, so a dialog around the card never takes the key too, and
-  // no handler on the popover or the anchor ever sees it. Focus returns to the anchor from the popover or the anchor
-  // alone: a popover a hover opened closes with focus left where it was.
+  // Captured on the document ahead of every other handler, so a key from the strip or its popover closes the popover
+  // alone: a dialog around the card never takes it too. A key from a control outside both is that control's, so the
+  // popover a hover opened over it closes and the key runs on, and a filter's open list closes on the same press. Focus
+  // returns to the anchor from the popover or the anchor alone: elsewhere it stays where it was.
   useEffect(() => {
     if (open === null) return undefined;
     const onEscape = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
       const at = e.target as Node;
-      close(Boolean(document.getElementById(popoverId)?.contains(at) || anchorEl?.contains(at)));
+      const inPopover = Boolean(document.getElementById(popoverId)?.contains(at));
+      if (inPopover || ref.current?.contains(at)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      close(inPopover || Boolean(anchorEl?.contains(at)));
     };
     document.addEventListener('keydown', onEscape, true);
     return () => document.removeEventListener('keydown', onEscape, true);
@@ -253,7 +257,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
                   aria-label={leafName(l)}
                   aria-describedby={describedBy}
                   {...expanded(anchor)}
-                  style={{ left: p.x, top: p.y - LEAF_HALF }}
+                  style={{ left: p.x, maxWidth: p.maxWidth, top: p.y - LEAF_HALF }}
                   {...handlers(anchor)}
                 >
                   {l.accountId !== null && <span className="strip-candidate__account">{l.accountId}</span>}

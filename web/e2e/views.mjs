@@ -2712,8 +2712,9 @@ async function firstDecisionOpen(theme) {
 }
 
 /**
- * Where the open card's strip draws one word into another: a station label into a leaf row or a bracket (its word and
- * its ticks) is a failure, a label against another label or a stub's word a measure line. Every box is the drawn one.
+ * Where the open card's strip draws one word into another: a station label into another label, a leaf row or a bracket
+ * (its word and its ticks) is a failure, and so is a leaf whose left edge lies left of the strip's, which the strip
+ * cannot scroll to. A label against a stub's word is a measure line. Every box is the drawn one.
  */
 function stripOverlaps() {
   const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
@@ -2728,15 +2729,20 @@ function stripOverlaps() {
   const brackets = [...strip.querySelectorAll('.strip-group')].map((el, i) => ({ box: ticks[i] ? union(box(el), box(ticks[i])) : box(el), name: `${el.textContent} bracket` }));
   const stubs = [...strip.querySelectorAll('.strip-stub')].map((el) => ({ box: box(el), name: `${el.textContent} stub` }));
   const pairs = (as, bs, same) => as.flatMap((a, i) => bs.filter((b, j) => (!same || j > i) && meet(a.box, b.box)).map((b) => `${a.name} / ${b.name}`));
-  return { contacts: [...pairs(labels, labels, true), ...pairs(labels, stubs, false)], hits: [...pairs(labels, leaves, false), ...pairs(labels, brackets, false)] };
+  const left = box(strip).left;
+  const cut = leaves.filter((l) => l.box.left < left - 0.5).map((l) => `${l.name} starts ${(left - l.box.left).toFixed(1)}px left of the strip`);
+  return { contacts: pairs(labels, stubs, false), hits: [...pairs(labels, labels, true), ...pairs(labels, leaves, false), ...pairs(labels, brackets, false), ...cut] };
 }
 
-/** Reads `stripOverlaps` on the open card, failing on a label that runs into a leaf row or a bracket. */
+/**
+ * Reads `stripOverlaps` on the open card, failing on a label that runs into another label, a leaf row or a bracket, and
+ * on a leaf that starts left of the strip.
+ */
 async function stripWords(theme, where) {
   const got = await page.evaluate(stripOverlaps);
   measurements.push(`${theme} /routing-log strip words of ${where} ${JSON.stringify(got)}`);
   if (got === null) return;
-  for (const hit of got.hits) failures.push(`${theme} /routing-log: ${where}: a station label runs into a leaf row or a bracket (${hit})`);
+  for (const hit of got.hits) failures.push(`${theme} /routing-log: ${where}: a station label runs into another label, a leaf row or a bracket, or a leaf runs past the strip's left edge (${hit})`);
 }
 
 /**
@@ -2923,17 +2929,101 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
 }
 
 /**
+ * Pins the open card's shed station's popover and reads its box inside the window less 8 px above and below. In the
+ * `short` window its content runs past that room, so the box holds it scrolling. Escape closes it.
+ */
+async function shedPopoverHeight(theme, where, short) {
+  const say = (message) => failures.push(`${theme} /routing-log: ${where}: ${message}`);
+  const station = page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="move:shed"]');
+  if ((await station.count()) === 0) {
+    say('no shed station to open');
+    return;
+  }
+  await station.click();
+  await advance(CLOCK_STEP_MS);
+  const got = await page.evaluate(() => {
+    const open = [...document.querySelectorAll('.strip-popover')];
+    if (open.length !== 1) return null;
+    const box = open[0].getBoundingClientRect();
+    return { bottom: box.bottom, client: open[0].clientHeight, overflow: getComputedStyle(open[0]).overflowY, pinned: open[0].classList.contains('is-pinned'), scroll: open[0].scrollHeight, top: box.top, view: document.documentElement.clientHeight };
+  });
+  measurements.push(`${theme} /routing-log shed station's popover of ${where} ${JSON.stringify(got)}`);
+  if (got === null) {
+    say('a click on the shed station opened no popover, or more than one');
+    return;
+  }
+  if (!got.pinned) say("the click left the shed station's popover unpinned");
+  if (got.top < 8 - 0.5 || got.bottom > got.view - 8 + 0.5) say(`the shed station's popover spans ${got.top} to ${got.bottom}px, outside the ${got.view}px window less 8 px above and below`);
+  if (short && (got.scroll <= got.client || got.overflow !== 'auto')) say(`the shed station's popover holds ${got.scroll}px of content in ${got.client}px with overflow-y ${got.overflow}, not scrolling a content taller than the window's room`);
+  // In the short window the popover stands over its station, so a pointer left there would open it again on hover.
+  await page.mouse.move(0, 0);
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  if ((await page.locator('.strip-popover').count()) !== 0) say("Escape left the shed station's popover open");
+}
+
+/**
+ * With the Accounts filter's list open and the focus in it, a pointer resting on `station` opens its popover, and one
+ * Escape closes both: a popover a hover opened lets the key run on to the focused filter, which closes its list and
+ * keeps the focus, on its trigger.
+ */
+async function escapeReachesFilter(theme, what, station) {
+  const say = (message) => failures.push(`${theme} /routing-log: ${what} over the open Accounts filter: ${message}`);
+  if ((await station.count()) === 0) {
+    say('no station to hover');
+    return;
+  }
+  const filter = page.locator('.mselect').filter({ has: page.locator('.mselect__trigger', { hasText: /^Accounts/ }) });
+  if ((await filter.count()) !== 1) {
+    say(`the page draws ${await filter.count()} Accounts filters, not one`);
+    return;
+  }
+  const read = () =>
+    filter.evaluate((el) => {
+      const at = document.activeElement;
+      return {
+        focus: at === el.querySelector('.mselect__trigger') ? 'trigger' : el.querySelector('.mselect__list')?.contains(at) ? 'list' : (at?.tagName ?? null),
+        list: el.querySelector('.mselect__list') !== null,
+        open: document.querySelectorAll('.strip-popover').length,
+        pinned: document.querySelector('.strip-popover')?.classList.contains('is-pinned') ?? null,
+      };
+    });
+  await filter.locator('.mselect__trigger').click();
+  await advance(CLOCK_STEP_MS);
+  await station.hover();
+  await advance(CLOCK_STEP_MS);
+  const before = await read();
+  measurements.push(`${theme} /routing-log ${what} hovered over the open Accounts filter ${JSON.stringify(before)}`);
+  if (!before.list || before.focus !== 'list' || before.open !== 1 || before.pinned !== false) say(`the hover left ${JSON.stringify(before)}, not the filter's list open with the focus in it under one hover popover`);
+  await page.keyboard.press('Escape');
+  await advance(CLOCK_STEP_MS);
+  const after = await read();
+  measurements.push(`${theme} /routing-log ${what} after one Escape over the open Accounts filter ${JSON.stringify(after)}`);
+  if (after.open !== 0 || after.list || after.focus !== 'trigger') say(`one Escape left ${JSON.stringify(after)}, not the popover closed and the filter's list closed with the focus kept on its trigger`);
+  // A list left open would stand over the rest of the pass.
+  if (after.list) {
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+  }
+  await atRest();
+}
+
+/**
  * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the strip and the candidate
  * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
- * kind badge's box, and the strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are
- * read on the first rung placement the page lists. The router's seed places no request by a rung and records no move,
- * so there that check stands down and the shed move's badge colors are the story's alone. A station's popover keeps
- * inside the card at the two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest
- * popover), its Cool reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the
- * seeded router's pass the station its first card's candidates hang from. The open card draws its record's station
- * count at both viewports, and every station's and way out's word holds the card's muted contrast with an idle way out
- * among them, read on the seeded router's first card and on the mock's fresh placement, whose Pick station the mock
- * pass then opens and closes by Enter, Escape, Space and Escape.
+ * kind badge's box, grown by a line for each line a station's badge wraps to, and the strip is as high as its rows. A
+ * renewal walks no rung, so the Prefix cell's two chips are read on the first rung placement the page lists. The
+ * router's seed places no request by a rung and records no move, so there that check stands down and the shed move's
+ * badge colors are the story's alone. A station's popover keeps inside the card at the two viewports and at 700 by 800:
+ * the mock pass reads the shed move's Move station (the widest popover), its Cool reading (the widest table) and its
+ * striped Pick table, and the fresh placement's Pick station, the seeded router's pass the station its first card's
+ * candidates hang from. The open card draws its record's station count at both viewports, and every station's and way
+ * out's word holds the card's muted contrast with an idle way out among them, read on the seeded router's first card
+ * and on the mock's fresh placement, whose Pick station the mock pass then opens and closes by Enter, Escape, Space and
+ * Escape. The shed move's shed station's popover keeps inside the window less 8 px above and below at both viewports
+ * and in a window shorter than its content, where it scrolls. One Escape over the open Accounts filter closes a hovered
+ * station's popover and the filter's list alike, on the seeded router's first card's host station and on the mock's
+ * fresh placement's Pick station.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -2946,6 +3036,12 @@ async function decisionCard(theme) {
         const s = getComputedStyle(el);
         return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
       };
+      // A line is a distinct top among the text's line boxes.
+      const lines = (el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+      };
       const card = document.querySelector('.routing-log__panel .decision-card');
       const strip = card?.querySelector('.decision-strip');
       const surface = strip?.querySelector('.decision-strip__surface');
@@ -2954,7 +3050,7 @@ async function decisionCard(theme) {
       const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
       const kind = card?.querySelector('.decision-card__verdict > .badge');
       return {
-        badges: [...(strip?.querySelectorAll('.badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
+        badges: [...(strip?.querySelectorAll('.badge') ?? [])].map((b) => ({ box: box(b), lines: lines(b), text: b.textContent })),
         card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
         log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
         reference: kind ? box(kind) : null,
@@ -3009,16 +3105,20 @@ async function decisionCard(theme) {
     if (got.log !== null && got.log.scroll > got.log.client) say(`${where}: the log's table scrolls sideways (${got.log.scroll}px in ${got.log.client}px)`);
     if (got.reference === null) say(`${where} has no kind badge to measure against`);
     if (got.badges.length === 0) say(`${where}: the strip draws no badge to measure`);
-    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the strip's "${b.text}" badge measures ${b.box} against the kind badge's ${got.reference}`);
+    // A station's badge wider than its label takes a line more, so its box is the kind badge's grown by an 18 px line.
+    const grown = (n) => got.reference?.replace(/\/(\d+)$/, (_, h) => `/${Number(h) + (n - 1) * 18}`);
+    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== grown(x.lines))) say(`${where}: the strip's "${b.text}" badge measures ${b.box} on ${b.lines} lines against the kind badge's ${got.reference}`);
   }
   if (counts.length === 2 && counts[0] !== counts[1]) say(`the open card draws ${counts[0]} stations at 1280 by 800 and ${counts[1]} at 1440 by 900`);
   // The seed's first card is a placement, whose candidates hang from its pick, or else from the station that decided it.
   if (!mock) {
     await stripContrast(theme, 'the first card');
-    await popoverBounds(theme, "the first card's host station", async (card) => {
+    const host = async (card) => {
       const pick = card.locator('.strip-station[data-step="pick"]');
       return (await pick.count()) > 0 ? pick.first() : card.locator('.strip-station.is-decisive').first();
-    });
+    };
+    await popoverBounds(theme, "the first card's host station", host);
+    await escapeReachesFilter(theme, "the first card's host station", await host(page.locator('.routing-log__panel .decision-card').last()));
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
@@ -3067,14 +3167,17 @@ async function decisionCard(theme) {
   }, shed);
   measurements.push(`${theme} /routing-log shed move badges ${JSON.stringify(tones)}`);
   if (tones.row === null || tones.move === null || tones.row !== tones.move) say(`the moved row's badge paints ${tones.row} and the shed move's Move station badge ${tones.move}, not one color`);
-  // Fifteen stations share the shed move's strip, the tightest spacing the story draws.
-  for (const { height, width } of [
-    { height: 800, width: 1280 },
-    { height: 900, width: 1440 },
+  // Fifteen stations share the shed move's strip, the tightest spacing the story draws. The last window is shorter than
+  // the shed station's popover, so the popover's own bound and scroll are read there.
+  for (const { height, short, width } of [
+    { height: 800, short: false, width: 1280 },
+    { height: 900, short: false, width: 1440 },
+    { height: 200, short: true, width: 1280 },
   ]) {
     await page.setViewportSize({ height, width });
     await advance(2 * CLOCK_STEP_MS);
     await stripWords(theme, `the shed move's card at ${width} by ${height}`);
+    await shedPopoverHeight(theme, `the shed move's card at ${width} by ${height}`, short);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await advance(2 * CLOCK_STEP_MS);
@@ -3098,6 +3201,7 @@ async function decisionCard(theme) {
   await stripContrast(theme, "the fresh placement's card");
   await popoverBounds(theme, "the fresh placement's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'));
   await stationKeys(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
+  await escapeReachesFilter(theme, "the fresh placement's Pick station", page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]'));
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */

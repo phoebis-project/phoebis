@@ -286,7 +286,13 @@ test('a move whose continuation the content rung decides ends its taken track th
   const [taken, idle] = track.map((p) => p.d);
   assert.equal(highestAt(taken, at('rung:content').x), yu, 'the taken track runs along the track to the decisive rung');
   for (const id of ['rung:with_main', 'rung:static']) assert.ok(highestAt(taken, at(id).x) > yu + d.RADIUS, `the taken track passes under the idle ${id}`);
-  assert.deepEqual(pointsOf(taken).at(-1), [layout.termini.chosen.x, layout.termini.chosen.y], 'the taken track ends at Chosen');
+  // The line's idle curve into Chosen runs on the line itself, so past the rung the taken track keeps below it.
+  const [rung, chosen] = [at('rung:content').x, layout.termini.chosen.x];
+  for (let k = 1; k < 16; k += 1) {
+    const x = rung + ((chosen - rung) * k) / 16;
+    assert.ok(highestAt(taken, x) > layout.y0 + d.RADIUS, `the taken track passes under the line at ${x.toFixed(1)} (highest ${highestAt(taken, x)}, the line at ${layout.y0})`);
+  }
+  assert.deepEqual(pointsOf(taken).at(-1), [chosen, layout.termini.chosen.y + d.TERMINUS_RADIUS], 'the taken track rises into Chosen from below');
   assert.ok(idle.startsWith(`M${at('rung:content').x} ${yu} `), 'the idle track starts at the decisive rung');
   for (const id of ['rung:with_main', 'rung:static']) assert.equal(highestAt(idle, at(id).x), yu, `the idle track runs through ${id}`);
   assert.ok(idle.endsWith(`${layout.termini.chosen.x} ${layout.y0 - 8}`), 'the idle track comes down into Chosen');
@@ -395,7 +401,7 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.ok(Math.abs(fresh.termini.chosen.x - last - 1.9 * fresh.unit) < 1e-9, 'the termini sit 1.9 units past the last station');
   assert.deepEqual([fresh.termini.chosen.y, fresh.termini.held.y, fresh.termini.refused.y], [104, 140, 176]);
   assert.equal(fresh.height, Math.max(104 + 76 + freshModel.leaves.length * 30 + 4, 208));
-  assert.ok(Object.values(fresh.labels).every((l) => l.width >= 58 && l.width <= 110));
+  assert.ok(Object.values(fresh.labels).every((l) => l.width > 0 && l.width <= 110));
   assert.deepEqual(Object.entries(fresh.labels).filter(([, l]) => l.above).map(([id]) => id), ['pick']);
   assert.deepEqual(fresh.leaves.map((p) => [p.x, p.y]), [0, 1, 2, 3].map((i) => [fresh.stations.pick.x - 16, 180 + i * 30]));
   const kinds = (layout) => layout.paths.reduce((n, p) => ({ ...n, [p.kind]: (n[p.kind] ?? 0) + 1 }), {});
@@ -491,6 +497,62 @@ test("a label's measured height moves the leaf rows below it and the track's bra
   assert.equal(shed.yu - shedCounted.yu, down);
   assert.ok(shedModel.stations.every((s) => shed.stations[s.id].y === shedCounted.stations[s.id].y + down && shed.stations[s.id].x === shedCounted.stations[s.id].x));
   assert.equal(shed.height, shedCounted.height + down);
+});
+
+/** How far a station stands from the nearest other station on its level whose label stands on the same side. */
+const neighborOf = (layout, id) => {
+  const p = layout.stations[id];
+  const above = layout.labels[id].above;
+  return Math.min(...Object.keys(layout.stations).filter((o) => o !== id && layout.stations[o].y === p.y && layout.labels[o].above === above).map((o) => Math.abs(layout.stations[o].x - p.x)));
+};
+
+test("a station's label is no wider than the way to its nearest neighbor on its side of its level less 4 px", async () => {
+  // The cap cancels a spent move with shedding off, so the four rules it cut short spread between it and Renew.
+  const base = await recordOf('req_f8085653-422/1');
+  const walk = [step('pin', 'match'), step('eligible', 'match'), step('move:spent', 'fired'), ...RULES.slice(1).map((r) => step(r, 'not_run')), step('cap_filter', 'dropped'), step('renew', 'renewed')];
+  const capped = d.layoutStrip(modelOf(built(base, walk, 'renewed')), 958);
+  for (const id of RULES.slice(1)) {
+    const { width } = capped.labels[id];
+    const room = neighborOf(capped, id) - 4;
+    assert.ok(width > 0 && width <= room + 1e-9, `${id}'s label is ${width} px wide beside ${room} px`);
+  }
+  // Two partitions of one group stand a unit apart, both reading "fell through" when neither preference keeps a member.
+  const freshRecord = await recordOf('req_ef099b34-453/1');
+  const fell = (s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'above_ceiling' || f.key === 'winding_down' ? { ...f, value: 'fell_through' } : f)) } : s);
+  const m = modelOf({ ...freshRecord, walk: freshRecord.walk.map(fell) });
+  const pair = ['partitions:above_ceiling', 'partitions:winding_down'];
+  assert.deepEqual(pair.map((id) => stationOf(m, id).badge), ['fell through', 'fell through']);
+  const fresh = d.layoutStrip(m, 958);
+  for (const id of pair) {
+    const label = fresh.labels[id];
+    assert.equal(label.above, false, id);
+    assert.ok(Math.abs(label.width - (fresh.unit - 4)) < 1e-9, `${id}'s label is ${label.width} px wide, not the unit of ${fresh.unit} less 4`);
+  }
+});
+
+test("a short walk's line moves right so its leaves keep inside the strip, and a long line stays where it starts", async () => {
+  const base = await recordOf('req_ef099b34-453/1');
+  // An answered probe: three stations at the widest unit, so the host stands near the strip's left edge.
+  const record = built(base, [step('pin', 'match'), step('eligible', 'match'), step('probe', 'answered')], 'renewed');
+  const m = modelOf(record);
+  assert.deepEqual([m.shape, m.host, m.leaves.length > 0], ['short', 'probe', true]);
+  const layout = d.layoutStrip(m, 958);
+  // Without candidates the line draws no leaves, so it starts at its left margin.
+  const bare = d.layoutStrip(modelOf({ ...record, candidates: [] }), 958);
+  const host = layout.stations.probe;
+  const shift = host.x - bare.stations.probe.x;
+  assert.ok(shift > 0, `the line moves right by ${shift} px`);
+  assert.ok(host.x >= d.LEAF_ROOM - 1e-9 || Math.abs(layout.termini.chosen.x - (958 - 150)) < 1e-9, `the host stands at ${host.x}, short of ${d.LEAF_ROOM} px with room left at the right`);
+  for (const s of m.stations) assert.ok(layout.stations[s.id].y === bare.stations[s.id].y && Math.abs(layout.stations[s.id].x - bare.stations[s.id].x - shift) < 1e-9, `${s.id} keeps its place on the line`);
+  for (const t of ['chosen', 'held', 'refused']) assert.ok(Math.abs(layout.termini[t].x - bare.termini[t].x - shift) < 1e-9, `${t} moves with the line`);
+  assert.deepEqual(layout.leaves.map((p) => [p.x, p.maxWidth]), m.leaves.map(() => [host.x - 16, host.x - 16 - 8]));
+
+  const freshModel = modelOf(await recordOf('req_ef099b34-453/1'));
+  const fresh = d.layoutStrip(freshModel, 958);
+  const freshBare = d.layoutStrip(modelOf({ ...(await recordOf('req_ef099b34-453/1')), candidates: [] }), 958);
+  assert.equal(fresh.stations.pin.x, 36);
+  assert.ok(freshModel.stations.every((s) => fresh.stations[s.id].x === freshBare.stations[s.id].x), 'a line whose host stands far enough right stays');
+  assert.deepEqual(fresh.leaves.map((p) => p.maxWidth), freshModel.leaves.map(() => fresh.stations.pick.x - 16 - 8));
 });
 
 /** The story's decisions, and the holds and the exhaustion after a hold its cards are read beside. */
