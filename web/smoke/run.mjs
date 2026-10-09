@@ -11575,7 +11575,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -11620,8 +11620,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
-    name: '/settings the main snippet is the six recommended lines',
-    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
+    name: '/settings the main snippet is the seven recommended lines',
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
@@ -11636,6 +11636,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const want = [
     'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
     '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
     'DISABLE_TELEMETRY=1',
@@ -11647,6 +11648,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
+    'Marks the session a consumer subscription, which no organization policy governs',
+    'The client documents it nowhere, and a future build may drop it.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
     'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',

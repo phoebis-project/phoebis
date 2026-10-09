@@ -63,10 +63,11 @@ ceiling and switch is a pool field or a constant of the router. It installs from
 ```
 
 The mod needs Claude Code 2.1.287 or later and does nothing on an older client. With its options unset it reports to
-`ANTHROPIC_BASE_URL` under the router key in `ANTHROPIC_AUTH_TOKEN`, then `CLAUDE_CODE_OAUTH_TOKEN`, so the
-[client block](client.md#for-the-keepalive-mod) needs no line of its own for it, and without a URL or a key it reports
-nothing. It behaves the same in the terminal, the Desktop app, the VS Code extension's chat panel, `claude -p` and the
-Agent SDK.
+`ANTHROPIC_BASE_URL` under the router key in `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then
+`CLAUDE_CODE_OAUTH_TOKEN`, so the [client block](client.md#for-the-keepalive-mod) needs no line of its own for it beyond
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#claude_code_subscription_type), which lets its reports leave the process,
+and without a URL or a key it reports nothing. It behaves the same in the terminal, the Desktop app, the VS Code
+extension's chat panel, `claude -p` and the Agent SDK.
 
 The mod reports on the main conversation, whose agent id is `main`, and on each subagent the client lists. An agent's
 open set holds the background commands and the subagents it started that have not ended yet, and the session's crons

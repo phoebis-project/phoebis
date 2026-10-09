@@ -17,6 +17,10 @@ const ENV_TERMS: { body: string; term: string }[] = [
     body: 'Holds the router key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
   },
   {
+    term: 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
+    body: "Marks the session a consumer subscription, which no organization policy governs, so the client skips the policy check that under the first-party variable goes to api.anthropic.com with the router key, fails, and refuses the keepalive mod's reports. The client documents it nowhere, and a future build may drop it.",
+  },
+  {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the router relays the reduced shape as is. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
   },

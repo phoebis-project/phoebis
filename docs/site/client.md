@@ -9,6 +9,7 @@ listener accepts from the client and what it refuses.
 ```sh
 ANTHROPIC_BASE_URL=https://<router host>
 CLAUDE_CODE_OAUTH_TOKEN=<key secret>
+CLAUDE_CODE_SUBSCRIPTION_TYPE=max
 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 DISABLE_TELEMETRY=1
@@ -32,6 +33,20 @@ Holds the router key's secret, the one shown once at creation or rotation. Put i
 `ANTHROPIC_API_KEY`: the client gates three behaviors on a subscriber check that a credential in `ANTHROPIC_API_KEY`
 never passes, the one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429,
 and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
+
+### CLAUDE_CODE_SUBSCRIPTION_TYPE
+
+Optional, and needed for the keepalive mod's reports under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Set to `max`
+beside the token. The client builds the credential it uses from `CLAUDE_CODE_OAUTH_TOKEN` with the subscription type
+this variable names, null when it is unset, and reads the type for its policy eligibility check, which fetches the
+organization's policy limits from `api.anthropic.com` for a null, `team` or `enterprise` type and skips the fetch for
+`pro` or `max`, a consumer subscription no organization policy governs. Its two subscriber checks and its upgrade hint
+read the type too. Under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` the policy fetch goes to `api.anthropic.com` with
+the router key, answers 401, and the client then refuses every fetch a plugin makes, so the keepalive mod reports
+nothing and the Sessions view reads `none` under Companion. Without that variable the client skips the fetch for a base
+URL that is not its own. With `max` the check is skipped and the mod's reports leave the process. The client documents
+the variable nowhere, sets it itself from its own auth state when the token is its own, and a later client build may
+drop it.
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
@@ -94,8 +109,10 @@ lands. Every header is optional; a request without one is relayed the same way. 
 Optional. Set to `1`, it switches off the client's event logger, which otherwise posts telemetry batches to
 `api.anthropic.com` with the credential it was given, behind the router the key secret.
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and also stops update checks and the bootstrap lookup. The
-policy and settings lookups the client makes at start still go to `api.anthropic.com` with the secret under either
-setting; they fail there and the client tolerates that.
+settings lookup the client makes at start still goes to `api.anthropic.com` with the secret under either setting, fails
+there, and the client tolerates that. The policy lookup goes out only under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`,
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE=max`](#claude_code_subscription_type) skips it, and without that line its failure makes
+the client refuse every fetch a plugin makes.
 
 ### CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK
 
@@ -117,10 +134,12 @@ The keepalive mod installs from its marketplace, inside Claude Code:
 ```
 
 With its options unset, the mod reports to `ANTHROPIC_BASE_URL` under the key in `ANTHROPIC_AUTH_TOKEN`, then
-`CLAUDE_CODE_OAUTH_TOKEN`, so the block above needs no line of its own for it. At session start the mod writes its
-owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's other lines, and the
-client sends it on every model request of the process. The router reads it to tell that process's requests from those
-of another process on the same session id, so binding a session to its process needs no wrapper script.
+`ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`, so the block above needs no line of its own for it beyond
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type), which lets its reports leave the process. At session
+start the mod writes its owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's
+other lines, and the client sends it on every model request of the process. The router reads it to tell that process's
+requests from those of another process on the same session id, so binding a session to its process needs no wrapper
+script.
 
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is worth setting for Fable 5.1 sessions in a pool with cache warming on: at a
 0.025x read price, a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset
