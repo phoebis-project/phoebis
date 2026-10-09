@@ -87,13 +87,14 @@ const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>)
 /** The row's element id, so a fork's badge can link to its base; a session id may hold characters an id may not. */
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
 /**
- * The request log on the session the client sent, inside the narrowest range that covers its last request, read on
- * the clock at the click: the page's `now` is a sample up to five seconds old, and the request log measures its
- * window from its own load.
+ * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
+ * the same session id, inside the narrowest range that covers its last request, read on the clock at the click: the
+ * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load.
  */
-const requestsHref = (trafficSession: string, lastRequestAt: string | null) => {
-  const range = requestsRange(lastRequestAt, clock.now());
-  return `/requests?search=${encodeURIComponent(trafficSession)}${range === null ? '' : `&range=${range}`}`;
+const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>) => {
+  const range = requestsRange(session.lastRequestAt, clock.now());
+  const keys = encodeURIComponent(`${session.keyId}@${session.keyGeneration}`);
+  return `/requests?search=${encodeURIComponent(trafficSession)}&keys=${keys}${range === null ? '' : `&range=${range}`}`;
 };
 
 const sessionLabel = (session: Session) =>
@@ -516,7 +517,7 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
-              { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session.lastRequestAt)) },
+              { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session)) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),

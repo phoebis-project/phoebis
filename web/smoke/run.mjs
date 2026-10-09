@@ -10524,8 +10524,10 @@ m.unmount();
 }
 {
   // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
-  // sent inside the narrowest of the log's ranges that covers the row's last request. The page's own `now` is a sample
-  // up to five seconds old, so the range is read on the clock at the click, which the last case moves past the sample.
+  // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's last request. A
+  // session id outlives a key id created again, so the session alone would answer both holders' requests. The page's
+  // own `now` is a sample up to five seconds old, so the range is read on the clock at the click, which the last case
+  // moves past the sample.
   const MINUTE = 60_000;
   const HOUR = 60 * MINUTE;
   // The log's widths, each a minute short for the log's own load after the click, spelled out so the check holds the
@@ -10537,6 +10539,7 @@ m.unmount();
   ];
   const rangeAt = (lastRequestAt, at) => (lastRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(lastRequestAt) <= width)?.[0] ?? null));
   const listed = await api.listSessions();
+  const lifetime = (s) => `${s.keyId}@${s.keyGeneration}`;
   const rowsOf = (page) => [...page.container.querySelectorAll('tbody tr.srow')];
   const sessionOf = (page, tr) => {
     const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
@@ -10550,10 +10553,17 @@ m.unmount();
     return [...(tr?.querySelectorAll('.menu__list button') ?? [])];
   };
   const entryOf = async (page, tr) => (await toggleMenu(page, tr)).find((b) => b.textContent?.trim() === 'View in requests');
+  const keysFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
   const landing = (page) => {
     const at = page.location();
     const params = new URLSearchParams(at.search);
+    const keys = keysFilter(page);
     return {
+      keyFilter: keys?.querySelector('.mselect__trigger')?.textContent?.trim() ?? null,
+      // The live-key options list bare ids, so a lifetime is a value none of them carries: the trigger still counts
+      // it and offers its Clear.
+      keyFilterSet: keys?.classList.contains('has-value') === true && keys.querySelector('.mselect__clear[aria-label="Clear Keys"]') !== null,
+      keys: params.get('keys'),
       path: at.pathname,
       range: params.get('range'),
       search: params.get('search'),
@@ -10584,10 +10594,59 @@ m.unmount();
     const s = sessionOf(page, tr);
     (await entryOf(page, tr))?.click();
     await page.settle(300);
-    followed.push({ band, got: landing(page), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    followed.push({ band, got: landing(page), key: lifetime(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
     await page.navigate('/sessions');
     await page.settle(300);
   }
+  // The story's two rows of one session id under two generations of a key id, each clicked in turn. The log's reads
+  // are wrapped to capture the query the page sent and the rows it answered, and the drawn Key cells are read beside
+  // them, since the cells name the key id alone. The same search over the earlier holder's window without the key,
+  // read at a page size past the story's rows, holds both generations, so a scope the address drops shows.
+  const gone = listed.find((s) => s.historical && s.requests > 0);
+  const kept = listed.find((s) => gone !== undefined && !s.historical && s.keyId === gone.keyId && s.sessionId === gone.sessionId && s.requests > 0);
+  const { listRequests } = api;
+  const reads = [];
+  api.listRequests = async (...args) => {
+    const answer = await listRequests.apply(api, args);
+    reads.push({ answer, query: args[0] });
+    return answer;
+  };
+  const pair = [];
+  for (const s of [gone, kept]) {
+    if (s === undefined) continue;
+    const tr = rowsOf(page).find((r) => {
+      const at = sessionOf(page, r);
+      return at !== undefined && at.keyId === s.keyId && at.sessionId === s.sessionId && at.historical === s.historical;
+    });
+    reads.length = 0;
+    (await entryOf(page, tr))?.click();
+    await page.settle(300);
+    const read = reads[reads.length - 1];
+    const answered = read?.answer.requests ?? [];
+    const heads = [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+    const drawn = [...page.container.querySelectorAll('.requests__table tbody tr')].map((row) => row.children[heads.indexOf('Key')]?.textContent?.trim() ?? '');
+    const filter = keysFilter(page);
+    filter?.querySelector('.mselect__trigger')?.click();
+    await page.settle(150);
+    const options = [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    const unscoped = read === undefined ? [] : (await listRequests.call(api, { ...read.query, cursor: undefined, keyIds: [], limit: 500 })).requests;
+    pair.push({
+      checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length,
+      drawn: [...new Set(drawn)],
+      drawnCount: drawn.length,
+      historical: s.historical,
+      key: lifetime(s),
+      keyId: s.keyId,
+      listed: [...new Set(answered.map(lifetime))],
+      listedCount: answered.length,
+      offered: options.length,
+      reads: reads.map((r) => (r.query?.keyIds ?? []).join(',')),
+      unscoped: [...new Set(unscoped.map(lifetime))].sort(),
+    });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  api.listRequests = listRequests;
   // Unmounted before the next mount, since an unmount puts the clock back to live and `tick` needs it frozen.
   page.unmount();
   // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, moved to one
@@ -10610,7 +10669,7 @@ m.unmount();
   await later.navigate('/sessions');
   later.unmount();
   results.push({
-    name: '/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page with the session in its search and the narrowest range that covers its last request',
+    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page with the session in its search, the row's key lifetime in its key filter and the narrowest range that covers its last request, listing that holder's requests alone",
     ok:
       labels.indexOf('View in requests') === labels.indexOf('View in routing log') - 1 &&
       labels.indexOf('View in requests') > labels.indexOf('View in analytics') &&
@@ -10618,17 +10677,23 @@ m.unmount();
       off.disabled &&
       (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClick.path === '/requests' &&
+      atClick.keys === lifetime(moved) &&
       atClick.range === '6h' &&
-      atClick.select === '6h',
+      atClick.select === '6h' &&
+      pair.length === 2 &&
+      pair[0].key !== pair[1].key &&
+      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === 0) &&
+      pair.every((p) => (pair.find((x) => x.historical)?.unscoped ?? []).includes(p.key)),
     missing: [
       labels.join('|'),
       off === undefined ? 'no entry on the row without requests' : `without requests disabled=${off.disabled} title=${off.getAttribute('title')}`,
       `bands found ${followed.map((f) => f.band).join(',') || 'none'}`,
       ...followed.map((f) => JSON.stringify(f)),
       `at the click ${movedRow === undefined ? 'no moved row' : JSON.stringify(atClick)}`,
+      `the shared pair ${pair.length === 0 ? 'not found' : pair.map((p) => JSON.stringify(p)).join(' ')}`,
     ],
   });
 }
