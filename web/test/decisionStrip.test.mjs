@@ -188,6 +188,8 @@ test("the story's records give their stations, states, host and termini", async 
   const refusalLayout = d.layoutStrip(refusal, 958);
   assert.deepEqual(refusalLayout.paths.filter((p) => p.kind === 'edge' || p.kind === 'curve').map((p) => `${p.kind} ${p.state}`), ['edge idle', 'curve idle', 'curve idle', 'curve taken']);
   const refused = refusalLayout.paths.find((p) => p.kind === 'curve' && p.state === 'taken');
+  // The samples below answer only where the path runs, so the path has to reach its terminus first.
+  assert.deepEqual(pointsOf(refused.d).at(-1), [refusalLayout.termini.refused.x, refusalLayout.termini.refused.y], 'the taken path ends at Refused');
   assert.ok(highestAt(refused.d, refusalLayout.stations.selection.x) > refusalLayout.y0 + d.RADIUS, 'the taken path to Refused passes under the idle Rest of the walk');
   assert.ok(highestAt(refused.d, (refusalLayout.stations.admission.x + refusalLayout.stations.selection.x) / 2) > refusalLayout.y0 + d.RADIUS, 'it leaves the idle edge into Rest of the walk alone');
   assert.ok(refused.d.startsWith(`M${refusalLayout.stations.admission.x} ${refusalLayout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Admission toward Refused');
@@ -278,6 +280,7 @@ test('a record with no slot step expects the slot its outcome names after its la
   const layout = d.layoutStrip(m, 958);
   const curves = layout.paths.filter((p) => p.kind === 'curve');
   assert.deepEqual(curves.map((p) => p.state), ['idle', 'idle', 'taken']);
+  assert.deepEqual(pointsOf(curves[2].d).at(-1), [layout.termini.refused.x, layout.termini.refused.y], 'the taken path ends at Refused');
   for (const s of m.stations.slice(2)) assert.ok(highestAt(curves[2].d, layout.stations[s.id].x) > layout.y0 + d.RADIUS, `the taken path to Refused passes under the idle ${s.id}`);
   assert.ok(curves[2].d.startsWith(`M${layout.stations.eligible.x} ${layout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Eligible toward Refused');
   assert.equal(layout.labels.eligible.above, true);
@@ -408,6 +411,7 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   // The fan drops from Renew past its label, and the first leaf row keeps its place below it.
   const renewLabel = capped.labels.renew;
   assert.equal(renewLabel.top, 176 + 12);
+  assert.equal(renewLabel.height, 16 + 3 + 22, "Renew's name line over the console's badge box");
   const fan = capped.paths.find((p) => p.kind === 'fan');
   assert.ok(fan.d.startsWith(`M${capped.stations.renew.x} ${renewLabel.top + renewLabel.height} `), 'the fan starts at the label\'s bottom edge');
   assert.ok(renewLabel.top + renewLabel.height > 176 + d.RADIUS);

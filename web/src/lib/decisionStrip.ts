@@ -468,11 +468,11 @@ const TICK = 14;
 const LEAF_GAP = 16;
 // A leaf is centered on its row and 24 px tall.
 const LEAF_HALF = 12;
-// The label box the strip's stylesheet draws: its near edge 12 px off the station's center, a 15 px line for the name
-// and one for the second line, a 17 px badge, 3 px apart.
+// The label box the strip's stylesheet draws: its near edge 12 px off the station's center, a 16 px line for the name
+// and one for the second line, the console's 22 px badge box (an 18 px line in 2 px of padding), 3 px apart.
 const LABEL_OFFSET = 12;
-const LABEL_LINE = 15;
-const LABEL_BADGE = 17;
+const LABEL_LINE = 16;
+const LABEL_BADGE = 22;
 const LABEL_GAP = 3;
 const BRACKET_OVERHANG = 14;
 const BRACKET_RISE = 36;
