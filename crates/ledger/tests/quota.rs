@@ -12,7 +12,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    LedgerConfig, LedgerDb, QuotaPoll, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+    hourly_window_samples, lead_over_pace, HourlyWindowSample, LedgerConfig, LedgerDb, QuotaPoll,
+    QuotaSampleRecord, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
 };
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
@@ -1435,4 +1436,91 @@ async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
         "the end measures the second run"
     );
     up.shutdown().await;
+}
+
+#[test]
+fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let sample = |bucket: i64, utilization: f64| QuotaSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        window: FIVE_HOUR.into(),
+        utilization: Some(utilization),
+        reset_at: Some(bucket * 1_000 + 3_600_000),
+        source: "poll".into(),
+        observed_at: Some(bucket * 1_000 + 17_000),
+    };
+    // Three samples in the hour from 3,600 s written out of order, one in the hour after, and one before the
+    // epoch, whose hour floors below it rather than truncating toward zero.
+    db.insert_samples(
+        &[
+            sample(3_900, 0.1),
+            sample(4_500, 0.3),
+            sample(4_200, 0.2),
+            sample(7_500, 0.4),
+            sample(-2_700, 0.05),
+        ],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| hourly_window_samples(c, -3_600, 10_800))
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|r| (r.hour, r.bucket)).collect::<Vec<_>>(),
+        vec![(-3_600, -2_700), (3_600, 4_500), (7_200, 7_500)],
+        "the newest of the three, the one of the next hour, and the negative bucket under the hour below it"
+    );
+    assert_eq!(
+        rows[1],
+        HourlyWindowSample {
+            account_id: "a".into(),
+            hour: 3_600,
+            window: FIVE_HOUR.into(),
+            bucket: 4_500,
+            observed_at: Some(4_517_000),
+            utilization: Some(0.3),
+            reset_at: Some(8_100_000),
+        },
+        "the row carries the sample's own instant beside its bucket"
+    );
+    let bounded = db
+        .read_blocking(|c| hourly_window_samples(c, 3_600, 7_200))
+        .unwrap();
+    assert_eq!(
+        bounded.iter().map(|r| r.bucket).collect::<Vec<_>>(),
+        vec![4_500],
+        "the bounds are hours in seconds, the upper one exclusive"
+    );
+}
+
+#[test]
+fn the_lead_over_pace_reads_the_sample_against_its_window_s_elapsed_share() {
+    let week = 7 * 24 * 3_600_000;
+    let at = 1_700_000_000_000;
+    let ahead = lead_over_pace("seven_day", 0.5, Some(at + week * 9 / 10), at);
+    assert!(
+        (ahead - 0.4).abs() < 1e-9,
+        "a tenth of the week elapsed by the sample's instant: {ahead}"
+    );
+    assert_eq!(
+        lead_over_pace("five_hour", 0.7, None, at),
+        0.7,
+        "without a reset nothing has elapsed"
+    );
+    let past = lead_over_pace("five_hour", 0.7, Some(at - 1), at);
+    assert!(
+        (past - (0.7 - 1.0)).abs() < 1e-9,
+        "a reset in the past is the whole window elapsed: {past}"
+    );
+    let fable = lead_over_pace("seven_day_fable", 0.2, Some(at + week / 2), at);
+    assert!(
+        (fable - (0.2 - 0.5)).abs() < 1e-9,
+        "the model week is a seven_day window a week long: {fable}"
+    );
+    let half = lead_over_pace("five_hour", 0.6, Some(at + 9_000_000), at);
+    assert!(
+        (half - 0.1).abs() < 1e-9,
+        "a five-hour window half way to its reset: {half}"
+    );
 }

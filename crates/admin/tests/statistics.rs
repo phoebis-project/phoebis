@@ -559,6 +559,161 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
 }
 
 #[tokio::test]
+async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead_and_null_without_one(
+) {
+    let parts = common::admin_parts_full().await;
+    // Every instant sits at or after the epoch: the hour floor is proved on its own, and the samples are each
+    // observed past their bucket's floor so the wire's instant is told apart from it.
+    let five_hour_at = HOUR + 1_500_123;
+    let seven_day_at = 2 * HOUR + 300_456;
+    let sample = |window: &str, at: i64, utilization: Option<f64>, reset_at: i64| {
+        phoebis_ledger::QuotaSampleRecord {
+            account_id: "business".into(),
+            bucket: phoebis_ledger::bucket_of(at),
+            window: window.into(),
+            utilization,
+            reset_at: Some(reset_at),
+            source: "poll".into(),
+            observed_at: Some(at),
+        }
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                sample(
+                    "five_hour",
+                    five_hour_at,
+                    Some(0.62),
+                    five_hour_at + 4 * HOUR,
+                ),
+                sample(
+                    "seven_day",
+                    seven_day_at,
+                    Some(0.41),
+                    seven_day_at + 6 * 24 * HOUR,
+                ),
+                sample(
+                    "seven_day_fable",
+                    seven_day_at,
+                    None,
+                    seven_day_at + 6 * 24 * HOUR,
+                ),
+            ],
+            None,
+        )
+        .unwrap();
+    // A third hour with an attempt and no sample, so its rollup row lists it with every window null.
+    let attempted_at = 3 * HOUR + 60_000;
+    let mut served = attempt("w1", "business", 200);
+    served.started_at = attempted_at;
+    parts
+        .db
+        .insert_request(
+            &request(
+                "w1",
+                attempted_at,
+                Some("desktop"),
+                "claude-sonnet-5",
+                "succeeded",
+                200,
+                "inference",
+            ),
+            &[served],
+            None,
+        )
+        .unwrap();
+    let cookie = login(&parts.app, "admin-secret").await;
+    let answer = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/accounts?range={},{}", HOUR, 4 * HOUR),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    let hours = business["hours"].as_array().unwrap();
+    assert_eq!(
+        hours
+            .iter()
+            .map(|h| h["hour"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![HOUR, 2 * HOUR, 3 * HOUR],
+        "the two sampled hours without an attempt and the attempted hour without a sample are all listed"
+    );
+    let first = &hours[0];
+    assert!(
+        first["utilization_5h_max"].is_null() && first["pins_created"] == 0,
+        "an hour with samples and no attempt carries no peak and no count: {first}"
+    );
+    let five = &first["windows"]["five_hour"];
+    assert_eq!(five["utilization"].as_f64(), Some(0.62));
+    assert_eq!(five["reset_at"].as_i64(), Some(five_hour_at + 4 * HOUR));
+    assert_eq!(
+        five["sampled_at"].as_i64(),
+        Some(five_hour_at),
+        "the sample's own instant, not its bucket's floor"
+    );
+    let lead = five["lead"].as_f64().unwrap();
+    assert!(
+        (lead - 0.42).abs() < 1e-9,
+        "scored at the sample's instant, one hour of five elapsed: {lead}"
+    );
+    assert!(
+        first["windows"]["seven_day"].is_null() && first["windows"]["seven_day_fable"].is_null(),
+        "the windows the hour holds no sample of read null: {first}"
+    );
+    let second = &hours[1];
+    assert!(second["windows"]["five_hour"].is_null());
+    let seven = &second["windows"]["seven_day"];
+    assert_eq!(seven["utilization"].as_f64(), Some(0.41));
+    assert_eq!(seven["sampled_at"].as_i64(), Some(seven_day_at));
+    let seven_lead = seven["lead"].as_f64().unwrap();
+    assert!(
+        (seven_lead - (0.41 - 1.0 / 7.0)).abs() < 1e-9,
+        "a day of the week elapsed by the sample's instant: {seven_lead}"
+    );
+    let fable = &second["windows"]["seven_day_fable"];
+    assert!(
+        fable["utilization"].is_null() && fable["lead"].is_null(),
+        "a sample that reported the reset alone has no lead: {fable}"
+    );
+    assert_eq!(
+        fable["reset_at"].as_i64(),
+        Some(seven_day_at + 6 * 24 * HOUR)
+    );
+    assert_eq!(fable["sampled_at"].as_i64(), Some(seven_day_at));
+    let third = &hours[2];
+    assert_eq!(third["utilization_5h_max"].as_f64(), Some(0.3));
+    assert_eq!(
+        third["windows"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.is_null()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("five_hour", true),
+            ("seven_day", true),
+            ("seven_day_fable", true)
+        ],
+        "an hour with no sample holds the three windows as nulls and no other id"
+    );
+    assert_eq!(
+        business["peak"]["five_hour"].as_f64(),
+        Some(0.3),
+        "the peaks still come from the attempts' heads"
+    );
+}
+
+#[tokio::test]
 async fn the_request_log_answers_and_filters_the_client_the_agent_type_and_the_turn_origin() {
     let parts = common::admin_parts_full().await;
     seed_rollups(&parts);

@@ -1,6 +1,6 @@
 //! Rollup reads: the series bucketed to the range, the breakdown per group, and the account rollups.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -8,13 +8,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, moves_by_reason,
-    parse_range, read_account_rollups, rewrite_series, series_paged, session_burn_series,
-    AccountRollupRow, FundingFilter, LedgerError, LiveKeys, RollupFilter, SeriesFilter,
-    SharePricing, Tiers, GROUP_BYS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
+    lead_over_pace, moves_by_reason, parse_range, read_account_rollups, rewrite_series,
+    series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
+    LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, Tiers, GROUP_BYS,
 };
+use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::AccountKind;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::routes::{failure, store_failure};
 use crate::AdminState;
@@ -287,6 +288,28 @@ pub(crate) async fn placements(
     Json(json!({ "from": from, "to": to, "rows": rows })).into_response()
 }
 
+/// The three windows the router reads, each null until an hour's sample fills it, so the console reads the keys
+/// whatever the hour holds. Any other window id the samples carry joins the hours that hold one alone.
+fn base_windows() -> Map<String, Value> {
+    [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+        .into_iter()
+        .map(|w| (w.to_string(), Value::Null))
+        .collect()
+}
+
+/// An hour's last sample of one window as the wire carries it. The lead is scored at the sample's own instant,
+/// since the bucket is the sampler's 300-second floor and a reset minutes away would read wrong from it, and a
+/// sample that reported the reset alone has no lead.
+fn window_json(s: &HourlyWindowSample) -> Value {
+    let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
+    json!({
+        "utilization": s.utilization,
+        "reset_at": s.reset_at,
+        "lead": s.utilization.map(|u| lead_over_pace(&s.window, u, s.reset_at, sampled_at)),
+        "sampled_at": sampled_at,
+    })
+}
+
 pub(crate) async fn accounts(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
@@ -304,10 +327,18 @@ pub(crate) async fn accounts(
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
     };
-    let mut by_account: std::collections::BTreeMap<
-        String,
-        (AccountRollupRow, Vec<AccountRollupRow>),
-    > = std::collections::BTreeMap::new();
+    // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered.
+    let samples = match state
+        .ledger
+        .db()
+        .read(move |c| hourly_window_samples(c, hour_of(from), hour_ceil(to)))
+        .await
+    {
+        Ok(samples) => samples,
+        Err(e) => return ledger_failure(e),
+    };
+    type Hour = (AccountRollupRow, Map<String, Value>);
+    let mut by_account: BTreeMap<String, (AccountRollupRow, BTreeMap<i64, Hour>)> = BTreeMap::new();
     for row in rows {
         let entry = by_account.entry(row.account_id.clone()).or_insert_with(|| {
             (
@@ -315,18 +346,43 @@ pub(crate) async fn accounts(
                     account_id: row.account_id.clone(),
                     ..Default::default()
                 },
-                Vec::new(),
+                BTreeMap::new(),
             )
         });
         entry.0.add(&row);
-        entry.1.push(row);
+        let hour = row.hour;
+        entry.1.insert(hour, (row, base_windows()));
+    }
+    for s in samples {
+        let entry = by_account.entry(s.account_id.clone()).or_insert_with(|| {
+            (
+                AccountRollupRow {
+                    account_id: s.account_id.clone(),
+                    ..Default::default()
+                },
+                BTreeMap::new(),
+            )
+        });
+        // An hour with samples and no attempt is listed with null peaks and zero counts, so the cards draw an idle
+        // hour's reading while the peaks and the sums stay the attempts' own.
+        let (_, windows) = entry.1.entry(s.hour).or_insert_with(|| {
+            (
+                AccountRollupRow {
+                    hour: s.hour,
+                    account_id: s.account_id.clone(),
+                    ..Default::default()
+                },
+                base_windows(),
+            )
+        });
+        windows.insert(s.window.clone(), window_json(&s));
     }
     let accounts: Vec<_> = by_account.into_iter().map(|(id, (sum, hours))| json!({
         "account_id": id,
         "peak": { "five_hour": sum.utilization_5h_max, "seven_day": sum.utilization_7d_max, "seven_day_overage_included": sum.utilization_7d_oi_max },
         "overage_seconds": sum.overage_seconds, "cooldown_seconds": sum.cooldown_seconds,
         "pins": { "created": sum.pins_created, "migrated_in": sum.pins_migrated_in, "migrated_out": sum.pins_migrated_out },
-        "hours": hours.iter().map(|h| json!({ "hour": h.hour * 1_000, "utilization_5h_max": h.utilization_5h_max, "utilization_7d_max": h.utilization_7d_max, "utilization_7d_oi_max": h.utilization_7d_oi_max, "overage_seconds": h.overage_seconds, "cooldown_seconds": h.cooldown_seconds, "pins_created": h.pins_created, "pins_migrated_in": h.pins_migrated_in, "pins_migrated_out": h.pins_migrated_out })).collect::<Vec<_>>(),
+        "hours": hours.into_values().map(|(h, windows)| json!({ "hour": h.hour * 1_000, "utilization_5h_max": h.utilization_5h_max, "utilization_7d_max": h.utilization_7d_max, "utilization_7d_oi_max": h.utilization_7d_oi_max, "overage_seconds": h.overage_seconds, "cooldown_seconds": h.cooldown_seconds, "pins_created": h.pins_created, "pins_migrated_in": h.pins_migrated_in, "pins_migrated_out": h.pins_migrated_out, "windows": windows })).collect::<Vec<_>>(),
     })).collect();
     Json(json!({ "from": from, "to": to, "accounts": accounts })).into_response()
 }

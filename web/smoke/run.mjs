@@ -8697,7 +8697,25 @@ expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1
 await tab(m, 'Cache warming');
 expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
 await tab(m, 'Accounts');
-expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
+expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
+{
+  const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+  const toggleOf = (t) => [...(card(t)?.querySelectorAll('.segmented[aria-label="Window"] button') ?? [])];
+  const labels = (t) => toggleOf(t).map((b) => b.textContent?.trim() ?? '');
+  const pressed = (t) => toggleOf(t).find((b) => b.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? '';
+  // The mock's rows hold no sample yet, so the toggle offers the three windows the router reads and no fourth.
+  const three = '["5-hour","7-day","7-day Fable"]';
+  results.push({
+    name: '/analytics the Accounts section draws the Window usage and Pace cards with a window toggle',
+    ok: card('Window usage') !== undefined && card('Pace') !== undefined && JSON.stringify(labels('Window usage')) === three && JSON.stringify(labels('Pace')) === three,
+    missing: [JSON.stringify(labels('Window usage')), JSON.stringify(labels('Pace'))],
+  });
+  toggleOf('Window usage').find((b) => b.textContent?.trim() === '7-day')?.click();
+  await m.settle(300);
+  results.push({ name: '/analytics choosing 7-day on the toggle moves both cards', ok: pressed('Window usage') === '7-day' && pressed('Pace') === '7-day', missing: [pressed('Window usage'), pressed('Pace')] });
+  const meta = m.container.querySelector('#accounts .analytics-section__meta')?.textContent?.trim() ?? '';
+  results.push({ name: '/analytics the Accounts meta names window usage and pace', ok: meta === 'Peak utilization, window usage, pace, ineligible time, and pin churn per account', missing: [meta] });
+}
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));

@@ -45,21 +45,21 @@ pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 pub mod test_tables;
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
-    decision_record, group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota,
-    list_requests, list_routing_log, literal_like, member_spends, moves_by_reason, parked_count,
-    parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
-    recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
-    rewrite_series, series_paged,
-    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
-    CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupRow,
-    LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeShare, RequestFilter, RollupFilter,
-    RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint,
-    SessionActivity, SessionIdentity, SharePricing, Tiers, Totals, TrafficBucket, DECISION_KINDS,
-    EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    decision_record, group_of, hour_ceil, hourly_window_samples, key_request_totals,
+    latest_extra_usage, latest_quota, list_requests, list_routing_log, literal_like, member_spends,
+    moves_by_reason, parked_count, parked_summary, parse_range, pin_migrations_by_reason,
+    placements, pool_traffic, recent_events_of_kind, recent_gaps, request_by_id, request_events,
+    request_totals, rewrite_series,
+    series_paged, session_activity, session_burn_series, session_identities, BudgetedMember,
+    BurnPoint, CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow, FundingFilter,
+    GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeShare,
+    RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
+    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SharePricing, Tiers, Totals,
+    TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use quota::{
-    polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
-    PROFILE_EVERY_POLLS,
+    lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
+    POLL_INTERVAL, PROFILE_EVERY_POLLS,
 };
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,

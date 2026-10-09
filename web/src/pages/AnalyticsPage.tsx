@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
+import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -15,7 +16,7 @@ import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
-import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekKeyOf, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekKeyOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -23,6 +24,7 @@ import { bandRuns } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
+import { WINDOW_LABEL } from '@/lib/windows';
 
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
@@ -973,7 +975,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'accounts' && (
-        <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, ineligible time, and pin churn per account">
+        <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, window usage, pace, ineligible time, and pin churn per account">
           <AccountsSection
             accountIds={filters.accountId}
             bucketMs={bucketMs}
@@ -1138,7 +1140,10 @@ function ChartCard({
   footer,
   legend,
   height = 220,
+  actions,
 }: {
+  /** Drawn in the card's header beside the title: a control the chart reads. */
+  actions?: ReactNode;
   children: ReactNode;
   /** Drawn in place of the chart, legend and all, when the answer holds nothing the chart could draw. */
   empty?: ReactNode;
@@ -1152,7 +1157,7 @@ function ChartCard({
   title: string;
 }) {
   return (
-    <Card title={title} subtitle={subtitle}>
+    <Card title={title} subtitle={subtitle} actions={actions}>
       {error !== null ? (
         <ErrorState title={`Could not load ${title.toLowerCase()}`} body={error} />
       ) : loading ? (
@@ -1996,6 +2001,13 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
 
 const NO_SAMPLE_HINT = 'no utilization sampled in range';
 
+/**
+ * The toggle's word for a sampled window: the console's label for the three the router reads, and the extra-usage
+ * week by its own name, since the decoder folds that key onto the model week elsewhere and the cards never draw two
+ * windows as one.
+ */
+const toggleLabel = (id: string): string => (id === 'seven_day_overage_included' ? '7-day, extra usage' : WINDOW_LABEL[windowId(id) ?? ''] ?? id);
+
 /** An hour with no sample carries no peak, so the maximum is over the sampled hours alone and null without one. */
 function peakOf(values: (number | null)[]): number | null {
   const sampled = values.filter((v): v is number => v !== null);
@@ -2064,6 +2076,24 @@ function AccountsSection({
     }
     return rows;
   }, [rollups, accounts, span, bucketMs]);
+  const windows = useMemo(() => sampledWindows(rollups ?? []), [rollups]);
+  const [window, setWindow] = useState('five_hour');
+  // A chosen window no longer offered (the extra-usage week once no row of the range holds it) falls to the 5-hour one.
+  const chosen = windows.includes(window) ? window : 'five_hour';
+  const usage = useMemo(() => windowLines(rollups ?? [], chosen, 'usage', span, bucketMs), [rollups, chosen, span, bucketMs]);
+  const pace = useMemo(() => windowLines(rollups ?? [], chosen, 'pace', span, bucketMs), [rollups, chosen, span, bucketMs]);
+  // The axis takes the widest lead either side of zero, raised to a round tick, so ahead and behind read alike.
+  const paceTop = useMemo(() => {
+    const widest = Math.max(0, ...pace.data.flatMap((r) => accounts.map((a) => Math.abs(r[a] ?? 0))));
+    return widest > 0 ? niceAxisTop(widest) : 50;
+  }, [pace, accounts]);
+  const toggle = <Segmented value={chosen} options={windows.map((id) => ({ label: toggleLabel(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
+  const legend = accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' as const }));
+  const pct = (v: number | null | undefined, signed = false) => (v === null || v === undefined ? '-' : `${signed && v > 0 ? '+' : ''}${v.toFixed(0)}%`);
+  const scoreOf = (p: Record<string, number | null>, a: string) => {
+    const score = p[`${a}:score`];
+    return score === null || score === undefined ? '-' : score.toFixed(2);
+  };
   return (
     <>
       <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
@@ -2077,20 +2107,45 @@ function AccountsSection({
           ))}
         </LineChart>
       </ChartCard>
+      <div className="grid-2">
+        <ChartCard title="Window usage" subtitle="The window's utilization per bucket, from the quota samples" actions={toggle} loading={loading} legend={legend}>
+          <LineChart data={usage.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, a), label: a, value: pct(p[a]) })))} />
+            {accounts.map((a) => (
+              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ChartCard>
+        <ChartCard title="Pace" subtitle="The lead over pace per bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection" actions={toggle} loading={loading} legend={legend}>
+          <LineChart data={pace.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <YAxis domain={[-paceTop, paceTop]} ticks={[-paceTop, -paceTop / 2, 0, paceTop / 2, paceTop]} tickFormatter={(v: number) => pct(v, true)} tickLine={false} axisLine={false} width={44} />
+            <ReferenceLine y={0} stroke={ink.axis} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, a), label: a, value: pct(p[a], true) }, { label: 'Pace score', title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
+            {accounts.map((a) => (
+              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ChartCard>
+      </div>
       <BreakdownTable
         title="Accounts in range"
         subtitle={`Totals for the selected range and accounts${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
         loading={loading}
         groupLabel="Account"
-        columns={['Peak 5h', 'Peak 7d', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}
+        columns={['Peak 5h', 'Peak 7d', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}
         rows={table.map((r) => ({
           key: r.id,
           label: r.id,
           cells: [
             r.peak5 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak5),
             r.peak7 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak7),
-            r.peakF === null ? <span className="muted" title="no Fable window">n/a</span> : fmtPct(r.peakF),
+            r.peakF === null ? <span className="muted" title="no extra-usage window">n/a</span> : fmtPct(r.peakF),
             r.overage ? fmtDuration(r.overage * 1000) : <span className="muted">none</span>,
             r.cooldown ? fmtDuration(r.cooldown * 1000) : <span className="muted">none</span>,
             fmtInt(r.created),

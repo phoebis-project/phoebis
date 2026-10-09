@@ -449,7 +449,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_seconds": 0,
               "pins_created": 0,
               "pins_migrated_in": 1,
-              "pins_migrated_out": 0
+              "pins_migrated_out": 0,
+              "windows": {
+                "five_hour": null,
+                "seven_day": null,
+                "seven_day_fable": null
+              }
             },
             {
               "hour": 0,
@@ -460,7 +465,33 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_seconds": 1800,
               "pins_created": 1,
               "pins_migrated_in": 0,
-              "pins_migrated_out": 0
+              "pins_migrated_out": 0,
+              "windows": {
+                "five_hour": {
+                  "utilization": 0.62,
+                  "reset_at": 4600000,
+                  "lead": -0.1744444444444444,
+                  "sampled_at": 900000
+                },
+                "seven_day": {
+                  "utilization": 0.41,
+                  "reset_at": 87400000,
+                  "lead": -0.4469775132275133,
+                  "sampled_at": 900000
+                },
+                "seven_day_fable": {
+                  "utilization": 0.12,
+                  "reset_at": 87400000,
+                  "lead": -0.7369775132275133,
+                  "sampled_at": 900000
+                },
+                "seven_day_opus": {
+                  "utilization": 0.03,
+                  "reset_at": 87400000,
+                  "lead": -0.8269775132275132,
+                  "sampled_at": 900000
+                }
+              }
             }
           ]
         },
@@ -488,7 +519,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_seconds": 0,
               "pins_created": 0,
               "pins_migrated_in": 0,
-              "pins_migrated_out": 1
+              "pins_migrated_out": 1,
+              "windows": {
+                "five_hour": null,
+                "seven_day": null,
+                "seven_day_fable": null
+              }
             },
             {
               "hour": 0,
@@ -499,7 +535,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_seconds": 0,
               "pins_created": 0,
               "pins_migrated_in": 0,
-              "pins_migrated_out": 0
+              "pins_migrated_out": 0,
+              "windows": {
+                "five_hour": null,
+                "seven_day": null,
+                "seven_day_fable": null
+              }
             }
           ]
         }

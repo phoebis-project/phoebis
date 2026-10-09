@@ -2210,6 +2210,49 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The last quota sample of one account's window inside one hour, as `GET /admin/analytics/accounts` reads it.
+/// `observed_at` is the sample's own instant (`quota_samples.observed_at`, Unix milliseconds), which the lead and the
+/// wire's `sampled_at` read, since `bucket` is the 300-second floor the sampler files the row under. A row written
+/// before the column existed carries none, and the reader falls back to the bucket's floor in milliseconds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HourlyWindowSample {
+    pub account_id: String,
+    /// The hour the bucket falls in, in seconds, floored as `hour_of` floors an instant.
+    pub hour: i64,
+    pub window: String,
+    pub bucket: i64,
+    pub observed_at: Option<i64>,
+    pub utilization: Option<f64>,
+    pub reset_at: Option<i64>,
+}
+
+/// Every account's last sample per window and hour over `[from, to)` in Unix seconds, ordered by account, hour,
+/// window.
+pub fn hourly_window_samples(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+) -> Result<Vec<HourlyWindowSample>, LedgerError> {
+    // SQLite's `/` truncates toward zero, so the hour is floored through a modulus kept positive, the hour `hour_of`
+    // files a bucket before the epoch under.
+    const HOUR: &str = "(q.bucket - (((q.bucket % 3600) + 3600) % 3600))";
+    let mut stmt = conn.prepare(&format!(
+        "SELECT q.account_id, {HOUR} AS hour, q.window, q.bucket, q.observed_at, q.utilization, q.reset_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket < ?2 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND bucket >= {HOUR} AND bucket < {HOUR} + 3600) ORDER BY q.account_id, hour, q.window"
+    ))?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        Ok(HourlyWindowSample {
+            account_id: r.get(0)?,
+            hour: r.get(1)?,
+            window: r.get(2)?,
+            bucket: r.get(3)?,
+            observed_at: r.get(4)?,
+            utilization: r.get(5)?,
+            reset_at: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn latest_extra_usage(
     conn: &Connection,
     now: i64,

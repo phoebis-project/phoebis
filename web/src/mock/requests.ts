@@ -1838,6 +1838,7 @@ function accountRollups(): AccountRollup[] {
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
+        windows: {},
       };
       if (t >= from && t <= until) out.push(row);
     }

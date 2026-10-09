@@ -521,3 +521,64 @@ test('the session and non-session views agree on the share averages over one mix
   assert.deepEqual(d.shareRow(folded), d.shareRow(route), 'the fold and the route divide by the same plan-funded rows');
   assert.deepEqual(d.shareRow(folded), { fiveHour: '50%', perRequest: '12.5%', perThousand: '62.5%', sevenDay: '25%', week: null });
 });
+
+/** An account's hour as the accounts route answers it, the peaks and counts empty, the windows as given. */
+const rollup = (accountId, hourMs, windows) => ({ accountId, cooldownSeconds: 0, hour: new Date(hourMs).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows });
+const windowSample = (over = {}) => ({ lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });
+
+test('the sampled windows list the three windows and the extra-usage week only while a row holds it', () => {
+  const t = Date.UTC(2026, 8, 16, 10);
+  assert.deepEqual(d.sampledWindows([]), ['five_hour', 'seven_day', 'seven_day_fable'], 'the three the router reads are offered without a row');
+  assert.deepEqual(d.sampledWindows([rollup('a', t, { seven_day_opus: windowSample() })]), ['five_hour', 'seven_day', 'seven_day_fable'], 'another model week the samples carry is not offered');
+  assert.deepEqual(d.sampledWindows([rollup('a', t, {}), rollup('b', t + HOUR, { seven_day_overage_included: windowSample() })]), ['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_overage_included'], 'the extra-usage week joins fourth while any row holds it');
+});
+
+test("the window lines fold each account's utilization and lead per bucket and leave a gap where no sample is or the lead is null", () => {
+  const t = Date.UTC(2026, 8, 16, 10);
+  const span = { fromMs: t, toMs: t + 3 * HOUR };
+  const rows = [
+    rollup('a', t, { five_hour: windowSample({ lead: 0.2, utilization: 0.6 }), seven_day: windowSample({ lead: -0.1, utilization: 0.3 }) }),
+    rollup('b', t, { five_hour: windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null }) }),
+    rollup('a', t + 2 * HOUR, { five_hour: windowSample({ lead: -0.05, utilization: 0.45 }) }),
+  ];
+  const usage = d.windowLines(rows, 'five_hour', 'usage', span, HOUR);
+  assert.deepEqual(usage.accounts, ['a', 'b']);
+  assert.deepEqual(
+    usage.data,
+    [
+      { at: t, a: 60, b: null },
+      { at: t + HOUR, a: null, b: null },
+      { at: t + 2 * HOUR, a: 45, b: null },
+      { at: t + 3 * HOUR, a: null, b: null },
+    ],
+    'the utilization in percent per bucket, a gap for a bucket without a sample and for a reset-only sample',
+  );
+  const pace = d.windowLines(rows, 'five_hour', 'pace', span, HOUR);
+  assert.deepEqual(pace.data.map((r) => [r.a, r.b, r['b:score']]), [[20, null, null], [null, null, null], [-5, null, null], [null, null, null]], 'the lead in percent, the reset-only sample a gap on the pace side with no score');
+  assert.ok(Math.abs(pace.data[0]['a:score'] - 0.2) < 1e-9, `the pace score of the sample the lead was read from rides beside it: ${pace.data[0]['a:score']}`);
+  assert.equal(pace.data[1]['a:score'], null, 'and a gap carries none');
+  const seven = d.windowLines(rows, 'seven_day', 'pace', span, HOUR);
+  assert.deepEqual(seven.data.map((r) => r.a), [-10, null, null, null], 'another window reads its own samples alone');
+  // A bucket wider than an hour draws the latest hour inside it that holds a sample, so one in its first hour alone
+  // is no gap, and a later hour's sample wins over an earlier one.
+  const wide = { fromMs: t, toMs: t + 2 * HOUR };
+  const first = d.windowLines([rollup('a', t, { five_hour: windowSample({ utilization: 0.6 }) })], 'five_hour', 'usage', wide, 2 * HOUR);
+  assert.deepEqual(first.data.map((r) => r.a), [60, null], 'a sample in the first hour of a two-hour bucket draws it');
+  const later = d.windowLines([rollup('a', t + HOUR, { five_hour: windowSample({ utilization: 0.7 }) }), rollup('a', t, { five_hour: windowSample({ utilization: 0.6 }) })], 'five_hour', 'usage', wide, 2 * HOUR);
+  assert.deepEqual(later.data.map((r) => r.a), [70, null], 'the later hour wins whatever order the rows arrive in');
+});
+
+test("the pace score is the remaining share over the hours from the sample's instant to the reset", () => {
+  const late = windowSample({ resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 });
+  assert.ok(Math.abs(d.paceScoreOf(late) - 6) < 1e-9, `five minutes to the reset, not the hour from the bucket's start: ${d.paceScoreOf(late)}`);
+  const start = windowSample({ resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:00:00.000Z', utilization: 0.5 });
+  assert.ok(Math.abs(d.paceScoreOf(start) - 0.5) < 1e-9, "scored from the hour's start the same sample would read 0.5");
+  assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T10:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, "a reset at the sample's instant is a stale sample");
+  assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T10:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, 'and so is a reset before it');
+  assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 1.2 })), 0, 'a utilization past 1 has nothing remaining rather than a negative share');
+});
+
+test('a sample without a utilization has no pace score', () => {
+  assert.equal(d.paceScoreOf(windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null })), null, 'a reset-only sample');
+  assert.equal(d.paceScoreOf(windowSample({ resetsAt: null, utilization: 0.5 })), null, 'and a sample without a reset has no horizon');
+});

@@ -1215,6 +1215,15 @@ export interface LatencyHistograms {
 /** Why probes a recipe had already paid for went unanswered: the stop that left them, or a request after them that read no cache. */
 export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'idle_limit' | 'released' | 'replaced' | 'session_ended';
 
+/** An hour's last quota sample of one window: `lead` null for a sample that reported the reset alone, `sampledAt`
+ *  the instant it was taken, which the lead and the Pace score read. */
+export interface WindowSample {
+  lead: number | null;
+  resetsAt: string | null;
+  sampledAt: string;
+  utilization: number | null;
+}
+
 export interface AccountRollup {
   accountId: string;
   cooldownSeconds: number;
@@ -1223,6 +1232,8 @@ export interface AccountRollup {
   /** Null for a window the hour holds no utilization sample of. */
   peak: { '5h': number | null; '7d': number | null; '7d_fable': number | null };
   pins: { created: number; migratedIn: number; migratedOut: number };
+  /** Keyed by the ledger's window ids, never folded: an hour's last sample per window, absent where the hour holds none. */
+  windows: Partial<Record<string, WindowSample>>;
 }
 
 /** The dimensions the burn route groups on; `session` reads the twenty sessions with the most tokens. */

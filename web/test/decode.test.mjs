@@ -689,6 +689,26 @@ test('an account hour with no utilization sample carries no peak rather than a z
   assert.deepEqual([hour.peak['5h'], hour.peak['7d'], hour.peak['7d_fable']], [0.4, null, null]);
 });
 
+test("an account rollup carries its hour's window samples keyed by the ledger's ids with the lead and the sampled instant, and a reset-only sample decodes a null lead", () => {
+  const wireAccount = fixture('analytics_accounts').accounts.find((a) => a.account_id === 'business');
+  const wireHour = wireAccount.hours.find((h) => h.windows.five_hour !== null);
+  const rollups = d.decodeAccountRollups(fixture('analytics_accounts'));
+  const sampled = rollups.find((r) => r.accountId === 'business' && r.hour === new Date(wireHour.hour).toISOString());
+  assert.deepEqual(Object.keys(sampled.windows).sort(), Object.keys(wireHour.windows).filter((k) => wireHour.windows[k] !== null).sort(), "the keys are the ledger's ids as the route spells them, the null windows absent");
+  assert.ok('seven_day_fable' in sampled.windows, 'the model week keeps its own key rather than folding onto the overage-included one');
+  const five = wireHour.windows.five_hour;
+  assert.deepEqual(sampled.windows.five_hour, { lead: five.lead, resetsAt: new Date(five.reset_at).toISOString(), sampledAt: new Date(five.sampled_at).toISOString(), utilization: five.utilization });
+  assert.equal(typeof sampled.windows.five_hour.lead, 'number', 'a sampled utilization carries its lead');
+  const wireIdle = wireAccount.hours.find((h) => Object.values(h.windows).every((w) => w === null));
+  assert.ok(wireIdle, 'the capture holds a business hour without a sample');
+  assert.deepEqual(rollups.find((r) => r.accountId === 'business' && r.hour === new Date(wireIdle.hour).toISOString()).windows, {}, 'an hour whose windows all read null decodes none');
+  const [hand] = d.decodeAccountRollups({ accounts: [{ account_id: 'a', hours: [{ hour: 3_600_000, windows: { five_hour: null, seven_day: { utilization: null, reset_at: 7_200_000, lead: null, sampled_at: 5_400_000 }, seven_day_fable: null } }] }] });
+  assert.deepEqual(hand.windows, { seven_day: { lead: null, resetsAt: '1970-01-01T02:00:00.000Z', sampledAt: '1970-01-01T01:30:00.000Z', utilization: null } }, 'a reset-only sample keeps its null lead rather than reading as on pace');
+  const [bare] = d.decodeAccountRollups({ accounts: [{ account_id: 'a', hours: [{ hour: 3_600_000, windows: { five_hour: { utilization: 0.5, reset_at: null, lead: 0.5 } } }] }] });
+  assert.equal(bare.windows.five_hour.sampledAt, '1970-01-01T01:00:00.000Z', "a sample without an instant reads the hour's own");
+  assert.equal(bare.windows.five_hour.resetsAt, null);
+});
+
 test('a captured body carries the bytes the route counted, never the bytes the drawer would measure', () => {
   const whole = d.decodeBodies(fixture('request_bodies'));
   assert.equal(whole.request.model, 'claude-sonnet-5');

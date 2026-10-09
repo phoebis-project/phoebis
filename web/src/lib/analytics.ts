@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
 
@@ -234,6 +234,66 @@ export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data
     }
     return row;
   });
+  return { accounts, data };
+}
+
+const HOUR_MS = 3_600_000;
+/** The windows the router reads, which the Accounts cards always offer, in the console's order. */
+const BASE_WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
+/** The extra-usage week, offered only while a row holds a sample of it, since the heads alone write it. */
+const EXTRA_USAGE_WINDOW = 'seven_day_overage_included';
+/** The window ids the Accounts cards offer, in order, the extra-usage week only while a row holds it. */
+export function sampledWindows(rollups: AccountRollup[]): string[] {
+  return rollups.some((r) => r.windows[EXTRA_USAGE_WINDOW] !== undefined) ? [...BASE_WINDOWS, EXTRA_USAGE_WINDOW] : [...BASE_WINDOWS];
+}
+
+/**
+ * The Pace score beside a lead, as the routing preview scores an account: the remaining share over the hours from the
+ * sample's instant to the reset, floored at nothing remaining. Null without a reset or a utilization, and null for a
+ * reset at or before the sample, since the window has reset since and left the sample stale.
+ */
+export const paceScoreOf = (sample: WindowSample): number | null => {
+  if (sample.resetsAt === null || sample.utilization === null) return null;
+  const hours = (Date.parse(sample.resetsAt) - Date.parse(sample.sampledAt)) / HOUR_MS;
+  return hours > 0 ? Math.max(1 - sample.utilization, 0) / hours : null;
+};
+
+/**
+ * Per account per bucket of the span the chosen window's utilization (`usage`) or lead over pace (`pace`) in percent,
+ * null for a gap: a bucket no hour of which holds a sample of the window, or a sample without the figure (a
+ * reset-only sample has neither). A bucket wider than an hour reads the latest hour inside it that holds a sample.
+ * Under `pace` each row also carries `${account}:score`, the Pace score of the sample the lead was read from, null
+ * where the lead is, so the tooltip reads both off the row.
+ */
+export function windowLines(rollups: AccountRollup[], window: string, read: 'pace' | 'usage', span: { fromMs: number; toMs: number }, bucketMs: number): { accounts: string[]; data: Record<string, number | null>[] } {
+  const accounts = [...new Set(rollups.map((r) => r.accountId))].sort((a, b) => a.localeCompare(b));
+  const start = Math.floor(span.fromMs / bucketMs) * bucketMs;
+  const data: Record<string, number | null>[] = [];
+  const byAt = new Map<number, Record<string, number | null>>();
+  for (let t = start; t <= span.toMs; t += bucketMs) {
+    const row: Record<string, number | null> = { at: t };
+    for (const a of accounts) {
+      row[a] = null;
+      if (read === 'pace') row[`${a}:score`] = null;
+    }
+    data.push(row);
+    byAt.set(t, row);
+  }
+  const drawn = new Map<string, number>();
+  for (const r of rollups) {
+    const sample = r.windows[window];
+    if (sample === undefined) continue;
+    const hourMs = Date.parse(r.hour);
+    const at = Math.floor(hourMs / bucketMs) * bucketMs;
+    const row = byAt.get(at);
+    if (row === undefined) continue;
+    const key = `${at}:${r.accountId}`;
+    if ((drawn.get(key) ?? -Infinity) > hourMs) continue;
+    drawn.set(key, hourMs);
+    const figure = read === 'usage' ? sample.utilization : sample.lead;
+    row[r.accountId] = figure === null ? null : figure * 100;
+    if (read === 'pace') row[`${r.accountId}:score`] = sample.lead === null ? null : paceScoreOf(sample);
+  }
   return { accounts, data };
 }
 

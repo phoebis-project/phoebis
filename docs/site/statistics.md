@@ -587,8 +587,8 @@ requests as shares of its own 5-hour, 7-day and model-week windows under the acc
 requests' dollar equivalent, the position kept in the page's address as `unit`) and a Fast mode spend tile, the dollars
 fast-mode answers drew from usage credits; Cache warming reports what probes cost against what they saved, where a
 fast-mode session's probes and credits read as dollars and file under speed `fast`, the probe cost reading as a share
-under Window shares with one account named; and Accounts reports peak utilization, ineligible time, and pin churn per
-account.
+under Window shares with one account named; and Accounts reports peak utilization, each window's usage and lead over
+pace per account from the quota samples under a window toggle, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static
