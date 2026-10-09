@@ -455,7 +455,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         close(entry.write, write[w], `${g.key}'s ${w} cache write`);
       }
       const probe = summed(probes, tier, usageOf);
-      const probeUsd = sum(probes, (r) => r.savings.probeCostUsd);
+      const probeUsd = sum(probes, (r) => r.probeCostUsd);
       const ratio = probeUsd > 0 ? sum(probes, (r) => r.wastedProbeUsd) / probeUsd : null;
       assert.deepEqual(Object.keys(g.probeShares ?? {}).sort(), Object.keys(probe).filter((w) => probe[w] !== null).sort(), `${g.key}'s probe windows`);
       for (const [w, entry] of Object.entries(g.probeShares ?? {})) {

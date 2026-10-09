@@ -1130,7 +1130,7 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
 #[tokio::test]
 async fn an_overage_probe_s_request_and_credit_rows_file_under_overage_as_the_selection_s_state_decides(
 ) {
-    let mut r = rig(subscription_spec()).await;
+    let mut r = rig(plan_funded_spec()).await;
     r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router

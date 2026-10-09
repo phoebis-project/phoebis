@@ -1952,11 +1952,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
             };
             let groups = account_groups(&db, &filter, from, to, kinds, None).await;
             let a = group(&groups, "a");
-            (
-                a.cost_usd,
-                a.savings.probe_cost_usd,
-                a.savings.wasted_probe_usd,
-            )
+            (a.cost_usd, a.probe_cost_usd, a.wasted_probe_usd)
         }
     };
     let billed = read(FundingFilter::Billed).await;

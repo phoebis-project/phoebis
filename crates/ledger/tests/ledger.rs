@@ -6791,6 +6791,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
         false,
         &live,
         &[],
+        None,
     );
     let group = groups
         .iter()
