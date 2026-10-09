@@ -1024,11 +1024,17 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
             .to_vec(),
         })),
     );
+    let tracked = h.ledger.tracked();
     let confirmed = pair_business(&h.app, &cookie).await;
     assert_eq!(
         confirmed.status(),
         200,
         "the confirm answers before the held endpoint does"
+    );
+    assert_eq!(
+        h.ledger.tracked(),
+        tracked + 1,
+        "the confirm's poll is tracked, so a shutdown aborts it before the channel closes"
     );
     let bucket = phoebis_ledger::bucket_of(NOW);
     assert!(

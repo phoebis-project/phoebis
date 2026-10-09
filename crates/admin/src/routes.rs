@@ -982,9 +982,11 @@ async fn pairing_confirm(
     // The first reading is taken now rather than left to the scheduler's next pass, so the account's windows
     // show as soon as the endpoint answers. The answer does not wait on it: the endpoint can be slow and the
     // pairing is committed either way, so a failed read records nothing and the next pass reads the account.
+    // Tracked so a shutdown aborts a read still in flight rather than letting it record into the closing
+    // channel.
     let polled = Arc::clone(&state);
     let account_id = row.id.clone();
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         match polled.store.account(&account_id) {
             Ok(Some(committed)) => {
                 let _ = QuotaPoll::poll_account(
@@ -1003,6 +1005,7 @@ async fn pairing_confirm(
             }
         }
     });
+    state.ledger.track(handle);
     Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
 }
 

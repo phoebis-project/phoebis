@@ -18,6 +18,7 @@ test('the ninth account cycles to the first slot and an id outside the list has 
 
 test('a slot draws its series ink and no slot draws the muted ink', () => {
   const ink = { muted: 'm', series: ['s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 'm'] };
+  assert.equal(d.accountColor(ink, 0), 's0');
   assert.equal(d.accountColor(ink, 3), 's3');
   assert.equal(d.accountColor(ink, null), 'm');
 });

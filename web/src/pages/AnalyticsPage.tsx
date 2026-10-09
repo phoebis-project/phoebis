@@ -1393,7 +1393,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: { 
 
 const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
-const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}, and overhead is ${OVERHEAD_HINT}`;
+const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
 const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
