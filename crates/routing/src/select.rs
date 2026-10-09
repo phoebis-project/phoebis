@@ -18,7 +18,7 @@ use crate::record::{
     HoldOutcome, LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
     PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
     RequestFacts, RequestFlags, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
-    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
+    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
     budget_reached, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
@@ -854,6 +854,14 @@ struct Pick {
 
 impl Recorder {
     fn step(&mut self, step: &'static str, verdict: &'static str, facts: Vec<Fact>) {
+        // A step the table does not list would reach the console as a plain station and fail its fixture test there,
+        // so the engine refuses it first, where the author of the new step is.
+        debug_assert!(
+            WALK_STEPS
+                .iter()
+                .any(|(id, verdicts)| *id == step && verdicts.contains(&verdict)),
+            "the walk step {step}/{verdict} is not in WALK_STEPS"
+        );
         self.walk.push(WalkStep {
             step,
             verdict,
@@ -2922,6 +2930,7 @@ fn pace_of(
             deadline: None,
             hours: None,
             score: remaining,
+            window: None,
         };
     }
     let end = snapshot
@@ -2943,6 +2952,7 @@ fn pace_of(
         deadline,
         hours: Some(hours),
         score: remaining / hours,
+        window: Some(window.to_string()),
     }
 }
 
@@ -3978,5 +3988,22 @@ impl Readings<'_> {
             .max_by(|a, b| a.score.total_cmp(&b.score))
             .cloned();
         (score, runner_up)
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::Recorder;
+
+    #[test]
+    #[should_panic(expected = "the walk step x/match is not in WALK_STEPS")]
+    fn the_recorder_refuses_a_step_id_the_table_does_not_list() {
+        Recorder::default().step("x", "match", Vec::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "the walk step pin/fired is not in WALK_STEPS")]
+    fn the_recorder_refuses_a_verdict_the_table_does_not_list_for_its_step() {
+        Recorder::default().step("pin", "fired", Vec::new());
     }
 }

@@ -110,13 +110,15 @@ export const DECISION_KIND_LABEL: Record<DecisionKind, string> = {
   renewed: 'renewed',
 };
 
-export const DECISION_KIND_TONE: Record<DecisionKind, 'accent' | 'critical' | 'neutral' | 'warning'> = {
+export type VerdictTone = 'critical' | 'good' | 'neutral' | 'warning';
+
+export const DECISION_KIND_TONE: Record<DecisionKind, VerdictTone> = {
   exhausted: 'critical',
   held: 'warning',
-  moved: 'accent',
-  placed: 'accent',
+  moved: 'warning',
+  placed: 'good',
   refused: 'critical',
-  renewed: 'neutral',
+  renewed: 'good',
 };
 
 /** Every kind of the ledger's events table, in the console's words. */
@@ -192,15 +194,29 @@ export const STEP_NAME: Record<string, string> = {
   selection: 'Rest of the walk',
 };
 
-const ACTED = new Set(['bound', 'chosen', 'fired', 'match', 'placed', 'preferred', 'renewed']);
-const BLOCKED = new Set(['answered', 'blocked', 'dropped', 'exhausted', 'fell_through', 'held', 'refused', 'released']);
+const GOOD = new Set(['bound', 'chosen', 'match', 'passed', 'placed', 'renewed']);
+const WARNING = new Set(['blocked', 'dropped', 'fell_through', 'fired', 'held', 'moved', 'preferred', 'released']);
+const CRITICAL = new Set(['answered', 'exhausted', 'refused']);
+const NEUTRAL = new Set(['found', 'no', 'none', 'not_run', 'off']);
 
-/** The accent tone for a step that acted, the warning tone for one that blocked, neutral for the rest. */
-export function verdictTone(verdict: string): 'accent' | 'neutral' | 'warning' {
-  return ACTED.has(verdict) ? 'accent' : BLOCKED.has(verdict) ? 'warning' : 'neutral';
+/**
+ * Every word the scheme names a tone for, the neutral ones included, so a fixture test can tell a toned word from an
+ * unknown one.
+ */
+export const TONED_VERDICTS: ReadonlySet<string> = new Set([...GOOD, ...WARNING, ...CRITICAL, ...NEUTRAL]);
+
+/**
+ * One tone per verdict word across the log's rows, the card and the strip: good for a verdict that served the request,
+ * warning for one that changed its course, critical for a refusal or an exhaustion, neutral for found, no, none,
+ * not_run, off and a word the scheme does not know. The eligible step's `none` is critical, since no member was
+ * eligible and the request had nowhere to go.
+ */
+export function verdictTone(verdict: string, stepId?: string): VerdictTone {
+  if (verdict === 'none' && stepId === 'eligible') return 'critical';
+  return GOOD.has(verdict) ? 'good' : WARNING.has(verdict) ? 'warning' : CRITICAL.has(verdict) ? 'critical' : 'neutral';
 }
 
-const words = (name: string) => name.replace(/_/g, ' ');
+export const words = (name: string) => name.replace(/_/g, ' ');
 const wordOf = (map: Record<string, string>, name: string) => (own(map, name) ? map[name] : words(name));
 
 const HOUR = 3_600_000;
@@ -278,8 +294,19 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
   'the key was revoked': 'key revoked',
 };
 
-/** The strategy's word and the tier's priority: `Pace P0`. */
-const strategyChip = (strategy: string, tier: DecisionSummary['tier']) => (tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`);
+/** How the strategy ranks, the hover of a Pace chip on a routing log row. */
+export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
+
+/** The strategy's word with the tier's priority when the tier is known: `Pace P0`, `round robin`. */
+export function strategyWord(strategy: string, tier: number[] | null): string {
+  return tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`;
+}
+
+/** The strategy's word and the tier's priority (`Pace P0`), a Pace chip with how the strategy ranks as its hover. */
+const strategyChip = (strategy: string, tier: DecisionSummary['tier']): Chip => {
+  const value = strategyWord(strategy, tier);
+  return strategy === 'pace' ? { title: PACE_HINT, value } : { value };
+};
 
 function exhaustionWord(row: DecisionSummary): string {
   const x = row.exhaustion ?? { kind: row.by.value, obstacle: null, window: null };
@@ -309,7 +336,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'exhaustion':
       return { value: exhaustionWord(row) };
     case 'hold':
-      return { value: value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : words(value) };
+      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: words(value) };
     case 'none':
       return { value: 'no rule fired' };
     case 'refusal':
@@ -320,7 +347,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'rung':
       return { value: wordOf(RUNG_WORD, value) };
     case 'strategy':
-      return { value: strategyChip(value, row.by.tier ?? row.tier) };
+      return strategyChip(value, row.by.tier ?? row.tier);
   }
 }
 
@@ -330,7 +357,7 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 /** A window's name as the windows read elsewhere in the console. */
-const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
+export const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
 /** The registry's word for who moved an account's state. */
 const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', operator: 'by hand', refresh_failed: 'refresh failed' };
@@ -775,11 +802,11 @@ export function compareModels(a: string, b: string): number {
 // pairs. Every chip holds one value or one key-value pair, and every entity it names is a link.
 
 const accountEntity = (id: string): FactEntity => ({ id, kind: 'account' });
-const accountChip = (id: string, label?: string): Chip => ({ entity: accountEntity(id), ...(label === undefined ? {} : { label }), value: id });
+export const accountChip = (id: string, label?: string): Chip => ({ entity: accountEntity(id), ...(label === undefined ? {} : { label }), value: id });
 const modelChip = (id: string, label?: string): Chip => ({ entity: { id, kind: 'model' }, ...(label === undefined ? {} : { label }), mono: true, value: id });
 const sessionChip = (id: string): Chip => ({ href: entityHref('session', id), mono: true, title: id, value: id.slice(0, 8) });
 const requestChip = (id: string): Chip => ({ href: entityHref('request', id), mono: true, value: id });
-const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
+export const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
 
 /** Why a member could not take the request, the hover of the candidate table's verdict chip. */
 export const OBSTACLE_HINT: Record<string, string> = {
@@ -841,7 +868,7 @@ export interface WalkLine {
 }
 
 /** The fact keys of the walk in the console's words. Any other key reads with its underscores as spaces. */
-const WALK_KEY: Record<string, string> = {
+export const WALK_KEY: Record<string, string> = {
   above_ceiling: 'above ceiling',
   ahead_five_hour: '5h ahead',
   ahead_seven_day: '7d ahead',
@@ -859,7 +886,7 @@ const WALK_KEY: Record<string, string> = {
   reset_in_grace: 'reset in',
   worst_bucket: 'worst bucket',
 };
-const keyWord = (key: string) => wordOf(WALK_KEY, key);
+export const keyWord = (key: string) => wordOf(WALK_KEY, key);
 /** The keys whose value names itself, so a member's chip reads `primary eligible`, not `primary standing eligible`. */
 const SELF_NAMED = new Set(['score', 'standing']);
 
@@ -886,7 +913,7 @@ function textWord(key: string, value: string): string {
   }
 }
 
-const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
+export const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
   if (value === null || value === undefined) return 'none';
   if (typeof value === 'boolean') return value ? 'yes' : 'no';
   if (typeof value === 'number') return formatFact(value, unitOf(unit), now);
@@ -895,7 +922,7 @@ const valueText = (key: string, value: unknown, unit: string | null, now: number
 };
 
 /** A tier as the engine keys it, `[group, priority, overage]`, from the list or the `0/0/0` text a walk fact holds. */
-const tierOf = (value: unknown): number[] | null => {
+export const tierOf = (value: unknown): number[] | null => {
   const parts = Array.isArray(value) ? value.map(Number) : typeof value === 'string' ? value.split('/').map(Number) : [];
   return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? parts : null;
 };
@@ -903,7 +930,7 @@ const tierOf = (value: unknown): number[] | null => {
 const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
 
 /** A pin's lane is `model|speed|thinking|effort`. The model is the request's own, so the chips name the other three. */
-function laneChips(lane: string): Chip[] {
+export function laneChips(lane: string): Chip[] {
   const parts = lane.split('|');
   if (parts.length !== 4) return [plain(lane, 'lane')];
   const [, speed, thinking, effort] = parts;
@@ -927,7 +954,7 @@ function obstacleChip(text: string, record: DecisionRecord): Chip {
  * A shedding mark is its pin's key, `key/session/agent/model`. The session's prefix and the agent tell a round's marks
  * apart.
  */
-function markChip(text: string): Chip {
+export function markChip(text: string): Chip {
   const [, session = '', agent = ''] = text.split('/');
   return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
 }
@@ -944,7 +971,7 @@ function refusalChips(refusal: { kind: string; reason: string }, version: string
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
 
-function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
+export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
   const v = f.value;
   const members = new Set(record.candidates.map((c) => c.accountId));
   switch (f.key) {
@@ -977,13 +1004,13 @@ function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
   return [plain(value, keyWord(f.key))];
 }
 
-const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'rung:content': 'content', 'rung:static': 'static', 'rung:with_main': 'with_main' };
+export const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'rung:content': 'content', 'rung:static': 'static', 'rung:with_main': 'with_main' };
 
 /**
  * A rung line's entry: on a match the one the rung accepted on the member it took, on any other line the deepest entry
  * a member's gate refused. A placement beside the main conversation names no entry.
  */
-function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
+export function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
   const rung = own(RUNG_OF, s.step) ? RUNG_OF[s.step] : undefined;
   if (rung === undefined) return undefined;
   if (rung === 'with_main' || s.verdict === 'not_run') return null;
@@ -1088,7 +1115,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
 
 const WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
 /** A reading's age, whole seconds under a minute. */
-const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
+export const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
@@ -1164,11 +1191,40 @@ function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
   return null;
 }
 
+/** A Pace window's word in the column header and its phrase in a cell's hover. Any other window reads its id. */
+const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: 'Fable week' };
+const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
+
+/**
+ * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that
+ * candidate names no window or the record holds no subscription candidate.
+ */
+export function paceHeader(record: DecisionRecord): string {
+  const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
+  return id === null ? 'Pace' : `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour`;
+}
+
+/** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
+function paceTitle(c: RecordCandidate, now: number): string | null {
+  const p = c.pace;
+  if (p === null) return null;
+  if (c.kind === 'api_key') return `${fmtPct(p.remaining)} of its worst live bucket left. Scored by the remaining share alone, with no division by hours.`;
+  // A pace built by hand without the key names no window, as a null one does.
+  const id = p.window ?? null;
+  const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
+  // Whole hours would read a deadline under half an hour away as "0 h".
+  const over = p.hours === null ? '' : ` over ${p.hours < 1 ? p.hours.toFixed(1) : Math.round(p.hours)} h`;
+  // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
+  const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
+  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. The highest wins.`;
+}
+
 /**
  * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
- * merged reading), the slots, the Pace score, the prefix entry and the verdict with the one chip that decided it.
+ * merged reading), the slots, the Pace score with its hover, the prefix entry and the verdict with the one chip that
+ * decided it.
  */
-export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   const windows =
@@ -1184,6 +1240,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     account: accountChip(c.accountId),
     inFlight: `${c.inFlight} of ${c.inFlightCap}`,
     pace: c.pace === null ? '-' : c.kind === 'api_key' ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
+    paceTitle: paceTitle(c, now),
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
     tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
@@ -1239,7 +1296,7 @@ export function settingValue(key: keyof RecordSettings, settings: RecordSettings
 
 /** The relay's status for an exhaustion: a dated one a 429, a model no member serves a 404, the rest a 503. */
 const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
-const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
+export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 
 /** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
 export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionSummary): CardRow[] {

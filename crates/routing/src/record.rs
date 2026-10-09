@@ -13,6 +13,39 @@ use crate::RegistrySnapshot;
 
 pub const RECORD_VERSION: u32 = 1;
 
+/// Every step id the engine records with the verdict words it writes, in the ids' order, the two steps the refusal
+/// record writes by hand (`admission`, `selection`) and the cool reading it appends whole (`cool`) included. The
+/// recorder asserts each of its calls against this list, and the console's station table is held to it through the
+/// fixture `tests/walk_steps.rs` writes.
+pub const WALK_STEPS: &[(&str, &[&str])] = &[
+    ("admission", &["refused"]),
+    ("bound", &["bound", "exhausted", "renewed"]),
+    ("cap_filter", &["dropped", "passed"]),
+    ("cool", &["fell_through", "preferred"]),
+    ("eligible", &["match", "none"]),
+    ("exhausted", &["exhausted"]),
+    ("hold", &["held", "placed"]),
+    ("move:drain", &["fired", "no", "not_run"]),
+    ("move:overage", &["fired", "no", "not_run"]),
+    ("move:return_to_plan", &["fired", "no", "not_run"]),
+    ("move:shed", &["fired", "no", "not_run"]),
+    ("move:spent", &["fired", "no", "not_run"]),
+    ("partitions", &["match", "none"]),
+    ("pick", &["chosen", "none"]),
+    ("pin", &["match", "none"]),
+    ("probe", &["answered", "passed"]),
+    ("renew", &["renewed"]),
+    ("rung:content", &["match", "none"]),
+    ("rung:static", &["match", "none", "not_run"]),
+    ("rung:with_main", &["match", "none", "not_run"]),
+    ("selection", &["not_run"]),
+];
+
+/// The words a partition fact carries in place of a count: `off` for a partition the pool's settings switched off,
+/// `held` when every member sat at its in-flight cap, `fell_through` when a preference would have emptied a non-empty
+/// set. The console tones each as a verdict word on the partition's station.
+pub const PARTITION_VALUES: &[&str] = &["fell_through", "held", "off"];
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct DecisionRecord {
     pub version: u32,
@@ -235,6 +268,9 @@ pub struct PaceFacts {
     pub deadline: Option<i64>,
     pub hours: Option<f64>,
     pub score: f64,
+    /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
+    /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
+    pub window: Option<String>,
 }
 
 /// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has

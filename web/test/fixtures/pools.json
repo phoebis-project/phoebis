@@ -80,9 +80,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791516487189,
-        "updated_at": 1791516487189,
-        "revision": 6189562998293,
+        "created_at": 1791546165120,
+        "updated_at": 1791546165120,
+        "revision": 6189592676224,
         "members": [
           {
             "account_id": "business",
@@ -121,7 +121,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "syHcPKQm",
+            "prefix": "NzaMP_q7",
             "enabled": true
           }
         ],
