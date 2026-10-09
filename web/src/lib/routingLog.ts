@@ -216,7 +216,7 @@ export function verdictTone(verdict: string, stepId?: string): VerdictTone {
   return GOOD.has(verdict) ? 'good' : WARNING.has(verdict) ? 'warning' : CRITICAL.has(verdict) ? 'critical' : 'neutral';
 }
 
-const words = (name: string) => name.replace(/_/g, ' ');
+export const words = (name: string) => name.replace(/_/g, ' ');
 const wordOf = (map: Record<string, string>, name: string) => (own(map, name) ? map[name] : words(name));
 
 const HOUR = 3_600_000;
@@ -297,9 +297,14 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
 /** How the strategy ranks, the hover of a Pace chip on a routing log row. */
 export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
 
+/** The strategy's word with the tier's priority when the tier is known: `Pace P0`, `round robin`. */
+export function strategyWord(strategy: string, tier: number[] | null): string {
+  return tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`;
+}
+
 /** The strategy's word and the tier's priority (`Pace P0`), a Pace chip with how the strategy ranks as its hover. */
 const strategyChip = (strategy: string, tier: DecisionSummary['tier']): Chip => {
-  const value = tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`;
+  const value = strategyWord(strategy, tier);
   return strategy === 'pace' ? { title: PACE_HINT, value } : { value };
 };
 
@@ -917,7 +922,7 @@ const valueText = (key: string, value: unknown, unit: string | null, now: number
 };
 
 /** A tier as the engine keys it, `[group, priority, overage]`, from the list or the `0/0/0` text a walk fact holds. */
-const tierOf = (value: unknown): number[] | null => {
+export const tierOf = (value: unknown): number[] | null => {
   const parts = Array.isArray(value) ? value.map(Number) : typeof value === 'string' ? value.split('/').map(Number) : [];
   return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? parts : null;
 };
@@ -1290,7 +1295,7 @@ export function settingValue(key: keyof RecordSettings, settings: RecordSettings
 
 /** The relay's status for an exhaustion: a dated one a 429, a model no member serves a 404, the rest a 503. */
 const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
-const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
+export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 
 /** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
 export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionSummary): CardRow[] {
