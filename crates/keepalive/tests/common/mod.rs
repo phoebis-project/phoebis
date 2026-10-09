@@ -5,7 +5,9 @@
 #[path = "../../../relay/tests/common/mod.rs"]
 pub mod relay_common;
 
-use std::sync::atomic::Ordering;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,18 +16,19 @@ use axum::http::Request;
 use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::{
-    AccountSelected, Bus, Delivery, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
-    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber,
-    Usage,
+    AccountSelected, Bus, Delivery, Event as BusEvent, Kind, Origin, Outcome, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
-    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
+    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
 };
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
+    spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
+    PriceTable, Pricing, Record, RequestRecord,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
+use phoebis_store::{StorageKey, Store};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -66,15 +69,48 @@ pub struct Rig {
     pub db: Arc<LedgerDb>,
     pub engine: Arc<Engine>,
     pub h: relay_common::Harness,
+    /// Session id to the instance its last accepted `session_start` through `event` registered.
+    instances: BTreeMap<String, String>,
     pub ledger: Ledger,
     /// The spec's limits, kept so `restart` builds its engine with what this one was built with.
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
+    /// The spec's price table, kept so `restart` builds its engine with what this one was built with.
+    pub pricing: PriceTable,
     pub sequence: u64,
+    /// The registry file of a rig built `on_disk`, which a restart test opens beside the store.
+    pub store_path: Option<PathBuf>,
     pub sub: Subscriber,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
     pub tables: Arc<PlanTables>,
+    /// The spec's timing, kept so `restart` builds its engine with what this one was built with.
+    pub timing: KeepaliveTiming,
     pub up: FakeUpstream,
+    /// Last, so the directory goes after every holder of the store inside it has let go.
+    _scratch: Option<Scratch>,
+}
+
+/// A directory of the rig's own for an on-disk registry, removed with the rig.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "phoebis-keepalive-rig-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        // A run that died before its drop leaves its directory behind, whose registry would read as this rig's.
+        let _ = std::fs::remove_dir_all(&path);
+        Scratch(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 pub struct RigSpec {
@@ -84,13 +120,14 @@ pub struct RigSpec {
     pub accounts: Vec<TestAccount>,
     /// What the catalog fake answers; nothing by default, so a spelling never resolves to a dated id mid-test.
     pub catalog: Vec<Rule>,
-    pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
+    /// The registry in a file of its own rather than in memory, for a test that reaches it past the store.
+    pub on_disk: bool,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
-    /// The registry's file, `None` to keep the registry in memory: a case that breaks a read from a second
-    /// connection needs a file to open.
-    pub registry: Option<std::path::PathBuf>,
+    /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text, and a
+    /// case on a row priced by prompt length hands in the test table.
+    pub pricing: PriceTable,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
@@ -98,6 +135,7 @@ pub struct RigSpec {
     /// The subscription tier every OAuth account's stored profile names, `None` to store none: a plan-funded
     /// probe settles in the share of the tier's window, and in dollars on an account without one.
     pub tier: Option<&'static str>,
+    pub timing: KeepaliveTiming,
 }
 
 impl Default for RigSpec {
@@ -106,23 +144,26 @@ impl Default for RigSpec {
             accounting: None,
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
             catalog: Vec::new(),
-            lifecycle: None,
             limits: KeepaliveLimits::default(),
-            // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
-            // parity cases assert exact times.
+            on_disk: false,
             policy: KeepalivePolicy {
                 enabled: true,
-                lead_seconds_5m: 30,
-                jitter_seconds_5m: 0,
-                lead_seconds_1h: 360,
-                jitter_seconds_1h: 0,
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
-            registry: None,
+            pricing: PriceTable::shipped(),
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
+            // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
+            // parity cases assert exact times.
+            timing: KeepaliveTiming {
+                lead_5m_ms: 30_000,
+                jitter_5m_ms: 0,
+                lead_1h_ms: 360_000,
+                jitter_1h_ms: 0,
+                ..KeepaliveTiming::default()
+            },
         }
     }
 }
@@ -144,11 +185,15 @@ pub async fn rig(spec: RigSpec) -> Rig {
     // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
     // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
     let catalog_up = FakeUpstream::start(spec.catalog).await;
-    let key = phoebis_store::StorageKey::generate();
-    let store = Arc::new(match &spec.registry {
-        Some(path) => phoebis_store::Store::open(path, &key).unwrap(),
-        None => phoebis_store::Store::open_in_memory(&key).unwrap(),
-    });
+    let (store, store_path, scratch) = if spec.on_disk {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("router.sqlite");
+        let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
+        (store, Some(path), Some(scratch))
+    } else {
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        (store, None, None)
+    };
     let h = relay_common::harness_on_with_bus_and_catalog(
         store,
         &up,
@@ -177,7 +222,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         Arc::new(move || c.load(Ordering::SeqCst))
     };
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(spec.pricing.clone()));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),
@@ -195,7 +240,6 @@ pub async fn rig(spec: RigSpec) -> Rig {
         clock,
         cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
-        lifecycle: spec.lifecycle,
         limits: spec.limits.clone(),
         max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
@@ -205,6 +249,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         session_expiry: spec.session_expiry,
         store: h.store.clone(),
         tables: tables.clone(),
+        timing: spec.timing,
     });
     let mut rig = Rig {
         bus,
@@ -212,13 +257,18 @@ pub async fn rig(spec: RigSpec) -> Rig {
         db,
         engine,
         h,
+        instances: BTreeMap::new(),
         ledger,
         limits: spec.limits,
         metrics,
+        pricing: spec.pricing,
         sequence: 0,
+        store_path,
         sub,
         tables,
+        timing: spec.timing,
         up,
+        _scratch: scratch,
     };
     rig.event(Event {
         event: "session_start".into(),
@@ -280,9 +330,14 @@ pub fn session_start_as(
 
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
-    /// empty and has to restore `spent_today` and `share_spent_today` itself, unlike a `load_spent_today`
-    /// called back on this rig's own engine, which the running one already answers from.
+    /// empty and holds only what the persistence round trip brings back, the first engine's `flush_persisted`
+    /// and then this one's `load_persisted`.
     pub async fn restart(&self) -> Arc<Engine> {
+        self.restart_with_limits(self.limits.clone()).await
+    }
+
+    /// `restart` under the limits a changed bootstrap file would give the next process.
+    pub async fn restart_with_limits(&self, limits: KeepaliveLimits) -> Arc<Engine> {
         let clock: Clock = {
             let c = self.clock.clone();
             Arc::new(move || c.load(Ordering::SeqCst))
@@ -292,16 +347,16 @@ impl Rig {
             clock,
             cooldown_fallback: Duration::from_secs(60),
             ledger: self.ledger.clone(),
-            lifecycle: None,
-            limits: self.limits.clone(),
+            limits,
             max_request_bytes: 32 << 20,
             metrics: Arc::new(Metrics::new()),
-            pricing: Arc::new(Pricing::new(PriceTable::shipped())),
+            pricing: Arc::new(Pricing::new(self.pricing.clone())),
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
             session_expiry: Duration::from_secs(86_400),
             store: self.h.store.clone(),
             tables: self.tables.clone(),
+            timing: self.timing,
         })
     }
 
@@ -340,10 +395,10 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    /// A lifecycle event under the harness key, with the next sequence. A caller that leaves `session_id`
-    /// unset gets the rig's one session; one that leaves `instance_id` unset gets that session's own current
-    /// instance (the rig's default session and instance before either is registered), so `session_end` and
-    /// `session_start` need only the session id a multi-session test is driving.
+    /// A report under the harness key, with the next sequence, handed to `Engine::apply_event` as the route hands
+    /// it a decoded body. A caller that leaves `session_id` unset gets the rig's one session, and one that leaves
+    /// `instance_id` unset gets `instance_of` that session, so `session_end` and `session_start` need only the
+    /// session id a multi-session test is driving.
     pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
         self.sequence += 1;
         event.sequence = self.sequence;
@@ -351,24 +406,41 @@ impl Rig {
             event.session_id = "session".into();
         }
         if event.instance_id.is_empty() {
-            let generation = self.generation("desktop");
-            event.instance_id = self
-                .engine
-                .snapshot("desktop", generation)
-                .sessions
-                .into_iter()
-                .find(|s| s.session_id == event.session_id)
-                .map(|s| s.instance_id)
-                .unwrap_or_else(|| "instance".into());
+            event.instance_id = self.instance_of(&event.session_id);
         }
-        self.engine
-            .apply_event("desktop", self.generation("desktop"), event)
+        let registers = event.event == "session_start";
+        let acked = self
+            .engine
+            .apply_event("desktop", self.generation("desktop"), event);
+        // A refused start registered nothing, so the session keeps the instance the engine still holds.
+        if let (true, Ok(ack)) = (registers, &acked) {
+            self.instances
+                .insert(ack.session_id.clone(), ack.instance_id.clone());
+        }
+        acked
     }
 
-    /// A snapshot of the rig's own key, for a test that reads a tombstone's `ended` flag or a live session's
-    /// sequence.
-    pub fn snapshot(&self) -> phoebis_keepalive::Snapshot {
-        self.engine.snapshot("desktop", self.generation("desktop"))
+    /// The instance each session of the rig registered under, kept by `event` from the `session_start` it sent
+    /// (the rig's default session starts as "instance"), so a report finds it without reading the engine. A start
+    /// a test hands to `r.engine.apply_event` itself bypasses `event` and misses this map, so that test names the
+    /// instance in every report it sends after it.
+    pub fn instance_of(&self, session_id: &str) -> String {
+        self.instances
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| "instance".into())
+    }
+
+    /// The acknowledgment of a same-instance re-registration of the rig's session, the mod's view of the session.
+    pub fn reregister(&mut self) -> Ack {
+        let instance_id = self.instance_of("session");
+        self.event(Event {
+            event: "session_start".into(),
+            session_id: "session".into(),
+            instance_id,
+            ..Default::default()
+        })
+        .expect("a same-instance re-registration of the rig's session")
     }
 
     /// The companion's lease, so a test that waits one out never repeats the number.
@@ -376,6 +448,8 @@ impl Rig {
         phoebis_keepalive::LEASE_MS
     }
 
+    /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park
+    /// without its kind.
     pub fn state(&mut self, agent: &str, state: &str) {
         let generation = self.agent(agent).request_generation;
         self.event(Event {
@@ -383,26 +457,22 @@ impl Rig {
             agent_id: Some(agent.into()),
             state: Some(state.into()),
             request_generation: Some(generation),
+            park_kind: (state == "parked").then(|| "background".into()),
             ..Default::default()
         })
         .unwrap();
     }
 
-    pub fn agent(&self, id: &str) -> phoebis_keepalive::SnapshotAgent {
-        self.engine
-            .snapshot("desktop", self.generation("desktop"))
-            .sessions
-            .into_iter()
-            .flat_map(|s| s.agents)
-            .find(|a| a.agent_id == id)
-            .unwrap_or_else(|| panic!("missing agent {id}"))
-    }
-
-    /// The engine's own record of one agent, past what the companion snapshot shows.
+    /// The engine's own record of one agent of the rig's session, through `Engine::agent_status`.
     pub fn status(&self, id: &str) -> phoebis_keepalive::AgentStatus {
         self.engine
             .agent_status("desktop", "session", id)
             .unwrap_or_else(|| panic!("no agent {id}"))
+    }
+
+    /// `status` under the name the protocol tests read an agent's state and generation by.
+    pub fn agent(&self, id: &str) -> phoebis_keepalive::AgentStatus {
+        self.status(id)
     }
 
     pub fn request(&self, agent: &str) -> Request<Body> {
@@ -629,8 +699,8 @@ impl Rig {
         })
     }
 
-    /// Reports evidence that stands: the plan-side cap and the overage gate both read it through the router's
-    /// view on the scheduling tick that follows.
+    /// Reports evidence that stands: the overage gate reads it through the router's view on the scheduling tick
+    /// that follows.
     pub async fn enter_overage(&self, account: &str, reset_at: i64) {
         let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
         self.h
@@ -670,6 +740,83 @@ impl Rig {
             })
             .await;
     }
+}
+
+/// A report lands on the router task's own queue, and the state it changes is visible once the handle says so.
+///
+/// The lifetime is named rather than elided: `check` is only ever called with this one borrow of `r`, and an
+/// elided `Fn(&Rig) -> Fut` would desugar to a higher-ranked bound that no borrowing async closure can satisfy.
+pub async fn settled<'a, F, Fut>(r: &'a Rig, check: F)
+where
+    F: Fn(&'a Rig) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !check(r).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the router never applied the report"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+/// A real request and attempt for `a` in `main`: enough `claude-sonnet-5` input tokens, at the shipped table's
+/// live rate, to price at `usd` dollars, so a spend this test wants is a row the ledger's own rollups carry
+/// rather than a number the test invented.
+pub fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
+    let rate = PriceTable::shipped()
+        .price("claude-sonnet-5")
+        .expect("the shipped table prices claude-sonnet-5")
+        .input;
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: now,
+        finished_at: Some(now + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "api_key".into(),
+        outcome: "succeeded".into(),
+        input_tokens: Some((usd / rate * 1_000_000.0).round() as u64),
+        ..Default::default()
+    };
+    (request, attempt)
+}
+
+/// Lands a real, priced request for `a` through the ledger's own channel, the path a real request's completion
+/// uses, and waits for the router's view of `a`'s spend to agree: a priced landing is what makes the writer
+/// refresh the router at once, rather than at its next slow poll of the registry for the members a test just
+/// changed, so this is safe as the seed each test starts from, before anything else races its timing.
+pub async fn plant_spend(r: &Rig, id: &str, usd: f64) {
+    let (request, attempts) = spend_of(id, r.now(), usd);
+    r.ledger
+        .record_request(Record::Request {
+            request,
+            attempts: vec![attempts],
+            bodies: None,
+        })
+        .await;
+    settled(r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= usd - 0.01)
+    })
+    .await;
 }
 
 /// The formatter's output, kept in memory so a case reads back exactly what the host's journal would hold.

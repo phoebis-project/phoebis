@@ -10,8 +10,8 @@ afterwards.
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
 account, shown as "API key" in the console, holds an Anthropic API key toward `api.anthropic.com`.
 Creating an `api_key` account verifies the key against its host at once: a rejected key answers
-`400 credential rejected by the upstream`, while a host that serves no model list leaves the account ready with the
-error recorded and no models.
+`400 credential rejected by the upstream`, and a models endpoint that fails, is unreachable or answers a malformed body
+answers `502 the key check failed: ...` with the reason after the colon. Neither creates the account.
 
 ## Through the console
 
@@ -107,7 +107,8 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/con
 ```
 
 `GET /admin/accounts` lists the slots and their states, and `GET /admin/accounts/{id}/usage` answers the poll's
-latest snapshot of the account's usage windows and the poll's standing.
+latest snapshot of the account's usage windows and the poll's standing. The confirm reads the endpoint at once, so the
+windows show within seconds of it.
 
 A loopback deployment behind an SSH tunnel uses `http://127.0.0.1:8081` in place of `https://phoebis.example` in
 every example above, and sends no `Origin`.

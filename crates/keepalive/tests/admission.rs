@@ -225,8 +225,12 @@ async fn an_armed_recipe_that_saw_an_auxiliary_request_still_reports_armed() {
         .find(|v| v.agent_id == "main")
         .expect("the armed recipe");
     assert_eq!(
-        (recipe.state, recipe.reason, recipe.last_guard),
-        (RecipeState::Armed, None, Some(Guard::Auxiliary)),
+        (recipe.state, recipe.cause, recipe.last_guard),
+        (
+            RecipeState::Retained,
+            Reason::Scheduled,
+            Some(Guard::Auxiliary)
+        ),
         "{recipe:?}"
     );
 }
@@ -457,11 +461,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     r.engine.observe(r.selected("req", "a"));
     r.engine
         .observe(r.complete("req", Outcome::Succeeded, Some(usage(0, 2_000))));
-    let encoded = format!(
-        "{:?}{:?}",
-        r.status("main"),
-        r.engine.snapshot("desktop", r.generation("desktop"))
-    );
+    let encoded = format!("{:?}{:?}", r.status("main"), r.reregister());
     assert!(
         !encoded.contains("private prompt")
             && !encoded.contains(KEY)
@@ -752,7 +752,7 @@ async fn a_body_whose_edited_member_is_spelled_with_an_escape_is_not_retained() 
 }
 
 #[tokio::test]
-async fn unknown_ownership_needs_a_lifecycle_snapshot_and_a_restart_rearms() {
+async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.state("main", "unknown");
@@ -769,7 +769,7 @@ async fn unknown_ownership_needs_a_lifecycle_snapshot_and_a_restart_rearms() {
     r.observe("main").await;
     assert!(
         r.status("main").next_probe_at.is_some(),
-        "the snapshot restored observation"
+        "the state report restored observation"
     );
     r.event(Event {
         event: "agent_start".into(),
@@ -892,41 +892,6 @@ async fn a_request_observed_inside_a_gaps_backlog_never_arms() {
         .observe(r.complete("after", Outcome::Succeeded, Some(usage(2_000, 0))));
     assert_eq!(r.status("main").reason, Reason::Scheduled);
     assert!(r.status("main").next_probe_at.is_some() && r.engine.stats().retained_bytes > 0);
-}
-
-#[tokio::test]
-async fn warm_subagents_off_retains_the_main_agent_and_declines_a_subagent() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            enabled: true,
-            warm_subagents: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub-1".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    assert_eq!(r.status("main").reason, Reason::Scheduled);
-    r.observe("sub-1").await;
-    assert_eq!(
-        r.status("sub-1").reason,
-        Reason::SubagentsOff,
-        "declined before a recipe is built"
-    );
-    assert_eq!(
-        r.engine
-            .recipes()
-            .iter()
-            .filter(|v| v.agent_id == "sub-1")
-            .count(),
-        0
-    );
 }
 
 /// An auxiliary or a foreign request must leave an armed recipe's schedule and retained bytes exactly as they

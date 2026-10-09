@@ -76,22 +76,8 @@ export interface CreateKeyInput extends KeyInput {
   expiresInDays: number | null;
 }
 
-/** Probe tuning a new pool starts with; the pool dialog shows these as its initial values. */
-export const KEEPALIVE_TUNING_DEFAULTS: Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled'> = {
-  capWindowSharePerDay: null,
-  coldProbeLimit: 2,
-  jitterSeconds1h: 30,
-  jitterSeconds5m: 5,
-  leadSeconds1h: 360,
-  leadSeconds5m: 60,
-  maxIdleSeconds: 3_600,
-  maxIdleTicks: 0,
-  netNegativeGraceProbes: 2,
-  retryMaxSeconds: 300,
-  retrySeconds: 30,
-  stopWhenNetNegative: true,
-  warmSubagents: true,
-};
+/** The keepalive ceilings a new pool starts with, which the pool dialog shows as its initial values. */
+export const KEEPALIVE_DEFAULTS: Omit<PoolKeepalive, 'enabled'> = { maxIdleSeconds: 3_600, maxParkedSeconds: null, scheduledHorizonSeconds: null };
 
 /** Cache TTL policy a new pool starts with: off, so a pool's breakpoints pass through untouched until set. */
 export const PLAN_TTL_DEFAULTS: TtlRules = { main: '1h', models: [], subagent: '1h' };
@@ -120,7 +106,7 @@ export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
   affinityMode: 'always',
   minSharedPrefixTokens: 20_000,
   sessionPlacement: 'by_strategy',
-  subagentPlacement: 'by_cohort',
+  subagentPlacement: 'by_strategy',
 };
 
 export interface PoolInput extends PoolEngineFields, PoolAffinityFields {

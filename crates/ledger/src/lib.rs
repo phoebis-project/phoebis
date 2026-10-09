@@ -38,7 +38,9 @@ pub use plan::{
     Capacity, DefinedBy, ModelWindow, Override, Peak, PerWindow, PlanTables, SubscriptionCosts,
     TypeMultiplier, TypeOverride, Unit,
 };
-pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
+pub use pricing::{
+    price_attempts, prompt_tokens, LongContext, ModelPrice, ModelRow, PriceTable, Pricing, Speed,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 #[cfg(any(test, feature = "test-support"))]

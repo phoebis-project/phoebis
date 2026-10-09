@@ -16,7 +16,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
-import { KEYS, POOLS } from './pools';
+import { KEYS, POOLS, composedFor, resolvedFor } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
@@ -62,16 +62,9 @@ const restamp = (row: { revision: number; updatedAt: string }) => {
  * drifts from the route is refused here rather than agreed with.
  */
 const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
-  ['coldProbeLimit', 'cold_probe_limit', 1, 20],
-  ['retrySeconds', 'retry_seconds', 1, 3_600],
-  ['retryMaxSeconds', 'retry_max_seconds', 1, 604_800],
   ['maxIdleSeconds', 'max_idle_seconds', 0, 31_536_000],
-  ['maxIdleTicks', 'max_idle_ticks', 0, 1_000_000],
-  ['leadSeconds5m', 'lead_seconds_5m', 0, 299],
-  ['leadSeconds1h', 'lead_seconds_1h', 0, 3_599],
-  ['jitterSeconds5m', 'jitter_seconds_5m', 0, 299],
-  ['jitterSeconds1h', 'jitter_seconds_1h', 0, 3_599],
-  ['netNegativeGraceProbes', 'net_negative_grace_probes', 0, 100],
+  ['maxParkedSeconds', 'max_parked_seconds', 60, 604_800],
+  ['scheduledHorizonSeconds', 'scheduled_horizon_seconds', 60, 604_800],
 ];
 
 /**
@@ -155,16 +148,9 @@ const poolRefusal = (input: PoolInput): string | null => {
   const k = input.keepalive;
   for (const [key, field, min, max] of KEEPALIVE_RANGES) {
     const value = k[key];
-    if (value < min || value > max) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
-    if (key === 'retryMaxSeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
-    // The route reads the two sums once every lead and jitter has passed its own bound.
-    if (key === 'jitterSeconds1h') {
-      if (k.leadSeconds5m + k.jitterSeconds5m >= 300) return 'keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to';
-      if (k.leadSeconds1h + k.jitterSeconds1h >= 3_600) return 'keepalive.lead_seconds_1h plus keepalive.jitter_seconds_1h must stay under the cache TTL they apply to';
-    }
+    // A null ceiling is the recipe's break-even, which no bound applies to.
+    if (value !== null && (value < min || value > max)) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
   }
-  if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
-  if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
   const engine = engineRefusal(input) ?? affinityRefusal(input);
   if (engine) return engine;
   if (k.enabled && affinity < 300) {
@@ -232,9 +218,9 @@ const heldWriter = (): boolean => {
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
-  costToday: [],
   expiredBetweenTurns24h: 0,
-  netSaved7dUsd: 0,
+  limits: { agents: { count: 0, max: 1_024 }, retainedBytes: { count: 0, max: 256 * 1_048_576 }, sessions: { count: 0, max: 128 } },
+  pools: [],
   probes24h: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
 };
 
@@ -569,6 +555,8 @@ export class MockApi implements Api {
       activePins: 0,
       cost24h: 0,
       id,
+      // From the members' kinds, as the router composes them, and nothing for a pool with no member.
+      keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         return writtenMember(m, account, (member) => eligibilityOf(account, input.overagePolicy, member));
@@ -588,7 +576,10 @@ export class MockApi implements Api {
   async deleteAccount(accountId: string) {
     this.buried.set(accountId, Math.floor(this.account(accountId).revision / INCARNATION));
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
-    this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
+    this.pools = this.pools.map((p) => {
+      const members = p.members.filter((m) => m.accountId !== accountId);
+      return { ...p, keepaliveResolved: members.length === 0 ? null : p.keepaliveResolved, members };
+    });
     return latency(undefined, 250);
   }
 
@@ -948,7 +939,7 @@ export class MockApi implements Api {
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const { expiresAt: expiry, ...rest } = input;
     const current = this.keys[idx];
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited; reload and try again', 'stale_edit'));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
@@ -974,7 +965,7 @@ export class MockApi implements Api {
     // In the route's order: the stamp after the list's own shape and ahead of the member lookups, so a stale edit that
     // names an unknown or a held member answers `stale_edit`.
     const current = this.pools[idx];
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited, so reload and try again', 'stale_edit'));
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const held = heldElsewhere(input.members, this.pools, id);
@@ -983,6 +974,8 @@ export class MockApi implements Api {
     const next: Omit<Pool, 'keys'> = {
       ...current,
       ...input,
+      keepaliveResolved:
+        input.members.length === 0 ? null : resolvedFor(current.keepaliveResolved ?? composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
       // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
       members: input.members.map((m) => {

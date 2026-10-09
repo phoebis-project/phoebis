@@ -12,7 +12,8 @@
         "cache_read_per_m": 0.25,
         "output_per_m": 50.0,
         "reads_per_write_5m": 50.0,
-        "fast": null
+        "fast": null,
+        "long_context": null
       },
       {
         "model": "claude-fable-5",
@@ -22,7 +23,8 @@
         "cache_read_per_m": 1.0,
         "output_per_m": 50.0,
         "reads_per_write_5m": 12.5,
-        "fast": null
+        "fast": null,
+        "long_context": null
       },
       {
         "model": "claude-opus-5-5",
@@ -38,7 +40,8 @@
           "cache_write_1h_per_m": 16.0,
           "cache_read_per_m": 0.4,
           "output_per_m": 40.0
-        }
+        },
+        "long_context": null
       },
       {
         "model": "claude-opus-5",
@@ -54,7 +57,8 @@
           "cache_write_1h_per_m": 20.0,
           "cache_read_per_m": 1.0,
           "output_per_m": 50.0
-        }
+        },
+        "long_context": null
       },
       {
         "model": "claude-opus-4-8",
@@ -70,7 +74,8 @@
           "cache_write_1h_per_m": 20.0,
           "cache_read_per_m": 1.0,
           "output_per_m": 50.0
-        }
+        },
+        "long_context": null
       },
       {
         "model": "claude-sonnet-5-5",
@@ -80,7 +85,8 @@
         "cache_read_per_m": 0.1,
         "output_per_m": 10.0,
         "reads_per_write_5m": 25.0,
-        "fast": null
+        "fast": null,
+        "long_context": null
       },
       {
         "model": "claude-sonnet-5",
@@ -90,7 +96,26 @@
         "cache_read_per_m": 0.2,
         "output_per_m": 10.0,
         "reads_per_write_5m": 12.5,
-        "fast": null
+        "fast": null,
+        "long_context": null
+      },
+      {
+        "model": "claude-haiku-5-5",
+        "input_per_m": 0.1,
+        "cache_write_5m_per_m": 0.125,
+        "cache_write_1h_per_m": 0.2,
+        "cache_read_per_m": 0.01,
+        "output_per_m": 0.5,
+        "reads_per_write_5m": 12.5,
+        "fast": null,
+        "long_context": {
+          "over": 100000,
+          "input_per_m": 0.5,
+          "cache_write_5m_per_m": 0.625,
+          "cache_write_1h_per_m": 1.0,
+          "cache_read_per_m": 0.05,
+          "output_per_m": 2.5
+        }
       },
       {
         "model": "claude-haiku-4-5",
@@ -100,7 +125,8 @@
         "cache_read_per_m": 0.1,
         "output_per_m": 5.0,
         "reads_per_write_5m": 12.5,
-        "fast": null
+        "fast": null,
+        "long_context": null
       }
     ]
   }

@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{BurnUnit, FIVE_HOUR};
+use phoebis_routing::{BurnRates, BurnUnit, FIVE_HOUR};
 use serde_json::json;
 
 use crate::routes::failure;
@@ -45,6 +45,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Err(e) => return Err(crate::routes::store_failure(e)),
     };
     let overages = state.router.overages().await.unwrap_or_default();
+    // Asked after the `live` snapshot so the pins ask and that read stay adjacent. A renewal landing between the
+    // pins ask and this one moves one pin's figure by one fold, which the next read shows.
+    let fast_burns = state.router.fast_burns().await.unwrap_or_default();
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state
@@ -68,10 +71,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
-    // in force, or the share of the account's own 5-hour window through the model's anchor rates over its tier's
-    // capacity ratio. Each account's tier is read once per request.
-    let dollar_rates = state.pricing.current().rate_table();
-    let share_rates = state.tables.rate_table(FIVE_HOUR);
+    // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it, or
+    // the share of the account's own 5-hour window through the model's anchor rates over its tier's capacity
+    // ratio. Each account's tier is read once per request.
+    let prices = state.pricing.current();
+    let rates = BurnRates {
+        dollars: prices.rate_table(),
+        five_hour: state.tables.rate_table(FIVE_HOUR),
+        fast: prices.fast_rate_table(),
+    };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
@@ -114,10 +122,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, in_overage)
             });
+        let fast = fast_burns.get(&p.key()).copied().unwrap_or_default();
         let burn = match unit {
             None => None,
-            Some(BurnUnit::Usd) => dollar_rates
-                .price_burn(&p.model, &p.burn)
+            Some(BurnUnit::Usd) => rates
+                .price_pin(BurnUnit::Usd, &p, &fast)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
@@ -133,8 +142,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 // reads null rather than a guess.
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))
                     .and_then(|factor| {
-                        share_rates
-                            .price_burn(&p.model, &p.burn_banded)
+                        rates
+                            .price_pin(BurnUnit::WindowShare, &p, &fast)
                             .map(|b| b * 3_600.0 / factor)
                     })
             }
@@ -192,11 +201,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         entry["companion_since"] = json!(view.companion_since);
         entry["agents"] = json!(view.agents);
         entry["keepalive"] = json!(view.keepalive);
+        entry["presence_age_seconds"] = json!(view.presence_age_seconds);
     }
     // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
     // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
-    // deleted key's session outlives the key in the engine until the idle sweep or a release clears it, so
-    // the clearing is on `historical` as well as on the engine's own map, not on the map alone.
+    // deleted key's session outlives the key in the engine until the engine's next tick ends it, so the
+    // clearing is on `historical` as well as on the engine's own map, not on the map alone.
     for (key, entry) in rows.iter_mut() {
         let historical = live.get(&key.0) != Some(&key.1);
         entry["historical"] = json!(historical);
@@ -204,9 +214,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["companion"] = json!("none");
             entry["companion_since"] = json!(null);
             entry["agents"] = json!(agents_by_session.get(key).map_or(0, |a| a.len()));
-            entry["keepalive"] = json!({
-                "last_guard": null, "net_five_hour_share": null, "net_usd": null, "next_probe_at": null, "state": null
-            });
+            entry["keepalive"] =
+                json!({ "cause": null, "last_guard": null, "next_probe_at": null, "state": null });
+            entry["presence_age_seconds"] = json!(null);
         }
     }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
@@ -283,6 +293,7 @@ pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
             "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output,
             "reads_per_write_5m": if p.cache_read > 0.0 { Some(p.cache_write_5m / p.cache_read) } else { None },
             "fast": crate::pricing::fast_json(row),
+            "long_context": crate::pricing::long_context_json(row),
         })).collect::<Vec<_>>(),
     }))
     .into_response()
@@ -306,7 +317,16 @@ pub(crate) async fn release(
             )
         }
     };
-    let recipes = state.keepalive.release(&key, &session);
+    let recipes = match state.keepalive.release(&key, &session) {
+        Ok(recipes) => recipes,
+        // The engine has quiesced for the shutdown, so its final save stays what the next process restores.
+        Err(_) => {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the keepalive engine is shutting down",
+            )
+        }
+    };
     if pins == 0 && recipes == 0 {
         return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
     }

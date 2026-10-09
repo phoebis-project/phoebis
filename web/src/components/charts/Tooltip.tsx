@@ -14,7 +14,8 @@ export function ChartTooltip({ title, rows }: { rows: TooltipRow[]; title: React
       <div className="chart-tip__title">{title}</div>
       {rows.map((r) => (
         <div key={r.label} className="chart-tip__row">
-          {r.color && <span className="chart-tip__key" style={{ background: r.color }} />}
+          {/* Drawn on every row so an uncolored row keeps its value and label in the colored rows' columns. */}
+          <span className="chart-tip__key" style={r.color ? { background: r.color } : undefined} />
           <span className="chart-tip__value num">{r.value}</span>
           <span className="chart-tip__label" title={r.title}>
             {r.label}

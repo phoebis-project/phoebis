@@ -28,7 +28,8 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumbe
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
 export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
-export { fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { fmtCompact, fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';

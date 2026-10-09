@@ -265,34 +265,20 @@ export interface ReplayOutcome {
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
+/** The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees. */
+export interface Range {
+  max: number;
+  min: number;
+}
+
 export interface PoolKeepalive {
-  /** Probes stop for the day once a subscription account's probes have consumed this share of its 5-hour
-   * window; null means uncapped. */
-  capWindowSharePerDay: number | null;
-  /** Retries allowed for a session whose cache already went cold. */
-  coldProbeLimit: number;
-  /** Probes stop for the day once this is spent; null means uncapped. */
-  costCapUsdPerDay: number | null;
   enabled: boolean;
-  jitterSeconds1h: number;
-  jitterSeconds5m: number;
-  /** Seconds before a 1-hour cache entry expires at which its probe fires. */
-  leadSeconds1h: number;
-  /** Seconds before a 5-minute cache entry expires at which its probe fires. */
-  leadSeconds5m: number;
-  /** 0 means a session keeps being probed for as long as its pin lives. */
+  /** The idle window of the main conversation in seconds. 0 and any value above the recipe's break-even read as the break-even. */
   maxIdleSeconds: number;
-  /** 0 means no limit on consecutive probes without real traffic between them. */
-  maxIdleTicks: number;
-  /** Probes a recipe still gets once its session's net savings have gone below zero. */
-  netNegativeGraceProbes: number;
-  retryMaxSeconds: number;
-  /** First wait after a failed probe; each further failure doubles it. */
-  retrySeconds: number;
-  /** Pause a recipe whose probes have cost more than the cache reads they bought. */
-  stopWhenNetNegative: boolean;
-  /** Subagent recipes are probed too; off warms the main conversation only. */
-  warmSubagents: boolean;
+  /** How long a park on a background command or a subagent is probed. Null is the recipe's break-even. */
+  maxParkedSeconds: number | null;
+  /** A park on a scheduled wakeup is probed while the wake is at most this far away. Null is the recipe's break-even. */
+  scheduledHorizonSeconds: number | null;
 }
 
 export type CacheTtl = '5m' | '1h';
@@ -379,6 +365,12 @@ export interface Pool {
   /** Requests in flight one member may hold before a fresh session skips it. */
   inFlightCap: number;
   keepalive: PoolKeepalive;
+  /**
+   * The ceilings the router resolves for the pool's recipes over its members' fundings, the main agent's TTLs and the
+   * pool's models, in seconds, with the idle window's cost as a share of one re-write, and null for a pool with no
+   * member.
+   */
+  keepaliveResolved: { breakEvenSeconds: Range; horizonSeconds: Range; idleSeconds: Range; idleShare: Range; parkedSeconds: Range } | null;
   keys: PoolKey[];
   members: PoolMember[];
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
@@ -1128,8 +1120,8 @@ export interface AnalyticsGroup {
   failed: number;
   failovers: number;
   /**
-   * Set on a group folded from request rows, the session view's source: the rows carry no cost split, no
-   * savings and no kept-warm mark, so those figures are null and the probe counts are not measured.
+   * Set on a group folded from request rows, the session view's source: the rows carry no cost split and no
+   * kept-warm mark, so those figures are null and the probe figures are not measured.
    */
   fromRequests?: true;
   histograms: LatencyHistograms;
@@ -1145,16 +1137,19 @@ export interface AnalyticsGroup {
   keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
+  probeCostUsd: number;
   probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
   rateLimited: number;
   rejected: number;
   requests: number;
-  savings: { grossUsd: number; probeCostUsd: number; wastedProbeReasons: Record<WastedProbeReason, number>; wastedProbeUsd: number; wastedProbes: number } | null;
   succeeded: number;
   /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
+  wastedProbeReasons: Record<WastedProbeReason, number>;
+  wastedProbeUsd: number;
+  wastedProbes: number;
 }
 
 export interface AnalyticsPoint {
@@ -1178,7 +1173,7 @@ export interface LatencyHistograms {
 }
 
 /** Why probes a recipe had already paid for went unanswered: the stop that left them, or a request after them that read no cache. */
-export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'idle_limit' | 'released' | 'replaced' | 'session_ended';
+export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'horizon' | 'idle_limit' | 'parked_limit' | 'released' | 'replaced' | 'session_ended';
 
 export interface AccountRollup {
   accountId: string;
@@ -1222,9 +1217,13 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
-export type KeepaliveState = 'busy' | 'idle' | 'parked';
+/** The keepalive mod's lifecycle word for an agent. */
+export type KeepaliveState = 'busy' | 'idle' | 'parked' | 'released' | 'unknown';
 
-/** Whether a cache-keepalive companion is registered for the session and still reporting. */
+/** What a parked agent waits on: a background command or a subagent, a scheduled wakeup, or both. */
+export type ParkKind = 'background' | 'both' | 'scheduled';
+
+/** Whether the keepalive mod registered the session and is still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
@@ -1257,11 +1256,10 @@ export interface Session {
   forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** `state` is null when the session carries no cache-warming recipe at all; the other three are null with it. */
+  /** Main's recipe: `state` is null when main holds none, and `cause` and `lastGuard` are null with it. */
   keepalive: {
+    cause: RecipeCause | null;
     lastGuard: GuardVerdict | null;
-    netFiveHourShare: number | null;
-    netUsd: number | null;
     nextProbeAt: string | null;
     state: KeepaliveState | null;
   };
@@ -1279,6 +1277,8 @@ export interface Session {
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
+  /** Seconds since main's last presence report, null before the first one. */
+  presenceAgeSeconds: number | null;
   /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
   requests: number;
   sessionId: string;
@@ -1287,75 +1287,137 @@ export interface Session {
   shedFrom: string | null;
 }
 
-export type RecipeState = 'armed' | 'held' | 'probing';
-export type RecipeReason =
+/** The Sessions row's one word for an agent's recipe, read off the engine's cause and its pause. */
+export type RecipeState = 'ended' | 'held' | 'not_retained' | 'paused' | 'retained';
+/** The engine's own reason, every word it serializes. */
+export type RecipeCause =
   | 'affinity_too_short'
+  | 'agent_released'
+  | 'agent_unknown'
   | 'awaiting_cache_evidence'
+  | 'awaiting_request'
+  | 'awaiting_selection'
   | 'budget'
-  | 'cap_reached'
-  | 'cold_probes'
+  | 'bus_gap'
   | 'cooled'
   | 'evicted'
   | 'expired'
+  | 'expired_at_restart'
+  | 'fixed_thinking'
+  | 'forced_tool'
+  | 'headers_too_large'
+  | 'horizon'
   | 'idle_limit'
+  | 'ineligible_credential'
+  | 'instance_replaced'
+  | 'invalid_cache_control'
+  | 'invalid_model'
+  | 'invalid_probe_usage'
+  | 'invalid_request'
+  | 'keepalive_off'
+  | 'key_opted_out'
+  | 'lease_expired'
   | 'ledger_behind'
-  | 'net_negative'
+  | 'missing_account'
+  | 'no_cache_evidence'
+  | 'no_probe_cache_evidence'
+  | 'opted_out'
   | 'overage'
+  | 'owner_mismatch'
+  | 'parked_limit'
+  | 'partial_cache_coverage'
   | 'paused'
-  | 'pool_exhausted'
-  | 'probe_error'
-  | 'quota_exhausted'
+  | 'pool_disabled'
+  | 'probe_authentication_error'
+  | 'probe_pool_exhausted'
+  | 'probe_quota_exhausted'
+  | 'probe_retry_limit'
+  | 'probe_transport_error'
+  | 'probing'
   | 'reauth'
-  | 'retrying'
+  | 'released'
+  | 'repeated_cold_probe'
+  | 'request_canceled'
+  | 'request_failed'
+  | 'request_limit'
+  | 'request_rejected'
+  | 'request_too_large'
+  | 'reset'
+  | 'retryable_probe_error'
+  | 'scheduled'
+  | 'session_ended'
+  | 'session_expired'
+  | 'slow_probe'
   | 'storage_limit'
+  | 'structured_output'
+  | 'unexpected_output'
+  | 'unsupported_probe'
   | 'unsupported_shape';
 
 /** What the last request the agent observed did to its recipe: `auxiliary` and `foreign` both left it alone,
- * `rearm` and `restart` both fed it. Never a hold; `reason` names that separately. */
+ * `rearm` and `restart` both fed it. Never a hold: `cause` names that separately. */
 export type GuardVerdict = 'auxiliary' | 'foreign' | 'rearm' | 'restart';
 
-/** One cache-warming recipe per agent: what the next probe replays and why it may be held. */
+/** One row per agent that has sent a real request: its recipe's state and cause, its lifecycle and its probes. */
 export interface KeepaliveRecipe {
+  /** The account the agent is pinned to. */
   accountId: string | null;
   agentId: string;
+  agentState: KeepaliveState;
+  cause: RecipeCause;
+  /** Requests credited as kept warm since midnight UTC. */
+  creditedToday: number;
+  /** When the harness stops the background command a park waits on, null off a park on one. */
+  deadline: string | null;
   keyId: string;
   /** Null only before the agent's first observation. */
   lastGuard: GuardVerdict | null;
-  /** This agent's last real request; null for an agent that has not sent one yet. */
+  lastProbeAt: string | null;
+  /** This agent's last real request. */
   lastRequestAt: string | null;
   model: string;
-  /** The share of the account's 5-hour window the agent's probes saved minus what they cost. */
-  netFiveHourShare: number;
-  netUsd: number;
   nextProbeAt: string | null;
+  parkKind: ParkKind | null;
   poolId: string;
-  reason: RecipeReason | null;
+  /** Probes sent since midnight UTC. */
+  probesToday: number;
   sessionId: string;
   state: RecipeState;
   ttlSeconds: number;
+  /** When the scheduled wakeup a park waits on fires, null off a park on one. */
+  wakeAt: string | null;
 }
 
 export interface KeepaliveOverview {
-  agents: Record<KeepaliveState, number>;
+  agents: Record<'busy' | 'idle' | 'parked', number>;
   /** Times the keepalive engine found it had missed bus events; each gap discarded every observation still open. */
   busGaps: number;
-  costToday: { capUsd: number | null; poolId: string; usd: number }[];
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
-  netSaved7dUsd: number;
+  /** The engine's live sessions, agent records and retained bytes, each beside the cap the bootstrap file sets. */
+  limits: Record<'agents' | 'retainedBytes' | 'sessions', { count: number; max: number }>;
+  /**
+   * Per pool, the last 24 hours' probes, credits and wasted probes, and the idle-age counters' ten buckets, the last
+   * open-ended. An account outside every pool lists under its own id.
+   */
+  pools: { credited24h: number; idleReturns: { fromSeconds: number; toSeconds: number | null; reached: number; returned: number }[]; poolId: string; probes24h: number; wasted24h: number; wastedReasons24h: Record<WastedProbeReason, number> }[];
   probes24h: { failed: number; held: number; migrated: number; ok: number; skipped: number };
 }
 
-/** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */
-export interface FastPrice { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
+/** Five cells, USD per million tokens: a model's standard, fast-mode or long-context prices. */
+export interface PriceCells { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
+/** The prices of an attempt whose prompt is longer than `over` tokens. */
+export interface LongContextPrice extends PriceCells { over: number }
 
 export interface ModelPrice {
   cacheReadPerM: number;
   cacheWrite1hPerM: number;
   cacheWrite5mPerM: number;
   /** The fast cells, null on a model that serves no fast mode. */
-  fast: FastPrice | null;
+  fast: PriceCells | null;
   inputPerM: number;
+  /** The long-context set, null on a model priced one way. */
+  longContext: LongContextPrice | null;
   model: string;
   outputPerM: number;
 }
@@ -1381,7 +1443,6 @@ export interface Settings {
    * it, `effectiveDate` the instant it parses to, or null when it is not a date.
    */
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
-  keepalive: { maxAgents: number; maxRetainedBytes: number; maxSessions: number };
   listeners: { metrics: string; proxy: string };
   retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */

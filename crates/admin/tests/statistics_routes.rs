@@ -790,6 +790,75 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
 }
 
 #[tokio::test]
+async fn the_price_routes_answer_the_long_context_set_beside_the_standard_cells() {
+    // Served from the test table so a row with the block is there whatever the shipped table lists, and read from
+    // that table key for key.
+    let table = phoebis_ledger::test_tables::api_prices();
+    let parts = common::admin_parts_full_priced(table.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
+    let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
+    let (long_model, long_row) = table
+        .models
+        .iter()
+        .find(|(_, row)| row.long_context.is_some())
+        .expect("a row priced by prompt length");
+    let (plain_model, plain_row) = table
+        .models
+        .iter()
+        .find(|(_, row)| row.long_context.is_none())
+        .expect("a row priced one way");
+    let long = long_row.long_context.as_ref().unwrap();
+    for (route, models) in [
+        ("settings", &settings["api_prices"]["content"]["models"]),
+        ("pricing", &pricing["api_prices"]["content"]["models"]),
+    ] {
+        assert_eq!(
+            models[long_model],
+            serde_json::to_value(long_row).unwrap(),
+            "{route}: a model priced by prompt length answers its threshold and the five cells over it under the file's names"
+        );
+        assert_eq!(
+            models[plain_model],
+            serde_json::to_value(plain_row).unwrap(),
+            "{route}: a model priced one way answers its row as the file holds it"
+        );
+        assert!(
+            models[plain_model].get("long_context").is_none(),
+            "{route}: as its file row carries no long_context member: {models}"
+        );
+    }
+    let row = |model: &str| {
+        costs["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["model"] == model)
+            .cloned()
+            .unwrap_or_else(|| panic!("sessions/costs lists {model}: {costs}"))
+    };
+    let long_model_costs = row(long_model);
+    assert_eq!(
+        long_model_costs["long_context"],
+        serde_json::json!({
+            "over": long.over,
+            "input_per_m": long.cells.input,
+            "cache_write_5m_per_m": long.cells.cache_write_5m,
+            "cache_write_1h_per_m": long.cells.cache_write_1h,
+            "cache_read_per_m": long.cells.cache_read,
+            "output_per_m": long.cells.output,
+        }),
+        "sessions/costs: a model priced by prompt length answers its threshold and the five cells over it"
+    );
+    assert_eq!(
+        row(plain_model).get("long_context"),
+        Some(&serde_json::Value::Null),
+        "sessions/costs: a model priced one way answers null"
+    );
+}
+
+#[tokio::test]
 async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1619,7 +1688,7 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         .unwrap();
     // A million tokens at the fast cell's price per million read that price in dollars.
     let fast_input = phoebis_ledger::PriceTable::shipped()
-        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast)
+        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast, 1_000_000)
         .unwrap()
         .input;
     assert!(

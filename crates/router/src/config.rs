@@ -1105,7 +1105,7 @@ mod tests {
         }
         assert!(
             matches!(error, ConfigError::Syntax(_)) && chain.contains("max_attempts"),
-            "the pool's size is the attempt budget; the key is refused by name: {chain}"
+            "the pool's size is the attempt budget, so the key is refused by name: {chain}"
         );
     }
 

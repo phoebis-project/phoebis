@@ -1,4 +1,5 @@
-import type { CatalogModel, ModelPrice } from '@/api/types';
+import type { CatalogModel, ModelPrice, PriceCells } from '@/api/types';
+import type { Usage } from '@/lib/costs';
 
 // Stored out of id order, so a page that renders it verbatim rather than sorting it fails the smoke check
 // that reads the catalog popup as sorted by id. The effort levels are the ones the API documents for each model.
@@ -15,19 +16,21 @@ export const CATALOG: CatalogModel[] = [
  * The mock's own Anthropic price list, USD per million tokens, grouped by model
  * class with the newest generation of each first: the story's requests are
  * priced in dollars through `priceFor`, which prices a model the list does not
- * name at Sonnet 5's row.
+ * name at Sonnet 5's row. A row may carry a long-context set, the cells an
+ * answer prices at when its prompt is longer than the set's `over`.
  */
 export const PRICES: ModelPrice[] = [
-  { model: 'claude-fable-5-1', inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null },
-  { model: 'claude-fable-5', inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null },
-  { model: 'claude-opus-5-5', inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheWrite5mPerM: 5, cacheWrite1hPerM: 8, fast: { inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.4, cacheWrite5mPerM: 10, cacheWrite1hPerM: 16 } },
-  { model: 'claude-opus-5', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 } },
-  { model: 'claude-opus-4-8', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 } },
-  { model: 'claude-opus-4-7', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: null },
-  { model: 'claude-sonnet-5', inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheWrite5mPerM: 2.5, cacheWrite1hPerM: 4, fast: null },
-  { model: 'claude-sonnet-4-6', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null },
-  { model: 'claude-sonnet-4-5', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null },
-  { model: 'claude-haiku-4-5-20251001', inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1, cacheWrite5mPerM: 1.25, cacheWrite1hPerM: 2, fast: null },
+  { model: 'claude-fable-5-1', inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null, longContext: null },
+  { model: 'claude-fable-5', inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null, longContext: null },
+  { model: 'claude-opus-5-5', inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheWrite5mPerM: 5, cacheWrite1hPerM: 8, fast: { inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.4, cacheWrite5mPerM: 10, cacheWrite1hPerM: 16 }, longContext: null },
+  { model: 'claude-opus-5', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 }, longContext: null },
+  { model: 'claude-opus-4-8', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 }, longContext: null },
+  { model: 'claude-opus-4-7', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: null, longContext: null },
+  { model: 'claude-sonnet-5', inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheWrite5mPerM: 2.5, cacheWrite1hPerM: 4, fast: null, longContext: null },
+  { model: 'claude-sonnet-4-6', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null, longContext: null },
+  { model: 'claude-sonnet-4-5', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null, longContext: null },
+  { model: 'claude-haiku-5-5', inputPerM: 0.1, outputPerM: 0.5, cacheReadPerM: 0.01, cacheWrite5mPerM: 0.125, cacheWrite1hPerM: 0.2, fast: null, longContext: { over: 100_000, inputPerM: 0.5, outputPerM: 2.5, cacheReadPerM: 0.05, cacheWrite5mPerM: 0.625, cacheWrite1hPerM: 1 } },
+  { model: 'claude-haiku-4-5-20251001', inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1, cacheWrite5mPerM: 1.25, cacheWrite1hPerM: 2, fast: null, longContext: null },
 ];
 
 const priceIndex = new Map(PRICES.map((p) => [p.model, p]));
@@ -35,4 +38,16 @@ const FALLBACK = priceIndex.get('claude-sonnet-5')!;
 
 export function priceFor(model: string): ModelPrice {
   return priceIndex.get(model) ?? FALLBACK;
+}
+
+/**
+ * The cells an answer prices at, as the ledger selects them: the fast cells for a fast answer on a row that has
+ * them, else the long-context cells when the prompt (uncached input, cache reads and cache writes together) is
+ * over the threshold, else the standard cells.
+ */
+export function cellsFor(model: string, usage: Pick<Usage, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input'>, fast = false): PriceCells {
+  const row = priceFor(model);
+  if (fast && row.fast) return row.fast;
+  const prompt = usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
+  return row.longContext && prompt > row.longContext.over ? row.longContext : row;
 }

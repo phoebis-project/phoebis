@@ -22,7 +22,7 @@ import { joinTrend } from '@/lib/trend';
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
-const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
+const END_HINT = "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -360,7 +360,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               {STATUS_LABEL[account.status]}
             </Badge>
             {account.credential.quarantined && (
-              <Badge tone="critical" title="the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it">
+              <Badge tone="critical" title="the last refresh's outcome is uncertain, so re-pair or wait for the next start to resolve it">
                 quarantined
               </Badge>
             )}
@@ -441,7 +441,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 'Disconnect account',
-                `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
+                `Deletes ${account.label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.`,
                 'Disconnect',
                 () => api.disconnectAccount(account.id),
                 'Disconnected',
@@ -522,7 +522,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   ]
                 : [
                     { label: 'Type', value: 'API key' },
-                    { label: 'Windows', value: 'None reported; billed per token' },
+                    { label: 'Windows', value: 'None reported, billed per token' },
                   ]
             }
           />
@@ -818,7 +818,7 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
         />
       </div>
       <Field label="Label" hint="Short name used in pools and logs.">
-        <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
+        <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'home' : 'Office workspace'} />
       </Field>
       {customId === null ? (
         <p className="field__hint">

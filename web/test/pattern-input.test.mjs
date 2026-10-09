@@ -78,7 +78,7 @@ test('the field names itself by its label and carries the pattern grammar in its
   assert.equal(input.getAttribute('placeholder'), 'Client pattern');
   assert.equal(input.getAttribute('aria-label'), 'Client pattern');
   assert.equal(input.getAttribute('title'), PATTERN_GRAMMAR);
-  assert.equal(PATTERN_GRAMMAR, '* matches any run of characters, ? one; a backslash quotes either');
+  assert.equal(PATTERN_GRAMMAR, '* matches any run of characters, ? one, and a backslash quotes either');
   assert.ok(input.classList.contains('mono'), 'the pattern reads in the monospace face');
 });
 

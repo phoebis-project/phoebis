@@ -109,7 +109,7 @@ test('an account row decodes its usage block and null for an API-key account', (
     status: 'success',
   });
   assert.equal(direct.usage, null, 'the poll never reads an API-key account');
-  const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account; pair it to load quota', fetched_at: null, poll: null } }).usage;
+  const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account, so pair it to load quota', fetched_at: null, poll: null } }).usage;
   assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
 
@@ -323,8 +323,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   const [p] = fixture('pools').pools.map(d.decodePool);
   assert.equal(p.name, 'Main');
   assert.equal(p.strategy, 'pace');
-  assert.equal(p.keepalive.costCapUsdPerDay, 4);
-  assert.equal(p.keepalive.warmSubagents, true);
+  assert.deepEqual(p.keepalive, { enabled: true, maxIdleSeconds: 3_600, maxParkedSeconds: null, scheduledHorizonSeconds: null }, 'the four fields, the two ceilings null as the route answers them');
   assert.equal(p.cacheTtl.enabled, false);
   assert.equal(p.cacheTtl.plan.main, '1h');
   assert.equal(p.cacheDiagnostics, false);
@@ -335,6 +334,28 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
+});
+
+test('a pool decodes the ceilings the router resolved for it, and a pool with no member reads null', () => {
+  const row = fixture('pools').pools[0];
+  const resolved = d.decodePool(row).keepaliveResolved;
+  const wire = row.keepalive_resolved;
+  assert.deepEqual(
+    resolved,
+    {
+      breakEvenSeconds: { max: wire.break_even_seconds.max, min: wire.break_even_seconds.min },
+      horizonSeconds: { max: wire.horizon_seconds.max, min: wire.horizon_seconds.min },
+      idleSeconds: { max: wire.idle_seconds.max, min: wire.idle_seconds.min },
+      idleShare: { max: wire.idle_share.max, min: wire.idle_share.min },
+      parkedSeconds: { max: wire.parked_seconds.max, min: wire.parked_seconds.min },
+    },
+    'the five ranges as the route answers them',
+  );
+  assert.ok(resolved.breakEvenSeconds.min < resolved.breakEvenSeconds.max, 'the captured pool mixes a plan member and an API-key member, so its break-even is a range');
+  assert.equal(d.decodePool({ ...row, keepalive_resolved: null }).keepaliveResolved, null, 'a pool with no member');
+  const bare = { ...row };
+  delete bare.keepalive_resolved;
+  assert.equal(d.decodePool(bare).keepaliveResolved, null, 'a row without the member resolves nothing');
 });
 
 test('a pool decodes its select-below threshold and encodes it back', () => {
@@ -416,21 +437,21 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
       metered: { main: '5m', subagent: '5m', models: [] },
     },
     cache_diagnostics: true,
-    keepalive: { ...row.keepalive, warm_subagents: false },
+    keepalive: { ...row.keepalive, max_parked_seconds: 7_200 },
   };
   const p = d.decodePool(wire);
   assert.deepEqual([p.cacheTtl.enabled, p.cacheTtl.injectWhenAbsent, p.cacheTtl.plan.main, p.cacheTtl.plan.subagent], [true, true, '5m', '1h']);
   assert.deepEqual(p.cacheTtl.plan.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
   assert.deepEqual([p.cacheTtl.metered.main, p.cacheTtl.metered.subagent], ['5m', '5m']);
   assert.equal(p.cacheDiagnostics, true);
-  assert.equal(p.keepalive.warmSubagents, false);
+  assert.equal(p.keepalive.maxParkedSeconds, 7_200);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.equal(back.cache_ttl.enabled, true);
   assert.equal(back.cache_ttl.inject_when_absent, true);
   assert.equal(back.cache_ttl.plan.models[0].model, 'claude-haiku-4-5-20251001');
   assert.equal(back.cache_ttl.metered.main, '5m');
   assert.equal(back.cache_diagnostics, true);
-  assert.equal(back.keepalive.warm_subagents, false);
+  assert.deepEqual(back.keepalive, { enabled: true, max_idle_seconds: 3_600, max_parked_seconds: 7_200, scheduled_horizon_seconds: null }, 'the four fields go back under the names the route reads, a null ceiling as null');
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
   assert.equal(d.encodePool({ ...p, name: p.name, cacheDiagnostics: false, status: 'active' }).cache_diagnostics, false, 'the switch is sent off as it is sent on');
 });
@@ -497,8 +518,10 @@ test('a pool the route answers without a cache TTL policy decodes to the default
     'a field the route leaves out falls back one field at a time, each set against its own default',
   );
   const keepalive = { ...wire.keepalive };
-  delete keepalive.warm_subagents;
-  assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');
+  delete keepalive.max_parked_seconds;
+  delete keepalive.scheduled_horizon_seconds;
+  const bare = d.decodePool({ ...wire, keepalive }).keepalive;
+  assert.deepEqual([bare.maxParkedSeconds, bare.scheduledHorizonSeconds], [null, null], 'a keepalive block without the two ceilings reads them as the break-even');
 });
 
 test('a pool decodes the pin and placement fields and its members\' budgets, and encodes them back', () => {
@@ -506,7 +529,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   const p = d.decodePool(row);
   assert.deepEqual(
     [p.affinityMode, p.subagentPlacement, p.sessionPlacement, p.minSharedPrefixTokens],
-    ['always', 'by_cohort', 'by_strategy', 20_000],
+    ['always', 'by_strategy', 'by_strategy', 20_000],
     'the captured pool holds the store defaults',
   );
   const direct = p.members.find((m) => m.accountId === 'direct');
@@ -555,7 +578,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   const defaults = d.decodePool(bare);
   assert.deepEqual(
     [defaults.affinityMode, defaults.subagentPlacement, defaults.sessionPlacement, defaults.minSharedPrefixTokens],
-    ['always', 'by_cohort', 'by_strategy', 20_000],
+    ['always', 'by_strategy', 'by_strategy', 20_000],
     'a field the route leaves out reads the store default',
   );
   assert.deepEqual(
@@ -573,7 +596,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   });
   assert.deepEqual(
     [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind],
-    ['always', 'by_strategy', 'by_cohort', 'month', 'unavailable', 'oauth'],
+    ['always', 'by_strategy', 'by_strategy', 'month', 'unavailable', 'oauth'],
     'every unknown spelling reads its default',
   );
 });
@@ -703,7 +726,8 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 5);
   assert.equal(desktop.tokens.thinking, 200);
-  assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
+  assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
+  assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);
   assert.equal(desktop.probes.held, 0, 'the captured group counts no held probe');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
@@ -1055,44 +1079,75 @@ test('a session fold marks what request rows cannot supply and a sum carries the
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const [folded] = d.foldGroups(rows, 'all');
   assert.equal(folded.fromRequests, true);
-  assert.equal(folded.savings, null);
   assert.equal(folded.keptWarm, null);
   assert.equal(folded.cost.cacheRead, null);
   assert.equal(folded.cost.cacheWrite, null);
-  const route = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
+  const route = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], probe_cost_usd: 0.25, wasted_probe_usd: 0.125, wasted_probes: 1 });
   assert.equal(route.fromRequests, undefined, 'a route group carries every figure');
   const mixed = d.sumGroups([route, folded]);
   assert.equal(mixed.cost.cacheRead, null, 'a null source makes the sum unavailable, never NaN');
   assert.equal(mixed.cost.cacheWrite, null);
-  assert.equal(mixed.savings, null);
   assert.equal(mixed.keptWarm, null);
   assert.equal(mixed.fromRequests, true);
   assert.equal(mixed.costUsd, route.costUsd + folded.costUsd, 'the figures the rows do carry still sum');
   const routeOnly = d.sumGroups([route, route]);
   assert.equal(routeOnly.cost.cacheRead, route.cost.cacheRead * 2);
-  assert.equal(routeOnly.savings.grossUsd, route.savings.grossUsd * 2);
+  assert.deepEqual([routeOnly.probeCostUsd, routeOnly.wastedProbeUsd, routeOnly.wastedProbes], [0.5, 0.25, 2], 'the probe figures sum');
   assert.equal(routeOnly.keptWarm.requests, route.keptWarm.requests * 2);
   assert.equal(routeOnly.fromRequests, undefined);
   const [bucket] = d.foldRequests(rows, 3_600_000, rows[rows.length - 1].at, rows[0].at);
-  assert.ok(bucket.groups.every((g) => g.savings === null && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
+  assert.ok(bucket.groups.every((g) => g.fromRequests === true && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
 });
 
-test('a recipe evicted at the byte cap or lapsed past its entry keeps that reason, and the wasted probes their labels', () => {
+test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  for (const reason of ['evicted', 'expired']) {
-    const recipe = d.decodeRecipe({ ...wire, reason, state: 'held' });
-    assert.equal(recipe.reason, reason);
+  for (const cause of ['evicted', 'expired', 'expired_at_restart']) {
+    const recipe = d.decodeRecipe({ ...wire, cause, state: 'ended' });
+    assert.deepEqual([recipe.cause, recipe.state], [cause, 'ended']);
   }
   const row = fixture('analytics_breakdown').rows[0];
-  const group = d.decodeAnalyticsGroup({ ...row, savings: { ...row.savings, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 } });
-  assert.deepEqual([group.savings.wastedProbeReasons.cold_return, group.savings.wastedProbeReasons.evicted, group.savings.wastedProbeReasons.expired], [3, 2, 1]);
+  const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 });
+  assert.deepEqual([group.wastedProbeReasons.cold_return, group.wastedProbeReasons.evicted, group.wastedProbeReasons.expired], [3, 2, 1]);
 });
 
-test('a recipe held because every account of its pool was exhausted keeps that reason', () => {
+test('a recipe paused because every account of its pool was exhausted keeps that cause', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  const recipe = d.decodeRecipe({ ...wire, reason: 'pool_exhausted', state: 'held' });
-  assert.equal(recipe.reason, 'pool_exhausted');
-  assert.equal(recipe.state, 'held');
+  const recipe = d.decodeRecipe({ ...wire, cause: 'probe_pool_exhausted', state: 'paused' });
+  assert.equal(recipe.cause, 'probe_pool_exhausted');
+  assert.equal(recipe.state, 'paused');
+});
+
+test('a recipe decodes every cause word the engine serializes, its five states, the park and the day counts', () => {
+  const [wire] = fixture('keepalive_recipes').recipes;
+  assert.equal(d.RECIPE_CAUSE_VALUES.length, 62);
+  assert.deepEqual([...d.RECIPE_CAUSE_VALUES], [...d.RECIPE_CAUSE_VALUES].sort(), 'the causes read alphabetically');
+  for (const cause of d.RECIPE_CAUSE_VALUES) assert.equal(d.decodeRecipe({ ...wire, cause }).cause, cause);
+  assert.deepEqual([...d.RECIPE_STATE_VALUES], ['ended', 'held', 'not_retained', 'paused', 'retained']);
+  for (const state of d.RECIPE_STATE_VALUES) assert.equal(d.decodeRecipe({ ...wire, state }).state, state);
+  assert.deepEqual([...d.AGENT_STATE_VALUES], ['busy', 'idle', 'parked', 'released', 'unknown'], 'the lifecycle word admits every state the engine serializes, unknown among them');
+  const parked = d.decodeRecipe({ ...wire, agent_state: 'parked', park_kind: 'both', deadline: 7_200_000, wake_at: 10_800_000, last_probe_at: 3_600_000, probes_today: 4, credited_today: 2 });
+  assert.deepEqual(
+    [parked.agentState, parked.parkKind, parked.deadline, parked.wakeAt, parked.lastProbeAt, parked.probesToday, parked.creditedToday],
+    ['parked', 'both', new Date(7_200_000).toISOString(), new Date(10_800_000).toISOString(), new Date(3_600_000).toISOString(), 4, 2],
+  );
+  assert.equal(d.decodeRecipe({ ...wire, agent_state: 'unknown' }).agentState, 'unknown');
+  assert.equal(d.decodeRecipe({ ...wire, park_kind: 'nap' }).parkKind, null, 'a park kind outside the three reads as none');
+});
+
+test('a session row carries the presence age and the cause of its main recipe', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  assert.equal(d.decodeSession({ ...row, presence_age_seconds: 12 }).presenceAgeSeconds, 12);
+  assert.equal(d.decodeSession({ ...row, presence_age_seconds: null }).presenceAgeSeconds, null);
+  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'cooled' } }).keepalive.cause, 'cooled');
+  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
+});
+
+test('a recipe held under the horizon or ended at the parked limit keeps that cause, and the wasted probes their labels', () => {
+  const [wire] = fixture('keepalive_recipes').recipes;
+  assert.deepEqual([d.decodeRecipe({ ...wire, cause: 'horizon', state: 'held' }).cause, d.decodeRecipe({ ...wire, cause: 'parked_limit', state: 'ended' }).cause], ['horizon', 'parked_limit']);
+  const row = fixture('analytics_breakdown').rows[0];
+  const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { horizon: 2, parked_limit: 1 }, wasted_probes: 3 });
+  assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
 test('the downstream snippet is the six recommended lines with the public URL left to the operator', () => {
@@ -1224,21 +1279,35 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
+  assert.equal(s1.keepalive.cause, 'scheduled');
+  assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
   assert.equal(s1.requests, 3);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
-  assert.equal(recipe.state, 'armed');
-  assert.equal(recipe.reason, null);
-  assert.equal(recipe.netFiveHourShare, 0, 'no probe has settled into the recipe yet');
+  assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
-  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'costToday', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
+  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'limits', 'pools', 'probes24h']);
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
+  assert.deepEqual(ov.limits, { agents: { count: 1, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
+  const [pool] = ov.pools;
+  assert.deepEqual(
+    [ov.pools.length, pool.poolId, pool.credited24h, pool.probes24h, pool.wasted24h, Object.keys(fixture('keepalive_overview').pools[0].wasted_reasons_24h).sort()],
+    [1, 'main', 0, 0, 0, [...d.WASTED_PROBE_REASONS].sort()],
+    'the captured pool has the idle window it opened and no ledger rows yet, and the route names every wasted reason',
+  );
+  assert.deepEqual(
+    pool.idleReturns.map((b) => [b.fromSeconds, b.toSeconds, b.reached, b.returned]),
+    [[0, 300, 1, 0], [300, 900, 0, 0], [900, 1_800, 0, 0], [1_800, 3_600, 0, 0], [3_600, 7_200, 0, 0], [7_200, 14_400, 0, 0], [14_400, 28_800, 0, 0], [28_800, 57_600, 0, 0], [57_600, 115_200, 0, 0], [115_200, null, 0, 0]],
+    'ten buckets, the last open-ended',
+  );
+  const wire = { ...fixture('keepalive_overview'), pools: [{ ...fixture('keepalive_overview').pools[0], credited_24h: 2, wasted_reasons_24h: { horizon: 1 } }] };
+  const [read] = d.decodeKeepaliveOverview(wire).pools;
+  assert.deepEqual([read.credited24h, read.wastedReasons24h.horizon, read.wastedReasons24h.idle_limit], [2, 1, 0], 'a reason the answer leaves out reads zero');
   assert.deepEqual(Object.keys(ov.probes24h).sort(), ['failed', 'held', 'migrated', 'ok', 'skipped'], 'the five probe outcomes the tile draws');
   const captured = fixture('keepalive_overview');
   assert.equal(d.decodeKeepaliveOverview({ ...captured, probes_24h: { ...captured.probes_24h, held: 2 } }).probes24h.held, 2, 'the held count reads off the route');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
-  assert.equal(ov.costToday[0].capUsd, 4);
 });
 
 test('a session decodes its fork', () => {
@@ -1275,7 +1344,8 @@ test('settings decode the members the route answers and nothing more', () => {
   const s = d.decodeSettings(wire);
   assert.deepEqual(
     Object.keys(s).sort(),
-    ['about', 'access', 'apiPrices', 'keepalive', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
+    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
+    'the bootstrap caps the route still answers read on the Sessions page, from the overview',
   );
   const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
   assert.deepEqual(
@@ -1284,7 +1354,6 @@ test('settings decode the members the route answers and nothing more', () => {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
       apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
-      keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
       listeners: ['metrics', 'proxy'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
@@ -1294,7 +1363,6 @@ test('settings decode the members the route answers and nothing more', () => {
     },
     'each member carries what the pages read and no other key',
   );
-  assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
   assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
@@ -1312,7 +1380,6 @@ test('a settings member the answer leaves out decodes to its default', () => {
   };
   assert.deepEqual(without('about'), { profile: '', version: '' });
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
-  assert.deepEqual(without('keepalive'), { maxAgents: 0, maxRetainedBytes: 0, maxSessions: 0 });
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
@@ -1482,12 +1549,18 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
-  assert.deepEqual(s.keepalive, { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 });
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   const rows = wire.api_prices.content.models;
   assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);
   const opus = s.apiPrices.models.find((m) => m.model === 'claude-opus-5-5');
   assert.deepEqual([opus.cacheWrite1hPerM, opus.fast.outputPerM], [rows['claude-opus-5-5'].cache_write_1h, rows['claude-opus-5-5'].fast.output], "a cell and a fast cell read under the file's names");
+  const plainRow = { input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5 };
+  const longContextRow = { ...plainRow, long_context: { over: 1000, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25 } };
+  const withLongContext = d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, content: { ...wire.api_prices.content, models: { ...rows, 'claude-haiku-5-5': longContextRow, 'claude-test-plain': plainRow } } } });
+  const haiku = withLongContext.apiPrices.models.find((m) => m.model === 'claude-haiku-5-5');
+  assert.deepEqual(haiku.longContext, { cacheReadPerM: 0.5, cacheWrite1hPerM: 10, cacheWrite5mPerM: 6.25, inputPerM: 5, outputPerM: 25, over: 1000 }, "a long-context set reads its threshold and its cells under the file's names");
+  assert.equal(haiku.fast, null);
+  assert.equal(withLongContext.apiPrices.models.find((m) => m.model === 'claude-test-plain').longContext, null, 'a row without the block reads null');
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));
@@ -1596,7 +1669,7 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
   assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
-test('a session decodes its burn unit and both net balances, and a pin the cost model cannot price reads no burn', () => {
+test('a session decodes its burn unit, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
   assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
@@ -1604,10 +1677,8 @@ test('a session decodes its burn unit and both net balances, and a pin the cost 
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
-  const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_usd: 0.25 } }).keepalive;
-  assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);
-  const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002 });
-  assert.equal(recipe.netFiveHourShare, -0.0002);
+  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['cause', 'lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
+  assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'nor does a recipe');
 });
 
 test("an attention item decodes the route's shape, its start an instant and its detail passed through", () => {

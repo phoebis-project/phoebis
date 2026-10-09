@@ -27,6 +27,13 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
  */
 export const MIGRATE_BAND = 0.05;
 
+/**
+ * The lead over pace the console proposes when the shed switch turns on: a prediction twenty points ahead of the
+ * elapsed share, whose cool line under `MIGRATE_BAND` is 0.15. The router keeps no default, since the switch is the
+ * operator's choice.
+ */
+export const SHED_AHEAD_OF_PACE_DEFAULT = 0.2;
+
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -246,7 +253,7 @@ export function leadWords(lead: number): string {
  */
 export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
-  if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
+  if (table === 'loading') return 'The cost model is loading, and window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.hot.length === 0) {
     const c = preview.closest;

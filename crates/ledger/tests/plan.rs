@@ -352,7 +352,7 @@ fn the_rate_table_carries_a_row_per_weighted_model_on_the_anchor_and_no_rate_for
     assert_eq!(rates.rows.get("claude-opus-5"), None);
     assert_eq!(per_type(rates.fallback), [None; 5]);
     assert_eq!(
-        per_type(rates.rates_for("claude-opus-5-5-20260401")),
+        per_type(rates.rates_for("claude-opus-5-5-20260401", 0)),
         per_type(rates.rows[OPUS]),
         "a dated id reads its undated row"
     );

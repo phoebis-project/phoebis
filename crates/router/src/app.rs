@@ -9,7 +9,9 @@ use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
+use phoebis_keepalive::{
+    keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming, PERSIST_INTERVAL,
+};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
@@ -317,7 +319,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         clock: clock.clone(),
         cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
         ledger: ledger.clone(),
-        lifecycle: None,
         limits: config.keepalive.clone(),
         max_request_bytes: config.proxy.max_request_bytes,
         metrics: metrics.clone(),
@@ -327,9 +328,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
         store: store.clone(),
         tables: tables.clone(),
+        timing: KeepaliveTiming::for_start(),
     });
-    // Both daily budgets are read back from the store so a restart resets neither cap.
-    keepalive.load_spent_today().await;
+    let keepalive_flush = keepalive.clone().spawn_persist_flush(PERSIST_INTERVAL);
+    // The sessions, recipes and counters the last process saved, back before the scheduler's first tick.
+    keepalive.load_persisted().await;
     // Empty here because the attention reader and the admin state take it before the pairs load below. The load fills
     // it before any listener binds, so nothing reads it empty.
     let tls_live = tls::LiveSet::new();
@@ -487,7 +490,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     );
     if phoebis_ui::is_placeholder() {
         tracing::warn!(
-            "this build carries no web UI; the admin listener serves a placeholder page"
+            "this build carries no web UI, so the admin listener serves a placeholder page"
         );
     }
 
@@ -527,7 +530,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let mut proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
-        companion_router(keepalive.clone()).merge(usage_router(
+        keepalive_router(keepalive.clone()).merge(usage_router(
             ledger_db.clone(),
             router_task.clone(),
             clock.clone(),
@@ -587,7 +590,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     )
     .await;
     if let Some(listener) = ended_early {
-        tracing::error!(listener, "a listener ended on its own; shutting down");
+        tracing::error!(
+            listener,
+            "a listener ended on its own, so the process shuts down"
+        );
     }
     let early_error = ended_early.map(|listener| {
         let index = match listener {
@@ -607,8 +613,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     attention_handles.stop();
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
-        // which the drain is about to drop.
+        // which the drain is about to drop. The engine quiesces first, so no update lands after the state it saves,
+        // then drains its probes, saves, and clears last, so the clear takes nothing unsaved. The flusher is joined
+        // rather than aborted: the quiesce ended its loop, and a flush it had in flight ran to its end under the
+        // flush lock ahead of the shutdown's own.
         keepalive.shutdown().await;
+        if let Err(error) = keepalive_flush.await {
+            tracing::warn!(%error, "the keepalive's flush task did not end cleanly");
+        }
         join_remaining(
             &mut ended,
             [&mut proxy, &mut admin_server, &mut metrics_server],
@@ -974,12 +986,13 @@ mod tests {
             write_1h: 200,
             output: 500,
         };
+        let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
         let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
         let share = config
             .rates
             .five_hour
-            .price("claude-opus-5-5", usage)
+            .price("claude-opus-5-5", usage, prompt)
             .expect("a priced model");
         let expected = tables
             .share_at(
@@ -997,12 +1010,15 @@ mod tests {
         assert_ne!(
             share,
             phoebis_routing::RateTable::unit()
-                .price("claude-opus-5-5", usage)
+                .price("claude-opus-5-5", usage, prompt)
                 .expect("a priced model"),
             "the share table, not the unit table's token count"
         );
         assert_eq!(
-            config.rates.five_hour.price("claude-opus-4-8", usage),
+            config
+                .rates
+                .five_hour
+                .price("claude-opus-4-8", usage, prompt),
             None,
             "the share table prices no model the cost model has no weight for"
         );
@@ -1010,7 +1026,7 @@ mod tests {
             config
                 .rates
                 .dollars
-                .price("gpt-5", usage)
+                .price("gpt-5", usage, prompt)
                 .is_some_and(|usd| usd > 0.0),
             "the dollar table keeps its dearest-price fallback"
         );
@@ -1029,7 +1045,7 @@ mod tests {
             (config
                 .rates
                 .dollars
-                .price("claude-sonnet-5", usage)
+                .price("claude-sonnet-5", usage, prompt)
                 .expect("a priced model")
                 - usd)
                 .abs()
@@ -1051,7 +1067,7 @@ mod tests {
             (config
                 .rates
                 .fast
-                .price("claude-opus-5-5", usage)
+                .price("claude-opus-5-5", usage, prompt)
                 .expect("a priced model")
                 - fast_usd)
                 .abs()

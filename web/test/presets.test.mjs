@@ -22,6 +22,11 @@ test('a preset is derived from the values and custom when none matches', () => {
   for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
 });
 
+test('the proposed lead over pace is a lead the router can shed on, above the cool band', () => {
+  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT > 0 && d.SHED_AHEAD_OF_PACE_DEFAULT < 1);
+  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT - d.MIGRATE_BAND > 0, 'the cool line under the proposed lead stays above zero');
+});
+
 const NOW = Date.parse('2026-09-16T14:30:00Z');
 const MINUTE = 60_000;
 const at = (ms) => new Date(ms).toISOString();
@@ -236,7 +241,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
 
 test('while the cost model is loading or did not load the preview names the model and counts nothing', () => {
   const round = replay([hot, cool], four);
-  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading; window-share pins are counted once it is read.');
+  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading, and window-share pins are counted once it is read.');
   assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost model did not load, so window-share pins cannot be counted.');
   assert.equal(d.shedPreviewLine(round, true, 'ready'), `1 member runs ahead of pace by the margin: hot (5-hour, 90 points ahead). A round there would move 2 sessions (1 warm), 70% of the hot members' recent burn together, in window share, to a cool sibling.`, 'a read model counts as before');
   assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, model or not');

@@ -2562,7 +2562,8 @@ async fn a_committed_answer_the_relay_drained_renews_its_pin_where_the_answer_en
 }
 
 #[tokio::test]
-async fn a_fast_answers_renewal_folds_its_dollars_and_leaves_the_plan_copy_of_the_burn_at_zero() {
+async fn a_fast_answers_renewal_folds_its_usage_into_the_fast_copy_and_leaves_both_pin_copies_at_zero(
+) {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -2596,15 +2597,26 @@ async fn a_fast_answers_renewal_folds_its_dollars_and_leaves_the_plan_copy_of_th
             .find(|p| p.burn_at.is_some())
     })
     .await;
+    let fast = h
+        .router
+        .fast_burns()
+        .await
+        .unwrap()
+        .get(&pin.key())
+        .copied()
+        .unwrap_or_default();
     assert!(
-        pin.burn.input > 0.0 && pin.burn.output > 0.0,
-        "the answer's usage folds into the dollar copy: {:?}",
-        pin.burn
+        fast.input > 0.0 && fast.output > 0.0,
+        "the answer's usage folds into the pin's fast copy, which the router holds beside the row: {fast:?}"
     );
     assert_eq!(
-        pin.burn_banded,
-        phoebis_store::PinBurn::default(),
-        "an answer reporting usage.speed fast draws no plan window, so the banded copy folds nothing"
+        (pin.burn, pin.burn_banded),
+        (
+            phoebis_store::PinBurn::default(),
+            phoebis_store::PinBurn::default()
+        ),
+        "an answer reporting usage.speed fast prices at the fast cells and draws no plan window, so both of the \
+         row's copies fold nothing"
     );
     up.shutdown().await;
 }

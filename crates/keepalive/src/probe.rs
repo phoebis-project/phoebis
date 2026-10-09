@@ -13,11 +13,13 @@ use http_body_util::BodyExt;
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
 use phoebis_routing::BUDGET_WINDOW;
-use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
+use phoebis_store::AccountKind;
 use serde_json::Value;
 
+use crate::breakeven::Ceilings;
 use crate::engine::{
-    Agent, Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, UnansweredProbe, Wasted,
+    Agent, AgentState, Engine, Funding, Inner, ParkKind, Reason, SavingsUnit, SessionKey,
+    UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
@@ -42,13 +44,16 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
-    /// The dispatch counted this probe toward `max_idle_ticks`, as it does for an idle main agent or an unattended
+    /// The dispatch counted this probe in the agent's `idle_ticks`, as it does for an idle main agent or an unattended
     /// session alone. A hold gives back only a tick its dispatch counted.
     pub counted_idle_tick: bool,
 }
 
 pub(crate) struct ProbeResult {
     pub status: u16,
+    /// The relay's id of the exchange, which the probe's ledger request row carries. `None` for an answer the relay
+    /// never built.
+    pub request_id: Option<String>,
     pub account: Option<String>,
     /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
     /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
@@ -103,6 +108,32 @@ impl ProbeOutcome {
     }
 }
 
+/// The word the probe counter files a probe under: a served probe landed when it read its prefix back and was cold
+/// otherwise, and every other outcome is one the upstream did not serve. Every outcome is named, so one added later
+/// fails to build here rather than counting as `failed` unread.
+pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static str {
+    match outcome {
+        ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
+        ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
+        ProbeOutcome::Held => "held",
+        ProbeOutcome::Cancelled
+        | ProbeOutcome::Exhausted
+        | ProbeOutcome::Failed
+        | ProbeOutcome::RateLimited
+        | ProbeOutcome::Rejected
+        | ProbeOutcome::TimedOut => "failed",
+    }
+}
+
+/// The cold judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
+pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool {
+    if migrated {
+        usage.evidence() >= expected
+    } else {
+        usage.read >= expected
+    }
+}
+
 /// What one probe cost and how it ended, from the job and the exchange alone. Whether the recipe it ran for
 /// still exists changes nothing here: the upstream served it, so the pool's spend, the metrics, and the ledger
 /// carry it either way.
@@ -131,10 +162,10 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit and the cost a probe settles in: the unit `settlement_unit` decides, the same decision the gate took, and
-/// the probe's own usage priced in it.
+/// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
+/// priced. Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
 #[allow(clippy::too_many_arguments)]
-fn settled_cost(
+fn settled_unit(
     default_unit: SavingsUnit,
     table: &PriceTable,
     tables: &PlanTables,
@@ -143,25 +174,22 @@ fn settled_cost(
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
-) -> (SavingsUnit, f64) {
+) -> SavingsUnit {
     let unit = settlement_unit(default_unit, tables, tier, canonical_model);
-    if unit == SavingsUnit::WindowShare {
-        if let Some(share) = probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
-            return (unit, share);
-        }
+    if unit == SavingsUnit::WindowShare
+        && probe_cost(unit, table, tables, tier, canonical_model, usage, at).is_none()
+    {
         // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
-        // capacity for the tier), so this branch is unreachable; it stays as the defensive read of a `None`.
+        // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,
             unpriced = unpriced_reason(tables, canonical_model),
             "a probe the cost model cannot price on the window share settles in dollars"
         );
+        return SavingsUnit::Usd;
     }
-    (
-        SavingsUnit::Usd,
-        probe_dollars(table, canonical_model, usage),
-    )
+    unit
 }
 
 /// The `Retry-After` seconds a pool-at-its-cap 429 or a `ledger_behind` 503 carries, `None` for a missing header or
@@ -217,6 +245,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,
+            request_id: None,
             account: None,
             error_code: None,
             body: None,
@@ -241,6 +270,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 let body = read_bounded(response.into_body()).await;
                 ProbeResult {
                     status,
+                    request_id: outcome.as_ref().map(|o| o.request_id.clone()),
                     account: outcome
                         .as_ref()
                         .map(|o| o.account_id.clone())
@@ -265,21 +295,19 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let now = engine.now();
     let table = engine.parts.pricing.current();
     let tables = engine.parts.tables.clone();
-    // The serving account's kind decides the unit this probe's cost and any later credit settle in; read from
-    // the snapshot taken here, after the response, so a registry write mid-exchange never changes which account
-    // this probe is charged against.
+    // The serving account's kind decides the unit this probe's cost settles in. It is read from the snapshot taken
+    // here, after the response, so a registry write mid-exchange never changes which account this probe is charged
+    // against.
     let snapshot = engine.parts.router.snapshot();
-    let (record, applied, rolled, charge) = {
+    let (record, applied) = {
         let mut inner = engine.lock();
         let mut record = inner.probe_record(&job, &exchange, &table);
         record.kind = snapshot.account(&record.account).map(|a| a.kind);
-        let rolled = inner.roll_day(now);
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars: the pool's
-        // dollar figure below carries it and the account's share figure never does.
+        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars.
         let default_unit = if job.recipe.fast {
             SavingsUnit::Usd
         } else {
@@ -288,19 +316,24 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // The tier the store names now: a share is of the window the account has at this settlement.
         let tier = (default_unit == SavingsUnit::WindowShare)
             .then(|| match engine.parts.store.subscription(&record.account) {
-                Ok(row) => row,
+                Ok(row) => {
+                    inner.unreadable_tiers.remove(&record.account);
+                    row
+                }
                 Err(error) => {
-                    tracing::warn!(
-                        account = %record.account,
-                        %error,
-                        "the account's tier could not be read, so the settlement falls back to dollars"
-                    );
+                    if inner.unreadable_tiers.insert(record.account.clone()) {
+                        tracing::warn!(
+                            account = %record.account,
+                            %error,
+                            "the account's tier could not be read, so the settlement falls back to dollars"
+                        );
+                    }
                     None
                 }
             })
             .flatten()
             .and_then(|s| s.tier);
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             default_unit,
             &table,
             &tables,
@@ -310,53 +343,22 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             record.usage,
             now,
         );
-        let mut charge = None;
-        // The dollar cap counts what actually settles in dollars: an api_key account, a subscription account in
-        // overage, or a plan-funded probe the cost model cannot price on the account's tier, which `unit` (the
-        // settlement's decision) already reads as `Usd`. That last case is the only cap bounding such a probe at
-        // all, since the plan-side cap below counts `WindowShare` alone.
-        if unit == SavingsUnit::Usd {
-            *inner
-                .spent_today
-                .entry(record.pool_id.clone())
-                .or_insert(0.0) += record.cost_usd;
-            charge = Some(BudgetRow {
-                scope: BudgetScope::Pool,
-                id: record.pool_id.clone(),
-                usd: record.cost_usd,
-                five_hour_share: 0.0,
-            });
-        }
-        if unit == SavingsUnit::WindowShare {
-            *inner
-                .share_spent_today
-                .entry(record.account.clone())
-                .or_insert(0.0) += cost;
-            charge = Some(BudgetRow {
-                scope: BudgetScope::Account,
-                id: record.account.clone(),
-                usd: 0.0,
-                five_hour_share: cost,
-            });
-        }
-        // Filed under the day the in-memory sum is for: a probe whose `now` fell before a midnight another
-        // writer already rolled charged the new day's sum, and its row follows it.
-        let charge = charge.map(|c| (inner.spent_day, c));
         let covered_unit = funding.map(|_| unit);
-        let applied = inner.apply_probe(&job, exchange, &record, covered_unit, unit, cost, now);
-        (record, applied, rolled, charge)
+        let applied = inner.apply_probe(&job, exchange, &record, covered_unit, now);
+        (record, applied)
     };
-    if rolled {
-        engine.purge_budgets_before(now);
-    }
-    if let Some((day, charge)) = charge {
-        engine.persist_charge(day, &charge);
-    }
     engine.record_probe(&record, applied, now);
-    engine
-        .parts
-        .metrics
-        .observe_probe(&record.account, record.outcome.as_str());
+    // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
+    // was in flight, or paused on its answer, still counts as the upstream served it.
+    let cache_read = covers(
+        record.outcome == ProbeOutcome::Migrated,
+        &record.usage,
+        job.expected,
+    );
+    engine.parts.metrics.observe_probe(
+        &record.pool_id,
+        probe_outcome_label(record.outcome, cache_read),
+    );
     engine.flush();
     // The worker slot comes back only after both sends: `wait_idle` returns on a zero count, and a caller that
     // asserts on the ledger right after it would otherwise race the records this probe owes.
@@ -408,9 +410,9 @@ impl Inner {
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
             // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
-            // through the price table, at the cells the answer's own `usage.speed` selects; the funding-unit
-            // cost the agent's own net deducts is a second figure computed once the serving account's kind is
-            // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
+            // through the price table, at the cells the answer's own `usage.speed` selects. The funding unit is
+            // decided once the serving account's kind is known, back in `run_job`. Dollars read neither a tier nor
+            // the settlement instant.
             record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
         }
         if result
@@ -426,15 +428,12 @@ impl Inner {
     /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
     /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
     /// as one wasted probe under the stop that orphaned it, since the upstream served it either way.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_probe(
         &mut self,
         job: &ProbeJob,
         exchange: Exchange,
         record: &ProbeRecord,
         covered_unit: Option<SavingsUnit>,
-        unit: SavingsUnit,
-        cost: f64,
         now: i64,
     ) -> Applied {
         let key = &job.key;
@@ -464,17 +463,6 @@ impl Inner {
             })
             && self.live(key, agent_id);
         if !fenced {
-            // The job already charged the day and the ledger; the agent's net takes the same debit so an orphaned
-            // probe is not free. A probe the upstream did not serve is debited nowhere, as on the fenced path.
-            let served = matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated);
-            if let Some(agent) = self
-                .sessions
-                .get_mut(key)
-                .and_then(|s| s.agents.get_mut(agent_id))
-                .filter(|agent| served && agent.incarnation == job.incarnation)
-            {
-                debit(agent, unit, cost);
-            }
             // A record still on the incarnation the probe started on, carrying no stop label, was superseded by
             // a real request rather than stopped: the request the probe was paying for arrived, so the probe is
             // not wasted. A record that is gone leaves no label to read, so what removed it is what labels the
@@ -517,7 +505,7 @@ impl Inner {
             .agents
             .get_mut(agent_id)
             .unwrap();
-        let cold_limit = agent.policy.cold_probe_limit;
+        let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
                 self.probe_error(
@@ -551,9 +539,9 @@ impl Inner {
             return Applied::Landed { covered: false };
         }
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
-        // here, before any branch below pauses the recipe over what the answer said: the agent's net and the
-        // settlement a stop leaves would otherwise disagree with the ledger. Every probe since the last real
-        // request is unanswered until one arrives, a migrated one at its price like any other.
+        // here, before any branch below pauses the recipe over what the answer said: the settlement a stop leaves
+        // would otherwise disagree with the ledger. Every probe since the last real request is unanswered until one
+        // arrives, a migrated one at its price like any other.
         let migrated = record.outcome == ProbeOutcome::Migrated;
         let agent = self
             .sessions
@@ -569,6 +557,7 @@ impl Inner {
             result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
         );
         agent.unanswered.push(UnansweredProbe {
+            id: result.request_id.clone().unwrap_or_default(),
             cost: record.cost_usd,
             unit: covered_unit,
             account: Some(record.account.clone()),
@@ -577,7 +566,6 @@ impl Inner {
             expires: job.started + ttl,
             covered: false,
         });
-        debit(agent, unit, cost);
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
             self.pause(key, agent_id);
@@ -629,11 +617,7 @@ impl Inner {
         // write beside it is the prefix rebuilt rather than kept. A migrated probe wrote the prefix on its
         // new account instead, and that write is the coverage the next request reads there; it does not count
         // toward the cold streak.
-        let covered = if migrated {
-            usage.evidence() >= job.expected
-        } else {
-            usage.read >= job.expected
-        };
+        let covered = covers(migrated, &usage, job.expected);
         if !migrated {
             if covered {
                 agent.cold = 0;
@@ -781,11 +765,11 @@ impl Inner {
                 .agents
                 .get_mut(agent_id)
                 .unwrap();
-            let wait_ms = retry_after_ms.unwrap_or_else(|| agent.policy.retry_ms());
+            let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
             agent.retry_at = Some(now.saturating_add(wait_ms));
-            // A hold costs no tick: `max_idle_ticks` counts served or failed probes, so the tick this probe's
-            // dispatch counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse
-            // and `max_idle_seconds` bound the hold.
+            // A hold costs no tick: `idle_ticks` counts served or failed probes, so the tick this probe's dispatch
+            // counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse and the
+            // ceilings bound the hold.
             if counted_idle_tick {
                 agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
             }
@@ -804,11 +788,10 @@ impl Inner {
         self.pause(key, agent_id);
     }
 
-    /// Exponential backoff from the pool's `retry_seconds`, capped at its `retry_max_seconds`, unless
-    /// `override_delay_ms` names this attempt's own wait (the `accounts_at_cap` header); the cold-probe limit
-    /// bounds consecutive retries either way. A retry that falls past the entry's expiry needs no check here: the
-    /// due time is the later of the two, so the first tick at or after the expiry holds the recipe as lapsed
-    /// before the retry could send.
+    /// Exponential backoff from the timing's `retry_ms`, capped at its `retry_max_ms`, unless `override_delay_ms`
+    /// names this attempt's own wait (the `accounts_at_cap` header). The failure limit bounds consecutive retries
+    /// either way. A retry that falls past the entry's expiry needs no check here: the due time is the later of the
+    /// two, so the first tick at or after the expiry holds the recipe as lapsed before the retry could send.
     pub(crate) fn retry(
         &mut self,
         key: &SessionKey,
@@ -825,63 +808,87 @@ impl Inner {
             .get_mut(agent_id)
             .unwrap();
         agent.failures += 1;
-        if agent.failures >= agent.policy.cold_probe_limit {
+        if agent.failures >= agent.timing.failure_limit {
             self.set_reason(key, agent_id, Reason::ProbeRetryLimit);
             self.pause(key, agent_id);
             return;
         }
         let delay = match override_delay_ms {
-            Some(delay) => delay.min(agent.policy.retry_max_ms()),
+            Some(delay) => delay.min(agent.timing.retry_max_ms),
             None => {
                 let exponent = (agent.failures - 1).min(4);
-                (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms())
+                (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms)
             }
         };
         agent.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
-
-    pub(crate) fn idle_limited(&self, key: &SessionKey, agent_id: &str, now: i64) -> bool {
-        let Some(session) = self.sessions.get(key) else {
-            return false;
-        };
-        let Some(agent) = session.agents.get(agent_id) else {
-            return false;
-        };
-        let (counted, since) = if !session.attended {
-            (true, session.last_real_at.unwrap_or(agent.last_activity))
-        } else {
-            (
-                agent.id == crate::engine::MAIN_AGENT
-                    && agent.state == crate::engine::AgentState::Idle,
-                agent.last_activity,
-            )
-        };
-        counted
-            && ((agent.policy.max_idle_ticks > 0
-                && agent.idle_ticks >= agent.policy.max_idle_ticks)
-                || agent
-                    .policy
-                    .max_idle_ms()
-                    .is_some_and(|limit| now >= since + limit))
-    }
 }
 
-/// A paid probe on the agent's net. The grace budget is granted on the way into a negative net, so the first paid
-/// probe leaves the configured allowance; each further paid probe while negative spends one.
-fn debit(agent: &mut Agent, unit: SavingsUnit, cost: f64) {
-    let was_negative = agent.net.in_unit(unit) < 0.0;
-    agent.net.add(unit, -cost);
-    if agent.net.in_unit(unit) < 0.0 && !was_negative {
-        agent.grace_left = agent.policy.net_negative_grace_probes;
-    } else if agent.net.in_unit(unit) < 0.0 && agent.grace_left > 0 {
-        agent.grace_left -= 1;
+/// The ceilings over one agent at `now`, active while any of them says probe. The idle window is main's in every
+/// state, from the later of `last_activity` (a real request, a prompt or a presence report) and `park_ended_at`. A
+/// park on a background command or a subagent is probed for `parked_ms` from `park_began`, and one on a scheduled
+/// wakeup while the wake is at most `horizon_ms` away, held under `horizon` beyond it. A busy subagent has no
+/// ceiling of its own. A silent session reads the window alone, from the session's last real request, for every
+/// agent: nothing reports its parks any more.
+pub(crate) fn ceiling(
+    agent: &Agent,
+    attended: bool,
+    session_last_real_at: Option<i64>,
+    ceilings: &Ceilings,
+    now: i64,
+) -> Verdict {
+    if !attended {
+        let since = session_last_real_at.unwrap_or(agent.last_activity);
+        return if now - since < ceilings.idle_ms {
+            Verdict::Probe
+        } else {
+            Verdict::End(Reason::IdleLimit)
+        };
+    }
+    let main = agent.id == MAIN_AGENT;
+    if main {
+        let since = agent
+            .park_ended_at
+            .map_or(agent.last_activity, |ended| ended.max(agent.last_activity));
+        if now - since < ceilings.idle_ms {
+            return Verdict::Probe;
+        }
+    }
+    match agent.state {
+        AgentState::Parked => {
+            let kind = agent.park_kind;
+            let background = matches!(kind, Some(ParkKind::Background | ParkKind::Both));
+            if background
+                && agent
+                    .park_began
+                    .is_some_and(|began| now - began < ceilings.parked_ms)
+            {
+                return Verdict::Probe;
+            }
+            let wake = agent
+                .wake_at
+                .filter(|_| matches!(kind, Some(ParkKind::Scheduled | ParkKind::Both)));
+            match wake {
+                Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,
+                // The wake is a certain return the hold keeps the prompt for, so it outranks a command's part
+                // whose ceiling ran out.
+                Some(_) => Verdict::Hold(Reason::Horizon),
+                None => Verdict::End(Reason::ParkedLimit),
+            }
+        }
+        AgentState::Busy if !main => Verdict::Probe,
+        // A subagent is busy, parked or released: in any other state no rule says probe for it.
+        _ if !main => Verdict::End(Reason::ParkedLimit),
+        _ => Verdict::End(Reason::IdleLimit),
     }
 }
 
 pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
     match reason {
+        Reason::Horizon => Some(Wasted::Horizon),
         Reason::IdleLimit => Some(Wasted::IdleLimit),
+        Reason::ParkedLimit => Some(Wasted::ParkedLimit),
         _ => None,
     }
 }
@@ -890,6 +897,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::config::KeepaliveTiming;
     use crate::engine::{Agent, Session};
 
     use super::*;
@@ -899,8 +907,11 @@ mod tests {
     fn one_agent_inner() -> (Inner, SessionKey) {
         let key: SessionKey = ("k".into(), "s".into());
         let mut agents = BTreeMap::new();
-        agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
-        let mut inner = Inner::empty(None);
+        agents.insert(
+            "main".to_string(),
+            Agent::new("main", "k", 1, 0, KeepaliveTiming::default()),
+        );
+        let mut inner = Inner::empty(KeepaliveTiming::default());
         inner.agents = 1;
         inner.sessions.insert(
             key.clone(),
@@ -916,6 +927,7 @@ mod tests {
                 owner_id: None,
                 last_report_at: 0,
                 last_real_at: Some(0),
+                restored_until: None,
                 agents,
             },
         );
@@ -1022,7 +1034,7 @@ mod tests {
         );
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
-        assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
+        assert_eq!(agent.retry_at, Some(1_000 + agent.timing.retry_ms));
     }
 
     #[test]
@@ -1063,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ledger_behind_answer_without_a_header_waits_the_pools_retry_seconds() {
+    fn a_ledger_behind_answer_without_a_header_waits_the_timings_retry() {
         let (mut inner, key) = one_agent_inner();
         inner.probe_error(
             &key,
@@ -1082,17 +1094,17 @@ mod tests {
             (
                 false,
                 0,
-                Some(1_000 + agent.policy.retry_ms()),
+                Some(1_000 + agent.timing.retry_ms),
                 Reason::LedgerBehind
             ),
-            "the pool's base wait stands in for a missing header, still with no failure counted"
+            "the timing's base wait stands in for a missing header, still with no failure counted"
         );
     }
 
     #[test]
-    fn cold_probe_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
+    fn failure_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
-        let answers = inner.sessions[&key].agents["main"].policy.cold_probe_limit + 1;
+        let answers = inner.sessions[&key].agents["main"].timing.failure_limit + 1;
         for answer in 0..answers {
             let now = 1_000 + i64::from(answer) * 6_000;
             inner.probe_error(
@@ -1146,8 +1158,8 @@ mod tests {
         );
     }
 
-    /// A table pricing a model the shipped cost model has no weight for, so `settled_cost` must fall all the way
-    /// back to dollars rather than mixing a dollar figure into a share-priced settlement.
+    /// A table pricing a model the shipped cost model has no weight for, so `settled_unit` must fall all the way
+    /// back to dollars rather than naming a share nothing can price.
     fn table_pricing_an_unlisted_model() -> PriceTable {
         PriceTable {
             version: "test".into(),
@@ -1164,6 +1176,7 @@ mod tests {
                         output: 10.0,
                     },
                     fast: None,
+                    long_context: None,
                 },
             )]
             .into_iter()
@@ -1193,7 +1206,7 @@ mod tests {
             five_minutes: 2_000,
             ..ProbeUsage::default()
         };
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1208,18 +1221,6 @@ mod tests {
             SavingsUnit::Usd,
             "the cost model has no weight, so the unit falls back too"
         );
-        let expected = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            MAX_20X,
-            "unlisted-model",
-            usage,
-            OFF_BAND,
-        )
-        .unwrap();
-        assert!(expected > 0.0, "{expected}");
-        assert_eq!(cost, expected);
     }
 
     // The test table: Opus 5.5 weighs 2 and an input token multiplies by 1, the Max 20x 5-hour window holds 100
@@ -1232,25 +1233,35 @@ mod tests {
             input: 1,
             ..ProbeUsage::default()
         };
-        let settle = |at: i64| {
-            settled_cost(
-                SavingsUnit::WindowShare,
+        let unit = settled_unit(
+            SavingsUnit::WindowShare,
+            &table,
+            &tables,
+            MAX_20X,
+            "o",
+            "claude-opus-5-5",
+            one_input,
+            OFF_BAND,
+        );
+        assert_eq!(unit, SavingsUnit::WindowShare);
+        let share = |at: i64| {
+            probe_cost(
+                unit,
                 &table,
                 &tables,
                 MAX_20X,
-                "o",
                 "claude-opus-5-5",
                 one_input,
                 at,
             )
+            .unwrap()
         };
-        let (unit, cost) = settle(OFF_BAND);
-        assert_eq!(unit, SavingsUnit::WindowShare);
+        let cost = share(OFF_BAND);
         assert!(
             (cost - 2.0 / 100.0).abs() < 1e-12,
             "one Opus 5.5 input token is its 2 units over the window's 100: {cost}"
         );
-        let (_, banded) = settle(IN_BAND);
+        let banded = share(IN_BAND);
         assert!(
             (banded - 2.0 / 100.0 / 0.5).abs() < 1e-12,
             "the band is inside the price at the settlement instant: {banded}"
@@ -1261,7 +1272,7 @@ mod tests {
     fn a_plan_funded_probe_on_an_account_without_a_tier_settles_in_dollars() {
         let table = PriceTable::shipped();
         let tables = PlanTables::shipped();
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1271,22 +1282,11 @@ mod tests {
             million_input(),
             OFF_BAND,
         );
-        let dollars = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            None,
-            "claude-opus-5",
-            million_input(),
-            OFF_BAND,
-        )
-        .unwrap();
         assert_eq!(
-            (unit, cost),
-            (SavingsUnit::Usd, dollars),
+            unit,
+            SavingsUnit::Usd,
             "no tier names the window the share would be of, so the probe settles in dollars"
         );
-        assert!(dollars > 0.0, "{dollars}");
     }
 
     #[test]
@@ -1294,7 +1294,7 @@ mod tests {
         // The test table leaves Opus 5 without a weight; the test price table lists it.
         let table = phoebis_ledger::test_tables::api_prices();
         let tables = phoebis_ledger::test_tables::subscription_costs();
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1304,21 +1304,61 @@ mod tests {
             million_input(),
             OFF_BAND,
         );
-        let dollars = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            None,
-            "claude-opus-5",
-            million_input(),
-            OFF_BAND,
-        )
-        .unwrap();
         assert_eq!(
-            (unit, cost),
-            (SavingsUnit::Usd, dollars),
+            unit,
+            SavingsUnit::Usd,
             "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
         );
-        assert!(dollars > 0.0);
+    }
+
+    #[test]
+    fn a_probe_reads_landed_cold_or_failed_by_its_outcome_and_its_cache_read() {
+        for outcome in [ProbeOutcome::Migrated, ProbeOutcome::Ok] {
+            assert_eq!(
+                (
+                    probe_outcome_label(outcome, true),
+                    probe_outcome_label(outcome, false)
+                ),
+                ("landed", "cold"),
+                "{outcome:?}"
+            );
+        }
+        for outcome in [
+            ProbeOutcome::Cancelled,
+            ProbeOutcome::Exhausted,
+            ProbeOutcome::Failed,
+            ProbeOutcome::RateLimited,
+            ProbeOutcome::Rejected,
+            ProbeOutcome::TimedOut,
+        ] {
+            assert_eq!(
+                (
+                    probe_outcome_label(outcome, true),
+                    probe_outcome_label(outcome, false)
+                ),
+                ("failed", "failed"),
+                "{outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_probe_covers_its_prefix_by_reading_it_back_or_by_writing_it_after_a_migration() {
+        let usage = |read, write| ProbeUsage {
+            read,
+            write,
+            ..ProbeUsage::default()
+        };
+        assert_eq!(
+            [
+                covers(false, &usage(2_000, 0), 2_000),
+                covers(false, &usage(1_999, 1), 2_000),
+                covers(false, &usage(0, 2_000), 2_000),
+                covers(true, &usage(0, 2_000), 2_000),
+                covers(true, &usage(0, 1_999), 2_000),
+            ],
+            [true, false, false, true, false],
+            "a whole read, a partial read, a rebuild, a migrated write, a migrated short write"
+        );
     }
 }

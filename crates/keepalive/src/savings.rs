@@ -1,61 +1,27 @@
-//! The savings accounting: what a kept-warm request saved, what a probe cost, and what a stopped recipe wasted,
-//! as the ledger's rollup rows carry them. The accounting this feeds is an estimate in money for an API key and
-//! a proxy for quota on a subscription account, which is why it is kept apart from the ledger's own measured
-//! spend.
+//! The keepalive's rows in the ledger: what a probe cost, which request a probe kept warm, what a stopped recipe
+//! wasted and which due probe went unsent, as the rollup rows carry them, and the pricing a probe's cost reads.
 
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
-use phoebis_store::{BudgetRow, BudgetScope};
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
+use crate::view::RecipeState;
 
-/// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
-/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` on the share side alone, for a model the
-/// subscription cost model has no weight for, or a tier it has no capacity for on the window.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn gross_saving(
-    unit: SavingsUnit,
-    table: &PriceTable,
-    tables: &PlanTables,
-    tier: Option<&str>,
-    canonical_model: &str,
-    cache_read_tokens: u64,
-    at: i64,
-    speed: Speed,
-) -> Option<f64> {
-    match unit {
-        SavingsUnit::Usd => {
-            let per_token = match table.price_at(canonical_model, speed) {
-                Some(price) => (price.input - price.cache_read) / 1_000_000.0,
-                // The dearest cells `probe_dollars` prices this model's probes at: both sides of the net read one
-                // rate table, so a cache that saves more than its probes cost keeps the recipe net positive.
-                None => {
-                    let dearest = table.rate_table().fallback;
-                    dearest.input.unwrap_or(0.0) - dearest.cache_read.unwrap_or(0.0)
-                }
-            };
-            Some(cache_read_tokens as f64 * per_token)
-        }
-        SavingsUnit::WindowShare => {
-            let tier = tier?;
-            let priced = |usage| tables.share_at(FIVE_HOUR, tier, canonical_model, usage, at);
-            let as_input = priced(PinUsage {
-                input: cache_read_tokens,
-                ..PinUsage::default()
-            })?;
-            let as_read = priced(PinUsage {
-                cache_read: cache_read_tokens,
-                ..PinUsage::default()
-            })?;
-            Some(as_input - as_read)
-        }
-    }
-}
+/// A withheld probe's skip row keys, read off its agent under the lock: the session, the key generation, the pool, the
+/// account, the model, the speed and the recipe state.
+type QueuedSkip = (
+    SessionKey,
+    i64,
+    String,
+    Option<String>,
+    String,
+    bool,
+    RecipeState,
+);
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
 /// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
@@ -79,8 +45,7 @@ pub(crate) fn probe_cost(
 
 /// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
 /// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
-/// dollar burn: the daily cap and the net read this figure, and a zero would let a probe that consumed quota pass
-/// both.
+/// dollar burn: the ledger's probe cost reads this figure, and a zero would book a probe that consumed quota as free.
 pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
     let typed = typed(usage);
     if let Some((total, _)) = table.estimate(
@@ -134,9 +99,8 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'s
     }
 }
 
-/// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
-/// and the model cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which
-/// case dollars. One decision for the three, so the stop and the caps read the balance the probes move.
+/// The unit a probe settles in: `default_unit`, unless that is the window share and the model cannot price the
+/// account's tier and model on the 5-hour window (no weight, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
@@ -215,7 +179,6 @@ impl Engine {
         canonical_model: &str,
         request_id: &str,
         tokens: u64,
-        saving: f64,
         fast: bool,
     ) {
         let mut d = delta(
@@ -231,7 +194,6 @@ impl Engine {
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         d.kept_warm_tokens = tokens;
-        d.saved_usd_gross = saving;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -263,6 +225,7 @@ impl Engine {
         account: Option<&str>,
         canonical_model: &str,
         fast: bool,
+        state: RecipeState,
     ) {
         let mut d = delta(
             at,
@@ -276,6 +239,7 @@ impl Engine {
         );
         d.probes_skipped = 1;
         self.parts.ledger.record(Record::Keepalive(d));
+        self.parts.metrics.observe_skipped(pool_id, state.as_str());
     }
 
     /// Drains what the last locked section queued: the settlements of stopped recipes and the probes a gate
@@ -285,9 +249,8 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<(SessionKey, i64, String, Option<String>, String, bool)> =
-                Vec::new();
-            for (key, agent_id) in queued {
+            let mut skipped: Vec<QueuedSkip> = Vec::new();
+            for (key, agent_id, state) in queued {
                 let Some(agent) = inner
                     .sessions
                     .get(&key)
@@ -302,6 +265,7 @@ impl Engine {
                     agent.account.clone(),
                     agent.canonical_model.clone(),
                     agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+                    state,
                 ));
             }
             (std::mem::take(&mut inner.settlements), skipped)
@@ -309,7 +273,7 @@ impl Engine {
         for settlement in settlements {
             self.record_settlement(now, settlement);
         }
-        for (key, key_generation, pool_id, account, model, fast) in skipped {
+        for (key, key_generation, pool_id, account, model, fast, state) in skipped {
             self.record_skipped(
                 now,
                 &key,
@@ -318,80 +282,10 @@ impl Engine {
                 account.as_deref(),
                 &model,
                 fast,
+                state,
             );
         }
     }
-
-    pub fn spent_today(&self) -> BTreeMap<String, f64> {
-        self.lock().spent_today.clone()
-    }
-
-    /// The share of each subscription account's 5-hour window its probes consumed on the current UTC day, the
-    /// band inside each probe's price.
-    pub fn share_spent_today(&self) -> BTreeMap<String, f64> {
-        self.lock().share_spent_today.clone()
-    }
-
-    /// The pool's probe spend for the current UTC day, and the accounts' plan-side figure beside it, as the
-    /// probes of the day settled them into the store: what a restart starts from. Days before today are deleted
-    /// here too, since a restart across midnight is a roll no running engine saw.
-    pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
-        let now = self.now();
-        let day = now.div_euclid(86_400_000);
-        self.purge_budgets_before(now);
-        let rows = self
-            .parts
-            .store
-            .keepalive_budgets(&budget_date(day))
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "the keepalive's daily budgets could not be read; both start at zero");
-                Vec::new()
-            });
-        let mut spent = BTreeMap::new();
-        let mut share_spent = BTreeMap::new();
-        for row in rows {
-            match row.scope {
-                BudgetScope::Account => {
-                    share_spent.insert(row.id, row.five_hour_share);
-                }
-                BudgetScope::Pool => {
-                    spent.insert(row.id, row.usd);
-                }
-            }
-        }
-        let mut inner = self.lock();
-        inner.spent_today = spent.clone();
-        inner.share_spent_today = share_spent;
-        inner.spent_day = day;
-        spent
-    }
-
-    /// Adds a settled probe's charge to its row for `day`, a day index since the epoch. A failed write costs the
-    /// restore that charge, never the running engine's own figure.
-    pub(crate) fn persist_charge(&self, day: i64, charge: &BudgetRow) {
-        if let Err(error) = self
-            .parts
-            .store
-            .add_keepalive_budget(&budget_date(day), charge)
-        {
-            tracing::warn!(%error, id = %charge.id, "a probe's charge could not be kept for a restart");
-        }
-    }
-
-    /// Deletes the stored budgets of every UTC day before `now`'s.
-    pub(crate) fn purge_budgets_before(&self, now: i64) {
-        let today = budget_date(now.div_euclid(86_400_000));
-        if let Err(error) = self.parts.store.purge_keepalive_budgets_before(&today) {
-            tracing::warn!(%error, "the keepalive's past daily budgets could not be deleted");
-        }
-    }
-}
-
-/// The UTC date, `YYYY-MM-DD`, of the day index `day` counts from the epoch.
-fn budget_date(day: i64) -> String {
-    jiff::Timestamp::from_millisecond(day * 86_400_000)
-        .map(|t| t.strftime("%Y-%m-%d").to_string())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -430,27 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn a_window_share_saving_is_the_input_share_less_the_read_share() {
-        // 2026-09-26, a Saturday: outside the peak band's weekdays, so the band weighs nothing.
-        const SATURDAY_AFTERNOON: i64 = 1_790_431_200_000;
-        let saved = gross_saving(
-            SavingsUnit::WindowShare,
-            &phoebis_ledger::test_tables::api_prices(),
-            &phoebis_ledger::test_tables::subscription_costs(),
-            Some("default_claude_max_20x"),
-            "claude-opus-5-5",
-            1,
-            SATURDAY_AFTERNOON,
-            Speed::Standard,
-        )
-        .expect("a priced model on a known tier");
-        // The test table: Opus 5.5 weighs 2, an input token multiplies by 1 and a cache read by 0.1, and the Max
-        // 20x 5-hour window holds 100 units.
-        let want = 2.0 * 1.0 / 100.0 - 2.0 * 0.1 / 100.0;
-        assert!((saved - want).abs() < 1e-12, "{saved} against {want}");
-    }
-
-    #[test]
     fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
         // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9.
         let tables = phoebis_ledger::test_tables::subscription_costs();
@@ -461,35 +334,6 @@ mod tests {
             unpriced_reason(&tables, "claude-opus-5-5-20260401"),
             "tier",
             "a dated id reads its undated weight"
-        );
-    }
-
-    #[test]
-    fn a_fast_recipes_saving_reads_the_fast_input_less_the_fast_cache_read() {
-        let saved = |speed| {
-            gross_saving(
-                SavingsUnit::Usd,
-                &phoebis_ledger::test_tables::api_prices(),
-                &phoebis_ledger::test_tables::subscription_costs(),
-                None,
-                "claude-opus-5-5",
-                1_000_000,
-                0,
-                speed,
-            )
-            .expect("a priced model")
-        };
-        // The test price table's Opus 5.5 row, per million tokens: input 20 and cache read 2 at the fast cells, 10
-        // and 1 at the standard ones.
-        assert!(
-            (saved(Speed::Fast) - (20.0 - 2.0)).abs() < 1e-12,
-            "{:?}",
-            saved(Speed::Fast)
-        );
-        assert!(
-            (saved(Speed::Standard) - (10.0 - 1.0)).abs() < 1e-12,
-            "{:?}",
-            saved(Speed::Standard)
         );
     }
 

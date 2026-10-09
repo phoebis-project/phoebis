@@ -254,8 +254,8 @@ impl ToSql for AffinityMode {
 /// the pool's ordinary selection strategy, or beside the session's main agent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SubagentPlacement {
-    #[default]
     ByCohort,
+    #[default]
     ByStrategy,
     WithMain,
 }
@@ -379,7 +379,7 @@ impl Default for Affinity {
     fn default() -> Self {
         Affinity {
             mode: AffinityMode::Always,
-            subagent_placement: SubagentPlacement::ByCohort,
+            subagent_placement: SubagentPlacement::ByStrategy,
             session_placement: SessionPlacement::ByStrategy,
             min_shared_prefix_tokens: 20_000,
         }

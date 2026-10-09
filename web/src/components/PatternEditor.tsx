@@ -98,7 +98,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
   const refusals = value.map((r) => checkPattern(r.pattern));
   const first = refusals.findIndex((r) => r !== null);
   const count = `${value.length} ${value.length === 1 ? 'rule' : 'rules'}${inherited.length ? `, then ${inherited.length} from pool` : ''}`;
-  const summary = first < 0 ? count : `${count}; rule ${first + 1}: ${refusals[first]}`;
+  const summary = first < 0 ? count : `${count}. Rule ${first + 1}: ${refusals[first]}`;
 
   return (
     <div className="pattern-editor" role="group" aria-label={label} aria-describedby={summaryId}>

@@ -1,7 +1,7 @@
 import { useCommittedText } from '@/lib/hooks';
 import { Input } from './primitives';
 
-export const PATTERN_GRAMMAR = '* matches any run of characters, ? one; a backslash quotes either';
+export const PATTERN_GRAMMAR = '* matches any run of characters, ? one, and a backslash quotes either';
 
 interface Props {
   /** How long after the last keystroke the draft commits. */

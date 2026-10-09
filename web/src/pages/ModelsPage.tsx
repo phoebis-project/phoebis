@@ -28,7 +28,7 @@ function accountLinks(ids: string[], titleOf?: (id: string) => string): ReactNod
 
 function subtitleOf(models: KeyModels): string {
   const mode = models.modelRulesMode === 'replace' ? "Replaces the pool's rules" : "Extends the pool's rules";
-  return `${mode}; the models listing shows ${models.longContextTwins ? '' : 'no '}[1m] twins`;
+  return `${mode}, and the models listing shows ${models.longContextTwins ? '' : 'no '}[1m] twins`;
 }
 
 function CoolingCell({ rule }: { rule: ProcessedRule }) {

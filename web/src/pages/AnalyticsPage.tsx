@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
-import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, type ChartInk } from '@/components/charts/theme';
+import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -51,7 +51,7 @@ const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key
 /** The log has no session filter, so a session view pages through it; both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
-const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session; cache warming figures are unavailable per session';
+const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
@@ -298,6 +298,10 @@ export function AnalyticsPage() {
     const readAt = clock.now();
     return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
   }, [fromIso, toIso, burnGroup, tab, generation]);
+  // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
+  // differs from the Dashboard's, and one account keeps one color across the views.
+  const registry = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
@@ -368,18 +372,19 @@ export function AnalyticsPage() {
   }, [groups]);
   // A session fold has no cost split and no warming facts; those figures read unavailable rather than zero.
   const split = knownSplit(totals.cost);
-  const { keptWarm, savings } = totals;
+  const { keptWarm } = totals;
+  const probesUnmeasured = totals.fromRequests === true;
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
   // The burn, rewrite and fit routes read the range alone, so every filter of the bar passes them by.
   const unfiltered = otherFilters || filters.accountId.length > 0;
 
   const groupSlot = useMemo(() => {
-    // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
-    // option list of its own falls back to the keys the breakdown answered.
+    // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
+    // registry's. A dimension with no option list of its own falls back to the keys the breakdown answered.
     const listed = groupBy === 'account' ? options.accountId : groupBy === 'key' ? options.keyId : groupBy === 'model' ? options.model : groupBy === 'pool' ? options.poolId : [];
     const keys = listed.length ? listed.map((o) => o.value) : groups.map((g) => g.key);
-    return (key: string) => (groupBy === 'account' ? accountColor(ink, key) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
-  }, [options, groups, groupBy, ink]);
+    return (key: string) => (groupBy === 'account' ? accountColor(ink, slotOf(key)) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
+  }, [options, groups, groupBy, ink, slotOf]);
 
   const axis = timeAxis(bucketMs, ink);
   // A failed read shows its error alone: a skeleton beside it would say a load is still running, and an empty
@@ -415,7 +420,7 @@ export function AnalyticsPage() {
             <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
             <span className="muted">to</span>
             <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
-            {span.invalid && <span className="pairing__expired">End must be after start; showing the last 24h.</span>}
+            {span.invalid && <span className="pairing__expired">End must be after start. Showing the last 24h.</span>}
           </span>
         )}
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
@@ -448,7 +453,7 @@ export function AnalyticsPage() {
               }}
               placeholder={'User agent groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
               aria-label="User agent groups"
-              title="Each pattern names a group; every other user agent groups under other"
+              title="Each pattern names a group, and every other user agent groups under other"
               className="mono filters__groups"
               rows={2}
             />
@@ -575,7 +580,7 @@ export function AnalyticsPage() {
                 </option>
               ))}
             </Select>
-            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
+            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
           </div>
           {/* Only the account grouping sizes its lines by tier, so another one neither waits on nor fails with the settings read. */}
           <BurnCharts
@@ -587,6 +592,7 @@ export function AnalyticsPage() {
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
             sized={sized}
+            slotOf={slotOf}
           />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
@@ -752,60 +758,25 @@ export function AnalyticsPage() {
       {tab === 'cache-warming' && (
         <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
-            <Tile label="Gross saved" value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd)} note="cache writes avoided by kept-warm reads" />
-            <Tile label="Probe cost" value={loading ? null : savings === null ? '-' : fmtUsd(savings.probeCostUsd)} note={savings === null ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
-            <Tile
-              label="Net saved"
-              value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd - savings.probeCostUsd)}
-              note="gross saved minus probe cost"
-              tone={savings !== null && savings.grossUsd - savings.probeCostUsd < 0 ? 'critical' : undefined}
-            />
+            <Tile label="Probe cost" value={loading ? null : probesUnmeasured ? '-' : fmtUsd(totals.probeCostUsd)} note={probesUnmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
           </div>
           <div className="grid-2">
-            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(totals.probes[s.key]) }))}>
+            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
                 <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
                 <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(p.probes[s.key]) })))} />
-                {savings !== null &&
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
+                {!probesUnmeasured &&
                   PROBE_SERIES.map((s, i) => (
                     <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
                   ))}
               </BarChart>
             </ChartCard>
 
-            <ChartCard
-              title="Savings"
-              subtitle="Gross saved and probe cost per bucket; the line is the net"
-              loading={loading}
-              legend={[
-                { color: ink.series[2], label: 'Gross saved', value: savings === null ? '-' : fmtUsd(savings.grossUsd) },
-                { color: ink.series[3], label: 'Probe cost', value: savings === null ? '-' : fmtUsd(savings.probeCostUsd) },
-                { color: ink.ink2, label: 'Net saved', shape: 'line', value: savings === null ? '-' : <NetValue value={savings.grossUsd - savings.probeCostUsd} /> },
-              ]}
-            >
-              <ComposedChart data={buckets.map((b) => ({ ...b, net: b.savings === null ? null : b.savings.grossUsd - b.savings.probeCostUsd }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
-                <CartesianGrid vertical={false} stroke={ink.grid} />
-                <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-                <YAxis {...usdAxis(buckets.flatMap((b) => (b.savings === null ? [] : [b.savings.grossUsd, b.savings.probeCostUsd, b.savings.grossUsd - b.savings.probeCostUsd])))} tickLine={false} axisLine={false} />
-                <Tooltip
-                  cursor={{ fill: ink.grid, opacity: 0.6 }}
-                  content={timeTip<Bucket & { net: number | null }>((p) => [
-                    { color: ink.series[2], label: 'gross saved', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.grossUsd) },
-                    { color: ink.series[3], label: 'probe cost', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.probeCostUsd) },
-                    { color: ink.ink2, label: 'net', value: savings === null || p.net === null ? '-' : <NetValue value={p.net} /> },
-                  ])}
-                />
-                {savings !== null && <Bar dataKey="savings.grossUsd" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                {savings !== null && <Bar dataKey="savings.probeCostUsd" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                {savings !== null && <Line type="monotone" dataKey="net" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />}
-              </ComposedChart>
-            </ChartCard>
-
             <Card title="Wasted probes" subtitle={WASTED_PROBE_BLURB}>
-              {loading ? <Skeleton height={190} /> : savings === null ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes savings={savings} probes={probesOf(totals)} />}
+              {loading ? <Skeleton height={190} /> : probesUnmeasured ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes group={totals} probes={probesOf(totals)} />}
             </Card>
 
             <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
@@ -841,6 +812,7 @@ export function AnalyticsPage() {
             loading={accountRollups.data === null || accountRollups.stale}
             otherFilters={otherFilters}
             rollups={accountRollups.stale ? null : accountRollups.data}
+            slotOf={slotOf}
             span={span}
             axis={axis}
           />
@@ -939,10 +911,6 @@ function ChartCard({
       )}
     </Card>
   );
-}
-
-function NetValue({ value }: { value: number }) {
-  return <span className={`num ${value < 0 ? 'is-negative' : ''}`}>{fmtUsd(value)}</span>;
 }
 
 function PctLabel({ text }: { text: string }) {
@@ -1086,19 +1054,19 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.";
 
-function WastedProbes({ savings, probes }: { probes: number; savings: NonNullable<AnalyticsGroup['savings']> }) {
+function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number }) {
   const ink = useChartInk();
-  const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: savings.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
+  const rows = WASTED_PROBE_REASONS.map((reason) => ({ count: group.wastedProbeReasons[reason], reason })).sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
-  if (savings.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
+  if (group.wastedProbes === 0) return <p className="muted">No wasted probes in range.</p>;
   return (
     <>
       <div className="tiles-row tiles-row--panel">
-        <Tile label="Wasted probes" value={fmtInt(savings.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
-        <Tile label="Wasted cost" value={fmtUsd(savings.wastedProbeUsd)} note="at list prices" />
-        <Tile label="Share of probe cost" value={fmtPct(savings.probeCostUsd ? savings.wastedProbeUsd / savings.probeCostUsd : 0, 1)} note={`of ${fmtUsd(savings.probeCostUsd)} on probes`} />
+        <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
+        <Tile label="Wasted cost" value={fmtUsd(group.wastedProbeUsd)} note="at list prices" />
+        <Tile label="Share of probe cost" value={fmtPct(group.probeCostUsd ? group.wastedProbeUsd / group.probeCostUsd : 0, 1)} note={`of ${fmtUsd(group.probeCostUsd)} on probes`} />
       </div>
       <ul className="hbars hbars--reasons">
         {rows.map((r) => (
@@ -1109,7 +1077,7 @@ function WastedProbes({ savings, probes }: { probes: number; savings: NonNullabl
               <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: r.reason === 'idle_limit' ? ink.series[3] : ink.muted }} />
             </div>
             <span className="num">
-              {fmtInt(r.count)} <span className="muted">{fmtPct(savings.wastedProbes ? r.count / savings.wastedProbes : 0, 1)}</span>
+              {fmtInt(r.count)} <span className="muted">{fmtPct(group.wastedProbes ? r.count / group.wastedProbes : 0, 1)}</span>
             </span>
           </li>
         ))}
@@ -1146,7 +1114,7 @@ function LatencyRow({ axis, metric, series, totals, loading }: { axis: TimeAxis;
     <div className="metric-pair">
       <ChartCard
         title={metric.label}
-        subtitle="p50, p90, p95, and p99 per bucket; p99 emphasized"
+        subtitle="p50, p90, p95, and p99 per bucket, with p99 emphasized"
         loading={loading}
         legend={PERCENTILES.map((p) => ({ color: ink.ramp[p.rampIndex], label: p.label, shape: 'line', title: PERCENTILE_HINT, value: fmt(overall[p.key]) }))}
       >
@@ -1214,14 +1182,14 @@ function CacheByModel({ groups, error, loading }: { error: string | null; groups
 }
 
 function KeepaliveByPool({ groups, error, loading }: { error: string | null; groups: AnalyticsGroup[]; loading: boolean }) {
-  const rows = useMemo(() => [...groups].sort((a, b) => (b.savings?.grossUsd ?? 0) - (a.savings?.grossUsd ?? 0)), [groups]);
+  const rows = useMemo(() => [...groups].sort((a, b) => (b.keptWarm?.tokens ?? 0) - (a.keptWarm?.tokens ?? 0)), [groups]);
   return (
     <BreakdownTable
       title="Cache warming by pool"
       error={error}
       loading={loading}
       groupLabel="Pool"
-      columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
+      columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Probe cost']}
       rows={rows.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1233,9 +1201,7 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
           g.fromRequests ? '-' : fmtInt(g.probes.failed),
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(g.keptWarm.tokens),
-          g.savings === null ? '-' : fmtUsd(g.savings.grossUsd),
-          g.savings === null ? '-' : fmtUsd(g.savings.probeCostUsd),
-          g.savings === null ? '-' : <NetValue key="net" value={g.savings.grossUsd - g.savings.probeCostUsd} />,
+          g.fromRequests ? '-' : fmtUsd(g.probeCostUsd),
         ],
       }))}
     />
@@ -1308,7 +1274,7 @@ function CostByGroup({ axis, points, groupBy, groupSlot, loading }: { axis: Time
   );
 }
 
-const UNFILTERED_NOTE = '; the filters above do not apply here';
+const UNFILTERED_NOTE = '. The filters above do not apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
  * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
@@ -1393,7 +1359,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: { 
 
 const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
-const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
+const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
 const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
@@ -1432,6 +1398,7 @@ function BurnCharts({
   rangeEndMs,
   readAt,
   sized,
+  slotOf,
 }: {
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
   costs: SubscriptionCosts | null;
@@ -1441,6 +1408,7 @@ function BurnCharts({
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   sized: ReadonlySet<string> | null;
+  slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
   const { lines, rows } = useMemo(
@@ -1448,7 +1416,7 @@ function BurnCharts({
     [answer, groupBy, rangeEndMs, readAt, sized],
   );
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
-  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
+  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
@@ -1486,7 +1454,7 @@ function BurnCharts({
     <div className="grid-2">
       <ChartCard
         title="Tokens per minute"
-        subtitle={`Uncached input and cache reads per minute, stacked by ${label}; the fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
+        subtitle={`Uncached input and cache reads per minute, stacked by ${label}. The fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
         error={error}
         loading={loading}
         empty={empty}
@@ -1616,7 +1584,7 @@ function BurnCharts({
   );
 }
 
-const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all";
+const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all";
 const PLACEMENT_UNFILTERED_NOTE = '. The account, model and pattern filters above do not apply here';
 
 /** Placements by rung over the range, narrowed by the key and pool filters, the two the route reads here. */
@@ -1665,7 +1633,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   );
 }
 
-const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
+const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend. The range and the filters above do not apply here";
 
 /** Spend against each member's budget; a member at its budget is skipped until its period ends. */
 function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {
@@ -1758,6 +1726,7 @@ function AccountsSection({
   loading,
   otherFilters,
   rollups: all,
+  slotOf,
   span,
 }: {
   accountIds: string[];
@@ -1767,6 +1736,7 @@ function AccountsSection({
   loading: boolean;
   otherFilters: boolean;
   rollups: AccountRollup[] | null;
+  slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
 }) {
   const ink = useChartInk();
@@ -1810,20 +1780,20 @@ function AccountsSection({
   }, [rollups, accounts, span, bucketMs]);
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
+      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}>
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, a), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
           {accounts.map((a) => (
-            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
       <BreakdownTable
         title="Accounts in range"
-        subtitle={`Totals for the selected range and accounts${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
+        subtitle={`Totals for the selected range and accounts${otherFilters ? '. The key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
         loading={loading}
         groupLabel="Account"

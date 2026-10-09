@@ -166,9 +166,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     response
 }
 
-/// A discovery request with the staged secret against the staged account doubles as the key check: a 401
-/// refuses the edit, and any other outcome, success or failure, changes nothing here (the cache reads the
-/// live list on demand once the account exists).
+/// A discovery request with the staged secret against the staged account is the key check. A clean discovery
+/// admits the write, a rejected credential refuses it as the operator's mistake, and every other outcome refuses
+/// it as the endpoint's, so an account is created or re-keyed only with a key the upstream answered and a refused
+/// write leaves nothing behind (the cache reads the live list on demand once the account exists).
 async fn verify_staged(
     state: &AdminState,
     staged: &AccountRow,
@@ -180,10 +181,10 @@ async fn verify_staged(
             StatusCode::BAD_REQUEST,
             "credential rejected by the upstream",
         )),
-        Err(error) => {
-            tracing::warn!(account = %staged.id, %error, "the account's catalog probe failed during verification");
-            Ok(())
-        }
+        Err(error) => Err(failure(
+            StatusCode::BAD_GATEWAY,
+            &format!("the key check failed: {error}"),
+        )),
     }
 }
 
