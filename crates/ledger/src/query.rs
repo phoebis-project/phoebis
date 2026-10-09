@@ -2194,11 +2194,13 @@ pub struct BudgetedMember {
 }
 
 /// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
-/// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the
-/// same as any other request's; with `metered_only`, a subscription member's metered rows alone, those filed under
-/// `overage` or `fast`. The row names the period kind and its UTC bounds in ms (`period_end` is the next day or
-/// month boundary). The rollup's own stored price is not read, since a budget must move with the table in force,
-/// not the price an attempt happened to be booked at.
+/// read time, or at the booked dollars for a model priced by prompt length, a keepalive probe's cost included
+/// since it draws real money from an API-key member's budget the same as any other request's. With
+/// `metered_only`, a subscription member's metered rows alone count, those filed under `overage` or `fast`. The
+/// row names the period kind and its UTC bounds in ms (`period_end` is the next day or month boundary). The booked
+/// dollars are read for a model priced by prompt length because an hour's sums carry no per-attempt prompt, and
+/// every other group is re-priced because a budget must move with the table in force, not the price an attempt
+/// happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[BudgetedMember],
@@ -2210,7 +2212,7 @@ pub fn member_spends(
     // re-parsing the same statement text for every member in a pool would add nothing but overhead.
     let mut stmt = conn.prepare(
         "SELECT canonical_model, speed, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
-         SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
+         SUM(cache_write_1h_tokens), SUM(output_tokens), SUM(estimated_usd) FROM rollups_hourly \
          WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
          AND (?5 = 0 OR funding IN ('overage', 'fast')) \
          GROUP BY canonical_model, speed",
@@ -2240,12 +2242,20 @@ pub fn member_spends(
                     r.get::<_, i64>(4)? as u64,
                     r.get::<_, i64>(5)? as u64,
                     r.get::<_, i64>(6)? as u64,
+                    r.get::<_, f64>(7)?,
                 ))
             },
         )?;
         let mut spent_usd = 0.0;
         for row in rows {
-            let (model, speed, input, cache_read, write_5m, write_1h, output) = row?;
+            let (model, speed, input, cache_read, write_5m, write_1h, output, booked_usd) = row?;
+            // An hour's sums carry no per-attempt prompt, so a model priced by prompt length cannot be re-priced
+            // here: its group adds the dollars its attempts were booked at, and every other group moves with the
+            // table in force.
+            if table.priced_by_prompt_length(&model) {
+                spent_usd += booked_usd;
+                continue;
+            }
             // A model the table cannot price contributes nothing: the analytics already read such a row as
             // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
             if let Some((usd, _)) = table.estimate(

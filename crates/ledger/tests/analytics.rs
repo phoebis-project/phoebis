@@ -2241,6 +2241,7 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
             output: rate,
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),
@@ -2264,6 +2265,7 @@ fn priced_table_distinct(model: &str) -> PriceTable {
             output: per_m(5.0),
         },
         fast: None,
+        long_context: None,
     };
     PriceTable {
         version: "test".into(),
@@ -2405,7 +2407,8 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
 
 /// A request and its one attempt, for a pool member's spend: `estimated_usd` is planted at an obviously wrong
 /// figure, so a test that reads the priced sum back at the seeded token count (not the planted figure) proves
-/// `member_spends` recomputes at read time rather than trusting what the attempt was booked at.
+/// `member_spends` recomputes at read time for a model priced one way rather than trusting what the attempt was
+/// booked at.
 #[allow(clippy::too_many_arguments)]
 fn plant_spend(
     db: &LedgerDb,
@@ -3270,5 +3273,72 @@ fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
         rows.len(),
         1_000,
         "every session across more than one chunk answers, not only the first chunk's"
+    );
+}
+
+/// An hour's sums carry no per-attempt prompt, so a member's rows on a model priced by prompt length sum at the
+/// dollars they were booked at, while every other group follows the table in force.
+#[test]
+fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_rest() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = ms(2026, 1, 15, 10, 0);
+    // The booked figure is deliberately not what the table prices, so a re-pricing would show.
+    for (id, model, input, booked) in [
+        ("long", "claude-haiku-5-5", 1_001, 7.0),
+        ("plain", "claude-sonnet-5-5", 1_000_000, 999.0),
+    ] {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: ms(2026, 1, 15, 1, 0),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            estimated_usd: Some(booked),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let spend = |table: &PriceTable| {
+        db.read_blocking(|c| member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], now, table))
+            .unwrap()[0]
+            .spent_usd
+    };
+    // The test table's Sonnet 5.5 input is 3 per million: a million tokens re-price at 3, the Haiku 5.5 row at 7
+    // as booked.
+    let table = phoebis_ledger::test_tables::api_prices();
+    assert!(
+        (spend(&table) - (7.0 + 3.0)).abs() < 1e-9,
+        "{}",
+        spend(&table)
+    );
+    // A table in force that doubles Sonnet 5.5's input moves the plain group and leaves the one priced by prompt
+    // length.
+    let doubled = PriceTable::from_yaml(
+        &phoebis_ledger::test_tables::API_PRICES.replacen(
+            "claude-sonnet-5-5: {input: 3,",
+            "claude-sonnet-5-5: {input: 6,",
+            1,
+        ),
+        "test",
+    )
+    .unwrap();
+    assert!(
+        (spend(&doubled) - (7.0 + 6.0)).abs() < 1e-9,
+        "{}",
+        spend(&doubled)
     );
 }

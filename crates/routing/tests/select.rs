@@ -3,11 +3,12 @@ use phoebis_routing::{
     warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
     BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
-    LaneFacts, MemberSpend, MigrateReason, OverageEvidence, PinKeyFacts,
-    PinRef, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegistrySnapshot,
-    RequestFlags, RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample,
-    WalkStep, Warmth, WarmthCause, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
+    RefusedRequest, RegistrySnapshot, RequestFlags, RoutingState, SelectRequest, SelectResult,
+    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -19,6 +20,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const HOUR: i64 = 3_600_000;
@@ -9730,8 +9732,35 @@ fn input_prices(rows: &[(&str, Option<f64>)]) -> RateTable {
             .iter()
             .map(|(model, input)| (model.to_string(), only_input(*input)))
             .collect(),
+        long_context: HashMap::new(),
         fallback: only_input(Some(0.0)),
     }
+}
+
+/// `input_prices(rows)` with a long-context set per entry of `long`: the model's input tokens at `input` for a
+/// prompt over `over` tokens, every other token at nothing.
+fn long_context_input_prices(rows: &[(&str, Option<f64>)], long: &[(&str, u64, f64)]) -> RateTable {
+    let only_input = |input: f64| Rates {
+        input: Some(input),
+        cache_read: Some(0.0),
+        write_5m: Some(0.0),
+        write_1h: Some(0.0),
+        output: Some(0.0),
+    };
+    let mut table = input_prices(rows);
+    table.long_context = long
+        .iter()
+        .map(|(model, over, input)| {
+            (
+                model.to_string(),
+                LongContextRates {
+                    over: *over,
+                    rates: only_input(*input),
+                },
+            )
+        })
+        .collect();
+    table
 }
 
 fn loaded(pins: Vec<PinRow>) -> RoutingState {
@@ -13290,4 +13319,105 @@ fn the_last_account_fact_reads_the_accounts_tried_rather_than_the_wire_attempt()
     let d = decide(&mut st, &s, &consumed, &mut rng());
     assert_eq!(picked(&d.result), "c");
     assert_eq!(summary_facts(&d), vec![last]);
+}
+
+#[test]
+fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_context_rates_in_the_round(
+) {
+    // Both members api_key funded, so the round reads dollars and no plan-funded sibling takes a cold pin back to
+    // plan before it runs.
+    let s = snapshot(Pool {
+        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+        ..shedding_pool(Shedding::default())
+    });
+    // Sonnet 5's input at 1 and at 5 over 1,000 prompt tokens. The `long` pin burns one token a second with its
+    // last prompt one token over the threshold, the `short` pin two tokens a second with its last prompt at it,
+    // so the priced order (5 against 2) is the reverse of the token order (1 against 2).
+    let long = PinRow {
+        last_input_tokens: 1_001,
+        ..burning("long", "a", 1.0, false, T)
+    };
+    let short = PinRow {
+        last_input_tokens: 1_000,
+        ..burning("short", "a", 2.0, false, T)
+    };
+    let mut st = loaded(vec![long, short]);
+    st.set_rates(BurnRates {
+        dollars: long_context_input_prices(
+            &[("claude-sonnet-5", Some(1.0))],
+            &[("claude-sonnet-5", 1_000, 5.0)],
+        ),
+        five_hour: RateTable::unit(),
+        fast: RateTable::unit(),
+    });
+    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::Usd, st.rates(), T, HOUR);
+    let burn = |session: &str| {
+        pins.iter()
+            .find(|(p, _)| p.session_id == session)
+            .map(|(_, burn)| *burn)
+            .expect("the account holds the pin")
+    };
+    assert_eq!(
+        (burn("long"), burn("short"), sum),
+        (Some(5.0), Some(2.0), 7.0),
+        "the long pin's burn reads at the long-context rate, five times its token rate, the short pin's at the \
+         standard rate"
+    );
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "short", T), &mut rng()).0),
+        ("a".into(), None),
+        "the round marks the long pin first, so the short pin is the last unmarked one and renews in place"
+    );
+    assert!(
+        marked(&st, "long", T) && !marked(&st, "short", T),
+        "the long pin carries the mark"
+    );
+}
+
+#[test]
+fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_plan_share() {
+    // Sonnet 5's input at 1, at 5 over 1,000 prompt tokens and at 3 at the fast cells. Both pins burn one standard
+    // token and two fast tokens a second. `long`'s last prompt is one token over the threshold, `short`'s at it.
+    let long = PinRow {
+        last_input_tokens: 1_001,
+        ..burning("long", "a", 1.0, false, T)
+    };
+    let short = PinRow {
+        last_input_tokens: 1_000,
+        ..burning("short", "a", 1.0, false, T)
+    };
+    let mut st = loaded(vec![long.clone(), short.clone()]);
+    st.set_fast_burn(&long.key(), input_rate(2.0));
+    st.set_fast_burn(&short.key(), input_rate(2.0));
+    st.set_rates(BurnRates {
+        dollars: long_context_input_prices(
+            &[("claude-sonnet-5", Some(1.0))],
+            &[("claude-sonnet-5", 1_000, 5.0)],
+        ),
+        five_hour: RateTable::unit(),
+        fast: input_prices(&[("claude-sonnet-5", Some(3.0))]),
+    });
+    let burn = |unit| {
+        let (pins, sum) = st.burn_of("a", &|_| true, unit, st.rates(), T, HOUR);
+        let of = |session: &str| {
+            pins.iter()
+                .find(|(p, _)| p.session_id == session)
+                .map(|(_, burn)| *burn)
+                .expect("the account holds the pin")
+        };
+        (of("long"), of("short"), sum)
+    };
+    assert_eq!(
+        burn(BurnUnit::Usd),
+        (Some(11.0), Some(7.0), 18.0),
+        "in dollars each pin reads its standard token at the set its last prompt selects plus its two fast tokens \
+         at the fast cell, 5 + 6 and 1 + 6"
+    );
+    assert_eq!(
+        burn(BurnUnit::WindowShare),
+        (Some(1.0), Some(1.0), 2.0),
+        "as a window share the banded copy alone counts, since fast usage draws usage credits and never the plan's \
+         window"
+    );
 }

@@ -1899,6 +1899,7 @@ mod tests {
                 crate::pricing::ModelRow {
                     standard: dollar,
                     fast: None,
+                    long_context: None,
                 },
             )]
             .into(),

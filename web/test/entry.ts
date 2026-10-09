@@ -26,5 +26,6 @@ export * from '@/lib/trend';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';
-export { ALL_ROLLUPS } from '@/mock/requests';
+export { cellsFor, PRICES } from '@/mock/catalog';
+export { ALL_ROLLUPS, costSplitOf } from '@/mock/requests';
 export { liveFeed } from '@/mock/live';

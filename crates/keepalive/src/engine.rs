@@ -1578,6 +1578,16 @@ impl Engine {
             .as_ref()
             .and_then(|u| u.cache_read_tokens)
             .unwrap_or(0);
+        // The request's own prompt selects the cells it would have paid the read at: the four input-side counts, as the
+        // ledger prices the request.
+        let prompt = complete.usage.as_ref().map_or(0, |u| {
+            phoebis_ledger::prompt_tokens(
+                u.input_tokens.unwrap_or(0),
+                u.cache_read_tokens.unwrap_or(0),
+                u.cache_write_5m_tokens.unwrap_or(0),
+                u.cache_write_1h_tokens.unwrap_or(0),
+            )
+        });
         let reason = match complete.outcome {
             Outcome::Succeeded => None,
             Outcome::Canceled => Some(Reason::RequestCanceled),
@@ -1680,6 +1690,7 @@ impl Engine {
                 tier.as_deref(),
                 &model,
                 read,
+                prompt,
                 now,
                 speed,
             );
@@ -1693,6 +1704,7 @@ impl Engine {
                     None,
                     &model,
                     read,
+                    prompt,
                     now,
                     speed,
                 )

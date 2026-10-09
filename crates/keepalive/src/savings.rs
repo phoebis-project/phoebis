@@ -14,9 +14,10 @@ use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
-/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` on the share side alone, for a model the
-/// subscription cost model has no weight for, or a tier it has no capacity for on the window.
+/// unit the covering probe settled in: dollars at the list prices of the cells `speed` and the request's own
+/// `prompt_tokens` select, or the share of the `tier`'s 5-hour window at `at` (the band inside the price). `None`
+/// on the share side alone, for a model the subscription cost model has no weight for, or a tier it has no
+/// capacity for on the window.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
@@ -25,12 +26,13 @@ pub(crate) fn gross_saving(
     tier: Option<&str>,
     canonical_model: &str,
     cache_read_tokens: u64,
+    prompt_tokens: u64,
     at: i64,
     speed: Speed,
 ) -> Option<f64> {
     match unit {
         SavingsUnit::Usd => {
-            let per_token = match table.price_at(canonical_model, speed) {
+            let per_token = match table.price_at(canonical_model, speed, prompt_tokens) {
                 Some(price) => (price.input - price.cache_read) / 1_000_000.0,
                 // The dearest cells `probe_dollars` prices this model's probes at: both sides of the net read one
                 // rate table, so a cache that saves more than its probes cost keeps the recipe net positive.
@@ -440,6 +442,7 @@ mod tests {
             Some("default_claude_max_20x"),
             "claude-opus-5-5",
             1,
+            1,
             SATURDAY_AFTERNOON,
             Speed::Standard,
         )
@@ -474,6 +477,7 @@ mod tests {
                 None,
                 "claude-opus-5-5",
                 1_000_000,
+                1_000_000,
                 0,
                 speed,
             )
@@ -490,6 +494,52 @@ mod tests {
             (saved(Speed::Standard) - (10.0 - 1.0)).abs() < 1e-12,
             "{:?}",
             saved(Speed::Standard)
+        );
+    }
+
+    #[test]
+    fn a_long_prompts_saving_reads_the_long_context_input_less_its_cache_read() {
+        // A row in round numbers, per million tokens: input 2 and cache read 0.2 up to 1,000 prompt tokens, 10
+        // and 1 over them.
+        let table = PriceTable::from_yaml(
+            r#"
+effective: 2026-01-01
+models:
+  claude-haiku-5-5:
+    input: 2
+    cache_write_5m: 2.5
+    cache_write_1h: 4
+    cache_read: 0.2
+    output: 10
+    long_context: {over: 1000, input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+"#,
+            "test",
+        )
+        .expect("a row priced by prompt length");
+        let saved = |prompt| {
+            gross_saving(
+                SavingsUnit::Usd,
+                &table,
+                &phoebis_ledger::test_tables::subscription_costs(),
+                None,
+                "claude-haiku-5-5",
+                1_000,
+                prompt,
+                0,
+                Speed::Standard,
+            )
+            .expect("a priced model")
+        };
+        // A prompt of the threshold's own length is not over it.
+        assert!(
+            (saved(1_000) - 1_000.0 * (2.0 - 0.2) / 1_000_000.0).abs() < 1e-12,
+            "{}",
+            saved(1_000)
+        );
+        assert!(
+            (saved(1_001) - 1_000.0 * (10.0 - 1.0) / 1_000_000.0).abs() < 1e-12,
+            "{}",
+            saved(1_001)
         );
     }
 

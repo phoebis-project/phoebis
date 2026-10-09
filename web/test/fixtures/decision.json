@@ -10,7 +10,7 @@
       "seq": 1,
       "at": 1000000,
       "key_id": "desktop",
-      "key_generation": 1791485937994,
+      "key_generation": 1791506683793,
       "pool_id": "main",
       "routing_session_id": "s-static",
       "agent_id": "main",
@@ -80,7 +80,7 @@
       "retry_in_place_seconds": 60,
       "pace_floor": 0.05,
       "migrate_band": 0.05,
-      "pool_updated_at": 1791485938252
+      "pool_updated_at": 1791506684034
     },
     "candidates": [
       {

@@ -50,10 +50,11 @@ fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
 }
 
-/// The cells `model` prices at for an answer served at `speed`, in the table the rig prices through.
+/// The cells `model` prices at for an answer served at `speed` on a prompt under any threshold, in the table the
+/// rig prices through.
 fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::ModelPrice {
     phoebis_ledger::PriceTable::shipped()
-        .price_at(model, speed)
+        .price_at(model, speed, 0)
         .expect("the rig's table prices the model")
         .clone()
 }
@@ -3299,4 +3300,67 @@ async fn a_zero_window_share_cap_holds_a_subscription_probe_and_admits_an_api_ke
         "the API-key account's probe runs: {:?}",
         other(&r)
     );
+}
+
+/// A probe costs at the cells its own prompt selects: on a row priced by prompt length, a probe whose answer reads
+/// back more than the threshold costs at the long-context cache read.
+#[tokio::test]
+async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_prompt_selects() {
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let cost = probe_rows(&rows).probe_cost_usd;
+    // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
+    // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.
+    let over = 2_000.0 * 0.5 / 1_000_000.0;
+    let standard = 2_000.0 * 0.1 / 1_000_000.0;
+    assert!((cost - over).abs() < 1e-12, "{cost}");
+    assert!(
+        (cost - standard).abs() > 1e-12,
+        "a lookup that ignores the prompt prices the standard cells: {cost}"
+    );
+}
+
+/// A kept-warm request saves at the cells its own prompt selects: on a row priced by prompt length, a request
+/// over the threshold saves the long-context input less the long-context cache read on every token it read.
+#[tokio::test]
+async fn a_kept_warm_request_over_the_threshold_saves_at_the_long_context_cells() {
+    let mut r = rig(RigSpec {
+        pricing: phoebis_ledger::test_tables::api_prices(),
+        ..RigSpec::default()
+    })
+    .await;
+    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    // Past the five-minute TTL of the first request, a real request reads the 2,000 tokens the probe kept.
+    r.advance(60_000);
+    let kept = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let credit = inference_rows(&rows);
+    // The test price table's Haiku 5.5 row, per million tokens: input 5 and cache read 0.5 over 1,000 prompt
+    // tokens, 1 and 0.1 up to them. The request's prompt is the 2,000 tokens it read.
+    let saving = 2_000.0 * (5.0 - 0.5) / 1_000_000.0;
+    assert_eq!(
+        (credit.kept_warm_requests, credit.kept_warm_tokens),
+        (1, 2_000)
+    );
+    assert!(
+        (credit.saved_usd_gross - saving).abs() < 1e-12,
+        "{}",
+        credit.saved_usd_gross
+    );
+    assert!(row(&r, &kept).await.kept_warm);
 }

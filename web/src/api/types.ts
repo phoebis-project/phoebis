@@ -1334,16 +1334,20 @@ export interface KeepaliveOverview {
   probes24h: { failed: number; held: number; migrated: number; ok: number; skipped: number };
 }
 
-/** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */
-export interface FastPrice { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
+/** Five cells, USD per million tokens: a model's standard, fast-mode or long-context prices. */
+export interface PriceCells { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
+/** The prices of an attempt whose prompt is longer than `over` tokens. */
+export interface LongContextPrice extends PriceCells { over: number }
 
 export interface ModelPrice {
   cacheReadPerM: number;
   cacheWrite1hPerM: number;
   cacheWrite5mPerM: number;
   /** The fast cells, null on a model that serves no fast mode. */
-  fast: FastPrice | null;
+  fast: PriceCells | null;
   inputPerM: number;
+  /** The long-context set, null on a model priced one way. */
+  longContext: LongContextPrice | null;
   model: string;
   outputPerM: number;
 }

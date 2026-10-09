@@ -182,7 +182,8 @@ tint. The models the cost model does not weigh on any window follow a divider, e
 weighed".
 
 **API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
-with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
+with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs, and a
+row under each model priced by prompt length, at its prices over the threshold.
 
 Both tables list the models family by family, Fable, Opus, Sonnet, Haiku, the newest version first, the order both
 shipped files keep, and a file kept in another order lists the same. Plan rates lists the weighted models first and the
@@ -200,26 +201,30 @@ since the relay rewrites every marker of the probe to that TTL (and adds one whe
 policy off, when the recipe keeps an hour's cache or marks any part of its prefix for an hour. A probe settled in
 dollars on a model the price table does not list prices at the table's dearest cell of each type, never at zero, so the
 dollar cap and the net still bound it; a request such a probe kept warm saves at the same cells, so its net stays
-positive while the cache saves more than the probes cost. Whatever the account's funding, a fast-mode session's net is a
+positive while the cache saves more than the probes cost. On a model priced by prompt length, a probe and the read it
+kept warm price at the set their own prompt selects. Whatever the account's funding, a fast-mode session's net is a
 dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the
 5-hour window", in dollars, or both for an agent whose account changed funding while it was warmed.
 
-The eight shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
+The nine shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
 (the three Opus models' fast cells are twice each figure):
 
 | Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
 | --- | --- | --- | --- | --- | --- |
 | `claude-fable-5-1` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
-| `claude-fable-5` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
+| `claude-fable-5` | 10.00 | 1.00 | 12.50 | 20.00 | 50.00 |
 | `claude-opus-5-5` | 4.00 | 0.20 | 5.00 | 8.00 | 20.00 |
 | `claude-opus-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
 | `claude-opus-4-8` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
-| `claude-sonnet-5-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-sonnet-5-5` | 2.00 | 0.10 | 2.50 | 4.00 | 10.00 |
 | `claude-sonnet-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-haiku-5-5` | 0.10 | 0.01 | 0.125 | 0.20 | 0.50 |
+| `claude-haiku-5-5`, prompt over 100,000 tokens | 0.50 | 0.05 | 0.625 | 1.00 | 2.50 |
 | `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 |
 
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price
-over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5` and 12.5 for the other five.
+over the cache read price: 50 for `claude-fable-5-1`, 25 for `claude-opus-5-5` and `claude-sonnet-5-5`, and 12.5 for
+the other six.
 
 ## Recipe states
 

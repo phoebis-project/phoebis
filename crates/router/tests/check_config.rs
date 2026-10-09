@@ -276,7 +276,7 @@ const COUNTED_PRICES: &str = "\
 effective: 2026-02-01
 models:
   claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
-  claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5}
+  claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5, long_context: {over: 1000, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25}}
 ";
 
 const COUNTED_COSTS: &str = "\
@@ -308,11 +308,12 @@ overrides:
   claude-haiku-4-5: {weight_by_window: {seven_day: 1}}
 ";
 
-/// Two tables written for this count: two price rows dated 2026-02-01, and a cost model dated 2026-03-01 that weighs
-/// Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at null, and weighs Sonnet 5 and Haiku 4.5 on the
-/// week through overrides; its four tiers are Pro and Max 20x sized on both windows, Team on the 5-hour window alone
-/// and Enterprise on neither. Counted by hand: four models (Opus 5 left out, Sonnet 5 in through its override, Haiku
-/// 4.5 once) and three tiers (Enterprise left out).
+/// Two tables written for this count: two price rows dated 2026-02-01, the Haiku 4.5 row priced by prompt length,
+/// and a cost model dated 2026-03-01 that weighs Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at
+/// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides. Its four tiers are Pro and Max 20x sized
+/// on both windows, Team on the 5-hour window alone and Enterprise on neither. Counted by hand: two models on the
+/// price line (a row priced by prompt length is one model), and on the cost line four models (Opus 5 left out,
+/// Sonnet 5 in through its override, Haiku 4.5 once) and three tiers (Enterprise left out).
 #[test]
 fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {
@@ -384,6 +385,78 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     );
     assert!(
         stderr.contains("pricing table: model m, cell input must be a finite non-negative number"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// The start refuses a price file whose long-context cell an estimate cannot use, so the check refuses it too, naming
+/// the file, the model and the cell under its `long_context.` name.
+#[test]
+fn a_price_file_with_a_bad_long_context_cell_fails_check_config_naming_the_model_and_the_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    std::fs::write(
+        &prices,
+        "effective: 2026-10-04\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
+         output: 1, long_context: {over: 1000, input: -1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
+         output: 1}}\n",
+    )
+    .unwrap();
+    let config = config_file(
+        dir.path(),
+        "bad-long-context-cell",
+        &format!("stats:\n  api_prices_path: {}\n", prices.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: loading the price table from {}", prices.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains(
+            "pricing table: model m, cell long_context.input must be a finite non-negative number"
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// The start refuses a threshold at zero, which would price every prompt at the long-context cells, so the check
+/// refuses it too, naming the file, the model and `long_context.over`.
+#[test]
+fn a_price_file_with_a_zero_threshold_fails_check_config_naming_long_context_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    std::fs::write(
+        &prices,
+        "effective: 2026-10-04\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
+         output: 1, long_context: {over: 0, input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
+         output: 1}}\n",
+    )
+    .unwrap();
+    let config = config_file(
+        dir.path(),
+        "zero-threshold",
+        &format!("stats:\n  api_prices_path: {}\n", prices.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: loading the price table from {}", prices.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains(
+            "pricing table: model m, cell long_context.over must be a whole number of tokens above zero"
+        ),
         "{}",
         printed(&out)
     );

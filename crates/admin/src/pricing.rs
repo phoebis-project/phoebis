@@ -23,11 +23,26 @@ pub(crate) fn fast_json(row: &ModelRow) -> Value {
     })
 }
 
+/// The long-context set under the `*_per_m` names with its `over`, null on a model priced one way.
+pub(crate) fn long_context_json(row: &ModelRow) -> Value {
+    row.long_context.as_ref().map_or(Value::Null, |l| {
+        json!({
+            "over": l.over,
+            "input_per_m": l.cells.input,
+            "cache_write_5m_per_m": l.cells.cache_write_5m,
+            "cache_write_1h_per_m": l.cells.cache_write_1h,
+            "cache_read_per_m": l.cells.cache_read,
+            "output_per_m": l.cells.output,
+        })
+    })
+}
+
 /// The two tables in force, one envelope per table, each file as loaded with its models in the file's order:
 ///
 /// ```text
 /// {"api_prices": {effective, source, content: {effective, models: {<id>: {input, cache_write_5m, cache_write_1h,
-/// cache_read, output, fast?}}}}, "subscription_costs": {effective, source, content: <the model, key for key>}}
+/// cache_read, output, fast?, long_context?}}}}, "subscription_costs": {effective, source, content: <the model, key
+/// for key>}}
 /// ```
 pub fn table_envelopes(prices: &PriceTable, tables: &PlanTables) -> Value {
     json!({
