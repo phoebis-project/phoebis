@@ -52,6 +52,43 @@ const PINNED_TERMINI = (badge) => [`Chosen: ${badge} (taken)`, 'Held for a slot:
 /** A record built in the test over a story record's candidates and settings, with its own walk and outcome kind. */
 const built = (base, walk, kind, more = {}) => ({ ...base, ...more, outcome: { ...base.outcome, kind }, walk });
 
+/** The points along a path drawn with M, H, V and C, each cubic sampled finely. */
+function pointsOf(path) {
+  const tokens = path.match(/[MHVC]|\d*\.?\d+(?:e-?\d+)?/g);
+  const points = [];
+  let [x, y, i] = [0, 0, 0];
+  const n = () => Number(tokens[i++]);
+  while (i < tokens.length) {
+    const command = tokens[i++];
+    if (command === 'M') [x, y] = [n(), n()];
+    else if (command === 'H') x = n();
+    else if (command === 'V') y = n();
+    else if (command === 'C') {
+      const [x1, y1, x2, y2, x3, y3] = [n(), n(), n(), n(), n(), n()];
+      for (let k = 1; k < 64; k += 1) {
+        const [t, u] = [k / 64, 1 - k / 64];
+        points.push([u * u * u * x + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3, u * u * u * y + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3]);
+      }
+      [x, y] = [x3, y3];
+    } else throw new Error(`${command} in ${path}`);
+    points.push([x, y]);
+  }
+  return points;
+}
+
+/** The highest point a path reaches where it passes `x`, the one nearest the line above it. */
+function highestAt(path, x) {
+  const points = pointsOf(path);
+  let best = Infinity;
+  for (let k = 1; k < points.length; k += 1) {
+    const [[ax, ay], [bx, by]] = [points[k - 1], points[k]];
+    if (ax === bx) {
+      if (ax === x) best = Math.min(best, ay, by);
+    } else if ((ax - x) * (bx - x) <= 0) best = Math.min(best, ay + ((by - ay) * (x - ax)) / (bx - ax));
+  }
+  return best;
+}
+
 test('every step the router records has a station, a renderer and a stub word, and every station a step', () => {
   const renderers = ['candidate', 'chips', 'hold', 'list', 'outcome', 'rung', 'sentence', 'table'];
   const stubs = ['fires', 'match', 'released'];
@@ -150,7 +187,11 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(terminiOf(refusal), THREE_TERMINI(['refused', 'refused']));
   const refusalLayout = d.layoutStrip(refusal, 958);
   assert.deepEqual(refusalLayout.paths.filter((p) => p.kind === 'edge' || p.kind === 'curve').map((p) => `${p.kind} ${p.state}`), ['edge idle', 'curve idle', 'curve idle', 'curve taken']);
-  assert.ok(refusalLayout.paths.find((p) => p.kind === 'curve' && p.state === 'taken').d.startsWith(`M${refusalLayout.stations.admission.x} ${refusalLayout.y0} `), 'the taken path runs from the decisive Admission to Refused');
+  const refused = refusalLayout.paths.find((p) => p.kind === 'curve' && p.state === 'taken');
+  assert.ok(highestAt(refused.d, refusalLayout.stations.selection.x) > refusalLayout.y0 + d.RADIUS, 'the taken path to Refused passes under the idle Rest of the walk');
+  assert.ok(highestAt(refused.d, (refusalLayout.stations.admission.x + refusalLayout.stations.selection.x) / 2) > refusalLayout.y0 + d.RADIUS, 'it leaves the idle edge into Rest of the walk alone');
+  assert.ok(refused.d.startsWith(`M${refusalLayout.stations.admission.x} ${refusalLayout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Admission toward Refused');
+  assert.equal(refusalLayout.labels.admission.above, true, 'the curve drops from Admission, so its label sits above the line');
 
   const probe = modelOf(await recordOf('req_c41d0311-200/1'));
   assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Cool reading: preferred (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)']);
@@ -237,7 +278,9 @@ test('a record with no slot step expects the slot its outcome names after its la
   const layout = d.layoutStrip(m, 958);
   const curves = layout.paths.filter((p) => p.kind === 'curve');
   assert.deepEqual(curves.map((p) => p.state), ['idle', 'idle', 'taken']);
-  assert.ok(curves[2].d.startsWith(`M${layout.stations.eligible.x} ${layout.y0} `), 'the taken path runs from the decisive Eligible to Refused');
+  for (const s of m.stations.slice(2)) assert.ok(highestAt(curves[2].d, layout.stations[s.id].x) > layout.y0 + d.RADIUS, `the taken path to Refused passes under the idle ${s.id}`);
+  assert.ok(curves[2].d.startsWith(`M${layout.stations.eligible.x} ${layout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Eligible toward Refused');
+  assert.equal(layout.labels.eligible.above, true);
   assert.deepEqual(layout.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', ...Array(9).fill('idle')]);
 });
 
@@ -362,4 +405,11 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   // The walk reached Renew down the track, so the line's edge out of the idle Shed stays idle.
   assert.deepEqual(capped.paths.filter((p) => p.kind === 'edge').map((p) => p.state), ['taken', 'taken', 'idle', 'idle', 'idle', 'idle', 'idle']);
   assert.deepEqual([capped.labels.renew.above, capped.labels.cap_filter.above], [false, true], 'the track comes down into Renew, so its label stays below the line');
+  // The fan drops from Renew past its label, and the first leaf row keeps its place below it.
+  const renewLabel = capped.labels.renew;
+  assert.equal(renewLabel.top, 176 + 12);
+  const fan = capped.paths.find((p) => p.kind === 'fan');
+  assert.ok(fan.d.startsWith(`M${capped.stations.renew.x} ${renewLabel.top + renewLabel.height} `), 'the fan starts at the label\'s bottom edge');
+  assert.ok(renewLabel.top + renewLabel.height > 176 + d.RADIUS);
+  assert.equal(capped.leaves[0].y, 176 + 76);
 });
