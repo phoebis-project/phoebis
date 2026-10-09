@@ -1,9 +1,10 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel } from '@/lib/format';
+import { fundingOf } from '@/lib/costs';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
-import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
+import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
 
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });
@@ -92,6 +93,8 @@ export interface FoldOptions {
   agentPatterns?: string[];
   /** Patterns a row's client class must match one of; a row with none is matched as `-`, as the rollups file it. */
   clientPatterns?: string[];
+  /** The side the kept rows were paid on, read off each row's serving attempt. Absent keeps every row. */
+  funding?: FundingFilter;
 }
 
 /** The newest generation of each key id among the rows, the one the breakdown labels with the bare id. */
@@ -116,6 +119,32 @@ function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<s
 /** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */
 const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.ttftMs !== null && r.durationMs - r.ttftMs > 0 && r.usage.output > 0 ? r.usage.output / ((r.durationMs - r.ttftMs) / 1000) : null);
 
+/** Who paid for a request: its serving attempt's side, and a request no attempt served is billed in dollars. */
+const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length - 1] ?? null);
+const onSide = (r: RequestLog, side: FundingFilter) => (fundingOfRow(r) === 'plan') === (side === 'plan');
+
+/**
+ * The plan-funded rows' shares summed per window into the group, as the route sums them under the account grouping:
+ * a window no row's model applies to is no key, a window a row carries as null (the cost model could not price it) is
+ * null whatever the other rows priced, and the rest sum. A row whose account the route could not price (`{}`, or
+ * no map at all) nulls the map and both counts, as the route answers such an account, since the fold holds no window
+ * rule of its own to say which windows that row's model applies to. No plan-funded row is no shares.
+ */
+function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
+  const plan = rows.filter((r) => fundingOfRow(r) === 'plan');
+  if (plan.length === 0 || plan.some((r) => r.costShares === null || Object.keys(r.costShares).length === 0)) return;
+  const shares: Record<string, number | null> = {};
+  for (const r of plan) {
+    for (const [window, share] of Object.entries(r.costShares ?? {})) {
+      const sum = shares[window];
+      shares[window] = share === null || sum === null ? null : (sum ?? 0) + share;
+    }
+  }
+  g.costShares = shares;
+  g.planRequests = plan.length;
+  g.planOutputTokens = plan.reduce((n, r) => n + r.usage.output, 0);
+}
+
 /**
  * Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session.
  * `latest` is taken over every row of the range, so a bucket holding an earlier key holder alone still labels it
@@ -126,9 +155,15 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const lists = new Map<string, RequestLog[]>();
   const agentPatterns = options.agentPatterns ?? [];
   const clientPatterns = options.clientPatterns ?? [];
+  const { funding } = options;
   // The agent is matched on its folded token, as the unscoped page's rollups hold it, so one pattern selects the same
   // rows under both scopes.
-  const kept = rows.filter((r) => (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))));
+  const kept = rows.filter(
+    (r) =>
+      (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) &&
+      (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))) &&
+      (funding === undefined || onSide(r, funding)),
+  );
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
     const g = groups.get(key) ?? emptyFolded(key, labelOf(r, key, by, latest));
@@ -171,6 +206,8 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);
     g.histograms = { durationMs: histogramOf(pick((r) => r.durationMs)), outputTps: histogramOf(pick(outputTps)), ttfbMs: histogramOf(pick((r) => r.ttfbMs)), ttftMs: histogramOf(pick((r) => r.ttftMs)) };
     for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
+    // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
+    if (by === 'account') foldShares(g, list);
   }
   return [...groups.values()].sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }

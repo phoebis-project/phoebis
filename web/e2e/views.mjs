@@ -2483,6 +2483,48 @@ async function stickyStrip(theme) {
 }
 
 /**
+ * The Unit select in the Cost section's head: inside the head's box, below the tab strip's bottom and inside the
+ * viewport at 1280 and 400 px, so the control the head carries beside its meta never slides under the strip or off
+ * the edge.
+ */
+async function unitControl(theme) {
+  try {
+    if (!(await tabTo(theme, 'Cost'))) return;
+    for (const width of [1280, 400]) {
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const read = await page.evaluate(() => {
+        const box = (el) => {
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+        };
+        const head = document.querySelector('#cost .analytics-section__head');
+        return {
+          head: box(head),
+          select: box(head?.querySelector('select[aria-label="Cost unit"]')?.closest('.select')),
+          strip: Math.round(document.querySelector('.section-bar')?.getBoundingClientRect().bottom ?? NaN),
+          width: document.documentElement.clientWidth,
+        };
+      });
+      measurements.push(`${theme} /analytics unit control at ${width} px ${JSON.stringify(read)}`);
+      if (read.head === null || read.select === null) {
+        failures.push(`${theme} /analytics: at ${width} px the Cost head draws no Unit select`);
+        continue;
+      }
+      const { head, select } = read;
+      if (select.left < head.left || select.right > head.right || select.top < head.top || select.bottom > head.bottom) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the Cost head ${JSON.stringify(head)}`);
+      if (Number.isNaN(read.strip) || select.top < read.strip) failures.push(`${theme} /analytics: at ${width} px the Unit select's top ${select.top} sits above the tab strip's bottom ${read.strip}`);
+      if (select.left < 0 || select.right > read.width) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the ${read.width} px viewport`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
  * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
  * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
  * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
@@ -3810,6 +3852,7 @@ try {
         await trafficCards(theme);
         await analyticsTabs(theme);
         await stickyStrip(theme);
+        await unitControl(theme);
       }
       if (view.path === '/settings') await settingsOrder(theme);
       if (view.path === '/accounts') {

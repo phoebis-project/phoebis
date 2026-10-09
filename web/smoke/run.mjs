@@ -8736,6 +8736,154 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Traffic');
   }
   {
+    // The unit is one control in the heads of Cost, Cache and Cache warming, kept in the address beside the session.
+    const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
+    const unitSelect = (page, section) => page.container.querySelector(`#${section} .analytics-section__head select[aria-label="Cost unit"]`);
+    const changeSelect = async (page, select, value) => {
+      if (select) {
+        setSelect.call(select, value);
+        select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      }
+      await page.settle(900);
+    };
+    const chooseUnit = (page, value) => changeSelect(page, unitSelect(page, 'cost') ?? unitSelect(page, 'cache') ?? unitSelect(page, 'cache-warming'), value);
+    const groupPage = (page, value) => changeSelect(page, page.container.querySelector('.filters select.groupby-select'), value);
+    const costMeta = () => m.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
+    await tab(m, 'Cost');
+    const select = unitSelect(m, 'cost');
+    results.push({
+      name: "/analytics the Cost section's Unit select offers four positions with All in dollars selected and no unit in the URL",
+      ok: select !== null && [...select.options].map((o) => o.textContent).join() === 'All in dollars,Billed dollars,Window shares,Dollar equivalent' && select.value === 'all' && m.location().search === '' && select.closest('.analytics-section__head') !== null,
+      missing: [select?.outerHTML.slice(0, 160) ?? 'no select', m.location().search],
+    });
+    const written = [];
+    for (const value of ['usd', 'share', 'equivalent']) {
+      await chooseUnit(m, value);
+      written.push([m.location().search, m.location().hash, unitSelect(m, 'cost')?.value]);
+    }
+    await chooseUnit(m, 'all');
+    written.push([m.location().search, m.location().hash, unitSelect(m, 'cost')?.value]);
+    results.push({
+      name: '/analytics choosing Billed dollars, Window shares and Dollar equivalent writes unit=usd, unit=share and unit=equivalent and keeps the hash',
+      ok: JSON.stringify(written) === JSON.stringify([['?unit=usd', '#cost', 'usd'], ['?unit=share', '#cost', 'share'], ['?unit=equivalent', '#cost', 'equivalent'], ['', '#cost', 'all']]),
+      missing: written.map((w) => w.join(' ')),
+    });
+    // The two funded reads: none while Traffic shows, one series and one breakdown call per dollar position on Cost.
+    const fundingOf = (spy) => spy.calls.map((c) => c[0]?.funding).filter((f) => f !== undefined);
+    const spied = async (act) => {
+      const series = countCalls('getAnalyticsSeries');
+      const breakdown = countCalls('getAnalyticsBreakdown');
+      await act();
+      series.restore();
+      breakdown.restore();
+      return [fundingOf(series), fundingOf(breakdown)];
+    };
+    const onCost = await spied(() => chooseUnit(m, 'usd'));
+    const onTraffic = await spied(() => tab(m, 'Traffic'));
+    const backOnCost = await spied(() => tab(m, 'Cost'));
+    const equivalent = await spied(() => chooseUnit(m, 'equivalent'));
+    results.push({
+      name: '/analytics Billed dollars and Dollar equivalent read the series and breakdown once more with funding',
+      ok: JSON.stringify(onCost) === '[["billed"],["billed"]]' && JSON.stringify(onTraffic) === '[[],[]]' && JSON.stringify(backOnCost) === '[["billed"],["billed"]]' && JSON.stringify(equivalent) === '[["plan"],["plan"]]',
+      missing: [`on Cost ${JSON.stringify(onCost)}`, `on Traffic ${JSON.stringify(onTraffic)}`, `back on Cost ${JSON.stringify(backOnCost)}`, `equivalent ${JSON.stringify(equivalent)}`],
+    });
+    const metas = { equivalent: costMeta() };
+    await chooseUnit(m, 'usd');
+    metas.usd = costMeta();
+    await chooseUnit(m, 'share');
+    metas.share = costMeta();
+    await chooseUnit(m, 'all');
+    metas.all = costMeta();
+    results.push({
+      name: '/analytics the meta line names the position',
+      ok: /^\$[\d,.]+ in range, all requests$/.test(metas.all) && /^\$[\d,.]+ in range, billed$/.test(metas.usd) && metas.share === 'shares per account' && /^\$[\d,.]+ in range, equivalent$/.test(metas.equivalent),
+      missing: Object.entries(metas).map(([k, v]) => `${k}: ${v}`),
+    });
+    await tab(m, 'Traffic');
+
+    // jsdom lays nothing out, so a fresh page's chart containers read a browser's size and the charts draw.
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+    };
+    const shares = await mount('/analytics#cost');
+    const cardIn = (t) => [...shares.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+    const legendIn = (t) => [...(cardIn(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+    const tableIn = (t) => [...shares.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(t));
+    const areasIn = (t) => cardIn(t)?.querySelectorAll('.recharts-area').length ?? 0;
+    const dollarAreas = areasIn('Cost by key');
+    await chooseUnit(shares, 'share');
+    await groupPage(shares, 'account');
+    const accountCard = cardIn('Cost by account');
+    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account'), note: accountCard?.textContent?.includes(SHARE_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
+    const table = tableIn('Cost by account');
+    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    const cells = [...(table?.querySelectorAll('tbody td.num') ?? [])].map((td) => td.textContent?.trim() ?? '');
+    const tiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+    await groupPage(shares, 'model');
+    const modelCard = cardIn('Cost by model');
+    const noted = { note: modelCard?.textContent?.includes(SHARE_NOTE) ?? false, tableNote: tableIn('Cost by model') === undefined && [...shares.container.querySelectorAll('#cost .card')].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by model' && c !== modelCard && c.textContent?.includes(SHARE_NOTE)), wrapper: modelCard?.querySelector('.recharts-wrapper') !== null };
+    const modelTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+    results.push({
+      name: '/analytics under Window shares the Cost chart draws a line chart with the account grouping and the note under the model grouping',
+      ok: dollarAreas > 0 && lineChart.areas === 0 && lineChart.wrapper && !lineChart.note && lineChart.legend.length === 0 && noted.note && !noted.wrapper && noted.tableNote,
+      missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `model ${JSON.stringify(noted)}`],
+    });
+    results.push({
+      name: '/analytics under Window shares the share table reads Plan requests, 5-hour, 7-day, 7-day Fable, Per request and Per 1k output and its cells read a dash until a share is priced',
+      ok: JSON.stringify(heads) === JSON.stringify(['Account', 'Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']) && cells.length >= 6 && cells.every((c) => c === '-'),
+      missing: [heads.join(','), `${cells.length} cells: ${[...new Set(cells)].join(',')}`],
+    });
+    results.push({
+      name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named and a dash under another grouping',
+      ok: JSON.stringify(tiles.slice(0, 3)) === JSON.stringify([['Window share', '-', 'per account below'], ['Per request', '-', 'per account below'], ['Per 1k output', '-', 'per account below']]) && tiles[3]?.[0] === 'Fast mode spend' && modelTiles.slice(0, 3).every(([value, note]) => value === '-' && note === 'under the account grouping alone'),
+      missing: [JSON.stringify(tiles), JSON.stringify(modelTiles)],
+    });
+    await groupPage(shares, 'account');
+    await tab(shares, 'Cache');
+    const cacheSelect = unitSelect(shares, 'cache');
+    const cacheCard = cardIn('Write cost vs read cost');
+    const cacheNoted = cacheCard?.textContent?.includes(SHARE_NOTE) ?? false;
+    await tab(shares, 'Cache warming');
+    const warmingSelect = unitSelect(shares, 'cache-warming');
+    const probeTile = () => {
+      const t = [...shares.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim()];
+    };
+    const probeNoted = probeTile();
+    const wasted = cardIn('Wasted probes')?.textContent?.includes('how these sessions are used. In dollars at list prices.') ?? false;
+    results.push({
+      name: '/analytics the Unit select is drawn in the Cache and Cache warming headers too and the cache cost card reads the note under Window shares with no account named',
+      ok: cacheSelect?.value === 'share' && warmingSelect?.value === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
+      missing: [`cache select ${cacheSelect?.value}`, `warming select ${warmingSelect?.value}`, `cache note ${cacheNoted}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted blurb ${wasted}`],
+    });
+    // One account named: the cache card draws its legend and the Probe cost tile its probe count, each a dash until the
+    // mock prices a share.
+    const accountFilter = [...shares.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
+    accountFilter?.querySelector('.mselect__trigger')?.click();
+    await shares.settle(150);
+    [...(accountFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'primary')?.click();
+    await shares.settle(900);
+    const probeNamed = probeTile();
+    await tab(shares, 'Cache');
+    const namedCard = cardIn('Write cost vs read cost');
+    const namedLegend = legendIn('Write cost vs read cost');
+    await tab(shares, 'Cost');
+    const namedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+    results.push({
+      name: '/analytics under Window shares with one account named the cache cost card and the Probe cost tile read dashes until the mock prices a share',
+      ok:
+        JSON.stringify(namedLegend) === JSON.stringify([['Write share', '-'], ['Read share', '-']]) &&
+        !(namedCard?.textContent?.includes(SHARE_NOTE) ?? true) &&
+        probeNamed[0] === '-' &&
+        /^\d[\d,]* probes$/.test(probeNamed[1] ?? '') &&
+        JSON.stringify(namedTiles.slice(0, 3)) === JSON.stringify([['Window share', '-', ''], ['Per request', '-', 'of the 7-day window per plan-funded request'], ['Per 1k output', '-', 'of the 7-day window per 1k plan-funded output tokens']]),
+      missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
+    });
+    shares.unmount();
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+  }
+  {
     // The story's incomplete desktop stream falls inside the day, so the legend and the desktop row both count it.
     const incompleteItem = [...(card('Requests by outcome')?.querySelectorAll('.legend li') ?? [])].find((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('') === 'Incomplete');
     const legendCount = Number(incompleteItem?.querySelector('.legend__value')?.textContent?.trim().replace(/,/g, '') ?? 0);

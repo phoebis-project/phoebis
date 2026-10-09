@@ -437,3 +437,72 @@ test('FAILOVER_MOVE_REASONS names the three failover reasons and no reason the m
   assert.deepEqual([...d.RULE_MOVE_REASONS, ...d.FAILOVER_MOVE_REASONS].sort(), Object.keys(d.PIN_MIGRATION_LABEL).sort(), 'the two sets split the labeled reasons');
   assert.equal(d.FAILOVER_MOVE_REASONS.includes('unknown'), false, "the route's unknown reason is no failover");
 });
+
+/** A route-shaped account group, the captured one with the members a case sets. */
+const accountGroup = (over = {}) => ({ ...d.decodeAnalyticsGroup(fixture('analytics_breakdown_accounts').rows[0]), ...over });
+
+test("the unit reads the URL's position and falls to all", () => {
+  assert.deepEqual([...d.COST_UNITS], ['all', 'usd', 'share', 'equivalent'], "the select's order, the default first");
+  assert.deepEqual(d.UNIT_LABEL, { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' });
+  assert.deepEqual(d.UNIT_FUNDING, { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' });
+  for (const unit of d.COST_UNITS) assert.equal(d.unitOf(new URLSearchParams(`?unit=${unit}`)), unit, unit);
+  assert.equal(d.unitOf(new URLSearchParams('?unit=bogus')), 'all', 'a value the page does not know reads as the default');
+  assert.equal(d.unitOf(new URLSearchParams('')), 'all', 'no parameter reads as the default');
+  assert.equal(d.unitOf(new URLSearchParams('?session=s-1')), 'all', 'another parameter names no unit');
+});
+
+test("one account's shares read from the account filter under the account grouping alone", () => {
+  assert.equal(d.oneAccountOf('account', ['primary']), 'primary');
+  assert.equal(d.oneAccountOf('account', []), null, 'none named');
+  assert.equal(d.oneAccountOf('account', ['primary', 'secondary']), null, "several named, whose windows' shares do not add");
+  assert.equal(d.oneAccountOf('model', ['primary']), null, 'another grouping mixes accounts in every group');
+});
+
+test('a share row labels each window and divides the 7-day share per plan request and per 1k plan output', () => {
+  const base = accountGroup();
+  const g = accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 }, planOutputTokens: 2000, planRequests: 4, requests: 10, tokens: { ...base.tokens, output: 5000 } });
+  assert.deepEqual(d.shareRow(g), { fiveHour: '20%', perRequest: '2%', perThousand: '4%', sevenDay: '8%', week: '4%' }, 'the averages divide by the plan-funded rows, never by every request');
+  assert.deepEqual(d.shareRow(accountGroup({ costShares: null, planOutputTokens: null, planRequests: null })), { fiveHour: null, perRequest: null, perThousand: null, sevenDay: null, week: null }, 'a group the route priced no share for reads no cell');
+  assert.deepEqual(d.shareRow(accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 }, planOutputTokens: null, planRequests: null })), { fiveHour: '20%', perRequest: null, perThousand: null, sevenDay: '8%', week: null }, 'null counts read null averages, and a Sonnet group names no week');
+  assert.deepEqual(d.shareRow(accountGroup({ costShares: { five_hour: 0.2, seven_day: null, seven_day_fable: null }, planOutputTokens: 2000, planRequests: 4 })), { fiveHour: '20%', perRequest: null, perThousand: null, sevenDay: null, week: null }, 'an unpriced window reads null, and so do the averages over it');
+  assert.deepEqual(d.shareRow(accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 }, planOutputTokens: 0, planRequests: 0 })), { fiveHour: '20%', perRequest: null, perThousand: null, sevenDay: '8%', week: null }, 'a zero count divides nothing');
+});
+
+test("the share lines carry each account's 7-day and week shares per bucket with a gap for a missing one", () => {
+  const at = (h) => new Date(Date.UTC(2026, 8, 16, h)).toISOString();
+  const fable = accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 }, key: 'primary', label: 'primary' });
+  const haiku = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: 'nightly', label: 'nightly' });
+  const apiKey = accountGroup({ costShares: null, key: 'overflow', label: 'overflow' });
+  const { accounts, data } = d.shareLines([
+    { at: at(11), groups: [fable, haiku, apiKey] },
+    { at: at(12), groups: [{ ...fable, costShares: { five_hour: 0.3, seven_day: 0.1, seven_day_fable: null } }, apiKey] },
+  ]);
+  assert.deepEqual(accounts, ['nightly', 'primary'], 'the accounts with a share map, an API key account left out');
+  assert.deepEqual(
+    data,
+    [
+      { at: Date.UTC(2026, 8, 16, 11), 'nightly:5h': 0.1, 'nightly:7d': 0.05, 'nightly:week': null, 'primary:5h': 0.2, 'primary:7d': 0.08, 'primary:week': 0.04 },
+      { at: Date.UTC(2026, 8, 16, 12), 'nightly:5h': null, 'nightly:7d': null, 'nightly:week': null, 'primary:5h': 0.3, 'primary:7d': 0.1, 'primary:week': null },
+    ],
+    'a bucket an account has no group in, and a window it has no share on, read null, which the chart leaves as a gap',
+  );
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }] }, 'no share map, no line');
+});
+
+test('the session and non-session views agree on the share averages over one mixed-funding request set', () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = plan.attempts[plan.attempts.length - 1];
+  const shares = { five_hour: 0.25, seven_day: 0.125 };
+  const rows = [
+    { ...plan, costShares: shares, id: 'p-1', usage: { ...plan.usage, output: 100 } },
+    { ...plan, costShares: shares, id: 'p-2', usage: { ...plan.usage, output: 300 } },
+    { ...plan, attempts: [{ ...attempt, overageInUse: true }], costShares: null, id: 'o-1', usage: { ...plan.usage, output: 1000 } },
+  ];
+  const [folded] = d.foldGroups(rows, 'account');
+  const base = accountGroup();
+  const route = accountGroup({ costShares: { five_hour: 0.5, seven_day: 0.25 }, key: plan.accountId, label: plan.accountId, planOutputTokens: 400, planRequests: 2, requests: 3, tokens: { ...base.tokens, output: 1400 } });
+  assert.equal(folded.requests, 3, 'the overage row counts as a request');
+  assert.deepEqual([folded.planRequests, folded.planOutputTokens], [2, 400], 'and widens no share denominator');
+  assert.deepEqual(d.shareRow(folded), d.shareRow(route), 'the fold and the route divide by the same plan-funded rows');
+  assert.deepEqual(d.shareRow(folded), { fiveHour: '50%', perRequest: '12.5%', perThousand: '62.5%', sevenDay: '25%', week: null });
+});

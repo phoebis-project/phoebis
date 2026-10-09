@@ -1,7 +1,7 @@
 import type { Api } from '@/api/client';
-import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
+import type { Account, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
-import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
+import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
@@ -163,6 +163,78 @@ export async function readBurn(
 export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, window?: CostWindow): Set<string> {
   const sizes = (tier: string) => (window === undefined ? tierRow(costs, tier) !== undefined : tierCapacity(costs, tier, window) !== null);
   return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
+}
+
+/**
+ * The Cost section's unit position. Named apart from `CostUnit` in `web/src/lib/requests.ts` (a request's native
+ * unit), since the test entry re-exports both modules and one name for two types would clash.
+ */
+export type AnalyticsUnit = 'all' | 'equivalent' | 'share' | 'usd';
+/** The select's order: the default first, then the money, the shares and the shares' dollar equivalent. */
+export const COST_UNITS: readonly AnalyticsUnit[] = ['all', 'usd', 'share', 'equivalent'];
+export const UNIT_LABEL: Record<AnalyticsUnit, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' };
+/**
+ * The funding side of a position: the second query's under `usd` and `equivalent` (the page's own reads serve under
+ * `all` and `share`, since a share sums plan-funded rows alone whatever the filter) and the session fold's under
+ * `usd`, `share` and `equivalent`.
+ */
+export const UNIT_FUNDING: Record<AnalyticsUnit, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' };
+/** The position the URL names, `all` for none or an unknown value. */
+export const unitOf = (search: URLSearchParams): AnalyticsUnit => {
+  const unit = search.get('unit');
+  return unit !== null && (COST_UNITS as readonly string[]).includes(unit) ? (unit as AnalyticsUnit) : 'all';
+};
+export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
+/**
+ * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null
+ * for none or several, where the tiles read "per account below".
+ */
+export const oneAccountOf = (groupBy: AnalyticsGroupBy, accountIds: string[]): string | null => (groupBy === 'account' && accountIds.length === 1 ? accountIds[0] : null);
+
+const SHARED_WINDOWS = ['five_hour', 'seven_day'];
+/** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
+export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
+/** A window's share as the map carries it: null where absent or carried as null. */
+const windowShare = (shares: Record<string, number | null> | null, key: string | undefined): number | null => (shares === null || key === undefined || !own(shares, key) ? null : shares[key]);
+
+/**
+ * The share table's cells per group: the 5-hour, 7-day and model week shares, the 7-day share per plan-funded
+ * request and per 1k plan-funded output tokens (`planRequests` and `planOutputTokens`, the rows the shares were
+ * summed over, so a billed request never widens the denominator), each a label or null where the route answered
+ * none. The headers name the windows, so a cell is the bare percent.
+ */
+export function shareRow(g: AnalyticsGroup): { fiveHour: string | null; perRequest: string | null; perThousand: string | null; sevenDay: string | null; week: string | null } {
+  const sevenDay = windowShare(g.costShares, 'seven_day');
+  const cell = (share: number | null) => (share === null ? null : fmtShare(share));
+  const per = (count: number | null, scale: number) => (sevenDay === null || count === null || !(count > 0) ? null : fmtShare(sevenDay / (count / scale)));
+  return {
+    fiveHour: cell(windowShare(g.costShares, 'five_hour')),
+    perRequest: per(g.planRequests, 1),
+    perThousand: per(g.planOutputTokens, 1000),
+    sevenDay: cell(sevenDay),
+    week: cell(windowShare(g.costShares, g.costShares === null ? undefined : weekKeyOf(g.costShares))),
+  };
+}
+
+/**
+ * Per account the 7-day share (solid) and the model week's (dashed) per bucket as `<account>:7d` and
+ * `<account>:week`, the 5-hour share beside them as `<account>:5h` for the tooltip, a gap (null) where a bucket has
+ * none. The accounts are the groups carrying a share map, so an API key account draws no line.
+ */
+export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[] } {
+  const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
+  const data = points.map((p) => {
+    const row: Record<string, number | null> = { at: Date.parse(p.at) };
+    for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;
+    for (const g of p.groups) {
+      if (g.costShares === null) continue;
+      row[`${g.key}:5h`] = windowShare(g.costShares, 'five_hour');
+      row[`${g.key}:7d`] = windowShare(g.costShares, 'seven_day');
+      row[`${g.key}:week`] = windowShare(g.costShares, weekKeyOf(g.costShares));
+    }
+    return row;
+  });
+  return { accounts, data };
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */

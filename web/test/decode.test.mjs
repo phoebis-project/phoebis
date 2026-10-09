@@ -991,6 +991,57 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.ok(points.length >= 1 && points.every((p) => p.groups.length === 1));
 });
 
+test('a session fold under a funding side keeps the rows that side paid for', () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = plan.attempts[plan.attempts.length - 1];
+  const rows = [
+    { ...plan, attempts: [{ ...attempt, overageInUse: true }], costShares: null, id: 'overage' },
+    { ...plan, attempts: [{ ...attempt, response: { ...attempt.response, speed: 'fast' } }], costShares: null, id: 'fast' },
+    { ...plan, attempts: [{ ...attempt, accountKind: 'api_key' }], costShares: null, id: 'api-key' },
+    { ...plan, id: 'plan-1' },
+    { ...plan, id: 'plan-2' },
+  ];
+  const requestsUnder = (funding) => d.foldGroups(rows, 'all', { funding }).reduce((n, g) => n + g.requests, 0);
+  assert.equal(requestsUnder(undefined), 5, 'no side keeps every row');
+  assert.equal(requestsUnder('billed'), 3, 'the overage, fast and API key rows are billed in dollars');
+  assert.equal(requestsUnder('plan'), 2, 'the plan rows alone');
+  const hourAfter = new Date(Date.parse(plan.at) + 3_600_000).toISOString();
+  assert.equal(d.foldRequests(rows, 3_600_000, plan.at, hourAfter, 'all', { funding: 'plan' })[0].groups[0].requests, 2, 'the bucketed fold keeps the same side');
+  assert.deepEqual(d.foldGroups([{ ...plan, attempts: [], costShares: null, id: 'unserved' }], 'all', { funding: 'billed' }).map((g) => g.requests), [1], 'a request no attempt served is billed in dollars');
+});
+
+test("a session fold under the account grouping sums the rows' shares, leaves a window no row's model applies to absent, nulls one a row could not price and nulls the map where no share applies", () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = plan.attempts[plan.attempts.length - 1];
+  const row = (id, over) => ({ ...plan, id, ...over });
+  const fable = (id, costShares) => row(id, { canonicalModel: 'claude-fable-5-1', costShares, model: 'claude-fable-5-1' });
+  const haiku = (id, costShares) => row(id, { canonicalModel: 'claude-haiku-4-5', costShares, model: 'claude-haiku-4-5' });
+  const fableShares = { five_hour: 0.25, seven_day: 0.125, seven_day_fable: 0.03125 };
+  const haikuShares = { five_hour: 0.5, seven_day: 0.0625 };
+  const [mixed] = d.foldGroups([fable('f', fableShares), haiku('h', haikuShares)], 'account');
+  assert.deepEqual(mixed.costShares, { five_hour: 0.75, seven_day: 0.1875, seven_day_fable: 0.03125 }, "the shared windows sum and the week is the Fable row's alone");
+  assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [2, 2 * plan.usage.output], 'the plan rows and their output tokens');
+  assert.deepEqual([mixed.cacheShares, mixed.probeShares], [null, null], 'a fold prices no cache or probe share');
+  const [reversed] = d.foldGroups([haiku('h', haikuShares), fable('f', fableShares)], 'account');
+  assert.deepEqual(reversed.costShares, mixed.costShares, 'in either row order');
+  const [haikuOnly] = d.foldGroups([haiku('h1', haikuShares), haiku('h2', { five_hour: 0.25, seven_day: 0.0625 })], 'account');
+  assert.equal('seven_day_fable' in haikuOnly.costShares, false, "a window no row's model applies to is no key at all");
+  assert.deepEqual(haikuOnly.costShares, { five_hour: 0.75, seven_day: 0.125 });
+  const [unpriced] = d.foldGroups([fable('f1', { ...fableShares, seven_day_fable: null }), fable('f2', fableShares)], 'account');
+  assert.ok('seven_day_fable' in unpriced.costShares, 'a window the model applies to stays a key');
+  assert.deepEqual(unpriced.costShares, { five_hour: 0.5, seven_day: 0.25, seven_day_fable: null }, 'with null where one row could not be priced on it, whatever the other rows priced');
+  const [unknown] = d.foldGroups([fable('f', fableShares), row('u', { costShares: {} })], 'account');
+  assert.equal(unknown.costShares, null, "a row whose account the route could not price nulls the group's map, as the route answers such an account");
+  assert.deepEqual([unknown.planRequests, unknown.planOutputTokens, unknown.cacheShares, unknown.probeShares], [null, null, null, null], 'with the counts and the other maps');
+  assert.equal(unknown.requests, 2, 'the rows still count as requests');
+  const [byModel] = d.foldGroups([fable('f', fableShares)], 'model');
+  assert.deepEqual([byModel.costShares, byModel.planRequests, byModel.planOutputTokens], [null, null, null], "another grouping mixes accounts, whose windows' shares do not add");
+  const [keyed] = d.foldGroups([row('k', { attempts: [{ ...attempt, accountKind: 'api_key' }], costShares: null })], 'account');
+  assert.deepEqual([keyed.costShares, keyed.planRequests, keyed.planOutputTokens], [null, null, null], "an API key account's rows pay no window");
+  const [overage] = d.foldGroups([fable('f', fableShares), row('o', { attempts: [{ ...attempt, overageInUse: true }], costShares: null })], 'account');
+  assert.deepEqual([overage.costShares, overage.planRequests, overage.requests], [fableShares, 1, 2], 'an overage row adds to no share and to no plan count');
+});
+
 test('the fold uses the ledger formulas for failovers, throughput, and cache misses', () => {
   const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = base.attempts[0];

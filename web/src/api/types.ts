@@ -1143,14 +1143,20 @@ export interface AnalyticsGroup {
   /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
   /**
-   * Keyed by the ledger's window ids; null for an api_key group, under a grouping other than account and on a
-   * group folded from request rows; a window absent where the group's models do not apply to it. The route answers
-   * a window a row could not be priced on as absent too, while a session fold of the request rows carries such a
-   * window as a key with null, so a reader treats the two alike. `costShares` and `probeShares` are keyed the same.
+   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account and on a
+   * group folded from request rows, which prices no cache share. A window is absent where the group's models do not
+   * apply to it or where a row could not be priced on it. `probeShares` is keyed the same.
    */
   cacheShares: Record<string, { read: number; write: number }> | null;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
+  /**
+   * Keyed by the ledger's window ids. Null for an api_key group, under a grouping other than account, and on a
+   * group folded from request rows with no plan-funded row or with one whose account the route could not price. A
+   * window is absent where the group's models do not apply to it. The route answers a window a row could not be
+   * priced on as absent too, while a fold of the request rows carries such a window as a key with null, so a reader
+   * treats the two alike.
+   */
   costShares: Record<string, number | null> | null;
   costUsd: number;
   errors: Record<string, number>;
@@ -1173,7 +1179,7 @@ export interface AnalyticsGroup {
   planOutputTokens: number | null;
   planRequests: number | null;
   probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
-  /** `wasted` null while the group's probe dollars are zero. */
+  /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
   probeShares: Record<string, { cost: number; wasted: number | null }> | null;
   rateLimited: number;
   rejected: number;

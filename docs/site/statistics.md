@@ -579,10 +579,15 @@ the account priced in the range, a window with no priced bucket shown as a dash,
 model does not size listed as tier unknown. The chart shades the hours inside the peak band behind the 5-hour lines,
 none when the browser cannot read the band's zone, and its note opens the cost reference on the same Tiers and peak band
 tab. Latency reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that
-expired between turns, the share of input served from cache, and the output split into thinking and plain output; Cost
-reports the estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage
-credits; Cache warming reports what probes cost against what they saved, where a fast-mode session's probes and credits
-read as dollars and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per
+expired between turns, the share of input served from cache, the output split into thinking and plain output, and write
+cost against read cost in dollars or, under Window shares with one account named, as shares of that account's windows;
+Cost reports the estimated spend for the range under a Unit control with four positions (every request in dollars at the
+API price list, the billed dollars alone for the overage, fast mode and API key requests, a subscription account's
+requests as shares of its own 5-hour, 7-day and model-week windows under the account grouping, and the subscription
+requests' dollar equivalent, the position kept in the page's address as `unit`) and a Fast mode spend tile, the dollars
+fast-mode answers drew from usage credits; Cache warming reports what probes cost against what they saved, where a
+fast-mode session's probes and credits read as dollars and file under speed `fast`, the probe cost reading as a share
+under Window shares with one account named; and Accounts reports peak utilization, ineligible time, and pin churn per
 account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
@@ -601,7 +606,7 @@ hours it never held. A cooldown is booked up to seven days ahead of the announce
 announcement books the next stretch. Filtered to one session, the view sums the request log instead of the rollups, and
 the cost split, the cache write and read costs, and the Cache warming figures read as unavailable because the request
 log does not carry them; the Accounts section keeps reading the rollups for the range, since they carry no session, and
-its subtitle says so.
+its subtitle says so. The Unit control's positions fold the request rows by who paid for them.
 
 ![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-light.png#only-light)
 ![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-dark.png#only-dark)
