@@ -57,7 +57,7 @@ a Claude Code plugin that runs inside the client's own process. The mod reports 
 ceiling and switch is a pool field or a constant of the router. It installs from its marketplace, inside Claude Code:
 
 ```text
-/plugin marketplace add daystrom-labs/phoebis-keepalive
+/plugin marketplace add daystrom-labs/phoebis-marketplace
 /plugin install phoebis-keepalive@phoebis
 ```
 
@@ -394,28 +394,31 @@ records and retained prompt bytes, each as a count of the cap the bootstrap file
 recipe, and the Agents tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by
 outcome, sessions whose cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus
 events. A tile whose read failed draws a dash with the reason on hover, and Try again under the tiles reads them again,
-as a line above the table does for a failed account read. Its table lists one row per session, led by the row's menu,
-and offers eleven columns, eight shown by default (last request, agents and next probe start hidden, and
-the Columns control turns any on): key, session, model, account, last used, requests, last request,
-agents, companion, cache warming, and next probe. The model column reads the family and version, with the whole id on
-hover, and the account cell names the account's kind on hover and to a screen reader. The companion column reads the
-mod's state, `reporting`, `silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person
-was last seen at the terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real
-request: its model, pinned account and TTL, the last request, the last and the next probe, and the probes sent today
-with the requests they kept warm, counted from midnight UTC. The line ends on its state word with the cause beside it,
-the cause's sentence on hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle
-word for the agent, with a parked agent's park kind and its deadline or wake time
+as a line above the table does for a failed account read. Its table lists one row per session, the session id first and
+the row's menu at the row's end, and offers ten more columns through the Columns control, seven shown by default
+(last request, agents and next probe start hidden): key, model, account, last used,
+requests, last request, agents, companion, cache warming, and next probe. The session column cuts a long id with an
+ellipsis and shows the whole id on hover. The model column reads the family and version, with the whole id on hover, and
+the account cell names the account's kind on hover and to a screen reader. The companion column reads the mod's state,
+`reporting`, `silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person was last seen
+at the terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real request: its
+model, pinned account and TTL, the last request, the last and the next probe, and the probes sent today with the
+requests they kept warm, counted from midnight UTC. The line ends on its state word with the cause beside it, the
+cause's sentence on hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word
+for the agent, with a parked agent's park kind and its deadline or wake time
 (`parked · background · deadline in 1h 12m`), and repeats the state's and the cause's sentences. A session's menu
 offers "View in analytics" once it has ledgered traffic, "View in routing log" whenever the row has a routing session,
 which opens the log on that session's decisions, and Release. The analytics view opens on the requests of the key holder
 the row belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending requests stays
 on it, and its tiles once a minute.
 
-A session
-whose first request that is not auxiliary branched from another conversation at depth 2 or deeper carries a `fork at 3`
-badge beside its id, 3 being the depth where the two part; following the badge scrolls to the row of the session it
-branched from and marks that row, and where that session is not listed the badge names it instead, as
-`fork of 4ef130f1-90e0…`.
+A session whose first request that is not auxiliary branched from another conversation at depth 2 or deeper carries a
+fork badge under its id, `fork of 4ef130f1-90e0… at 3, on another account` when the session it branched from is listed
+on a different account and `same account` when it is listed on the row's own, 3 being the depth where the two part, with
+the base's account on hover and read out to a screen reader. Following the badge scrolls to the row of the session it
+branched from and marks that row. Where that session is not listed the badge names it alone, as
+`fork of 4ef130f1-90e0…`, and where it is listed but either session has no pinned account the badge reads `fork at 3`
+and still follows to the row.
 
 A pool card that keeps caches warm reads the pool's three resolved ceilings in whole hours after its `keepalive` chip:
 `idle 1h · parked 44h · horizon 44h` for a plan pool on the one-hour entry, its 44.1-hour break-even floored to `44h`,

@@ -4,6 +4,17 @@ import { test } from 'node:test';
 import * as d from './dist/api.js';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
+/** A read under a named zone: a label built in the host's zone is held to one zone so the case holds on any host. */
+const inZone = (zone, read) => {
+  const was = process.env.TZ;
+  process.env.TZ = zone;
+  try {
+    return read();
+  } finally {
+    if (was === undefined) delete process.env.TZ;
+    else process.env.TZ = was;
+  }
+};
 const isIso = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s)) && s.endsWith('Z');
 
 test('an account decodes with its windows, plan, pool, and models', () => {
@@ -92,6 +103,7 @@ test('an account row decodes its usage block and null for an API-key account', (
     accountId: 'business',
     error: null,
     fetchedAt: d.iso(rows.find((r) => r.id === 'business').usage.fetched_at),
+    heldUntil: null,
     poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
     status: 'success',
   });
@@ -750,12 +762,18 @@ test('a captured body carries the bytes the route counted, never the bytes the d
 });
 
 test('analytics groups and points keep the histograms and reasons whole', () => {
-  const rows = fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup);
+  // An earlier holder's label is built at decode time in the host's zone, so the rows are read under a pinned one.
+  const rows = inZone('UTC', () => fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup));
   const desktop = rows.find((g) => g.key === 'desktop');
   assert.equal(desktop.requests, 5);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
-  assert.equal(earlier.label, 'desktop (deleted, created 1970-01-01 00:15 UTC)');
+  assert.equal(earlier.label, 'desktop (deleted, created Jan 01, 1970, 00:15)');
   assert.equal(earlier.requests, 1);
+  // A nonzero generation proves the wire names, as the held-probe copy below does for its field.
+  assert.equal(earlier.keyId, 'desktop');
+  assert.equal(earlier.keyCreatedAt, 940_000);
+  assert.equal(desktop.keyId, 'desktop');
+  assert.equal(desktop.keyCreatedAt, null, 'the live key carries no creation instant');
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   assert.equal(desktop.cacheMissReasons.none, 5);
@@ -1024,8 +1042,8 @@ test('request rows fold into analytics groups with the same sums the routes answ
   const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
   assert.equal(busy.webFetch, 1 + captured.usage.webFetch);
-  const byKey = d.foldGroups(page.requests, 'key');
-  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted, created 1970-01-01 00:15 UTC)'], 'a reused id is one group per holder, as the breakdown answers it');
+  const byKey = inZone('UTC', () => d.foldGroups(page.requests, 'key'));
+  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted, created Jan 01, 1970, 00:15)'], 'a reused id is one group per holder, as the breakdown answers it');
   // No captured breakdown groups on effort, so the fold is where the dimension is proven.
   assert.deepEqual(d.foldGroups(page.requests, 'effort').map((g) => g.key), ['high']);
   assert.deepEqual(d.foldGroups([{ ...captured, shape: { ...captured.shape, effort: null } }], 'effort').map((g) => g.key), ['none'], 'a request that asked for no effort files under none, as the rollups file it');
@@ -1328,15 +1346,15 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const live = rows.find((r) => r.id === 'r-captured');
   const earlier = rows.find((r) => r.id === 'r-earlier-holder');
-  const groups = d.foldGroups(rows, 'key');
+  const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created 1970-01-01 00:15 UTC)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Jan 01, 1970, 00:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
-  const points = d.foldRequests([{ ...earlier, at: '1970-01-01T00:10:00.000Z' }, { ...live, at: '1970-01-01T01:10:00.000Z' }], 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T02:00:00.000Z', 'key');
-  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created 1970-01-01 00:15 UTC)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
+  const points = inZone('UTC', () => d.foldRequests([{ ...earlier, at: '1970-01-01T00:10:00.000Z' }, { ...live, at: '1970-01-01T01:10:00.000Z' }], 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T02:00:00.000Z', 'key'));
+  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created Jan 01, 1970, 00:15)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
 });
 
 test('a session fold labels an earlier holder at generation 0 deleted, with no creation time', () => {
@@ -1605,6 +1623,31 @@ test('a pricing effective date that is not a date decodes as the string sent wit
   assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
 });
 
+test("a key group's label is built from the holder's id and creation instant, in the viewer's zone", () => {
+  const row = fixture('analytics_breakdown').rows.find((r) => r.key === 'desktop@940000');
+  const earlier = inZone('America/Los_Angeles', () => d.decodeAnalyticsGroup(row));
+  assert.equal(earlier.label, 'desktop (deleted, created Dec 31, 1969, 16:15)', "the route's label is UTC and the console prints the viewer's zone");
+  assert.equal(earlier.keyId, 'desktop');
+  assert.equal(earlier.keyCreatedAt, 940_000);
+  const unstamped = d.decodeAnalyticsGroup({ ...row, key: 'desktop@0', key_created_at: 0, label: 'desktop (deleted)' });
+  assert.equal(unstamped.label, 'desktop (deleted)', 'generation 0 carries no creation time');
+  assert.equal(unstamped.keyCreatedAt, 0);
+  const { key_created_at: _generation, ...liveWire } = row;
+  const live = d.decodeAnalyticsGroup({ ...liveWire, key: 'desktop', label: 'desktop' });
+  assert.equal(live.label, 'desktop', 'a live key reads its id');
+  assert.equal(live.keyId, 'desktop');
+  assert.equal(live.keyCreatedAt, null);
+  const reserved = d.decodeAnalyticsGroup({ ...liveWire, key: '-', key_id: '-', label: 'unattributed' });
+  assert.equal(reserved.label, 'unattributed', "the reserved id keeps the route's label, which no id would build");
+  assert.equal(reserved.keyId, '-');
+  assert.equal(reserved.keyCreatedAt, null);
+  const { key_id: _id, ...other } = liveWire;
+  const model = d.decodeAnalyticsGroup({ ...other, key: 'claude-opus-4-1', label: 'claude-opus-4-1' });
+  assert.equal(model.label, 'claude-opus-4-1', 'another dimension keeps its label');
+  assert.equal(model.keyId, null);
+  assert.equal(model.keyCreatedAt, null);
+});
+
 test("a table's effective date reads as the calendar date the file names in every zone, and free text as sent", () => {
   // A date-only effective parses to midnight UTC, which a zone west of UTC reads as the evening before; the case sets
   // such a zone itself, so it holds on a host in any zone.
@@ -1651,12 +1694,12 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.equal(snapshot.status, 'success');
   const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
   assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
-  const hold = 'the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:04:00 UTC';
-  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
+  const hold = 'the usage endpoint rate-limited the account';
+  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, held_until: 240_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
   assert.deepEqual(
-    [held.status, held.poll],
-    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
-    'a poll backing off keeps each instant, the count and the last error',
+    [held.status, held.heldUntil, held.poll],
+    ['error', '1970-01-01T00:04:00.000Z', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
+    'a poll backing off keeps the hold deadline, each instant, the count and the last error',
   );
   assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');
   assert.equal(d.decodeSnapshot('a', { poll: { last_outcome: 'somewhere_new' } }).poll.lastOutcome, 'failed', 'an outcome this build does not know reads as a failure');

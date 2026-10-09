@@ -23,7 +23,7 @@ import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, Erro
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -146,7 +146,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Pace scores each member by the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
@@ -425,32 +425,32 @@ function CacheTtlOverrides({
     <Field plain label={label} data-rule-set={name} hint="A model absent here takes the rule above.">
       {rules.models.length > 0 && (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table rules-table">
             <thead>
               <tr>
-                <th>Model</th>
-                <th>Main conversation</th>
-                <th>Subagents</th>
-                <th />
+                <th className="col-fill">Model</th>
+                <th className="col-fit">Main conversation</th>
+                <th className="col-fit">Subagents</th>
+                <th className="col-fit" />
               </tr>
             </thead>
             <tbody>
               {rules.models.map((m) => (
                 <tr key={m.model}>
-                  <td className="mono">{m.model}</td>
-                  <td>
+                  <td className="mono col-fill" title={m.model}>{m.model}</td>
+                  <td className="col-fit">
                     <Select value={m.main} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
                       <option value="1h">1 hour</option>
                     </Select>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <Select value={m.subagent} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
                       <option value="1h">1 hour</option>
                     </Select>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <Button size="sm" variant="ghost" disabled={disabled} onClick={() => removeModelOverride(m.model)}>
                       Remove
                     </Button>
@@ -596,10 +596,10 @@ function PoolCard({
           <caption title={RULE_NOTE}>{caption}</caption>
           <thead>
             <tr>
-              <th>Tier</th>
-              <th>Account</th>
-              <th>Standing</th>
-              <th className="right">Pins</th>
+              <th className="col-fit">Tier</th>
+              <th className="col-fill">Account</th>
+              <th className="col-fit">Standing</th>
+              <th className="right col-fit">Pins</th>
             </tr>
           </thead>
           <tbody>
@@ -619,12 +619,12 @@ function PoolCard({
                 const whyId = `${standingId}-${p.account.id}`;
                 return (
                   <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
-                    <td className="pool__prio num">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
-                    <td>
+                    <td className="pool__prio num col-fit">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
+                    <td className="col-fill" title={p.account.label}>
                       <Link to={`/accounts/${p.account.id}`}>{p.account.label}</Link>
                       {m && <MemberBudget member={m} />}
                     </td>
-                    <td className="serving__standing" aria-describedby={whyId}>
+                    <td className="serving__standing col-fit" aria-describedby={whyId}>
                       <span className="chips">
                         {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
                         {!isNext && p.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[p.lastResort]}</Badge>}
@@ -637,7 +637,7 @@ function PoolCard({
                         {why}
                       </span>
                     </td>
-                    <td className="right num">{p.pins === 0 ? <span className="muted">0</span> : p.pins}</td>
+                    <td className="right num col-fit">{p.pins === 0 ? <span className="muted">0</span> : p.pins}</td>
                   </tr>
                 );
               }),
@@ -646,9 +646,9 @@ function PoolCard({
               const whyId = `${standingId}-${m.accountId}`;
               return (
                 <tr key={m.accountId}>
-                  <td className="pool__prio num">P{m.priority}</td>
-                  <td className="mono">{m.accountId}</td>
-                  <td className="serving__standing" aria-describedby={whyId}>
+                  <td className="pool__prio num col-fit">P{m.priority}</td>
+                  <td className="mono col-fill" title={m.accountId}>{m.accountId}</td>
+                  <td className="serving__standing col-fit" aria-describedby={whyId}>
                     <span className="chips">
                       <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
                     </span>
@@ -656,7 +656,7 @@ function PoolCard({
                       {`${m.accountId}: not a known account`}
                     </span>
                   </td>
-                  <td className="right num">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                  <td className="right num col-fit">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
                 </tr>
               );
             })}
@@ -792,10 +792,11 @@ function MemberBudget({ member }: { member: PoolMember }) {
     <>
       {budgets.map(({ budget, period }) => {
         const spent = member.spends.find((s) => s.period === period)?.spentUsd;
+        // The fill column cuts the line and the cell's title names the account alone, so the line carries its own.
+        const text = `${metered}${spent === undefined ? '-' : fmtUsd(spent)} of ${fmtUsd(budget)} ${period === 'day' ? 'today' : 'this month'}`;
         return (
-          <span key={period} className="sub num">
-            {metered}
-            {spent === undefined ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {period === 'day' ? 'today' : 'this month'}
+          <span key={period} className="sub num" title={text}>
+            {text}
           </span>
         );
       })}
@@ -908,6 +909,11 @@ const blankForm = (): PoolForm => ({
   subagentPlacement: POOL_AFFINITY_DEFAULTS.subagentPlacement,
 });
 
+// The compare the discard question reads. Key order is dropped on purpose: `members` is rebuilt in tick order, so a
+// member unticked and ticked again at its old priority reads as no change (`budgets` keeps an unticked member's
+// entry, so it is not rebuilt).
+const sameForm = (a: PoolForm, b: PoolForm): boolean => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
@@ -1006,6 +1012,8 @@ export function PoolDialog({
   const now = useNow();
   const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
+  // The values the dialog opened with, which the discard question compares the form against.
+  const opened = useRef(form);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
@@ -1021,6 +1029,7 @@ export function PoolDialog({
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveTo, setMoveTo] = useState('');
+  const openedMoveTo = useRef('');
   const [moving, setMoving] = useState<ApiKey | null>(null);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
@@ -1030,6 +1039,7 @@ export function PoolDialog({
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
     setForm(next);
+    opened.current = next;
     setMemberOrder(orderedAccountIds(accounts, next.members));
     setLocalKeys([]);
     setMoveError(null);
@@ -1171,7 +1181,13 @@ export function PoolDialog({
   const memberAccounts = accounts.filter((a) => a.id in form.members);
   const setBudget = (accountId: string, patch: Partial<{ daily: string; monthly: string }>) =>
     setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', monthly: '' }), ...patch } } }));
-  const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
+  const readings = memberAccounts.map((a) => {
+    const shared = (id: '5h' | '7d') => {
+      const w = windowOf(a, id);
+      return w === null ? null : { resetsAt: w.resetsAt, utilization: w.utilization };
+    };
+    return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
+  });
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
   const sized = useMemo(() => (settings.data ? sizedAccounts(accounts, settings.data.subscriptionCosts, 'five_hour') : new Set<string>()), [accounts, settings.data]);
@@ -1179,7 +1195,9 @@ export function PoolDialog({
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const startMove = (k: ApiKey) => {
-    setMoveTo(otherPools[0]?.id ?? '');
+    const to = otherPools[0]?.id ?? '';
+    openedMoveTo.current = to;
+    setMoveTo(to);
     setMoveError(null);
     setMoving(k);
   };
@@ -1303,10 +1321,10 @@ export function PoolDialog({
             <table className="table members-table">
               <thead>
                 <tr>
-                  <th>Account</th>
-                  <th className="right">Priority</th>
-                  <th className="right">Daily budget, USD</th>
-                  <th className="right">Monthly budget, USD</th>
+                  <th className="col-fill">Account</th>
+                  <th className="right col-fit">Priority</th>
+                  <th className="right col-fit">Daily budget, USD</th>
+                  <th className="right col-fit">Monthly budget, USD</th>
                 </tr>
               </thead>
               <tbody>
@@ -1318,27 +1336,27 @@ export function PoolDialog({
                   if (heldBy) {
                     return (
                       <tr key={a.id}>
-                        <td>
+                        <td className="col-fill" title={a.label}>
                           <div className="row">
                             <div className="members-table__check" />
-                            <span>{a.label}</span>
+                            <span className="members-table__name">{a.label}</span>
                             {a.email && <span className="muted mono">{a.email}</span>}
                             <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
                               In pool {heldBy.id}
                             </span>
                           </div>
                         </td>
-                        <td className="right">
+                        <td className="right col-fit">
                           <div className="input members-table__blank">&nbsp;</div>
                         </td>
-                        <td className="right" />
-                        <td className="right" />
+                        <td className="right col-fit" />
+                        <td className="right col-fit" />
                       </tr>
                     );
                   }
                   return (
                     <tr key={a.id}>
-                      <td>
+                      <td className="col-fill" title={a.label}>
                         <label>
                           <input
                             type="checkbox"
@@ -1351,11 +1369,11 @@ export function PoolDialog({
                               setMemberOrder(orderedAccountIds(accounts, next));
                             }}
                           />
-                          <span>{a.label}</span>
+                          <span className="members-table__name">{a.label}</span>
                           {a.email && <span className="muted mono">{a.email}</span>}
                         </label>
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0}
@@ -1371,7 +1389,7 @@ export function PoolDialog({
                           aria-invalid={invalid(`priority:${a.id}`)}
                         />
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0.01}
@@ -1384,7 +1402,7 @@ export function PoolDialog({
                           aria-invalid={invalid(`budget_daily:${a.id}`)}
                         />
                       </td>
-                      <td className="right">
+                      <td className="right col-fit">
                         <Input
                           type="number"
                           min={0.01}
@@ -1402,7 +1420,7 @@ export function PoolDialog({
                 })}
                 {unlisted.map((id) => (
                   <tr key={id}>
-                    <td>
+                    <td className="col-fill" title={id}>
                       <label>
                         <input
                           type="checkbox"
@@ -1414,17 +1432,17 @@ export function PoolDialog({
                           }}
                           aria-invalid={invalid(`member:${id}`)}
                         />
-                        <span>{id}</span>
+                        <span className="members-table__name">{id}</span>
                         {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
                       </label>
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                     </td>
-                    <td className="right">
+                    <td className="right col-fit">
                       <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                     </td>
                   </tr>
@@ -1457,10 +1475,10 @@ export function PoolDialog({
               <table className="table keys-table">
                 <thead>
                   <tr>
-                    <th>Key</th>
-                    <th>Prefix</th>
-                    <th>Status</th>
-                    <th />
+                    <th className="col-fill">Key</th>
+                    <th className="col-fit">Prefix</th>
+                    <th className="col-fit">Status</th>
+                    <th className="col-fit" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1468,14 +1486,14 @@ export function PoolDialog({
                     const status = revoked.has(k.id) ? 'revoked' : k.status;
                     return (
                       <tr key={k.id}>
-                        <td>{k.name}</td>
-                        <td className="mono muted">{k.prefix}…</td>
-                        <td>
+                        <td className="col-fill" title={k.name}>{k.name}</td>
+                        <td className="mono muted col-fit">{k.prefix}…</td>
+                        <td className="col-fit">
                           <Badge tone={KEY_STATUS_TONE[status]} dot>
                             {status}
                           </Badge>
                         </td>
-                        <td>
+                        <td className="col-fit">
                           <Menu
                             label={`Actions for key ${k.name}`}
                             items={[
@@ -1667,54 +1685,61 @@ export function PoolDialog({
       </div>
     ),
     utilization: (
-      <div className="cells">
-        <div className="cell--half">
-          <SwitchedNumber
-            label="Shed ahead of pace"
-            numberLabel="Lead over pace (%)"
-            checked={form.shedAheadOn}
-            onChange={(v) => set('shedAheadOn', v)}
-            input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
-            hint={
-              <>
-                A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>, and a sibling counts as cool under the line minus 5%.
-              </>
-            }
-          />
-        </div>
-        <Expert refused={refusedFields.has('Select below utilization (%)')}>
+      <>
+        <p className="dialog-group__intro">
+          A window&apos;s pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
+        </p>
+        <div className="cells">
           <div className="cell--half">
             <SwitchedNumber
-              label="Select below utilization"
-              numberLabel="Utilization (%)"
-              checked={form.selectBelowOn}
-              onChange={(v) => set('selectBelowOn', v)}
-              input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+              label="Shed ahead of pace"
+              numberLabel="Lead over pace (%)"
+              checked={form.shedAheadOn}
+              onChange={(v) => set('shedAheadOn', v)}
+              input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
               hint={
                 <>
-                  A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
+                  Read on the 5-hour and the 7-day window. A member whose used share runs ahead of the elapsed share by this many points starts a <GroupLink id="shedding">shedding round</GroupLink>, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.
                 </>
               }
             />
           </div>
-        </Expert>
-        <Field
-          label="Member utilization"
-          plain
-          hint={
-            <>
-              Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>.
-              {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
-            </>
-          }
-        >
-          <UtilizationBar
-            expert={handleShown}
-            readings={readings}
-            selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
-          />
-        </Field>
-      </div>
+          <Expert refused={refusedFields.has('Select below utilization (%)')}>
+            <div className="cell--half">
+              <SwitchedNumber
+                label="Select below utilization"
+                numberLabel="Utilization (%)"
+                checked={form.selectBelowOn}
+                onChange={(v) => set('selectBelowOn', v)}
+                input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+                hint={
+                  <>
+                    A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
+                  </>
+                }
+              />
+            </div>
+          </Expert>
+          <Field
+            label="Member utilization"
+            plain
+            hint={
+              <>
+                Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. The lower track reads each window&apos;s lead over pace, from 100 points behind to 100 ahead, with the shedding margin and the cool band under it.
+                {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
+              </>
+            }
+          >
+            <UtilizationBar
+              expert={handleShown}
+              margin={form.shedAheadOn ? form.shedAhead : null}
+              now={now}
+              readings={readings}
+              selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
+            />
+          </Field>
+        </div>
+      </>
     ),
     shedding: (
       <>
@@ -1847,7 +1872,7 @@ export function PoolDialog({
               className="cell--half"
               hint={
                 <>
-                  Under <GroupLink id="selection">Pace</GroupLink>, a member with this share of its window left or less serves only as the last resort.
+                  Under the <GroupLink id="selection">Pace</GroupLink> strategy, a member with this share or less of the window Pace reads left serves only as the last resort.
                 </>
               }
             >
@@ -2125,6 +2150,7 @@ export function PoolDialog({
         open={open}
         onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
+        unsaved={!sameForm(form, opened.current)}
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
@@ -2178,6 +2204,8 @@ export function PoolDialog({
           if (!moveBusy) setMoving(null);
         }}
         title={moving ? `Move key ${moving.name}` : 'Move key'}
+        // False while the move is out, so an outside click or Escape reaches the hold above rather than a question.
+        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo.current}
         subtitle="A key reaches only its own pool's members, so moving it ends its current session pins."
         width={440}
         footer={

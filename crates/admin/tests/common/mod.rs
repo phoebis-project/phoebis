@@ -974,6 +974,42 @@ pub async fn exchanged_session_for(app: &Router, cookie: &str, account_id: &str)
     id
 }
 
+/// Starts a pairing with `new` for an id no row holds, drives it to the exchange and answers the session id.
+pub async fn exchanged_session_for_new(
+    app: &Router,
+    cookie: &str,
+    id: &str,
+    label: &str,
+) -> String {
+    let started = post(
+        app,
+        "/admin/oauth/sessions",
+        &format!(r#"{{"new":{{"id":"{id}","label":"{label}"}},"login":"claude_ai"}}"#),
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(started.status(), StatusCode::CREATED, "the start with new");
+    let started = json(started).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), StatusCode::OK);
+    id
+}
+
 async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
     FakeUpstream::start(vec![
         json_rule(

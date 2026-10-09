@@ -26,6 +26,7 @@ import type {
   PairingInput,
   PairingPreview,
   PairingSession,
+  PairingStart,
   PlacementRow,
   Pool,
   PoolCacheTtl,
@@ -197,7 +198,7 @@ export interface Api {
   resumeAccount(accountId: string): Promise<void>;
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;
-  startPairing(accountId: string): Promise<PairingSession>;
+  startPairing(start: PairingStart): Promise<PairingSession>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */

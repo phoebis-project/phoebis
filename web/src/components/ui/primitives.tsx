@@ -57,8 +57,10 @@ export function useDescription(text: string | undefined): { id: string; sibling:
   return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
 }
 
-export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
-  const described = useDescription(title);
+export function Badge({ tone = 'neutral', children, dot = false, title, describe = true }: { children: ReactNode; describe?: boolean; dot?: boolean; title?: string; tone?: BadgeTone }) {
+  // A title that only repeats the badge's text would have a reader say it twice under a host, so such a caller keeps
+  // the hover and turns the description off.
+  const described = useDescription(describe ? title : undefined);
   // Outside every host the title alone describes the badge: a node beside it would join its parent's text.
   const hosted = described && !described.sibling ? described.id : undefined;
   return (
@@ -138,11 +140,12 @@ export function Card({ children, className = '', title, subtitle, actions, padde
   );
 }
 
-export function Meter({ value, tone, label, thin = false }: { label?: string; thin?: boolean; tone: 'accent' | 'good' | 'low' | 'warn'; value: number }) {
+export function Meter({ value, tone, label, mark, thin = false, title }: { label?: string; /** A share of the track, 0 to 1, where a thin vertical mark is drawn. None without it. */ mark?: number; thin?: boolean; title?: string; tone: 'accent' | 'good' | 'low' | 'warn'; value: number }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 1000) / 10;
   return (
-    <div className={`meter meter--${tone} ${thin ? 'meter--thin' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={label}>
+    <div className={`meter meter--${tone} ${thin ? 'meter--thin' : ''} ${mark !== undefined ? 'meter--marked' : ''}`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={label} title={title}>
       <div className="meter__fill" style={{ width: `${pct}%` }} />
+      {mark !== undefined && <span className="meter__mark" style={{ left: `${mark * 100}%` }} aria-hidden />}
     </div>
   );
 }
@@ -264,6 +267,46 @@ export function Tabs<T extends string>({ label, onChange, tabs, value }: { label
   );
 }
 
+/**
+ * The copy command: `navigator.clipboard` exists in secure contexts alone, and a console served over plain HTTP on
+ * a LAN address has none. The temporary control lives inside `button`'s open modal, where the document is not inert,
+ * and the focus returns to `button` after. Answers whether the command reported a copy.
+ */
+function copyByCommand(text: string, button: HTMLElement): boolean {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.setAttribute('aria-hidden', 'true');
+  // Off screen and fixed, so the page neither scrolls nor reflows for the moment the control exists.
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.left = '-9999px';
+  // Inside the open modal when the button is in one: a `showModal` dialog leaves the rest of the document inert, so
+  // a control appended to the body could take neither the focus nor the selection the command copies.
+  const host = button.closest('dialog[open]') ?? document.body;
+  const selection = document.getSelection();
+  // Copies of the page's ranges, so a selection that moves its own range into the control leaves them whole.
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  host.appendChild(area);
+  area.focus();
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  // The button first: a focus can move the selection to the element that takes it, so the page's ranges go back
+  // after the button has the focus.
+  button.focus();
+  if (selection) {
+    selection.removeAllRanges();
+    for (const range of ranges) selection.addRange(range);
+  }
+  return copied;
+}
+
 export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string }) {
   const [state, setState] = useState<'copied' | 'failed' | 'idle'>('idle');
   useEffect(() => {
@@ -277,18 +320,22 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
       variant={state === 'failed' ? 'danger' : 'ghost'}
       icon={state === 'copied' ? <IconCheck size={14} /> : state === 'failed' ? <IconWarning size={14} /> : <IconCopy size={14} />}
       title={state === 'failed' ? 'select the text and copy it by hand' : undefined}
-      onClick={() => {
-        void (async () => {
-          try {
-            if (!navigator.clipboard) throw new Error('no clipboard');
-            await navigator.clipboard.writeText(text);
-            setState('copied');
-          } catch {
-            // The secret dialog is the one place this matters: saying Copied without a write lets the operator
-            // close the only display of a secret they never received.
-            setState('failed');
-          }
-        })();
+      onClick={(e) => {
+        // React resets the synthetic event's currentTarget once the handler returns, so the button is read first.
+        const button = e.currentTarget;
+        // Saying Copied without a write matters most in the secret dialog: the operator could close the only
+        // display of a secret they never received. The command runs inside the click, the user gesture it honors.
+        // After a rejected write it runs in the rejection callback, where it relies on the click's transient
+        // activation still standing: a browser that counts the activation spent answers false, and the button lands
+        // at the failed state rather than claiming the copy.
+        if (!navigator.clipboard) {
+          setState(copyByCommand(text, button) ? 'copied' : 'failed');
+          return;
+        }
+        void navigator.clipboard.writeText(text).then(
+          () => setState('copied'),
+          () => setState(copyByCommand(text, button) ? 'copied' : 'failed'),
+        );
       }}
     >
       {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed, select the text' : label}
@@ -296,8 +343,48 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
   );
 }
 
-function useModalDialog(open: boolean, onClose: () => void) {
+// What takes the focus back after Keep editing: the control that held it, or else the first one a Tab reaches.
+const HELD_FOCUS = 'a[href], button, input, select, textarea, [tabindex]';
+const TABBABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The outside path of a modal dialog: a backdrop click or the Escape key's `cancel`. While `unsaved` holds, both
+ * ask before closing. The X button and a footer's Cancel never pass through here.
+ */
+function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   const ref = useRef<HTMLDialogElement>(null);
+  const [asking, setAsking] = useState(false);
+  // The latest `onClose` and `unsaved` behind one stable `request`, so the `cancel` listener is attached once per
+  // element and never reads a stale prop.
+  const latest = useRef({ onClose, unsaved });
+  latest.current = { onClose, unsaved };
+  // The last control inside the dialog that took the focus: a click on the backdrop moves the focus off the control
+  // before the dialog hears the click, so the active element alone would miss it.
+  const lastFocused = useRef<HTMLElement | null>(null);
+  // The control that held the focus as the question opened, so Keep editing can hand it back.
+  const held = useRef<HTMLElement | null>(null);
+  const request = useCallback(() => {
+    if (!latest.current.unsaved) {
+      latest.current.onClose();
+      return;
+    }
+    const last = lastFocused.current;
+    const active = last?.isConnected ? last : document.activeElement;
+    held.current = active instanceof HTMLElement && ref.current?.contains(active) ? active : null;
+    setAsking(true);
+  }, []);
+  // Keep editing hands the focus back once the question is gone, not before: the question's modal leaves the dialog
+  // under it inert, and a question that unmounts rather than closing restores nothing on its own.
+  const refocus = useRef(false);
+  const keep = useCallback(() => {
+    refocus.current = true;
+    setAsking(false);
+  }, []);
+  useEffect(() => {
+    if (open) return;
+    setAsking(false);
+    lastFocused.current = null;
+  }, [open]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -305,16 +392,41 @@ function useModalDialog(open: boolean, onClose: () => void) {
     if (!open && el.open) el.close();
   }, [open]);
   useEffect(() => {
+    if (asking || !refocus.current) return;
+    refocus.current = false;
+    const el = ref.current;
+    if (!el?.open) return;
+    const was = held.current;
+    held.current = null;
+    const target = was?.isConnected && el.contains(was) && was.matches(HELD_FOCUS) && !was.matches(':disabled') ? was : el.querySelector<HTMLElement>(TABBABLE);
+    target?.focus();
+  }, [asking]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onFocusIn = (e: Event) => {
+      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
+    };
+    el.addEventListener('focusin', onFocusIn);
+    return () => el.removeEventListener('focusin', onFocusIn);
+  }, []);
+  useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const onCancel = (e: Event) => {
+      // An uncancelable cancel (Chromium's Escape without a fresh activation) closes the element whatever the
+      // listener does, so the state follows the element rather than asking over a dialog that is already gone.
+      if (!e.cancelable) {
+        latest.current.onClose();
+        return;
+      }
       e.preventDefault();
-      onClose();
+      request();
     };
     el.addEventListener('cancel', onCancel);
     return () => el.removeEventListener('cancel', onCancel);
-  }, [onClose]);
-  return ref;
+  }, [request]);
+  return { asking, keep, ref, request };
 }
 
 /** A titled element in a dialog describes through the dialog's own node, which no list item or cell of it holds. */
@@ -326,35 +438,40 @@ function DialogInner({ children }: { children: ReactNode }) {
   );
 }
 
-export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560, className }: { children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
-  const ref = useModalDialog(open, onClose);
+export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560, className, unsaved = false }: { children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; unsaved?: boolean; width?: number }) {
+  const { asking, keep, ref, request } = useModalDialog(open, onClose, unsaved);
   const titleId = useId();
+  // The question is a sibling, mounted only while asked: inside the element it would be read by every check that
+  // reads the dialog's text, and its clicks would bubble into the dialog's own handler.
   return (
-    <dialog
-      ref={ref}
-      className={className ? `dialog ${className}` : 'dialog'}
-      aria-labelledby={titleId}
-      style={{ width: `min(${width}px, calc(100vw - 32px))` }}
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
-      }}
-    >
-      <DialogInner>
-        <header className="dialog__head">
-          <div>
-            <h2 id={titleId} className="dialog__title">
-              {title}
-            </h2>
-            {subtitle && <p className="dialog__subtitle">{subtitle}</p>}
-          </div>
-          <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
-            <IconX size={16} />
-          </button>
-        </header>
-        <div className="dialog__body">{children}</div>
-        {footer && <footer className="dialog__foot">{footer}</footer>}
-      </DialogInner>
-    </dialog>
+    <>
+      <dialog
+        ref={ref}
+        className={className ? `dialog ${className}` : 'dialog'}
+        aria-labelledby={titleId}
+        style={{ width: `min(${width}px, calc(100vw - 32px))` }}
+        onClick={(e) => {
+          if (e.target === ref.current) request();
+        }}
+      >
+        <DialogInner>
+          <header className="dialog__head">
+            <div>
+              <h2 id={titleId} className="dialog__title">
+                {title}
+              </h2>
+              {subtitle && <p className="dialog__subtitle">{subtitle}</p>}
+            </div>
+            <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
+              <IconX size={16} />
+            </button>
+          </header>
+          <div className="dialog__body">{children}</div>
+          {footer && <footer className="dialog__foot">{footer}</footer>}
+        </DialogInner>
+      </dialog>
+      {asking && <ConfirmDialog open onClose={keep} onConfirm={onClose} title="Discard changes?" body="This dialog has changes that are not saved." cancelLabel="Keep editing" confirmLabel="Discard" danger initialFocus="cancel" />}
+    </>
   );
 }
 
@@ -497,6 +614,7 @@ export function GroupedDialog({
   initialGroup = null,
   footer,
   notice,
+  unsaved = false,
   width = 1040,
 }: {
   /** The id of the group shown; the page owns it and resets it on open. */
@@ -524,9 +642,11 @@ export function GroupedDialog({
   /** The footer's status line, read in a `role="status"` element before the buttons. */
   status: ReactNode;
   title: ReactNode;
+  /** The form differs from the values it opened with: an outside click or Escape asks before discarding. */
+  unsaved?: boolean;
   width?: number;
 }) {
-  const ref = useModalDialog(open, onClose);
+  const { asking, keep, ref, request } = useModalDialog(open, onClose, unsaved);
   const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const sections = useRef(new Map<string, HTMLElement>());
@@ -627,7 +747,7 @@ export function GroupedDialog({
         aria-labelledby={titleId}
         style={{ '--dialog-w': `${width}px` } as CSSProperties}
         onClick={(e) => {
-          if (e.target === ref.current) onClose();
+          if (e.target === ref.current) request();
         }}
       >
         <DialogInner>
@@ -701,11 +821,18 @@ export function GroupedDialog({
           </footer>
         </DialogInner>
       </dialog>
+      {asking && <ConfirmDialog open onClose={keep} onConfirm={onClose} title="Discard changes?" body="This dialog has changes that are not saved." cancelLabel="Keep editing" confirmLabel="Discard" danger initialFocus="cancel" />}
     </GroupChoice.Provider>
   );
 }
 
-export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLabel = 'Confirm', danger = false }: { body: ReactNode; confirmLabel?: string; danger?: boolean; onClose: () => void; onConfirm: () => void; open: boolean; title: string }) {
+export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLabel = 'Cancel', confirmLabel = 'Confirm', danger = false, initialFocus }: { body: ReactNode; cancelLabel?: string; confirmLabel?: string; danger?: boolean; initialFocus?: 'cancel'; onClose: () => void; onConfirm: () => void; open: boolean; title: string }) {
+  const cancelId = useId();
+  // After the dialog's own showModal effect (a child's effect runs first), so the browser's dialog focusing does not
+  // take the focus back to the first button.
+  useEffect(() => {
+    if (open && initialFocus === 'cancel') document.getElementById(cancelId)?.focus();
+  }, [cancelId, initialFocus, open]);
   return (
     <Dialog
       open={open}
@@ -714,8 +841,8 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
       width={440}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
+          <Button id={cancelId} variant="ghost" onClick={onClose}>
+            {cancelLabel}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}

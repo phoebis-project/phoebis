@@ -21,9 +21,9 @@ use crate::routes::{
 };
 use crate::AdminState;
 
-const ACTOR: &str = "admin";
+pub(crate) const ACTOR: &str = "admin";
 
-const DUPLICATE_ID: &str = "an account with this id exists";
+pub(crate) const DUPLICATE_ID: &str = "an account with this id exists";
 
 #[derive(serde::Deserialize)]
 struct CreateInput {
@@ -70,7 +70,7 @@ pub(crate) fn within_text_bound(field: &str, value: Option<&str>) -> Result<(), 
     }
 }
 
-fn valid_slug(id: &str) -> bool {
+pub(crate) fn valid_slug(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .bytes()

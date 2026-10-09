@@ -112,6 +112,9 @@ export interface Account {
 /** What the operator pasted: a whole callback URL, which carries its own state, or the bare code with the state the pairing started under. */
 export type PairingInput = { code: string; state: string } | { url: string };
 
+/** What a pairing starts on: an existing OAuth row, or a row the confirm creates under `id` with `label`. */
+export type PairingStart = { accountId: string } | { id: string; label: string };
+
 export interface PairingSession {
   authorizeUrl: string;
   expiresAt: string;
@@ -221,6 +224,8 @@ export interface QuotaSnapshot {
   accountId: string;
   error: string | null;
   fetchedAt: string | null;
+  /** The instant a held answer's next attempt may run, ISO. Null outside a hold. */
+  heldUntil: string | null;
   poll: QuotaPoll | null;
   status: QuotaFetchStatus;
 }
@@ -991,7 +996,7 @@ export interface RecordCandidate {
   kind: 'api_key' | 'oauth';
   obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
-  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number } | null;
+  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number; window: string | null } | null;
   partition: string | null;
   planTier: string | null;
   /**
@@ -1165,6 +1170,13 @@ export interface AnalyticsGroup {
   incomplete: number;
   keptWarm: { requests: number; tokens: number } | null;
   key: string;
+  /**
+   * An earlier holder's creation in Unix milliseconds under the key grouping, 0 for one with no creation time. Null
+   * for the live key, for every other dimension and for a group folded from request rows.
+   */
+  keyCreatedAt: number | null;
+  /** The key's id for a key group the route answered, so the label is built in the viewer's zone; null otherwise. */
+  keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
   /** The plan-funded requests and output tokens the shares were summed over; null where `costShares` is. */

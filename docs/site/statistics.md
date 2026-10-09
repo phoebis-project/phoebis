@@ -339,21 +339,27 @@ same slots in the same order, so a card with more to say moves no rule against i
 rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and the poll reading. Every window share on
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
-A window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
-reading. The Extra usage line reads the month's spend against its limit, in the serious tone while requests bill as
-extra usage and in the muted ink while they do not, and reads off or not reported in the muted ink when extra usage is
-disabled or the account has not reported it. The reason the provider gave for it sits inside the line, cut to the line's
-width, with the whole message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then
-say when the plan of an account marked cancelled ends, in the serious tone inside a week, and when the trial of an
-account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint
-and how it answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next
-attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message,
-when the snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a
-row. Refresh reads the endpoint now unless the account is backing off, and records the reading as the poll does. The
-page counts a card that shows an error, whose last poll failed, or that is backing off as needing attention.
+A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
+window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
+reading. Each live window's meter carries a pace mark at the share of the window still to come, so a remaining share
+that reaches past the mark is behind pace and one short of it ahead, and the meter's title names the lead: 12% ahead of
+pace, 5% behind pace, or on pace. The Extra usage line reads the month's spend against its limit, in the serious tone
+while requests bill as extra usage and in the muted ink while they do not, and reads off or not reported in the muted
+ink when extra usage is disabled or the account has not reported it. The reason the provider gave for it sits inside the
+line, cut to the line's width, with the whole message on hover. The chips start with the plan, named by its tier (Max
+20x, Max 5x or Pro), then say when the plan of an account marked cancelled ends, in the serious tone inside a week, and
+when the trial of an account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last
+asked the endpoint and how it answered, a failed poll naming its reason cut to the line's width, and, while the account
+backs off, the next attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed
+poll's whole message, when the snapshot shown was read, since when the account backs off, and how many rate-limited
+answers it has had in a row. Refresh reads the endpoint now unless the account is backing off, and records the reading
+as the poll does. The page counts a card that shows an error, whose last poll failed, or that is backing off as needing
+attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
+view. Each lane's current bar fills from the window's start to its used share in the window's tone, so a fill past the
+now line is ahead of pace and one short of it behind, and the lane's chips take the tone of their share, as the cards'
+do. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
 window opens after it, and the window that spans it stops there.
 
 The fast-mode reading is on the account page's Usage card: a Fast mode line with the share of the fast lane's input and
@@ -438,13 +444,18 @@ First, Previous and Next. A row reads the time, with a decision's request beneat
 the kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), the
 session's first eight characters with the agent beneath, the account (a move names the account it left and the one it
 landed on, a pool or key event names its pool or key), the model, By and Fact, and Details, which opens the request's
-drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static
-rung`), the strategy and the tier's priority (`Pace P0`), where a hold waited (`cohort`, `session pin`), what exhausted
-the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a
-renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one labeled value or
-two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's
-own time already gives. Every account, key, pool, model, session and request a row names is a link, and a column with
-nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+drawer. A verdict reads in one color across the log's rows, the card's verdict line and its strip, and the Requests
+view's held marker: good when it served the request (placed, renewed, a rung or a pin that matched), warning when it
+changed its course (moved, held, a rule that fired), critical for a refusal or an exhaustion, and neutral for none and
+no. The strip's Eligible station is the one exception, where none means no member was eligible and reads critical. The
+candidate table's badges keep their own tones, since they mark each member's verdict rather than the walk's. By names
+what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static rung`), the
+strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited (`cohort`, `session
+pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no
+rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one
+labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a
+time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
+column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
@@ -474,28 +485,42 @@ probe decision's included. A card opened on a request that is still running read
 the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
 secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
 the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
-router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool
-reading and the cap filter after a fired rule, the renewal, the three rungs, the partitions, the pick, and a hold or an
-exhaustion. Each line reads the step, its verdict in a badge and the facts the engine read as chips, one value or one
-key-value pair each, a member's fact keyed by the member. The rules after a fired one never run, so they fold into one
-line, "Rules after spent". A rung line adds the entry the rung took, or the deepest one a gate refused: the boundary's
-hash as its first eight characters with the whole hash and any refusing gate on hover, and `warm until 14:58` from the
-entry's write and its TTL, which an entry the cache never confirmed leaves out. A refusal's walk is two lines, the
-admission with its reason and the rest of the walk not run.
+router decided" draws the walk as a strip, a line of stations in the engine's order (the pin, every member's
+eligibility, the five partitions, the three rungs, the pick and a hold or an exhaustion, or on a pinned request the five
+move rules and the renewal, a probe or a bound where the record puts it) with its verdict on each, brackets over the
+partitions, the rungs and the moves, the path the decision took in the accent and every branch it did not take as a
+short stub ("match" on a rung, "fires" on a rule, "released" on the renewal). A branch it took runs on a track above the
+line, and a move's continuation (the cool reading, the cap filter, the partitions, the rungs and the pick) rides that
+track to the Chosen terminus. The candidates fan out under the pick in the walk's order with the chosen one tinted and
+"and N more" past eight. The three ways out stand at the line's end as termini (Chosen, Held for a slot, Refused) with
+the one the decision reached filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way
+out its outcome names. A step the record does not carry is drawn dashed before the decisive station and reads "not run"
+after it. A refusal's walk is two stations, the admission refused and the rest of the walk not run, with the reason on
+the verdict line and in the outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a
+popover: a table of the members for the eligibility, the cool reading, the cap filter and the pick (whose scores read as
+the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round,
+destinations), a rung's entry (the boundary's hash as its first eight characters with the whole hash on hover, its
+depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's place, account, slot and
+bound, a candidate's plan, tier, requests in flight, Pace and windows, the outcome's rows on the terminus the decision
+reached, and, for a rule that a fired rule cut short, the names of the rules that did not run. Every list row is a label
+with its chips, and a step that did not run says so. Tab walks the stations, the candidates and the termini in the
+record's order, Enter or Space opens the focused one's popover and moves into it, and Escape closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
 each (the utilization, the reset, the reading's source and age), or an API key's one merged reading, the requests
-in flight against the cap, the Pace score, the prefix entry, and the verdict with the one chip that decided it (`429 on
-5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until
-opened, hold the request's facts, the pin and its warmth (a record that pins nothing reads why: not looked
-up or pinning off) and the twenty settings in force.
-A refusal under a key or pool the registry no longer holds says so in its place. The outcome
-lists the pin written, the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL
-tier of its deepest entry, the hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The
-foot repeats the three widenings for the row, names the record's version (Record v1), and Copy as JSON copies the
-record route's answer whole, every field the card does not draw included. A record the retention purged reads "The
-record left with the retention" in the card's place.
+in flight against the cap, the Pace score under a header that names the window it read (the 7-day window or the model's
+week), each cell's hover spelling the share left, the hours to the reset or the subscription's end and the rate, the
+highest winning, the prefix entry, and the verdict with the one chip that decided it (`429 on 5h until 15:42`, `budget
+$1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until opened, hold the request's
+facts, the pin and its warmth (a record that pins nothing reads why: not looked up or pinning off) and the
+twenty settings in force. A
+refusal under a key or pool the registry no longer holds says so in its place. The outcome lists the pin written, the
+cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the
+hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The foot repeats the three widenings
+for the row, names the record's version (Record v1), and Copy as JSON copies the record route's answer whole, every
+field the card does not draw included. A record the retention purged reads "The record left with the retention" in the
+card's place.
 
 An event row opens to a bordered panel of pairs: When to the second in UTC, the account and the pool as links, then the
 kind's own pairs. An event that names a request ends with Source request, which opens the log on that request a quarter
@@ -568,12 +593,14 @@ request folds under the reserved value alongside a keepalive credit, and a reque
 reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
 `standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
 as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
-with the key that spent them. The earlier holder is labeled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
-and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
-client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
-token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects
-nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*`
-as two groups, every other agent under `other`.
+with the key that spent them. The earlier holder is labeled `<id> (deleted, created Sep 14, 2026, 09:31)`, the date and
+time it was created at minute precision in your zone, or `<id> (deleted)` when the ledger holds no creation time for
+it. The client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the
+folded token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`)
+selects nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups, every other agent under `other`. The charts' day ticks print the date in your zone,
+with the time beside a tick where a bucket boundary is not midnight there, and the axis says that days start at 00:00
+UTC.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
@@ -630,12 +657,13 @@ its subtitle says so. The Unit control's positions fold the request rows by who 
 
 ### Settings
 
-Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
-router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and the
-address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About card
-with the version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's each
-with its effective date) and the admin secret's standing. About closes on a pointer: the values the configuration file
-sets are on the [installation page](installation.md), and `phoebis check-config` prints them.
+Settings opens on the appearance and time-format choices, then an About card with the version, the profile, the metrics
+listener, the four storage paths (the price table's and the cost model's each with its effective date) and the admin
+secret's standing. About closes on a pointer: the values the configuration file sets are on the
+[installation page](installation.md), and `phoebis check-config` prints them. The page closes on the downstream client
+configuration, the six-line environment block that points Claude Code at the router with a reason under each line. Its
+base URL is a placeholder for the URL that reaches the proxy listener, and the address the listener binds shows beside
+the block.
 
 ## Conditions and gauges
 

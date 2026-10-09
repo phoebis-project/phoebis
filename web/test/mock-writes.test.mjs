@@ -437,6 +437,26 @@ test('an editor opened before its account was deleted and created again is refus
   assert.deepEqual([stored.label, stored.cancelled, stored.revision], ['again', replacement.cancelled, replacement.revision], 'the stale saves stored nothing');
 });
 
+test('a pairing started for a new account writes its row at the confirm and none at a cancel', async () => {
+  const api = await signedIn();
+  const before = (await api.listAccounts()).length;
+  const started = await api.startPairing({ id: 'fresh', label: 'Fresh' });
+  await api.completePairing(started.id, { code: 'code', state: started.state });
+  await api.confirmPairing(started.id);
+  const created = await storyAccount(api, 'fresh');
+  assert.deepEqual([created?.kind, created?.label, created?.status, created?.email], ['oauth', 'Fresh', 'ready', 'operator+new@example.com'], 'the confirm writes the row ready with the identity it paired');
+  const cancelled = await api.startPairing({ id: 'fresh2', label: 'Fresh 2' });
+  await api.cancelPairing(cancelled.id);
+  assert.equal(await storyAccount(api, 'fresh2'), undefined, 'a cancel leaves no row');
+  await assert.rejects(() => api.startPairing({ id: 'primary', label: 'x' }), refusedAs(409, 'an account with this id exists'), 'a start under a listed id is refused at once');
+  const raced = await api.startPairing({ id: 'fresh3', label: 'Fresh 3' });
+  const taken = await api.createAccount({ id: 'fresh3', kind: 'oauth', label: 'Taken first', secret: null });
+  await api.completePairing(raced.id, { code: 'code', state: raced.state });
+  await assert.rejects(() => api.confirmPairing(raced.id), refusedAs(409, 'an account with this id exists'), 'a confirm whose id a create took meanwhile is refused');
+  assert.deepEqual(await storyAccount(api, 'fresh3'), taken, 'the created row is unchanged, unpaired and without an email');
+  assert.equal((await api.listAccounts()).length, before + 2, 'the confirmed row and the created row are the two that landed');
+});
+
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';

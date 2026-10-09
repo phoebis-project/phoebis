@@ -426,21 +426,35 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     assert_eq!(
         groups
             .iter()
-            .map(|g| (g.key.as_str(), g.label.as_str(), g.requests))
+            .map(|g| (
+                g.key.as_str(),
+                g.label.as_str(),
+                g.key_id.as_deref(),
+                g.key_created_at,
+                g.requests
+            ))
             .collect::<Vec<_>>(),
         vec![
-            ("k1", "k1", 1),
-            ("k1@0", "k1 (deleted)", 1),
-            ("k1@1000", "k1 (deleted, created 1970-01-01 00:00 UTC)", 2),
+            ("k1", "k1", Some("k1"), None, 1),
+            ("k1@0", "k1 (deleted)", Some("k1"), Some(0), 1),
+            (
+                "k1@1000",
+                "k1 (deleted, created 1970-01-01 00:00 UTC)",
+                Some("k1"),
+                Some(1_000),
+                2
+            ),
             (
                 "k1@34305000",
                 "k1 (deleted, created 1970-01-01 09:31 UTC)",
+                Some("k1"),
+                Some(34_305_000),
                 1
             ),
-            ("k2", "k2", 2),
-            ("-", "unattributed", 1)
+            ("k2", "k2", Some("k2"), None, 2),
+            ("-", "unattributed", Some("-"), None, 1)
         ],
-        "groups sort by label; the reserved id keeps its label and no suffix"
+        "groups sort by label; the reserved id keeps its label and no suffix, and a key group names its holder beside the label, with the creation instant for an earlier holder alone"
     );
     let agents = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),

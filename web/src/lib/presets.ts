@@ -1,7 +1,7 @@
 import type { Account, BurnUnit, MemberEligibility, Pool, Session } from '@/api/types';
 import { fmtPct } from './format';
-import { windowOf } from './quota';
-import { WINDOW_HOURS } from './windows';
+import { aheadOf, windowOf } from './quota';
+import { WINDOW_HOURS, WINDOW_LABEL } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -33,14 +33,6 @@ export const MIGRATE_BAND = 0.05;
  * operator's choice.
  */
 export const SHED_AHEAD_OF_PACE_DEFAULT = 0.2;
-
-/** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
-export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
-  if (window.resetsAt === null) return window.utilization;
-  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
-  const elapsed = (lengthMs - (Date.parse(window.resetsAt) - now)) / lengthMs;
-  return window.utilization - Math.min(1, Math.max(0, elapsed));
-}
 
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
@@ -93,11 +85,24 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
   return burn * Math.exp(-Math.max(now - Date.parse(burnAt), 0) / Math.max(windowMs, 1));
 }
 
+/** A member's lead over pace on one of its shared windows, as the router reads it. */
+export interface MemberLead {
+  id: string;
+  label: string;
+  lead: number;
+  window: '5h' | '7d';
+}
+
 export interface ShedPreview {
   /** The members that ran a round burn in different units, so `burnShare` is the mean of their own shares. */
   averaged: boolean;
   /** The marked burn over the burn of the members that ran a round; 0 when they burn nothing. */
   burnShare: number;
+  /**
+   * The member with the largest lead under the margin, and its leading window, when no member is hot. Null without
+   * a lead to read (API-key members alone, or no member).
+   */
+  closest: MemberLead | null;
   /**
    * Whether an eligible member reads cool (a subscription member under the band, an API-key member with room in
    * its bucket), where the router lands a marked session; without one the marks stand and nothing moves. The router
@@ -105,7 +110,12 @@ export interface ShedPreview {
    * does not carry.
    */
   cool: boolean;
-  /** Members whose 5-hour or 7-day window runs ahead of its pace by the shedding margin, each of which runs a round. */
+  /**
+   * The members whose 5-hour or 7-day lead over pace reached the margin, each with the window that reached it first
+   * (5-hour before 7-day on a tie, as the router's round takes them) and its lead.
+   */
+  hot: MemberLead[];
+  /** The count of `hot`, each of which runs a round. */
   members: number;
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
@@ -133,7 +143,7 @@ export function shedPreview(
   sized: ReadonlySet<string>,
 ): ShedPreview {
   const threshold = pool.shedAheadOfPace;
-  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
+  if (threshold === null) return { averaged: false, burnShare: 0, closest: null, cool: false, hot: [], members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
   const lead = (a: Account, id: '5h' | '7d') => {
@@ -152,9 +162,22 @@ export function shedPreview(
     const account = byId.get(m.accountId);
     return account !== undefined && (m.eligible ?? 'eligible') === 'eligible' && under(account);
   });
-  const hot = pool.members
-    .map((m) => byId.get(m.accountId))
-    .filter((a): a is Account => a !== undefined && (['5h', '7d'] as const).some((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) >= threshold));
+  const hot: MemberLead[] = [];
+  let closest: MemberLead | null = null;
+  for (const m of pool.members) {
+    const a = byId.get(m.accountId);
+    if (a === undefined) continue;
+    const leads = (['5h', '7d'] as const).flatMap((id) => {
+      const l = lead(a, id);
+      return l === null ? [] : [{ id: a.id, label: a.label, lead: l, window: id }];
+    });
+    const reached = leads.find((l) => l.lead >= threshold);
+    if (reached) {
+      hot.push(reached);
+      continue;
+    }
+    for (const l of leads) if (closest === null || l.lead > closest.lead) closest = l;
+  }
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
@@ -204,7 +227,9 @@ export function shedPreview(
   return {
     averaged,
     burnShare,
+    closest: hot.length === 0 ? closest : null,
     cool,
+    hot,
     members: hot.length,
     sessions: rounds.reduce((s, r) => s + r.sessions, 0),
     unit: units.size === 1 ? [...units][0] : null,
@@ -214,24 +239,38 @@ export function shedPreview(
 }
 
 /**
- * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost model is read no
- * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
+ * A lead over pace in points: "14 points ahead", "1 point behind", or "on pace" under a hundredth, the edge the Quota
+ * card's pace words read.
+ */
+export function leadWords(lead: number): string {
+  if (Math.abs(lead) < 0.01) return 'on pace';
+  const points = Math.round(Math.abs(lead) * 100);
+  return `${points} ${points === 1 ? 'point' : 'points'} ${lead > 0 ? 'ahead' : 'behind'}`;
+}
+
+/**
+ * The shedding card's dry run in up to three sentences: the members ahead of pace by the margin with their leading
+ * window and lead, the round they would run with its share in the unit it was taken in, and, when none is ahead, the
+ * member closest to the margin. Until the cost model is read no window-share pin enters the round, so a count then
+ * would read short, and `table` says whether it has been read.
  */
 export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
   if (table === 'loading') return 'The cost model is loading, and window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
-  if (preview.members === 0) return 'No member is ahead of pace by the margin.';
+  if (preview.hot.length === 0) {
+    const c = preview.closest;
+    return `No member is ahead of pace by the margin${c === null ? '' : `: the closest is ${c.label}, ${leadWords(c.lead)}`}.`;
+  }
+  const named = preview.hot.map((h) => `${h.label} (${WINDOW_LABEL[h.window]}, ${leadWords(h.lead)})`);
+  const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
+  const members = preview.hot.length === 1 ? '1 member runs' : `${preview.hot.length} members run`;
   const of = preview.averaged
-    ? "of each account's burn on average"
-    : preview.unit === 'window_share'
-      ? 'of the burn in window share'
-      : preview.unit === 'usd'
-        ? 'of the burn in dollars'
-        : 'of the burn';
-  const across = preview.members > 1 ? `, across ${preview.members} accounts` : '';
-  const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
+    ? "of each member's recent burn on average"
+    : `of the hot members' recent burn together${preview.unit === 'window_share' ? ', in window share' : preview.unit === 'usd' ? ', in dollars' : ''}`;
+  const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'} (${preview.warm} warm), ${fmtPct(preview.burnShare)} ${of}`;
+  const round = preview.cool ? `A round there would move ${what}, to a cool sibling.` : `A round there would mark ${what}, but no sibling reads under the margin less 5 points, so the sessions would be marked and stay.`;
   const n = preview.unpriced;
   const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the cost model cannot price stay${n === 1 ? 's' : ''}.` : '';
-  return `${preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`}${unpriced}`;
+  return `${members} ahead of pace by the margin: ${list}. ${round}${unpriced}`;
 }

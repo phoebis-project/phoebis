@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtDuration, fmtEndsIn, fmtHourTick, fmtHours, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
+
+// The holder label and the minute formatter print in the host's zone, so the file reads them in UTC whatever the host's
+// zone, and `node --test` gives each file a process of its own.
+process.env.TZ = 'UTC';
+
+const { earlierHolderLabel, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -17,12 +22,21 @@ test('a placement is a hit when the cache read what it promised: a content one i
   assert.equal(placementHit(main, 0), false);
 });
 
-test('a UTC day tick prints the UTC date whatever the zone', () => {
-  // The day buckets are UTC multiples, so a tick two hours into the UTC day names that day even where it is still the
-  // evening before.
-  const at = Date.parse('2026-09-16T02:00Z');
-  assert.equal(fmtDayShort(at, 'UTC'), 'Sep 16');
-  assert.equal(fmtDayShort(at, 'America/Los_Angeles'), 'Sep 15', 'the zone passed is the zone printed');
+test('a day tick prints the date in the zone named, and the local time where the boundary is not midnight there', () => {
+  // The day buckets start at 00:00 UTC, so a tick on that boundary is the date alone where the day turns there and
+  // carries the local clock where it does not.
+  const at = Date.parse('2026-09-16T00:00Z');
+  assert.equal(fmtDayTick(at, 'UTC'), 'Sep 16');
+  assert.equal(fmtDayTick(at, 'America/Los_Angeles'), 'Sep 15 17:00', 'the zone passed is the zone printed, with the hour the boundary falls at there');
+  assert.equal(fmtDayTick(at, 'Asia/Kolkata'), 'Sep 16 05:30');
+  assert.equal(fmtDayTick(at), 'Sep 16', "the browser's zone when none is named, UTC here");
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtDayTick(at, 'America/Los_Angeles'), /^Sep 15 05:00\sPM$/, 'the time format reaches the tick where the boundary carries a clock');
+    assert.equal(fmtDayTick(at, 'UTC'), 'Sep 16', 'a boundary at midnight stays the date alone on either clock');
+  } finally {
+    setTimeFormat('24h');
+  }
 });
 
 test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12 AM on the 12-hour one, never 24', () => {
@@ -66,11 +80,20 @@ test('an end reads in whole days, then hours, then minutes, and one already past
   assert.equal(fmtEndsIn(at(0), now), 'ended 1 minute ago', 'the end itself has passed');
 });
 
-test('an earlier holder reads its creation minute in UTC, and one with no creation time reads deleted alone', () => {
-  assert.equal(earlierHolderLabel('desktop', 34_305_000), 'desktop (deleted, created 1970-01-01 09:31 UTC)', 'the seconds drop, the hour and the minute stay');
+test("an earlier holder reads its creation minute in the viewer's zone, and one with no creation time reads deleted alone", () => {
+  assert.equal(earlierHolderLabel('desktop', 34_305_000), 'desktop (deleted, created Jan 01, 1970, 09:31)', 'the seconds drop, the hour and the minute stay, under the time format');
   assert.equal(earlierHolderLabel('desktop', 0), 'desktop (deleted)', 'generation 0 is a row filed before the generation column');
   assert.equal(earlierHolderLabel('desktop', Number('abc')), 'desktop (deleted)', 'a generation that is no number');
   assert.equal(earlierHolderLabel('desktop', Infinity), 'desktop (deleted)');
+  assert.equal(fmtMinute('2026-09-14T09:31:45Z'), 'Sep 14, 2026, 09:31', 'the shape of fmtAbsolute with the seconds dropped');
+  assert.equal(fmtMinute(null), '-');
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtMinute('2026-09-14T09:31:45Z'), /^Sep 14, 2026, 09:31\sAM$/);
+    assert.match(earlierHolderLabel('desktop', 34_305_000), /^desktop \(deleted, created Jan 01, 1970, 09:31\sAM\)$/, 'the label follows the time format as every other timestamp does');
+  } finally {
+    setTimeFormat('24h');
+  }
 });
 
 test('a ceiling reads floored: the dialog in days, hours and minutes, the card in whole hours or minutes', () => {

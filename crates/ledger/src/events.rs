@@ -703,6 +703,11 @@ pub fn spawn_event_mirror(
                                 }
                                 // A holder the mirror never saw: the registry's own row says it was created.
                                 None if account.state == AccountState::ReauthRequired => record_reauth(&ledger, &account.id, now),
+                                // A row born paired skipped `unpaired`: the transition a pairing on an existing row records is
+                                // recorded for it too, so the account's history opens the same way.
+                                None if account.state == AccountState::Ready && account.state_cause == StateCause::Paired => {
+                                    record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::Ready, account.state_cause, None, now)
+                                }
                                 None => {}
                             }
                             states.insert(account.id, observed);

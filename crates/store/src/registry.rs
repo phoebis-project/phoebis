@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
-use crate::{AccountRow, AccountState, Secret, StateCause, Store, StoreError, LOCK_POISONED};
+use crate::{
+    AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
+    LOCK_POISONED,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Strategy {
@@ -1274,6 +1277,106 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// A row born paired: the account with its identity, state and profile, the credential bundle at its first
+    /// generation, the pairing's resolved attempt and the change record, in one transaction, so a confirm that
+    /// cannot write the row leaves no credential and one that cannot write the credential leaves no row. A
+    /// constraint violation on the row is `IdentityTaken` when no row holds `row.id`. The caller re-reads the id
+    /// to tell a taken id apart, as `create` does.
+    pub fn create_paired_account(
+        &self,
+        row: &AccountRow,
+        bundle: &NewBundle,
+        profile_json: &str,
+        subscription: &SubscriptionRow,
+        at: i64,
+        actor: &str,
+    ) -> Result<u64, StoreError> {
+        self.fail_injected_commit()?;
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let identity_json = row
+            .identity
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let incarnation = crate::accounts::next_incarnation(&tx, &row.id)?;
+        let inserted = tx.execute(
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, \
+             state, state_cause, profile_json, subscription_plan, subscription_tier, subscription_since, trial_ends_at, \
+             created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+            params![
+                row.id,
+                row.kind,
+                row.label,
+                row.enabled,
+                identity_json,
+                incarnation as i64,
+                row.lifecycle_generation as i64,
+                row.state,
+                row.state_cause,
+                profile_json,
+                subscription.plan,
+                subscription.tier,
+                subscription.since,
+                subscription.trial_ends_at,
+                at,
+            ],
+        );
+        if let Err(rusqlite::Error::SqliteFailure(failure, _)) = &inserted {
+            // The primary key or the identity index: the caller tells a taken id apart by reading the row, so only
+            // the identity's violation is named here.
+            if failure.code == rusqlite::ErrorCode::ConstraintViolation {
+                let held: Option<i64> = tx
+                    .query_row(
+                        "SELECT 1 FROM accounts WHERE id = ?1",
+                        params![row.id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if held.is_none() {
+                    return Err(StoreError::IdentityTaken);
+                }
+            }
+        }
+        inserted?;
+        let generation = self.commit_credentials_in(
+            &tx,
+            &row.id,
+            incarnation,
+            row.lifecycle_generation,
+            None,
+            None,
+            bundle,
+            at,
+        )?;
+        tx.execute(
+            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
+             started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
+            params![
+                row.id,
+                incarnation as i64,
+                row.lifecycle_generation as i64,
+                generation as i64,
+                at
+            ],
+        )?;
+        record_change(
+            &tx,
+            at,
+            actor,
+            "account_created",
+            &row.id,
+            &serde_json::json!({
+                "kind": row.kind.as_str(),
+                "label": row.label,
+            })
+            .to_string(),
+        )?;
+        tx.commit()?;
+        Ok(generation)
     }
 
     /// An edit lands whole, in one revision: every staged field or none. Discovery ran against the staged secret,

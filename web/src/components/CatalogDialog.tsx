@@ -91,31 +91,28 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
           <table className="table">
             <thead>
               <tr>
-                <th>Model</th>
-                <th>Name</th>
-                <th>Released</th>
-                <th className="right">Input tokens</th>
-                <th className="right">Output tokens</th>
-                <th>Effort levels</th>
+                <th className="col-fill">Model</th>
+                <th className="col-fill">Name</th>
+                <th className="col-fit">Released</th>
+                <th className="right col-fit">Input tokens</th>
+                <th className="right col-fit">Output tokens</th>
+                <th className="col-fit">Effort levels</th>
               </tr>
             </thead>
             <tbody>
               {models.map((m) => (
                 <tr key={m.id}>
-                  <td>
-                    <span className="mono">{m.id}</span>
-                    {(m.maxInputTokens ?? 0) > LONG_CONTEXT_ABOVE && (
-                      <>
-                        {' '}
-                        <Badge tone="neutral">long context</Badge>
-                      </>
-                    )}
+                  <td className="col-fill" title={m.id}>
+                    <div className="catalog__model">
+                      <span className="mono catalog__id">{m.id}</span>
+                      {(m.maxInputTokens ?? 0) > LONG_CONTEXT_ABOVE && <Badge tone="neutral">long context</Badge>}
+                    </div>
                   </td>
-                  <td>{m.displayName || '-'}</td>
-                  <td className="num">{released(m.createdAt)}</td>
-                  <td className="right num">{tokens(m.maxInputTokens)}</td>
-                  <td className="right num">{tokens(m.maxTokens)}</td>
-                  <td className="catalog__levels">{m.effortLevels.length ? m.effortLevels.join(', ') : '-'}</td>
+                  <td className="col-fill" title={m.displayName || undefined}>{m.displayName || '-'}</td>
+                  <td className="num col-fit">{released(m.createdAt)}</td>
+                  <td className="right num col-fit">{tokens(m.maxInputTokens)}</td>
+                  <td className="right num col-fit">{tokens(m.maxTokens)}</td>
+                  <td className="col-fit">{m.effortLevels.length ? m.effortLevels.join(', ') : '-'}</td>
                 </tr>
               ))}
             </tbody>

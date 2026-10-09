@@ -450,7 +450,7 @@ export function RequestsPage() {
                             <span className="requests__attempts">
                               <AttemptCount attempts={r.attempts} />
                               {r.held && (
-                                <Badge tone="neutral" title={heldTitle(r.held)}>
+                                <Badge tone="warning" title={heldTitle(r.held)}>
                                   held {fmtMs(r.held.heldMs)}
                                 </Badge>
                               )}

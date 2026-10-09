@@ -8,7 +8,7 @@ import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
-import { fmtDate } from '@/lib/format';
+import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { isFastScope } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
@@ -232,7 +232,7 @@ function decodePoll(v: unknown): QuotaPoll | null {
 export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   const u = rec(v);
   const error = strOrNull(u.error);
-  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
+  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), heldUntil: isoOrNull(u.held_until), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
 export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
@@ -550,7 +550,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     enabled: bool(c.enabled), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
     obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
     overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
-    pace: orNull(c.pace, (p) => ({ deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score) })),
+    pace: orNull(c.pace, (p) => ({ deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score), window: strOrNull(p.window) })),
     partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
     prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
     priority: num(c.priority), rank: numOrNull(c.rank), score: numOrNull(c.score), state: str(c.state),
@@ -647,6 +647,8 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const p = rec(g.percentiles);
   const t = rec(g.tokens);
   const c = rec(g.cost);
+  const keyId = strOrNull(g.key_id);
+  const keyCreatedAt = numOrNull(g.key_created_at);
   return {
     attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cacheShares: shareMap(g.cache_shares, (e) => ({ read: num(e.read), write: num(e.write) })),
@@ -654,7 +656,11 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     costShares: g.cost_shares === null || g.cost_shares === undefined ? null : nullableNumberMap(g.cost_shares),
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
-    incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
+    incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), keyCreatedAt, keyId,
+    // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
+    // holder's members, and keeps the wire's label where the route alone knows it (a live key's id, the reserved id's
+    // `unattributed`).
+    label: keyId !== null && keyCreatedAt !== null ? earlierHolderLabel(keyId, keyCreatedAt) : str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },
     planOutputTokens: numOrNull(g.plan_output_tokens),
     planRequests: numOrNull(g.plan_requests),

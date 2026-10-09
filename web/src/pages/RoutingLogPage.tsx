@@ -7,7 +7,7 @@ import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
-import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
@@ -530,6 +530,7 @@ const modelOf = (row: RoutingLogRow) => {
 
 function LogRow({ isNew, now, onToggle, open, row, rows, striped }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[]; striped: boolean }) {
   const by = byOf(row, rows);
+  const described = useDescription(by.title);
   const facts = factsOf(row, now, rows);
   const model = modelOf(row);
   const className = ['routing-log__row', isNew && 'is-new', open && 'is-open', striped && 'is-striped'].filter(Boolean).join(' ');
@@ -596,7 +597,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows, striped }: { isNew: boo
         )}
       </td>
       <td className="routing-log__by">
-        <span className="chip routing-log__chip" title={by.value}>
+        <span className="chip routing-log__chip" title={by.title ?? by.value} aria-describedby={described && !described.sibling ? described.id : undefined}>
           {by.label && <span className="chip__label">{by.label}</span>}
           {by.value}
         </span>

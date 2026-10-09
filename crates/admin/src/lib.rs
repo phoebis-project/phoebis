@@ -138,7 +138,17 @@ pub struct TakenExchange {
     pub bundle: NewBundle,
     pub identity: PendingIdentity,
     pub lifecycle_generation: u64,
+    /// Set for a pairing started with `new`: the row the confirm creates. `None` for an existing row.
+    pub new_account: Option<NewAccount>,
     pub profile: ProfileResponse,
+}
+
+/// The row a pairing started with `new` creates at its confirm. Until then the id is held here, in memory, so a
+/// pairing nobody confirms leaves no row and the id free.
+#[derive(Clone, Debug)]
+pub struct NewAccount {
+    pub id: String,
+    pub label: String,
 }
 
 struct PairingRecord {
@@ -151,6 +161,8 @@ struct PairingRecord {
     /// The account's lifecycle generation when the pairing started. A bundle confirmed past a bump was
     /// issued for a slot that has since been disconnected.
     lifecycle_generation: u64,
+    /// The row the confirm creates, for a pairing started with `new`.
+    new_account: Option<NewAccount>,
     status: VaultStatus,
     /// When `status` last moved; an ended record leaves one pairing lifetime after it.
     status_at: i64,
@@ -175,6 +187,8 @@ impl PairingVault {
         }
     }
 
+    // The record's fields, passed once by the start route: a parameter struct would be the record itself.
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         &self,
         session_id: &str,
@@ -183,6 +197,7 @@ impl PairingVault {
         lifecycle_generation: u64,
         deadline: i64,
         now: i64,
+        new_account: Option<NewAccount>,
     ) {
         self.records.lock().expect(LOCK_POISONED).insert(
             session_id.to_string(),
@@ -192,6 +207,7 @@ impl PairingVault {
                 deadline,
                 exchange: None,
                 lifecycle_generation,
+                new_account,
                 status: VaultStatus::Started,
                 status_at: now,
             },
@@ -235,6 +251,7 @@ impl PairingVault {
             bundle: exchange.bundle,
             identity: exchange.identity,
             lifecycle_generation: record.lifecycle_generation,
+            new_account: record.new_account.clone(),
             profile: exchange.profile,
         })
     }

@@ -12,7 +12,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, Err
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 
@@ -21,12 +21,18 @@ const isKeyGroup = (value: string | null): value is KeyGroup => value !== null &
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
+/** The capture line whole, its inherited mark included, for the title of a line the fill column cuts. */
+const captureLine = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null) => `${captureLabel(effectiveCaptureHours(key, pool))}${key.bodyCaptureHours === null ? ' inherited' : ''}`;
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
+/** The Models summary of a key without rules of its own. */
+const NO_RULES: Record<ModelRulesMode, string> = { extend: 'Pool rules', replace: 'No rules' };
 const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Extend pool rules', value: 'extend' },
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
+/** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
+const retiredNote = (sessions: number) => `${sessions} ${sessions === 1 ? 'session' : 'sessions'} still on the previous secret`;
 
 export function KeysPage() {
   const now = useNow();
@@ -218,14 +224,14 @@ export function KeysPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Prefix</th>
-                  <th>Pool</th>
-                  <th>Models</th>
-                  <th className="right">Usage, 7d</th>
-                  <th>Expiry</th>
-                  <th>Status</th>
-                  <th />
+                  <th className="col-fill">Name</th>
+                  <th className="col-fit">Prefix</th>
+                  <th className="col-fit">Pool</th>
+                  <th className="col-fill">Models</th>
+                  <th className="right col-fit">Usage, 7d</th>
+                  <th className="col-fit">Expiry</th>
+                  <th className="col-fill">Status</th>
+                  <th className="col-fit" />
                 </tr>
               </thead>
               <tbody>
@@ -247,9 +253,10 @@ export function KeysPage() {
                       ))
                   : rows.map((k) => (
                       <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
-                        <td>
+                        <td className="col-fill" title={k.name}>
                           <b>{k.name}</b>
-                          <span className="sub">
+                          {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
+                          <span className="sub" title={captureLine(k, poolById.get(k.poolId) ?? null)}>
                             {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
                             {k.bodyCaptureHours === null && (
                               <span className="muted" title={CAPTURE_INHERIT_HINT}>
@@ -258,29 +265,29 @@ export function KeysPage() {
                               </span>
                             )}
                           </span>
-                          {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
+                          {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
                         </td>
-                        <td className="mono">{k.prefix}…</td>
-                        <td className="mono">{k.poolId}</td>
-                        <td>{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted">{k.modelRulesMode === 'replace' ? 'No rules' : 'Pool rules'}</span>}</td>
-                        <td className="right num">
+                        <td className="mono col-fit">{k.prefix}…</td>
+                        <td className="mono col-fit">{k.poolId}</td>
+                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
+                        <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
                           <span className="sub">{fmtUsd(k.usage7d.cost)}</span>
                         </td>
-                        <td title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
-                        <td>
-                          <Badge tone={STATUS_TONE[k.status]} dot>
-                            {k.status}
+                        <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
+                        <td className="col-fill">
+                          <Badge tone={STATUS_TONE[k.status]} dot title={k.status} describe={false}>
+                            <span className="key-row__badge-label">{k.status}</span>
                           </Badge>
-                          {k.lastUsedAt && <span className="sub">used {fmtRelative(k.lastUsedAt, now)}</span>}
+                          {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
                           {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
                           {k.sessionsOnRetiredSecret > 0 && (
-                            <span className="sub" title={k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}>
-                              {k.sessionsOnRetiredSecret} {k.sessionsOnRetiredSecret === 1 ? 'session' : 'sessions'} still on the previous secret
+                            <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
+                              {retiredNote(k.sessionsOnRetiredSecret)}
                             </span>
                           )}
                         </td>
-                        <td className="right">
+                        <td className="right col-fit">
                           <Menu
                             onOpenChange={(open) =>
                               setOpenMenus((s) => {
@@ -456,6 +463,8 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const first = refusals[0] ?? null;
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
+  // The values the dialog opened with, which the discard question compares the fields against.
+  const opened = useRef(keyFormOf(null, ''));
 
   // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
   // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
@@ -463,6 +472,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
+    opened.current = form;
     setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
@@ -481,22 +491,26 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setStale(null);
   }, [open, existing, initialPoolId, initialGroup]);
   // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do. An updater,
-  // so it never replaces the pool the reset above queued in the same render.
+  // so it never replaces the pool the reset above queued in the same render. The fill is no edit of the operator's,
+  // so the opening values take it too where they hold no pool yet.
   useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId((current) => (current === '' ? pools[0].id : current));
+    if (open && existing === null && poolId === '' && pools.length > 0) {
+      setPoolId((current) => (current === '' ? pools[0].id : current));
+      if (opened.current.poolId === '') opened.current = { ...opened.current, poolId: pools[0].id };
+    }
   }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
   useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
+  const current = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     setStale(null);
-    const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
-    const input = keyInputOf(form, clock.now());
+    const input = keyInputOf(current, clock.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input, existing.revision);
@@ -709,6 +723,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
+      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened.current))}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}

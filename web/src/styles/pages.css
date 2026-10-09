@@ -911,9 +911,9 @@
 }
 
 /*
- * Neutral pill, tone on the number only: the row's color belongs to its lane.
  * One width for every chip in the column, so the labels start and the numbers
- * end on two straight lines whatever the window is called.
+ * end on two straight lines whatever the window is called. A chip with a share
+ * takes its tone whole, as the card chips do.
  */
 .tl-chip {
   display: flex;
@@ -935,16 +935,22 @@
   font-weight: 700;
 }
 
-.tl-chip__pct--good {
+.tl-chip--good {
   color: var(--good-ink);
+  background: var(--good-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--warn {
+.tl-chip--warn {
   color: var(--warning-ink);
+  background: var(--warning-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--low {
+.tl-chip--low {
   color: var(--critical-ink);
+  background: var(--critical-soft);
+  border-color: transparent;
 }
 
 .lane__track {
@@ -974,14 +980,37 @@
   background: color-mix(in srgb, var(--surface-3) 70%, transparent);
 }
 
-/* The share of the current window already spent, so the bar reads as a clock. */
-.lane__elapsed {
+/* The fill's clip at the pill's own radius, so a fill that reaches the bar's end keeps the rounded corners rather than
+   drawing square ones past them. The reset mark sits outside it, since it stands past the bar's edge. */
+.lane__clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/*
+ * The window's used share, in the window's tone, so the bar reads against the now line. The tone's soft background,
+ * as the lane chips draw it, keeps the ink label legible where it crosses the fill.
+ */
+.lane__used {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  background: color-mix(in srgb, var(--lane-color) 55%, var(--surface));
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.lane__used--good {
+  background: var(--good-soft);
+}
+
+.lane__used--warn {
+  background: var(--warning-soft);
+}
+
+.lane__used--low {
+  background: var(--critical-soft);
 }
 
 .lane__reset-mark {
@@ -1053,6 +1082,10 @@
 
 .lane__swatch--next {
   border: 1px dashed color-mix(in srgb, var(--series-1) 45%, transparent);
+}
+
+.lane__swatch--used {
+  background: var(--good-soft);
 }
 
 .lane__swatch--past {
@@ -1253,9 +1286,23 @@
   white-space: nowrap;
 }
 
-/* A model's levels read as one list; the id and the name beside them wrap first. */
-.catalog__levels {
+/* The id shrinks and cuts while its long-context badge keeps its own width, and the gap stands where a space would. */
+.catalog__model {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.catalog__id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.catalog__model > .badge {
+  flex: none;
 }
 
 .req-totals {
@@ -1295,6 +1342,22 @@
 .pool,
 .key-row {
   scroll-margin-top: 68px;
+}
+
+/* A badge is an atomic box the cell's ellipsis cannot reach, so in a fill cell it narrows with the cell and cuts its
+   own label instead, the dot kept whole. */
+.key-row .badge {
+  max-width: 100%;
+}
+
+.key-row .badge__dot {
+  flex: none;
+}
+
+.key-row__badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pool__head {
@@ -1381,7 +1444,10 @@
   vertical-align: middle;
 }
 
+/* A fit column is as wide as one line of its widest cell, so a row's two badges stay on that line rather than
+   stacking. */
 .serving .chips {
+  flex-wrap: nowrap;
   gap: 6px;
 }
 
@@ -1441,6 +1507,20 @@
   align-items: center;
 }
 
+/* The row stays on one line and lets the name shrink, so the email, the pool note and the badge beside it keep their
+   place while the name cuts. */
+.members-table td:first-child .row,
+.members-table td:first-child label {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.members-table__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A held row draws no checkbox and no Priority field, so blanks of their size keep its name in line with the names
    around it and the row as tall as theirs. The checkbox's box is the browser's own, 13 px inside 3 px and 4 px
    margins. */
@@ -1455,19 +1535,27 @@
   visibility: hidden;
 }
 
+/* The numeric columns are fit columns, which would shrink to their headers, so the minimums keep each input wide
+   enough for its figure. */
 .members-table th:nth-child(2),
 .members-table td:nth-child(2) {
-  width: 96px;
+  min-width: 96px;
 }
 
 .members-table th:nth-child(3),
 .members-table td:nth-child(3) {
-  width: 140px;
+  min-width: 140px;
 }
 
 .members-table th:nth-child(4),
 .members-table td:nth-child(4) {
-  width: 150px;
+  min-width: 150px;
+}
+
+/* A fit column would shrink the select to its header and clip the longest option, so each select keeps the width of
+   its widest option. */
+.rules-table .select {
+  min-width: max-content;
 }
 
 /* The grid's selects keep the dialog's type, which the table's smaller size would shrink below the selects around it. */
@@ -1629,6 +1717,38 @@
 
 .ubar__tick--7d {
   background: var(--series-4);
+}
+
+/* The lead track's center mark, on pace, drawn first so a tick or the band at the center paints over it. */
+.ubar__track--lead::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  background: var(--ink-2);
+  border-radius: 1px;
+}
+
+.ubar__margin {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 18px;
+  margin-left: -1px;
+  background: var(--serious);
+  border-radius: 1px;
+}
+
+/* Translucent, so the center mark and the track show through where the band starts. */
+.ubar__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--good-soft);
+  opacity: 0.8;
 }
 
 .ubar__handle {
@@ -1984,12 +2104,14 @@
 }
 
 .decision-card .chips,
+.strip-popover .chips,
 .event-detail .chips {
   gap: 4px;
   min-height: 0;
 }
 
 .decision-card .chip,
+.strip-popover .chip,
 .event-detail .chip {
   padding: 0 7px;
   font-size: 12px;
@@ -2012,43 +2134,324 @@
   font-weight: 600;
 }
 
-.decision-card__title {
+.decision-card__title,
+.strip-popover__group h5 {
   margin: 0 0 6px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-2);
 }
 
-/* The walk: the number, the step, its verdict and the facts, one line a step. */
-.decision-card__walk {
-  display: grid;
-  grid-template-columns: 22px 150px 96px minmax(0, 1fr);
-  gap: 5px 10px;
-  align-items: start;
-  margin: 0;
+/* The decision strip: the walk as stations on a line, the path the decision took in the accent and every branch it
+   left as an idle stub. Every color is a theme token, so both themes draw it with no rule of their own. A label's
+   lines are the ones the layout counts (16 px, the badge's 22 px box, 3 px apart), and the strip lays out again with
+   the drawn height of a label whose words wrapped. */
+.decision-strip {
+  position: relative;
+  overflow-x: auto;
+}
+
+.decision-strip__surface {
+  position: relative;
+  min-width: 640px;
+}
+
+.decision-strip svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* The curves are open, which an SVG path would otherwise fill. */
+.strip-path,
+.strip-bracket {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.strip-path.is-taken {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.strip-path.is-inferred {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+
+.strip-path.is-idle {
+  stroke: var(--hairline);
+  stroke-width: 1.5;
+}
+
+.strip-bracket {
+  stroke: var(--hairline);
+  stroke-width: 1;
+}
+
+.strip-node {
+  fill: var(--surface);
+  stroke-width: 2;
+}
+
+.strip-node.is-taken {
+  stroke: var(--accent);
+}
+
+.strip-node.is-inferred {
+  stroke: var(--accent);
+  stroke-dasharray: 3 3;
+}
+
+.strip-node.is-idle {
+  stroke: var(--hairline);
+}
+
+.strip-node.is-decisive {
+  stroke-width: 3;
+}
+
+.strip-node--terminus.is-taken.strip-node--good {
+  fill: var(--good-soft);
+}
+
+.strip-node--terminus.is-taken.strip-node--warning {
+  fill: var(--warning-soft);
+}
+
+.strip-node--terminus.is-taken.strip-node--critical {
+  fill: var(--critical-soft);
+}
+
+/* An idle word keeps the ink too: on the open row's tint the muted ink falls below the card's muted contrast, so the
+   idle ring and edge carry the muted look. */
+.strip-station,
+.strip-candidate,
+.strip-terminus {
+  position: absolute;
   padding: 0;
-  list-style: none;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
 }
 
-.decision-card__walk li {
-  display: contents;
+.strip-station {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+  text-align: center;
 }
 
-.decision-card__n {
-  color: var(--ink-2);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+/* A label narrows to the room its neighbors leave it, so a badge of several words wraps at the label's width, which
+   the strip's measured label heights count. A single word wider than the label keeps its whole pill, centered and
+   standing past the label's edges, since a pill clamped to the label would let the word run out of it. */
+.strip-station .badge {
+  height: auto;
+  white-space: normal;
 }
 
-.decision-card__step {
+/* Above the line the badge keeps to its node, so the second line stays clear of the stub words beside the host. */
+.strip-station--above .strip-station__second {
+  order: 1;
+}
+
+.strip-station--above .badge {
+  order: 2;
+}
+
+.strip-station__word,
+.strip-terminus__word,
+.strip-candidate__account {
   font-weight: 500;
 }
 
-.decision-card__verdict-cell {
-  justify-self: start;
+.strip-station__second {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  justify-content: center;
+  color: var(--ink-2);
 }
 
-.decision-card .chip.decision-card__hash {
+.strip-station__second > span {
+  white-space: nowrap;
+}
+
+.strip-group,
+.strip-stub {
+  position: absolute;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.strip-group {
+  font-weight: 600;
+  text-align: center;
+}
+
+/* The leaf's right edge is the layout's point, 16 px short of the fan's line. */
+.strip-candidate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  transform: translateX(-100%);
+}
+
+/* A leaf no wider than the room left of its host cuts its account short, and its name and popover keep the whole id. */
+.strip-candidate__account {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip-candidate.is-chosen {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.strip-candidate.is-more {
+  font-style: italic;
+}
+
+.strip-terminus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  align-items: center;
+  min-height: 22px;
+  text-align: left;
+}
+
+.strip-terminus--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.strip-station.is-selected,
+.strip-candidate.is-selected,
+.strip-terminus.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.strip-station:focus-visible,
+.strip-candidate:focus-visible,
+.strip-terminus:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A station's popover sits over the card in the body, outside the card's rules, so it sets the card's type itself.
+   An unpinned one lets the pointer through to the strip, and a pinned one takes it so it and its table scroll. The
+   width bound is the window's, which the component tightens to the card's, and the component bounds its height by the
+   window's. */
+.strip-popover {
+  position: fixed;
+  z-index: 20;
+  max-width: min(720px, 100vw - 16px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+}
+
+.strip-popover.is-pinned {
+  pointer-events: auto;
+}
+
+.strip-popover__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.strip-popover__title {
+  font-weight: 600;
+}
+
+.strip-popover__second {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  color: var(--ink-2);
+}
+
+.strip-popover__second > span {
+  white-space: nowrap;
+}
+
+.strip-popover__groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.strip-popover .kv__row.is-marked dt {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.strip-popover .kv + .strip-popover__table,
+.strip-popover .chips + .strip-popover__table {
+  margin-top: 8px;
+}
+
+/* Rows of one 18 px line in 4 px of padding under a head of two lines, so the bound below is the head and eight
+   rows: 4 + 36 + 4 and its rule, then 4 + 18 + 4 and a rule a row. */
+.strip-popover__table {
+  max-height: calc(45px + 8 * 27px);
+  overflow-y: auto;
+}
+
+.strip-popover .table th,
+.strip-popover .table td {
+  padding: 4px 8px;
+  line-height: 18px;
+}
+
+.strip-popover .table th {
+  box-sizing: content-box;
+  height: 36px;
+  vertical-align: bottom;
+  white-space: normal;
+}
+
+.strip-popover .table td {
+  white-space: nowrap;
+}
+
+.strip-popover .chip.is-marked {
+  outline: 1px solid var(--accent);
+}
+
+.strip-popover__sentence {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.decision-card .chip.decision-card__hash,
+.strip-popover .chip.decision-card__hash {
   font-size: 11.5px;
 }
 
@@ -2073,7 +2476,8 @@
   padding-left: 10px;
 }
 
-.decision-card__candidates tbody tr:nth-child(even) td {
+.decision-card__candidates tbody tr:nth-child(even) td,
+.strip-popover .table tbody tr:nth-child(even) td {
   background: var(--surface-2);
 }
 
@@ -2957,10 +3361,22 @@
   font-family: var(--font-sans);
 }
 
-/* The Session cell is monospace for the id; the fork badge reads as the other badges do. */
-.srow__fork {
-  margin-left: 6px;
+/* The id line alone: the column's free width cuts a long id with an ellipsis, the whole id on the cell's title. */
+.srow__id {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Session cell is monospace for the id, and the fork badge reads as the other badges do. It sits on the line under
+   the id and wraps its words when the column is narrower than they are, so a cut id never clips it or its link. */
+.sessions-table .srow__fork {
+  max-width: 100%;
+  margin-top: 2px;
   font-family: var(--font-sans);
+  text-align: left;
+  white-space: normal;
 }
 
 .srow[aria-current='true'] td {
@@ -3551,6 +3967,12 @@
 .analytics-section__meta {
   font-size: 12.5px;
   color: var(--ink-2);
+}
+
+/* Nine reason headers on one line each leave the group column its padding alone at 1280, so they wrap and each fit
+   column sizes to its widest word or figure. The class outranks the fit rule's nowrap. */
+.misses-table th.col-fit {
+  white-space: normal;
 }
 
 .filters__range {

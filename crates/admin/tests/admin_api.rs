@@ -1123,12 +1123,17 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": NOW + 10_000,
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
-            "last_error": "the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:50 UTC",
+            "last_error": "the usage endpoint rate-limited the account",
             "last_outcome": "rate_limited",
             "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
         }),
         "the first 429 holds the account for the ladder's first step, two minutes"
+    );
+    assert_eq!(
+        refused["held_until"],
+        NOW + 10_000 + 120_000,
+        "the hold's deadline is the poll's next attempt, answered as a member of its own"
     );
     let held = json(get(&h.app, path, Some(&cookie)).await).await;
     assert!(
@@ -1138,6 +1143,10 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
     assert_eq!(held["windows"], first["windows"]);
     assert_eq!(held["fetched_at"], NOW, "the windows are the clean read's");
     assert_eq!(held["poll"], refused["poll"]);
+    assert_eq!(
+        held["held_until"], refused["held_until"],
+        "the GET inside the hold carries the deadline beside the windows"
+    );
 
     h.clock_cell.store(NOW + 40_000, Ordering::SeqCst);
     let again = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
@@ -1371,6 +1380,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     let no_credential = serde_json::json!({
         "error": "no credential is stored for this account, so pair it to load quota",
         "fetched_at": null,
+        "held_until": null,
         "poll": null,
     });
     assert_eq!(
@@ -1404,7 +1414,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     let usage = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
     assert_eq!(
         business,
-        serde_json::json!({ "error": usage["error"], "fetched_at": usage["fetched_at"], "poll": usage["poll"] }),
+        serde_json::json!({ "error": usage["error"], "fetched_at": usage["fetched_at"], "held_until": usage["held_until"], "poll": usage["poll"] }),
     );
     assert_eq!(row("spare"), no_credential);
     assert!(
@@ -1420,6 +1430,124 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
         asked(),
         polled,
         "the list reads the poll's standing, never the endpoint"
+    );
+}
+
+#[tokio::test]
+async fn an_account_held_by_a_429_lists_its_hold_deadline() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    // A zero TTL, so the refresh below reaches the endpoint and takes its 429.
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let usage_of = |listed: &serde_json::Value| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "business")
+            .unwrap()["usage"]
+            .clone()
+    };
+    // The clean read comes first: a 429 over windows keeps them, and the list drops the error while they stand, so
+    // the deadline is the one thing the hold adds to the block.
+    h.usage.poll("business").await.unwrap();
+    let clean = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert!(clean["error"].is_null(), "{clean}");
+    assert!(
+        clean["held_until"].is_null(),
+        "no hold, no deadline: {clean}"
+    );
+
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 10_000, Ordering::SeqCst);
+    let refused = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/usage/refresh",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused["poll"]["last_outcome"], "rate_limited", "{refused}");
+    let held = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert_eq!(
+        held["held_until"],
+        NOW + 10_000 + 120_000,
+        "the list carries the hold's deadline, the poll's next attempt: {held}"
+    );
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+    assert!(
+        held["error"].is_null(),
+        "the windows stand, so the block reads no error beside the deadline: {held}"
+    );
+
+    h.clock_cell.store(NOW + 10_000 + 120_000, Ordering::SeqCst);
+    let past = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert!(
+        past["held_until"].is_null(),
+        "past the hold the deadline leaves the block: {past}"
+    );
+    assert_eq!(
+        past["poll"]["next_attempt_at"],
+        serde_json::Value::Null,
+        "{past}"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_the_hold_deadline() {
+    use common::{get, json, login, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    // The poll reads the usage first and the profile after it, so a profile 429 ahead of any usage reading comes
+    // through the profile read alone, the first thing the account's entry then records.
+    assert!(
+        h.usage.profile("business").await.is_err(),
+        "the first read meets the profile 429"
+    );
+    let held = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(held["error"], "no usage fetched yet", "{held}");
+    let until = held["held_until"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("the hold's deadline rides the block: {held}"));
+    assert!(until > NOW, "{held}");
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+    assert!(
+        held["windows"].as_array().is_some_and(Vec::is_empty),
+        "no reading landed: {held}"
+    );
+
+    h.clock_cell.store(until, Ordering::SeqCst);
+    let past = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert!(
+        past["held_until"].is_null(),
+        "past the hold the deadline leaves the block: {past}"
+    );
+    assert_eq!(
+        past["poll"]["next_attempt_at"],
+        serde_json::Value::Null,
+        "{past}"
     );
 }
 
@@ -2101,6 +2229,7 @@ fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
         0,
         common::NOW + 600_000,
         common::NOW,
+        None,
     );
     vault.discard("pairing", common::NOW);
     // A callback whose exchange returns after the owner cancelled discards the record a second time.
@@ -2175,6 +2304,297 @@ async fn a_start_by_another_admin_session_answers_409() {
         shown["status"], "pending",
         "the refused start left the owner's pairing alone"
     );
+}
+
+#[tokio::test]
+async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_start() {
+    use common::{get, json, login, post};
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let mut profile: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Profile,
+        ))
+        .unwrap();
+    profile["account"]["has_claude_max"] = serde_json::json!(true);
+    profile["organization"]["subscription_created_at"] = serde_json::json!("2026-03-14T10:00:00Z");
+    profile["organization"]["claude_code_trial_ends_at"] =
+        serde_json::json!("2026-10-02T00:00:00+00:00");
+    up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&profile).unwrap(),
+        },
+    );
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    assert_eq!(
+        json(confirmed).await,
+        serde_json::json!({ "account_id": "fresh", "status": "confirmed" })
+    );
+    let acct = json(get(&app, "/admin/accounts/fresh", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            acct["state"].as_str(),
+            acct["kind"].as_str(),
+            acct["label"].as_str()
+        ),
+        (Some("ready"), Some("oauth"), Some("Fresh"))
+    );
+    assert_eq!(acct["identity"]["account_uuid"], common::ACCOUNT_UUID);
+    assert!(acct["credential"]["access_expires_at"].is_number());
+    let derived = phoebis_routing::term::derived_end(
+        &phoebis_store::SubscriptionTerm {
+            account_id: "fresh".into(),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: Some(1_790_899_200_000),
+            cancelled: false,
+            ends_at: None,
+            tier: None,
+        },
+        common::NOW,
+    );
+    assert_eq!(
+        acct["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+            "ends_at": null,
+            "derived_ends_at": derived,
+        }),
+        "the one write stored the plan and the start with the row"
+    );
+    let listed = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let fresh = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["id"] == "fresh")
+        .count();
+    assert_eq!(fresh, 1, "the list carries the row once");
+}
+
+#[tokio::test]
+async fn a_cancel_after_a_start_with_new_leaves_no_row() {
+    use common::{delete, get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let owner = login(&app, "admin-secret").await;
+    let start = r#"{"new":{"id":"fresh","label":"Fresh"},"login":"claude_ai"}"#;
+    let started = post(&app, "/admin/oauth/sessions", start, Some(&owner)).await;
+    assert_eq!(started.status(), 201);
+    let id = json(started).await["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&owner))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/fresh", Some(&owner))
+            .await
+            .status(),
+        404
+    );
+    // The owner's own start would supersede a standing session whatever the cancel did. Another admin session's
+    // start is refused while one stands, so its 201 is what proves the id was freed.
+    let other = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(&app, "/admin/oauth/sessions", start, Some(&other))
+            .await
+            .status(),
+        201
+    );
+}
+
+#[tokio::test]
+async fn an_expiry_after_a_start_with_new_leaves_no_row() {
+    use common::{get, json, login, post};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_sweepable().await;
+    let owner = login(&parts.app, "admin-secret").await;
+    let start = r#"{"new":{"id":"fresh","label":"Fresh"},"login":"claude_ai"}"#;
+    let started = post(&parts.app, "/admin/oauth/sessions", start, Some(&owner)).await;
+    assert_eq!(started.status(), 201);
+    let deadline = json(started).await["expires_at"].as_i64().unwrap();
+    let at = deadline + 1;
+    parts.clock_cell.store(at, Ordering::SeqCst);
+    assert_eq!(
+        parts.vault.sweep(at),
+        1,
+        "the vault record left at the deadline"
+    );
+    parts.pairing.sweep(at);
+    assert_eq!(
+        get(&parts.app, "/admin/accounts/fresh", Some(&owner))
+            .await
+            .status(),
+        404
+    );
+    let other = login(&parts.app, "admin-secret").await;
+    assert_eq!(
+        post(&parts.app, "/admin/oauth/sessions", start, Some(&other))
+            .await
+            .status(),
+        201,
+        "the expired pairing holds the id no longer"
+    );
+}
+
+#[tokio::test]
+async fn a_confirm_whose_id_a_create_took_meanwhile_answers_409_and_leaves_the_row_untouched() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"fresh","kind":"oauth","label":"Taken"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        json(confirmed).await["error"],
+        "an account with this id exists"
+    );
+    let acct = json(get(&app, "/admin/accounts/fresh", Some(&cookie)).await).await;
+    assert_eq!(
+        (acct["label"].as_str(), acct["state"].as_str()),
+        (Some("Taken"), Some("unpaired")),
+        "the row belongs to the create that won"
+    );
+    assert!(
+        acct["credential"]["access_expires_at"].is_null(),
+        "no credential reached the winner's row"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+}
+
+#[tokio::test]
+async fn a_start_with_new_for_an_existing_id_answers_409() {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"new":{"id":"business","label":"Business"}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        json(refused).await["error"],
+        "an account with this id exists"
+    );
+}
+
+#[tokio::test]
+async fn a_start_with_both_members_or_neither_answers_400() {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (body, error) in [
+        (
+            r#"{"account_id":"business","new":{"id":"fresh","label":"Fresh"}}"#,
+            "body must carry an account_id or a new account",
+        ),
+        (
+            r#"{"login":"claude_ai"}"#,
+            "body must carry an account_id or a new account",
+        ),
+        (
+            r#"{"new":{"id":"Bad Id","label":"x"}}"#,
+            "id must match [a-z0-9][a-z0-9-]{0,63}",
+        ),
+        (
+            r#"{"new":{"id":"ok","label":""}}"#,
+            "a new account needs a label",
+        ),
+    ] {
+        let refused = post(&app, "/admin/oauth/sessions", body, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{body}");
+        assert_eq!(json(refused).await["error"], error, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_start_with_new_whose_identity_another_slot_holds_leaves_no_row() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(pair_business(&app, &cookie).await.status(), 200);
+    let id = common::exchanged_session_for_new(&app, &cookie, "second", "Second").await;
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        json(confirmed).await["error"],
+        "that upstream account is already paired to another slot"
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/second", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "the refused confirm left no row"
+    );
+    let business = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(business["state"], "ready");
+}
+
+#[tokio::test]
+async fn a_confirm_whose_create_the_store_refuses_answers_500_and_leaves_no_row() {
+    use common::{get, json, login, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    store.debug_fail_next_credential_commit();
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 500);
+    assert_eq!(json(confirmed).await["error"], "storage failure");
+    assert_eq!(
+        get(&app, "/admin/accounts/fresh", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "the refused create left no row"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
 }
 
 #[tokio::test]

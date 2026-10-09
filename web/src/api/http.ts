@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -138,8 +138,8 @@ export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[
 const withRevision = (body: Record<string, unknown>, revision?: number) =>
   revision === undefined ? body : { ...body, expected_revision: revision };
 
-// The writes of the pool, key and account dialogs and the account's two inline editors: each shows a refusal in its
-// own callout or footer, so the shell's toast would only repeat it.
+// The writes of the pool, key and account dialogs, the pairing dialog's start and the account's two inline editors:
+// each shows a refusal in its own callout or footer, so the shell's toast would only repeat it.
 const DIALOG_WRITE = { quiet: true };
 
 export class HttpApi implements Api {
@@ -257,7 +257,8 @@ export class HttpApi implements Api {
     const r = await call<Record<string, unknown>>('POST', `/admin/keys/${enc(id)}/rotate`);
     return { key: d.decodeKey(r), secret: String(r.secret) };
   };
-  startPairing = async (accountId: string) => d.decodePairingSession(await call('POST', '/admin/oauth/sessions', { account_id: accountId, login: 'claude_ai' }));
+  startPairing = async (start: PairingStart) =>
+    d.decodePairingSession(await call('POST', '/admin/oauth/sessions', 'accountId' in start ? { account_id: start.accountId, login: 'claude_ai' } : { login: 'claude_ai', new: { id: start.id, label: start.label } }, false, DIALOG_WRITE));
   updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
     d.decodeAccount(
       await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), false, DIALOG_WRITE),

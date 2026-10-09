@@ -62,7 +62,7 @@ const SYNC = {
   key_models: { decode: (b) => d.decodeKeyModels(b), mock: (api) => api.getKeyModels('laptop') },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   models_state: { decode: (b) => d.decodeModelsState(b), mock: (api) => api.getModelsState() },
-  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('legacy') },
+  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },
   request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },

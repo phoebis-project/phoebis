@@ -48,6 +48,15 @@ when what the mock answers for a route differs in shape from what the decoder re
 what holds the rows a fold computes rather than spreads (`buildRequestEvents`, `getOverview`, `groupOf`, and the
 quota history's `sawtooth`) to the fixtures' shape.
 
+`test/fixtures/routing/walk_steps.json` lists every step id a decision's walk records with the verdict words the engine
+writes for it, and the three words a partition fact carries in place of a count. `PHOEBIS_WRITE_FIXTURES=1 cargo test -p
+phoebis-routing --test walk_steps` writes it from the routing crate's table, which the recorder asserts each step
+against, and the same test run without the variable fails when the file differs from the table. The recorder does not
+see the `cool` step or the refusal record's two steps, so the test checks those three against the table itself.
+`test/decisionStrip.test.mjs` reads the file and fails `npm test` when a step lacks its station or its name, a verdict
+its tone, or a partition value its word or its tone, and when the console's station table names a step the file does not
+list. `npm run sync-mock` reads only the files directly under `test/fixtures/`, so it skips this subdirectory.
+
 To add a route: capture its fixture in the Rust harness, run `npm run sync-mock`, write its decoder in
 `src/api/decode.ts` and its `Api` method, add a `SYNC` row for it in `test/mock-sync.test.mjs` (the test names
 the fixture that lacks one), and back it in `MockApi` from a story row that spreads its sample.

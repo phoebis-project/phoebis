@@ -13,6 +13,7 @@
     },
     "fable_window": null,
     "fetched_at": 1000000,
+    "held_until": null,
     "identity_generation": 1,
     "poll": {
       "backoff_since": null,

@@ -107,10 +107,14 @@ export interface PoolChecks {
  * The id a create derives from a name, and whether the name gave it nothing: `slug` keeps ASCII letters and digits
  * alone, so a name without one falls back to the id `item`.
  */
-function derivedId(name: string): { id: string; unnamed: boolean } {
+export function derivedId(name: string): { id: string; unnamed: boolean } {
   const id = slug(name);
   return { id, unnamed: id === 'item' && !/[a-z0-9]/i.test(name) };
 }
+
+/** `value` with every object's keys in sorted order, so a discard question's compare reads values alone. */
+export const sortKeys = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(sortKeys) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])])) : value;
 
 /**
  * Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes

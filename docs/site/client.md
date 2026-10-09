@@ -112,7 +112,7 @@ draws no plan window.
 The keepalive mod installs from its marketplace, inside Claude Code:
 
 ```text
-/plugin marketplace add daystrom-labs/phoebis-keepalive
+/plugin marketplace add daystrom-labs/phoebis-marketplace
 /plugin install phoebis-keepalive@phoebis
 ```
 

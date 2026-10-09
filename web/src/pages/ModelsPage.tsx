@@ -90,12 +90,14 @@ export function ModelsPage() {
           ? row("No rules: every model the pool's accounts serve is allowed.", true)
           : processed.rules.map((r, i) => (
               <tr key={i}>
-                <td>
+                <td className="col-fit">
                   <Badge tone={r.level === 'key' ? 'accent' : 'neutral'}>{r.level}</Badge>
                 </td>
-                <td>{r.not ? 'Deny' : 'Allow'}</td>
-                <td className="mono">{r.pattern}</td>
-                <td>
+                <td className="col-fit">{r.not ? 'Deny' : 'Allow'}</td>
+                <td className="mono col-fill" title={r.pattern}>
+                  {r.pattern}
+                </td>
+                <td className="col-fit">
                   <CoolingCell rule={r} />
                 </td>
               </tr>
@@ -129,10 +131,10 @@ export function ModelsPage() {
           <table className="table">
             <thead>
               <tr>
-                <th>Level</th>
-                <th>Rule</th>
-                <th>Pattern</th>
-                <th>Cooling</th>
+                <th className="col-fit">Level</th>
+                <th className="col-fit">Rule</th>
+                <th className="col-fill">Pattern</th>
+                <th className="col-fit">Cooling</th>
               </tr>
             </thead>
             <tbody>{rulesBody}</tbody>

@@ -53,31 +53,6 @@ export function SettingsPage() {
 
   return (
     <div className="settings">
-      <Card
-        title="Downstream client configuration"
-        subtitle="Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page."
-        actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
-      >
-        <pre className="snippet">{snippet}</pre>
-        {s && (
-          <p className="muted snippet__hint">
-            Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds. Replace the
-            placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy,
-            a port mapping or another host name can stand between Claude Code and the listener.
-          </p>
-        )}
-        <dl className="envdl">
-          {ENV_TERMS.map((t) => (
-            <div className="envdl__row" key={t.term}>
-              <dt>
-                <code>{t.term}</code>
-              </dt>
-              <dd>{t.body}</dd>
-            </div>
-          ))}
-        </dl>
-      </Card>
-
       <Card title="Appearance" subtitle="Stored in this browser only.">
         <div className="setting-row">
           <div>
@@ -136,6 +111,31 @@ export function SettingsPage() {
         ) : (
           <Skeleton height={60} />
         )}
+      </Card>
+
+      <Card
+        title="Downstream client configuration"
+        subtitle="Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page."
+        actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
+      >
+        <pre className="snippet">{snippet}</pre>
+        {s && (
+          <p className="muted snippet__hint">
+            Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds. Replace the
+            placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy,
+            a port mapping or another host name can stand between Claude Code and the listener.
+          </p>
+        )}
+        <dl className="envdl">
+          {ENV_TERMS.map((t) => (
+            <div className="envdl__row" key={t.term}>
+              <dt>
+                <code>{t.term}</code>
+              </dt>
+              <dd>{t.body}</dd>
+            </div>
+          ))}
+        </dl>
       </Card>
     </div>
   );

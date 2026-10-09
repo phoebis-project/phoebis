@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -93,8 +93,52 @@ function expect(name, text, needles) {
 }
 /** A grouped dialog's group section by its label; hidden groups stay mounted, so a lookup reaches every one. */
 const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
+/**
+ * A table's columns as the width rule marks them: each header's class (fit, fill, both or none), the fill headers'
+ * texts in order, the rows shaped like the head (a placeholder spans the table with one cell and takes no class), and
+ * every cell of those rows whose class differs from its header's. jsdom lays nothing out, so the classes alone are
+ * read here and the browser pass reads the widths.
+ */
+const columnClasses = (table) => {
+  const classOf = (c) => (c?.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c?.classList.contains('col-fill') ? 'fill' : 'none');
+  const ths = [...(table?.querySelectorAll('thead th') ?? [])];
+  const heads = ths.map(classOf);
+  const rows = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === ths.length);
+  return {
+    cellsOff: rows.flatMap((tr) => [...tr.children].map((td, i) => (classOf(td) === heads[i] ? null : `${ths[i].textContent?.trim() || `cell ${i}`}: ${classOf(td)}`)).filter(Boolean)),
+    fills: ths.filter((th) => classOf(th) === 'fill').map((th) => th.textContent?.trim()),
+    heads,
+    rows: rows.length,
+  };
+};
+/** Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class. */
+const columnsMarked = (name, table, fill) => {
+  const read = columnClasses(table);
+  results.push({
+    name,
+    ok: read.heads.length > 0 && read.heads.every((c) => c === 'fit' || c === 'fill') && JSON.stringify(read.fills) === JSON.stringify(fill) && read.rows > 0 && read.cellsOff.length === 0,
+    missing: [table ? JSON.stringify(read.heads) : 'no table', JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
+  });
+};
+/**
+ * Every fill cell of `table` carries its own text as its title, the whole value the column's ellipsis cuts, for the
+ * hover.
+ */
+const fillTitles = (name, table) => {
+  const cells = [...(table?.querySelectorAll('tbody td.col-fill') ?? [])];
+  const off = cells.filter((td) => (td.getAttribute('title') ?? '') !== (td.textContent?.trim() ?? '')).map((td) => `${JSON.stringify(td.textContent?.trim())}: ${td.getAttribute('title') ?? 'no title'}`);
+  results.push({ name, ok: cells.length > 0 && off.length === 0, missing: [`${cells.length} fill cells`, ...off.slice(0, 5)] });
+};
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
+const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
+/** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
+const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+/** The discard question while it is up, the topmost open dialog (the question's own modal makes it so), or null. */
+const discardQuestion = (root) => {
+  const last = [...root.querySelectorAll('dialog[open]')].pop();
+  return last && (last.textContent ?? '').includes('Discard changes?') ? last : null;
+};
 
 /**
  * `rows` pairs an account id with the line drawn under its name, or null where no line is drawn: the line is the
@@ -433,6 +477,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
+fillTitles('/ every Key cell of the recent requests table carries its own text as its title', m.container.querySelector('.dash__recent'));
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -609,6 +655,40 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
 }
 {
+  // The mark's offset compares exactly only when the page and the check read one instant, so the check mounts its
+  // own frozen page and leaves the shared mount on the live clock for the checks around it. A card draws its 5h, 7d
+  // and Fable rows, so the walk takes those three per account and finds each row by its chip's name.
+  const at = Date.now();
+  const q = await mount('/quota', { now: at });
+  const rows = [];
+  for (const a of (await api.listAccounts()).filter((x) => x.kind === 'oauth' && (x.windows.length > 0 || x.fableWindow !== null))) {
+    const card = [...q.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === a.label);
+    const windowOf = (id) => a.windows.find((w) => w.id === id) ?? null;
+    for (const [name, w] of [['5h', windowOf('5h')], ['7d', windowOf('7d')], ['Fable', a.fableWindow]]) {
+      const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === name);
+      const meter = chip?.nextElementSibling;
+      const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
+      const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
+      const share = live ? remainingTimeShare(w, at) : null;
+      rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
+    }
+  }
+  const marked = rows.filter((r) => r.want !== null);
+  const off = rows.filter((r) => (r.want === null ? r.marks !== 0 : r.marks !== 1 || r.left !== r.want || !/, (\d+% (ahead of|behind) pace|on pace)$/.test(r.title)));
+  results.push({
+    name: "/quota every live window row draws one pace mark at the window's remaining time share whose title names the lead",
+    ok: marked.length > 0 && rows.some((r) => r.want === null) && off.length === 0,
+    missing: off.map((r) => JSON.stringify(r)),
+  });
+  const titleOf = (name) => rows.find((r) => r.account === 'primary' && r.name === name)?.title ?? 'no title';
+  results.push({
+    name: '/quota the story holds one window ahead of pace and one behind',
+    ok: titleOf('5h').endsWith('ahead of pace') && titleOf('7d').endsWith('behind pace'),
+    missing: [titleOf('5h'), titleOf('7d')],
+  });
+  q.unmount();
+}
+{
   // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
   // grows one card past the rest.
   const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
@@ -766,6 +846,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     missing: [...backoff.map((b) => b.textContent?.trim() ?? ''), JSON.stringify(backoffTitle)],
   });
 }
+// The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
+// chips and fills to be read against: the cards and the lanes draw the three windows in one order.
+const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
+const cardTone = (label, window) => cardToneOf.get(label)?.[['5h', '7d', 'fable'].indexOf(window)] ?? 'no card chip';
 await quotaSection(m, 'Quota windows');
 {
   const panel = m.container.querySelector('#quota-windows');
@@ -781,14 +865,24 @@ await quotaSection(m, 'Quota windows');
     missing: [JSON.stringify(m.location()), m.container.querySelector('.qcard') ? 'a card is drawn' : 'no card', panel?.querySelector('.timeline') ? 'a timeline' : 'no timeline'],
   });
 }
-expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'plan ends']);
+expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'used', 'past window', 'plan ends']);
 {
   const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
   results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
   const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
   results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
-  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
+  const chips = [...m.container.querySelectorAll('.tl-chip')].map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
+  const withShare = chips.filter((c) => c.text.includes('% left'));
+  const withoutShare = chips.filter((c) => !c.text.includes('% left'));
+  results.push({
+    name: '/quota a timeline chip with a share carries the tone on the chip and none on the percentage',
+    ok: withShare.length > 0 && withoutShare.length > 0 && withShare.every((c) => ['tl-chip--good', 'tl-chip--low', 'tl-chip--warn'].includes(c.tone) && c.pct === 'none') && withoutShare.every((c) => c.tone === 'none' && c.pct === 'none'),
+    missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
+  });
+  // A lane chip without a share carries no tone where the card chip of that window reads absent.
+  const laneChipTones = [...m.container.querySelectorAll('.lane')].flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
+  const chipOff = laneChipTones.filter((c) => c.tone !== cardTone(c.label, c.window)).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
+  results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
@@ -809,16 +903,69 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
   zoom('5-hour');
   await m.settle();
-  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
+  const liveBarOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label)?.querySelector('.lane__bar--live');
+  const bar = liveBarOf('legacy');
   const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
   const barTitle = bar?.getAttribute('title') ?? 'no bar';
+  // The projected bar has no current sample to fill by, where primary's current 5-hour window on the same zoom has.
+  const fills = [bar?.querySelectorAll('.lane__used').length ?? null, liveBarOf('primary')?.querySelectorAll('.lane__used').length ?? null];
   zoom('Weekly');
   await m.settle();
   results.push({
     name: "/quota an expired window's current bar carries its reset stamp and no share",
-    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
-    missing: [barLabel, barTitle],
+    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%') && fills[0] === 0 && fills[1] === 1,
+    missing: [barLabel, barTitle, `used fills: legacy ${fills[0]}, primary ${fills[1]}`],
   });
+}
+{
+  // The fill is the window's used share placed from the window's start and cut to the drawn bar, so the expectation
+  // reads the bar's span back off its inline style and places the share the same way. The shared mount runs on the
+  // live clock, so the widths compare within half a point.
+  const DAY = 86_400_000;
+  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
+  const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const accounts = await api.listAccounts();
+  const expired = (w) => w.resetsAt !== null && Date.parse(w.resetsAt) < Date.now();
+  const toneOf = (fill) => [...(fill?.classList ?? [])].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null;
+  // The page's span: the weekly zoom opens three days before today's midnight and runs two weeks, the 5-hour zoom one
+  // day before and three days.
+  const fillOf = (label, windowId, days) => {
+    const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === windowId);
+    const bar = laneOf(label)?.querySelector('.lane__bar--live');
+    const fills = [...(bar?.querySelectorAll('.lane__used') ?? [])];
+    const startMs = new Date(Date.now()).setHours(0, 0, 0, 0) - (days === 14 ? 3 : 1) * DAY;
+    const from = startMs + (parseFloat(bar?.style.left ?? 'NaN') / 100) * days * DAY;
+    const to = from + (parseFloat(bar?.style.width ?? 'NaN') / 100) * days * DAY;
+    const period = (w?.periodHours ?? 0) * 3_600_000;
+    const usedEnd = Date.parse(w?.resetsAt ?? '') - period + Math.min(1, w?.utilization ?? 0) * period;
+    return { drawn: parseFloat(fills[0]?.style.width ?? 'NaN'), fills: fills.length, tone: toneOf(fills[0]), want: Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 };
+  };
+  const weekly = fillOf('primary', '7d', 14);
+  results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the weekly zoom", ok: weekly.fills === 1 && Math.abs(weekly.drawn - weekly.want) <= 0.5, missing: [JSON.stringify(weekly)] });
+  const lanes = [...m.container.querySelectorAll('.lane')].map((l) => {
+    const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
+    const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
+    const bar = l.querySelector('.lane__bar--live');
+    return { fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), tone: toneOf(bar?.querySelector('.lane__used')), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+  });
+  const withShare = lanes.filter((l) => l.share);
+  const fillOff = withShare.filter((l) => l.tone !== cardTone(l.label, '7d')).map((l) => `${l.label}: ${l.tone} where the card chip reads ${cardTone(l.label, '7d')}`);
+  results.push({ name: "/quota each live bar's fill on the weekly zoom carries the tone of the same account's 7-day card chip", ok: withShare.length > 0 && fillOff.length === 0, missing: fillOff });
+  const alike = withShare.flatMap((a) => withShare.filter((b) => a.label < b.label && a.utilization !== b.utilization && a.width === b.width).map((b) => `${a.label} and ${b.label} at ${a.width}`));
+  results.push({
+    name: '/quota no two live bars of windows at different shares fill alike',
+    ok: withShare.length >= 2 && new Set(withShare.map((l) => l.utilization)).size >= 2 && withShare.every((l) => l.fills === 1) && alike.length === 0,
+    missing: [...lanes.map((l) => JSON.stringify(l)), ...alike],
+  });
+  const legend = [...m.container.querySelectorAll('.timeline__legend > span:not(.timeline__note)')].map((s) => s.textContent?.trim() ?? '');
+  results.push({ name: '/quota the legend reads used and past window', ok: JSON.stringify(legend) === JSON.stringify(['current window', 'upcoming', 'used', 'past window', 'now', 'plan ends']), missing: legend });
+  zoom('5-hour');
+  await m.settle();
+  const session = fillOf('primary', '5h', 3);
+  zoom('Weekly');
+  await m.settle();
+  results.push({ name: "/quota the live bar of primary's lane fills to its window's used share on the 5-hour zoom", ok: session.fills === 1 && Math.abs(session.drawn - session.want) <= 0.5, missing: [JSON.stringify(session)] });
+  results.push({ name: "/quota the fill of primary's 5-hour bar carries the tone of its 5-hour card chip", ok: session.tone !== null && session.tone === cardTone('primary', '5h'), missing: [String(session.tone), cardTone('primary', '5h')] });
 }
 {
   // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
@@ -925,6 +1072,26 @@ m.unmount();
     name: '/quota a card whose read failed still draws the windows it holds, and the error block is kept for a card with none',
     ok: Boolean(legacy?.querySelector('.qcard__windows')) && !legacy?.querySelector('.qcard__error') && !legacy?.classList.contains('is-error') && Boolean(cardOf('spare')?.querySelector('.qcard__error')),
     missing: [legacy?.textContent?.slice(0, 160) ?? 'no legacy card'],
+  });
+  api.listAccounts = listAccounts;
+  held.unmount();
+}
+
+// The router answers a held account's deadline as the snapshot's own member, so a card with no windows prints the
+// next attempt beside its error, to the minute in the viewer's zone.
+{
+  const heldUntil = new Date(Date.now() + 4 * 60_000).toISOString();
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'secondary' ? { ...a, fableWindow: null, usage: { ...a.usage, error: 'usage request rate-limited', heldUntil, status: 'error' }, windows: [] } : a));
+  const held = await mount('/quota');
+  const card = [...held.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'secondary');
+  const text = card?.querySelector('.qcard__error p')?.textContent ?? '';
+  // The run is UTC under the default 24-hour format, so the printed hour and minute are the instant's own.
+  const minute = heldUntil.slice(11, 16);
+  results.push({
+    name: "/quota a held card prints the next attempt beside the hold in the viewer's zone",
+    ok: new RegExp(`^usage request rate-limited, next attempt [A-Z][a-z]{2} \\d{2}, \\d{4}, ${minute}( [AP]M)?$`).test(text),
+    missing: [text || 'no error block on secondary', `expected the minute ${minute}`],
   });
   api.listAccounts = listAccounts;
   held.unmount();
@@ -1038,6 +1205,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   });
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
   results.push({ name: '/accounts/primary the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
+  columnsMarked('/accounts the cooling-down block marks Reason as its fill column', cardOf('Cooling down')?.querySelector('table'), ['Reason']);
   const badge = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/accounts/primary the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
 }
@@ -1241,95 +1409,301 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await rename('primary');
 }
 {
-  const add = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account');
-  add?.click();
+  // The Add account dialog: the id derives from the label, and the OAuth kind opens the pairing with no row written.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const open = () => [...m.container.querySelectorAll('dialog[open]')];
+  const openAdd = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+    await m.settle(300);
+    return open().pop() ?? null;
+  };
+  /** A dialog's field by its label, and the input inside it. */
+  const fieldOf = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label) ?? null;
+  const inputOf = (dlg, label) => fieldOf(dlg, label)?.querySelector('input') ?? null;
+  const typeInto = async (input, value) => {
+    if (!input) return;
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+  };
+  /** The id line under the Label field, drawn while the id follows the label. Null once customize revealed the input. */
+  const idLine = (dlg) => [...(dlg?.querySelectorAll('p.field__hint') ?? [])].find((p) => p.textContent?.trim().startsWith('Id:')) ?? null;
+  const idRead = (dlg) => idLine(dlg)?.querySelector('.mono')?.textContent ?? null;
+  const primary = (dlg) => buttonIn(dlg, 'Start pairing') ?? buttonIn(dlg, 'Add API key') ?? null;
+  const rowCount = () => m.container.querySelectorAll('.account-rows .account-row').length;
+  const names = () => [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+
+  let dlg = await openAdd();
+  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(open().length)] });
+  const oauthHint = inputOf(dlg, 'Label')?.getAttribute('placeholder') ?? null;
+  await typeInto(inputOf(dlg, 'Label'), '!!!');
+  results.push({
+    name: '/accounts a label of punctuation alone holds Start pairing',
+    ok: idRead(dlg) === 'Id: none yet, the label needs a letter or digit' && primary(dlg)?.textContent?.trim() === 'Start pairing' && primary(dlg)?.disabled === true,
+    missing: [idRead(dlg) ?? 'no id line', `${primary(dlg)?.textContent?.trim() ?? 'no primary'} disabled ${primary(dlg)?.disabled}`],
+  });
+  await typeInto(inputOf(dlg, 'Label'), 'primary');
+  const takenLine = idLine(dlg)?.textContent ?? '';
+  const takenHeld = primary(dlg)?.disabled === true;
+  await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
+  results.push({
+    name: '/accounts a label that derives a listed id holds the button with the taken hint',
+    ok: takenLine.includes('Id: primary') && takenLine.includes('taken, customize the id') && takenHeld && idRead(dlg) === 'Id: fresh-desk' && !(idLine(dlg)?.textContent ?? '').includes('taken') && primary(dlg)?.disabled === false,
+    missing: [takenLine || 'no id line', `held ${takenHeld}`, idLine(dlg)?.textContent ?? 'no id line after', `enabled ${primary(dlg)?.disabled === false}`],
+  });
+  // Start pairing opens the pairing dialog and writes nothing: no read lands and the list keeps its rows.
+  const rowsBefore = rowCount();
+  const reads = countCalls('listAccounts');
+  const cancels = countCalls('cancelPairing');
+  primary(dlg)?.click();
+  await m.settle(500);
+  const pairingDlg = open().pop() ?? null;
+  const pairingTitle = pairingDlg?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
+  results.push({
+    name: '/accounts Start pairing opens the pairing dialog with no new row in the list',
+    ok: open().length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
+    missing: [`${open().length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+  });
+  buttonIn(pairingDlg, 'Cancel')?.click();
   await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
-  const hints = () => [...(dlg?.querySelectorAll('.form-row input') ?? [])].map((i) => i.getAttribute('placeholder'));
-  const oauthHints = hints();
-  const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
-  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
+  results.push({
+    name: "/accounts Cancel on a new account's pairing leaves the list unchanged",
+    ok: pairingTitle === 'Pair Fresh desk' && open().length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
+    missing: [pairingTitle || 'no pairing dialog', `${open().length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+  });
+  reads.restore();
+  cancels.restore();
+
+  {
+    // A customized id the route's slug rule refuses is held in the form, the hint naming the shape, so that refusal
+    // never reaches the route. A start the route refuses all the same keeps the typed draft in the form.
+    dlg = await openAdd();
+    await typeInto(inputOf(dlg, 'Label'), 'Home desk');
+    buttonIn(idLine(dlg), 'customize')?.click();
+    await m.settle(150);
+    await typeInto(inputOf(dlg, 'Id'), 'Home_Invalid');
+    const hint = fieldOf(dlg, 'Id')?.querySelector('.field__hint')?.textContent ?? '';
+    results.push({
+      name: '/accounts a customized id outside the slug shape holds Start pairing, and the Id hint names the shape',
+      ok: primary(dlg)?.disabled === true && inputOf(dlg, 'Id')?.getAttribute('aria-invalid') === 'true' && hint.startsWith('Not an id the router takes. ') && hint.includes('a letter or digit first, 64 at most'),
+      missing: [`disabled ${primary(dlg)?.disabled}`, `aria-invalid ${inputOf(dlg, 'Id')?.getAttribute('aria-invalid')}`, hint || 'no hint'],
+    });
+    await typeInto(inputOf(dlg, 'Id'), 'home-desk');
+    const refusal = 'a pairing is already running for this account';
+    failNextCall('startPairing', '/admin/oauth/sessions', refusal, { quiet: true, status: 409 });
+    primary(dlg)?.click();
+    await m.settle(500);
+    const refused = {
+      callout: dlg?.querySelector('[role="alert"]')?.textContent ?? 'no callout',
+      enabled: primary(dlg)?.disabled === false,
+      id: inputOf(dlg, 'Id')?.value ?? 'no Id input',
+      label: inputOf(dlg, 'Label')?.value ?? 'no Label input',
+      open: open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
+    };
+    primary(dlg)?.click();
+    await m.settle(500);
+    const retried = open().pop() ?? null;
+    const retriedTitle = retried?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
+    results.push({
+      name: "/accounts a refused pairing start keeps the Add account form open with the typed label and id, the route's sentence in its callout and Start pairing enabled, and a second start reaches the pairing dialog",
+      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && open().length === 1 && retriedTitle === 'Pair Home desk',
+      missing: [JSON.stringify(refused), `${open().length} open`, retriedTitle || 'no title'],
+    });
+    buttonIn(retried, 'Cancel')?.click();
+    await m.settle(300);
+  }
+
+  dlg = await openAdd();
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
   results.push({
-    name: "/accounts Add account suggests home for an OAuth account's id and label, and office and Office workspace for an API key's id and label",
-    ok: JSON.stringify(oauthHints) === '["home","home"]' && JSON.stringify(hints()) === '["office","Office workspace"]',
-    missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
+    name: "/accounts Add account suggests home for an OAuth account's label, and Office workspace for an API key's",
+    ok: oauthHint === 'home' && inputOf(dlg, 'Label')?.getAttribute('placeholder') === 'Office workspace',
+    missing: [String(oauthHint), String(inputOf(dlg, 'Label')?.getAttribute('placeholder'))],
   });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
   const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
   results.push({
-    name: '/accounts the API-key form asks for an id, a label, and the key, and nothing else',
-    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
-    missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
+    name: '/accounts the API-key form asks for a label and the key, with the id as a line, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 2 && (idLine(dlg)?.textContent?.trim().startsWith('Id:') ?? false) && (dlg?.textContent ?? '').includes(subtitle),
+    missing: [...fields, ...choices, `${inputs} inputs`, idLine(dlg)?.textContent ?? 'no id line', (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
-  const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
   const typeBox = dlg?.querySelector('[aria-label="Account type"]')?.parentElement;
+  await typeInto(inputOf(dlg, 'Label'), 'Work (Max)');
+  const derivedRead = idRead(dlg);
+  const follows = fieldOf(dlg, 'Label') !== null && fieldOf(dlg, 'Label')?.nextElementSibling === idLine(dlg);
+  buttonIn(idLine(dlg), 'customize')?.click();
+  await m.settle(150);
+  const idInput = inputOf(dlg, 'Id');
   results.push({
-    name: '/accounts Id and Label share a row and the type control keeps its content width',
-    ok: pairs.length === 1 && JSON.stringify(pairs[0]) === JSON.stringify(['Id', 'Label']) && typeBox?.classList.contains('row') === true,
-    missing: [JSON.stringify(pairs), `type control in ${typeBox?.className ?? 'nothing'}`],
+    name: '/accounts the id line follows the Label field and customize reveals an input holding the derived id',
+    ok: derivedRead === 'Id: work-max' && follows && idLine(dlg) === null && idInput?.value === 'work-max' && idInput?.classList.contains('mono') === true && typeBox?.classList.contains('row') === true,
+    missing: [derivedRead ?? 'no id line', `follows the Label field ${follows}`, `Id input ${idInput?.value ?? 'absent'}`, `type control in ${typeBox?.className ?? 'nothing'}`],
   });
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  buttonIn(dlg, 'Cancel')?.click();
   await m.settle(200);
+
+  // The confirm of a new account: the row appears, the page selects it, and the toast names the identity.
+  dlg = await openAdd();
+  await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
+  primary(dlg)?.click();
+  await m.settle(500);
+  const pair = open().pop() ?? null;
+  const pairState = new URLSearchParams((pair?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  await typeInto(pair?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${pairState}`);
+  buttonIn(pair, 'Submit')?.click();
+  await m.settle(900);
+  buttonIn(pair, 'Confirm')?.click();
+  await m.settle(900);
+  const toast = m.container.querySelector('.toast')?.textContent ?? '';
+  results.push({
+    name: '/accounts Confirm adds the row and selects it',
+    ok: open().length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
+    missing: [`${open().length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
+  });
+  // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
+  // the page returns to primary for the checks that follow.
+  await api.deleteAccount('fresh-desk').catch((e) => {
+    if (e?.status !== 404) throw e;
+  });
+  await m.navigate('/accounts/primary');
+  {
+    // A confirm whose reload fails: the list keeps its rows, so the page lands on the first account rather than
+    // holding a URL no row answers, where the detail pane would draw nothing until the next refresh. On a mount of
+    // its own, so the failed read's standing reaches none of the checks that follow.
+    const lost = await mount('/accounts/primary');
+    const openIn = () => [...lost.container.querySelectorAll('dialog[open]')];
+    const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await lost.settle(120);
+    };
+    [...lost.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+    await lost.settle(300);
+    const add = openIn().pop() ?? null;
+    await type(fieldIn(add, 'Label'), 'Fresh lamp');
+    buttonIn(add, 'Start pairing')?.click();
+    await lost.settle(500);
+    const lamp = openIn().pop() ?? null;
+    const lampState = new URLSearchParams((lamp?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+    await type(lamp?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${lampState}`);
+    buttonIn(lamp, 'Submit')?.click();
+    await lost.settle(900);
+    failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable', { quiet: true });
+    buttonIn(lamp, 'Confirm')?.click();
+    await lost.settle(900);
+    const listed = [...lost.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+    results.push({
+      name: '/accounts a confirm whose reload fails lands on the first account with its detail drawn',
+      ok: openIn().length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
+      missing: [`${openIn().length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
+    });
+    lost.unmount();
+    await api.deleteAccount('fresh-lamp').catch((e) => {
+      if (e?.status !== 404) throw e;
+    });
+  }
+
+  // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
+  dlg = await openAdd();
+  clickOutside(dlg);
+  await m.settle(200);
+  results.push({ name: '/accounts Add account closes on an outside click while unchanged', ok: dlg !== null && open().length === 0, missing: [dlg ? 'opened' : 'no dialog', `${open().length} open`] });
+  dlg = await openAdd();
+  await typeInto(inputOf(dlg, 'Label'), 'Draft');
+  clickOutside(dlg);
+  await m.settle(200);
+  const asked = discardQuestion(m.container);
+  results.push({ name: '/accounts Add account asks after a typed label', ok: open().length === 2 && asked !== null && dlg?.hasAttribute('open') === true, missing: [`${open().length} open`, asked ? 'asked' : 'no question'] });
+  buttonIn(asked, 'Keep editing')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Add account Keep editing keeps the label', ok: open().length === 1 && inputOf(dlg, 'Label')?.value === 'Draft', missing: [`${open().length} open`, inputOf(dlg, 'Label')?.value ?? 'no Label input'] });
+  clickOutside(dlg);
+  await m.settle(200);
+  const askedAgain = discardQuestion(m.container);
+  buttonIn(askedAgain, 'Discard')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Add account Discard closes it', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`] });
 }
 {
-  const head = m.container.querySelector('.detail__head');
-  // Pairing dialog: step 1 link, step 2 paste, step 3 preview.
-  const repair = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
-  repair?.click();
-  await m.settle(500);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts pairing step 1', dlg?.textContent ?? '', ['Re-pair primary', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'I have logged in']);
-  // Read before step 1 unmounts: the callback the browser lands on carries this state, and the mock now checks it.
-  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
-  const next = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in');
-  next?.click();
-  await m.settle(200);
-  expect('/accounts pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load, since nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
-  const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
-  results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
-  results.push({ name: '/accounts pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
+  // The pairing dialog: the link, the paste field and the redirect on one page, the identity on the Confirm page.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const type = async (value) => {
+  const open = () => [...m.container.querySelectorAll('dialog[open]')];
+  const openRepair = async () => {
+    [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
+    await m.settle(500);
+    return open().pop() ?? null;
+  };
+  const type = async (input, value) => {
+    if (!input) return;
     setter.call(input, value);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(100);
   };
+  const CALLBACK_SENTENCE = 'Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code alone.';
+  const dlg = await openRepair();
+  expect("/accounts the pairing's first page carries the link, Copy, Open in browser, the expiry, the field, the redirect and the callback sentence", dlg?.textContent ?? '', ['Re-pair primary', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', CALLBACK_SENTENCE, 'Submit']);
+  // The callback the browser lands on carries this state, and the mock checks it.
+  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
+  results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
+  results.push({ name: "/accounts the pairing's first page exposes the state the callback must carry", ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
   if (input) {
-    await type(`http://localhost:54545/callback?code=abc123&state=${state}`);
-    const submit = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit');
-    submit?.click();
+    await type(input, `http://localhost:54545/callback?code=abc123&state=${state}`);
+    buttonIn(dlg, 'Submit')?.click();
     await m.settle(900);
-    expect('/accounts pairing step 3', dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
-    const confirm = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm');
-    confirm?.click();
+    expect("/accounts the pairing's Confirm page reads the identity", dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
+    buttonIn(dlg, 'Confirm')?.click();
     await m.settle(600);
-    results.push({ name: '/accounts pairing closes after confirm', ok: !m.container.querySelector('dialog[open]'), missing: [] });
+    results.push({ name: '/accounts pairing closes after confirm', ok: open().length === 0, missing: [] });
   } else {
     results.push({ name: '/accounts pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
   }
   // A bare code is the other half of the field's promise, so it gets its own pass through the dialog.
-  repair?.click();
-  await m.settle(500);
-  const bare = [...m.container.querySelectorAll('dialog[open]')].pop();
-  [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in')?.click();
-  await m.settle(200);
+  const bare = await openRepair();
   const bareInput = bare?.querySelector('input[placeholder^="http://localhost"]');
   if (bareInput) {
-    setter.call(bareInput, 'abc123');
-    bareInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(100);
-    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit')?.click();
+    await type(bareInput, 'abc123');
+    buttonIn(bare, 'Submit')?.click();
     await m.settle(900);
     expect('/accounts pairing accepts a bare code', bare?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm']);
-    [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    buttonIn(bare, 'Cancel')?.click();
     await m.settle(300);
   } else {
     results.push({ name: '/accounts pairing accepts a bare code', ok: false, missing: ['no input on the second pass'] });
   }
+  // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
+  const unchanged = await openRepair();
+  clickOutside(unchanged);
+  await m.settle(300);
+  results.push({ name: '/accounts the pairing dialog closes on an outside click before anything is pasted', ok: unchanged !== null && open().length === 0, missing: [unchanged ? 'opened' : 'no pairing dialog', `${open().length} open`] });
+  // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
+  const cancels = countCalls('cancelPairing');
+  const pasted = await openRepair();
+  const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
+  await type(pastedInput, 'abc123');
+  clickOutside(pasted);
+  await m.settle(200);
+  const asked = discardQuestion(m.container);
+  results.push({
+    name: '/accounts the pairing dialog asks once the field holds text',
+    ok: open().length === 2 && asked !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
+    missing: [`${open().length} open`, asked ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  });
+  buttonIn(asked, 'Keep editing')?.click();
+  await m.settle(200);
+  results.push({ name: '/accounts Keep editing keeps the pasted text in the pairing field', ok: open().length === 1 && pastedInput?.value === 'abc123', missing: [`${open().length} open`, pastedInput?.value ?? 'no field'] });
+  clickOutside(pasted);
+  await m.settle(200);
+  const askedAgain = discardQuestion(m.container);
+  buttonIn(askedAgain, 'Discard')?.click();
+  await m.settle(300);
+  results.push({ name: '/accounts Discard cancels the pairing and closes the dialog', ok: askedAgain !== null && open().length === 0 && cancels.calls.length === 1, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`, `cancelPairing ${cancels.calls.length}`] });
+  cancels.restore();
 }
 await m.navigate('/accounts/legacy');
 expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a', 'Payment method declined']);
@@ -1423,15 +1797,16 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   };
   const listed = await openCatalog();
   const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-  const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('td')?.firstChild?.textContent ?? '');
+  const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('.catalog__id')?.textContent ?? '');
   expect('/accounts/primary the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
   results.push({
     name: '/accounts/primary the catalog popup reads six columns, sorted by id',
-    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
+    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every(Boolean) && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
     missing: [...heads, ...ids],
   });
+  columnsMarked('/accounts the catalog dialog marks Model and Name as its fill columns', listed?.querySelector('table'), ['Model', 'Name']);
   {
-    const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('td')?.firstChild?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
+    const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('.catalog__id')?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
     const read = { haiku: effort('claude-haiku-4-5-20251001'), opus: effort('claude-opus-5') };
     results.push({
       name: '/accounts/primary the catalog popup ends each row with the effort levels it lists, a dash for none',
@@ -1972,11 +2347,19 @@ m.unmount();
   [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
   await page.settle(150);
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const values = ['refused', 'Refused workspace', 'sk-ant-api03-not-a-key'];
-  for (const [n, input] of [...(dlg?.querySelectorAll('input') ?? [])].entries()) {
-    setter.call(input, values[n]);
+  const fill = async (label, value) => {
+    const input = [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    if (!input) return;
+    setter.call(input, value);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
-  }
+    await page.settle(100);
+  };
+  // The Label first: customize copies the id the label derives, which the typed id then replaces.
+  await fill('Label', 'Refused workspace');
+  buttonIn(dlg, 'customize')?.click();
+  await page.settle(100);
+  await fill('Id', 'refused');
+  await fill('API key', 'sk-ant-api03-not-a-key');
   await page.settle(100);
   const refusal = 'secret must be an API key';
   failNextCall('createAccount', '/admin/accounts', refusal, { quiet: true, status: 400 });
@@ -2216,6 +2599,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const cell = (tr, i) => tr.children[i];
   const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
   results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['primary', 'secondary', 'nightly', 'Overflow workspace']), missing: accountsOf('all') });
+  columnsMarked('/pools the serving table marks Account as its fill column', card('all')?.querySelector('.serving'), ['Account']);
+  {
+    // The Account cell's title names the account alone and the column's ellipsis cuts a budget line, so each line
+    // carries its own text as its title for the hover.
+    const lines = ['all', 'jobs', 'work'].flatMap((name) => rows(name).flatMap((tr) => [...(cell(tr, 1)?.querySelectorAll('.sub') ?? [])]));
+    const off = lines.filter((s) => s.getAttribute('title') !== s.textContent?.trim()).map((s) => `${JSON.stringify(s.textContent?.trim())}: ${s.getAttribute('title') ?? 'no title'}`);
+    results.push({ name: "/pools every budget line in a serving table's Account cell carries its own text as its title", ok: lines.length > 0 && off.length === 0, missing: [`${lines.length} budget lines`, ...off.slice(0, 5)] });
+  }
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
   results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
   const standing = (name, label) => {
@@ -2852,22 +3243,84 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         migrateSwitch?.getAttribute('aria-checked') === 'true' &&
         migratePercent()?.disabled === false &&
         migratePercent()?.value === SHED_DEFAULT_PERCENT &&
-        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round, and a sibling counts as cool under the line minus 5%.'),
+        (util?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.'),
       missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
+    expect('/pools the Utilization thresholds group opens with its intro naming the two windows and the fresh placement', util?.textContent ?? '', [
+      "A window's pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page's.",
+      'A member whose used share runs ahead of the elapsed share by this many points starts a shedding round, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.',
+    ]);
+    // Pool all runs the Pace strategy, so the Strategy field draws its hint, and the Pace floor sits in the Failover group.
+    // The Accounts page link carries its screen-reader note after its words, so the closing sentence is read without its
+    // period.
+    expect('/pools the Pace strategy hint names the Fable week and the 7-day window', [card('Selection')?.textContent ?? '', card('Failover')?.textContent ?? ''].join(' '), [
+      "Pace scores each member by the allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, within the first priority tier that has an eligible account. An unsampled account counts as untouched, and ties are random.",
+      "Each account's windows are on the Accounts page",
+      'Under the Pace strategy, a member with this share or less of the window Pace reads left serves only as the last resort.',
+    ]);
     const percent = migratePercent();
     if (percent) setter.call(percent, '50');
     percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    // The lead ticks share `.ubar__tick` for their size and place, so each track's ticks are read under their own track.
+    const ticks = [...(util?.querySelectorAll('.ubar__track:not(.ubar__track--lead) .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    const leadTicks = () => [...(util?.querySelectorAll('.ubar__track--lead .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    const marginLine = () => util?.querySelector('.ubar__margin');
     results.push({
-      name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
-      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null && util?.querySelector('.ubar__band') === null,
-      missing: [String(percent?.value), ...ticks],
+      name: '/pools the bar draws each member reading with no migrate handle, the lead track its ticks with the margin line and the band, and the percent field holds the typed margin',
+      ok:
+        percent?.value === '50' &&
+        ticks.length === 6 &&
+        ticks.includes('primary: 5-hour 62%') &&
+        util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null &&
+        leadTicks().length === 6 &&
+        marginLine()?.style.left === '75%' &&
+        marginLine()?.getAttribute('title') === 'Shedding margin: 50 points' &&
+        util?.querySelector('.ubar__band') !== null,
+      missing: [String(percent?.value), ...ticks, String(leadTicks().length), String(marginLine()?.style.left), String(marginLine()?.getAttribute('title')), String(util?.querySelector('.ubar__band') !== null)],
+    });
+    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of
+    // the run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The
+    // 7-day windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits
+    // minutes away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's
+    // 41% used reads about 54% elapsed and 13 points behind, secondary's 88% about 27% elapsed and 61 points ahead,
+    // nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the typed value: 20 points sits
+    // at 60% of the track with the band 7.5% wide, 50 at 75%.
+    const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed, (\d+ points? (ahead|behind)|on pace)$/;
+    const atFifty = leadTicks();
+    if (percent) setter.call(percent, '20');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    const atTwenty = [marginLine()?.style.left, marginLine()?.getAttribute('title'), util?.querySelector('.ubar__band')?.style.width];
+    if (percent) setter.call(percent, '50');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({
+      name: "/pools the lead track draws a tick per member and window with the margin line at the field's value",
+      ok:
+        atFifty.length === 6 &&
+        atFifty.every((title) => leadTitle.test(title ?? '')) &&
+        atFifty.some((title) => /^primary: 5-hour 62% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
+        atFifty.some((title) => /^primary: 7-day 41% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
+        atFifty.some((title) => /^secondary: 7-day 88% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
+        atFifty.some((title) => /^nightly: 7-day 35% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
+        util?.querySelector('.ubar__track--lead')?.getAttribute('aria-label') === 'Lead over pace by member and window' &&
+        JSON.stringify(atTwenty) === '["60%","Shedding margin: 20 points","7.5%"]' &&
+        marginLine()?.style.left === '75%',
+      missing: [...atFifty, JSON.stringify(atTwenty), String(marginLine()?.style.left)],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
     // 0.61, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the cost model cannot price stay.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', [
+      '2 members run ahead of pace by the margin',
+      'nightly (5-hour',
+      'secondary (7-day',
+      'A round there would move',
+      'warm',
+      "of the hot members' recent burn together, in window share",
+      'to a cool sibling',
+      '2 pins the cost model cannot price stay.',
+    ]);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -3060,6 +3513,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // Keys can leave a pool only by moving to another one or being revoked.
   const keyRows = () => [...(dlg?.querySelectorAll('.keys-table tbody tr') ?? [])];
   const rowNames = keyRows().map((tr) => tr.children[0]?.textContent?.trim());
+  columnsMarked("/pools the dialog's keys table marks Key as its fill column", dlg?.querySelector('.keys-table'), ['Key']);
   results.push({ name: '/pools the key table lists desktop and laptop', ok: rowNames.includes('desktop') && rowNames.includes('laptop'), missing: rowNames });
   results.push({ name: '/pools key rows have no plain remove', ok: keyRows().length > 0 && keyRows().every((tr) => ![...tr.querySelectorAll('button')].some((b) => ['Remove', 'Delete'].includes(b.textContent?.trim() ?? ''))), missing: rowNames });
   const desktopRowIdx = rowNames.indexOf('desktop');
@@ -3135,6 +3589,64 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools reopening the Move dialog drops the last refusal', ok: !!reopened && reopened.querySelector('[role="alert"]') === null, missing: [reopened?.querySelector('[role="alert"]')?.textContent ?? (reopened ? '' : 'no dialog')] });
     footButton(reopened, 'Cancel')?.click();
     await m.settle(200);
+
+    {
+      // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
+      // closes the Move dialog alone. After another pool is picked it asks, Keep editing keeps the pick, and Discard
+      // closes the Move dialog and leaves the pool dialog open.
+      const open = () => [...m.container.querySelectorAll('dialog[open]')];
+      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+      const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
+      const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      const pick = async (dialog, value) => {
+        selectSetter.call(destination(dialog), value);
+        destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await m.settle(120);
+      };
+      const outside = async (dialog) => {
+        clickOutside(dialog);
+        await m.settle(200);
+      };
+      const escape = async () => {
+        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+        await m.settle(200);
+      };
+      let move = await openMove();
+      await outside(move);
+      results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
+      move = await openMove();
+      const openedOn = destination(move)?.value;
+      const second = destination(move)?.options[1]?.value;
+      await pick(move, second);
+      await outside(move);
+      const asked = discardQuestion(m.container);
+      results.push({
+        name: '/pools the Move key dialog asks before an outside click discards a changed pick',
+        ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
+        missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
+      });
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
+      await outside(move);
+      const askedAgain = discardQuestion(m.container);
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
+      move = await openMove();
+      await pick(move, second);
+      await escape();
+      const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
+      if (askedByEscape) await escape();
+      results.push({
+        name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
+        ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
+        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
+      });
+      footButton(move, 'Cancel')?.click();
+      await m.settle(200);
+    }
   }
 
   const laptopIdx = keyRows().map((tr) => tr.children[0]?.textContent?.trim()).indexOf('laptop');
@@ -3165,6 +3677,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: JSON.stringify(gridSelects) === '[1,1,1,1]' && names.join(',') === 'metered,plan' && labels.join(',') === 'metered=Metered writes,plan=Plan writes' && ruleSets.every((el) => el.querySelectorAll('select[aria-label^="Model to add"]').length === 1),
       missing: [JSON.stringify(gridSelects), ...names, ...labels],
     });
+    columnsMarked('/pools the model rules table marks Model as its fill column and every other column fit', dlg?.querySelector('[data-rule-set="plan"] table'), ['Model']);
     const writeCost = [...(ttl?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Write cost');
     const gridHint = ttl?.querySelector('.ttl-grid')?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '';
     const meteredMain = ttl?.querySelector('select[aria-label="Metered writes main conversation TTL"]');
@@ -3272,6 +3785,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         (group(dlg, 'Members')?.textContent ?? '').includes(hint),
       missing: [...rows.map(String), ...subscription.map(String), ...heads, `legacy fields ${daily('legacy')?.disabled === true && monthly('legacy')?.disabled === true ? 'disabled' : 'absent or enabled'}`],
     });
+    columnsMarked('/pools the members table marks Account as its fill column', group(dlg, 'Members')?.querySelector('.members-table'), ['Account']);
     await type(daily('Overflow workspace'), '0');
     const members = group(dlg, 'Members');
     const held = [save()?.disabled, members?.querySelector('.callout--critical')?.textContent ?? '', daily('Overflow workspace')?.getAttribute('aria-invalid')];
@@ -3296,6 +3810,66 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const pickedBeforeClose = picker()?.value;
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
     await m.settle(200);
+    {
+      // The pool dialog's outside path: unchanged, a backdrop click closes it at once. After an edit it asks, Keep
+      // editing returns to the edit, and Discard closes. Every close reopens Edit pool all, so the checks after this
+      // one read the open dialog they expect.
+      const open = () => [...m.container.querySelectorAll('dialog[open]')];
+      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+      const reopen = async () => {
+        [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+        await m.settle(300);
+      };
+      const outside = async () => {
+        clickOutside(dlg);
+        await m.settle(200);
+      };
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      const name = () => group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
+      const typeName = async (value) => {
+        setter.call(name(), value);
+        name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await m.settle(120);
+      };
+      const escape = async () => {
+        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+        await m.settle(200);
+      };
+      await reopen();
+      await outside();
+      results.push({ name: '/pools the pool dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+      await reopen();
+      await typeName('all2');
+      await outside();
+      const asked = discardQuestion(m.container);
+      const askedText = asked?.textContent ?? '';
+      results.push({
+        name: '/pools the pool dialog asks before an outside click discards a change',
+        ok: open().length === 2 && asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing'),
+        missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+      });
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Keep editing returns to the pool dialog with the typed value', ok: open().length === 1 && dlg?.hasAttribute('open') === true && name()?.value === 'all2', missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
+      await outside();
+      const askedAgain = discardQuestion(m.container);
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Discard closes the pool dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      // Once for the grouped dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
+      await reopen();
+      await typeName('all2');
+      await escape();
+      const askedByEscape = open().length === 2 && discardQuestion(m.container) !== null;
+      await escape();
+      results.push({
+        name: '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
+        ok: askedByEscape && open().length === 1 && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
+        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'],
+      });
+      [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+      await m.settle(200);
+    }
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
     rail(dlg, 'cacheTtl')?.click();
@@ -3981,7 +4555,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
     // count that it ran over laptop's one pin alone.
-    ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the cost model cannot price stays\.$/.test(line),
+    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 1 pin the cost model cannot price stays\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4085,9 +4659,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   setter.call(percent(dlg), '');
   percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
-  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
-    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round, and a sibling counts as cool under the line minus 5%.',
-  );
+  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes('Read on the 5-hour and the 7-day window.');
   const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
   setter.call(percent(dlg), '20');
   percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -4219,6 +4791,13 @@ m.unmount();
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
+  // The dialog checks run with all's margin cleared, so the story's 90 is typed back: under it no member is hot, and
+  // nightly's 5-hour window, about 71 points ahead at the mock's clock (the figure drifts a point every three minutes
+  // of the run on the moving clock), is the closest.
+  const percent = dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
+  if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '90');
+  percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
   rail(dlg, 'shedding')?.click();
   await m.settle(120);
   const line = () => group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
@@ -4229,7 +4808,7 @@ m.unmount();
   api.getSettings = getSettings;
   results.push({
     name: '/pools the preview says the cost model is loading while the settings read is held',
-    ok: loading === 'The cost model is loading, and window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
+    ok: loading === 'The cost model is loading, and window-share pins are counted once it is read.' && !loading.includes('Would move') && /^No member is ahead of pace by the margin: the closest is nightly, \d+ points ahead\.$/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4960,6 +5539,28 @@ localStorage.removeItem('phoebis.expertView');
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
+columnsMarked('/keys every header cell is fit or fill, and Name, Models and Status are the fill columns', m.container.querySelector('.card--table table'), ['Name', 'Models', 'Status']);
+{
+  // A fill column cuts its lines with an ellipsis, so each line under a name, the Models summary of a key without
+  // rules and the Status badge open their title with their own text, and a badge's label sits in a span of its own
+  // for the ellipsis to reach.
+  const rows = [...m.container.querySelectorAll('.card--table tbody tr.key-row')];
+  const opens = (el) => {
+    const text = el.textContent?.trim() ?? '';
+    return text !== '' && (el.getAttribute('title') ?? '').startsWith(text);
+  };
+  const lines = rows.flatMap((row) => [...row.querySelectorAll('td.col-fill .sub')].filter((s) => s.querySelector('.badge') === null));
+  const summaries = rows.map((row) => row.children[3]?.querySelector('.muted')).filter(Boolean);
+  const badges = rows.flatMap((row) => [...row.querySelectorAll('td.col-fill .badge')]);
+  const wrapped = (b) => [...b.children].some((c) => c.classList.contains('key-row__badge-label') && c.textContent?.trim() === b.textContent?.trim());
+  const untitled = [...lines, ...summaries, ...badges].filter((el) => !opens(el)).map((el) => `${el.textContent?.trim()}: ${el.getAttribute('title') ?? 'no title'}`);
+  const bare = badges.filter((b) => !wrapped(b)).map((b) => `${b.textContent?.trim()} unwrapped`);
+  results.push({
+    name: '/keys every line a fill cell cuts opens its title with its own text, and each badge wraps its label',
+    ok: lines.length > rows.length && summaries.length > 0 && badges.length === rows.length && untitled.length === 0 && bare.length === 0,
+    missing: [`${lines.length} lines, ${summaries.length} summaries and ${badges.length} badges over ${rows.length} rows`, ...untitled.slice(0, 6), ...bare],
+  });
+}
 {
   // jsdom draws no styles and lays nothing out, so the menu reads the viewport's room below and keeps the list in flow.
   const last = [...m.container.querySelectorAll('.card--table tbody tr')].pop();
@@ -4981,7 +5582,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     name: '/keys a rotated key counts the sessions still on the previous secret',
     ok:
       retired?.textContent?.trim() === '1 session still on the previous secret' &&
-      (retired.getAttribute('title') ?? '').startsWith('Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched. Previous secret last used '),
+      (retired.getAttribute('title') ?? '').startsWith('1 session still on the previous secret. Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched. Previous secret last used '),
     missing: [retired?.textContent?.trim() ?? 'absent', retired?.getAttribute('title') ?? 'no title'],
   });
 }
@@ -5338,6 +5939,51 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.']);
+  {
+    // The edit dialog's outside path: unchanged, a backdrop click closes it at once. After a typed change it asks,
+    // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
+    // the checks after this one read the open dialog they expect.
+    const open = () => [...m.container.querySelectorAll('dialog[open]')];
+    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+    const reopen = async () => {
+      m.container.querySelector('.menu__trigger')?.click();
+      await m.settle(100);
+      [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+      await m.settle(300);
+    };
+    const outside = async () => {
+      clickOutside(editDlg);
+      await m.settle(200);
+    };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const name = () => group(editDlg, 'Key')?.querySelector('input[placeholder="workstation"]');
+    const typeName = async (value) => {
+      setter.call(name(), value);
+      name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    const openedAs = name()?.value ?? '';
+    await outside();
+    results.push({ name: '/keys the key dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+    await reopen();
+    await typeName(`${openedAs}2`);
+    await outside();
+    const asked = discardQuestion(m.container);
+    results.push({
+      name: '/keys the key dialog asks before an outside click discards a change',
+      ok: open().length === 2 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
+      missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+    });
+    buttonIn(asked, 'Keep editing')?.click();
+    await m.settle(200);
+    results.push({ name: '/keys Keep editing returns to the key dialog with the typed value', ok: open().length === 1 && editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`, missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
+    await outside();
+    const askedAgain = discardQuestion(m.container);
+    buttonIn(askedAgain, 'Discard')?.click();
+    await m.settle(200);
+    results.push({ name: '/keys Discard closes the key dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+    await reopen();
+  }
   {
     const expiry = editDlg?.querySelector('select[aria-label="Expiry"]');
     const toggle = editDlg?.querySelector('button[role="switch"][aria-label="Enabled"]');
@@ -5756,6 +6402,8 @@ m = await mount('/models');
   expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
+  columnsMarked('/models the rules table marks Pattern as its fill column', rulesCard()?.querySelector('table'), ['Pattern']);
+  fillTitles('/models every Pattern cell of the rules table carries its own text as its title', rulesCard()?.querySelector('table'));
   const select = m.container.querySelector('select[aria-label="Key"]');
   if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
   else {
@@ -6187,6 +6835,12 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     name: heldCheck,
     ok: heldOnly?.getAttribute('aria-checked') === 'true' && caption === 'Held only' && besideSpeed === true && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
     missing: [`${heldRows.length} rows against ${heldDay}`, String(caption), String(besideSpeed), ...new Set(heldRows)],
+  });
+  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('held '));
+  results.push({
+    name: '/requests the held marker reads in the warning tone',
+    ok: heldMarkers.length > 0 && heldMarkers.every((b) => b.classList.contains('badge--warning')),
+    missing: [`${heldMarkers.length} markers`, ...new Set(heldMarkers.map((b) => b.className))],
   });
   heldOnly?.click();
   await m.settle(700);
@@ -7480,6 +8134,38 @@ m.unmount();
     results.push({ name: "/routing-log a refresh row's Fact reads the new token's expiry or the failure's class", ok: sorted(drawn) === sorted(want), missing: [JSON.stringify(drawn)] });
   }
   {
+    // The default page draws the hour's newest 25 rows, so a kind it misses is read on a story request's own page.
+    const tones = { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' };
+    const stories = { exhausted: 'req_51d0e2b8-7a0', held: 'req_69e30548-32e', moved: 'req_868264bc-611', placed: 'req_ef099b34-453', refused: 'req_6c3a9e27-5b1', renewed: 'req_f8085653-422' };
+    const seen = new Set();
+    const wrong = [];
+    const read = (page) => {
+      for (const tr of page.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')) {
+        const id = tr.getAttribute('data-row') ?? 'event/';
+        if (id.startsWith('event/')) continue;
+        const badge = cell(tr, 'kind')?.querySelector('.badge');
+        const word = badge?.textContent ?? '';
+        seen.add(word);
+        if (!badge?.classList.contains(`badge--${tones[word]}`)) wrong.push(`${id} ${word}: ${badge?.className ?? 'no badge'}`);
+      }
+    };
+    read(m);
+    for (const [kind, id] of Object.entries(stories)) {
+      if (seen.has(kind)) continue;
+      const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 24 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
+      const at = Math.min(...own.filter((r) => r.type === 'decision').map((r) => Date.parse(r.at)));
+      const page = await mount(`/routing-log?request=${id}&from=${iso(at - 15 * MINUTE)}&to=${iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN))}`, { now: CLOCK_ORIGIN });
+      read(page);
+      page.unmount();
+    }
+    const unseen = Object.keys(tones).filter((k) => !seen.has(k));
+    results.push({
+      name: "/routing-log every decision row's kind badge reads the scheme's tone: good on placed and renewed, warning on moved and held, critical on exhausted and refused",
+      ok: unseen.length === 0 && wrong.length === 0,
+      missing: [...unseen.map((k) => `no ${k} row`), ...wrong.slice(0, 8)],
+    });
+  }
+  {
     // A link in reads the request a quarter hour either side of its first decision.
     const id = 'req_1d9c3e55-0b2';
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
@@ -7879,14 +8565,75 @@ m.unmount();
     const all = el.textContent ?? '';
     return label ? `${label} ${all.slice(label.length)}` : all;
   };
-  const walkOf = (card) =>
-    [...(card?.querySelectorAll('.decision-card__walk > li') ?? [])].map((li) => ({
-      chips: [...li.querySelectorAll('.chips > .chip')].map(chipWords),
-      li,
-      n: li.querySelector('.decision-card__n')?.textContent ?? '',
-      step: li.querySelector('.decision-card__step')?.textContent ?? '',
-      verdict: li.querySelector('.decision-card__verdict-cell')?.textContent ?? '',
+  /** The strip's stations in its order, the line's then the track's: the word, the badge, the second line and the state. */
+  const stationsOf = (card) =>
+    [...(card?.querySelectorAll('.decision-strip .strip-station') ?? [])].map((b) => ({
+      button: b,
+      id: b.dataset.station,
+      second: [...b.querySelectorAll('.strip-station__second > span')].map((s) => s.textContent),
+      state: [...b.classList].find((c) => c.startsWith('is-')) ?? '',
+      step: b.querySelector('.strip-station__word')?.textContent ?? '',
+      verdict: b.querySelector('.badge')?.textContent ?? '',
     }));
+  /**
+   * A key pressed where focus stands, or on `target`, as the keyboard checks below press one, `init` adding a modifier
+   * such as `shiftKey`. jsdom fires no click and moves no focus for the key, so a check reads what the key's own
+   * handler did.
+   */
+  const pressKey = async (page, key, target = document.activeElement, init = {}) => {
+    target?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...init }));
+    await page.settle(150);
+  };
+  const leavesOf = (card) =>
+    [...(card?.querySelectorAll('.decision-strip .strip-candidate') ?? [])].map((b) => ({ account: b.querySelector('.strip-candidate__account')?.textContent ?? '', badge: b.querySelector('.badge')?.textContent ?? '', chosen: b.classList.contains('is-chosen') }));
+  const terminiOf = (card) => [...(card?.querySelectorAll('.decision-strip .strip-terminus') ?? [])].map((b) => ({ badge: b.querySelector('.badge')?.textContent ?? null, kind: b.dataset.terminus, taken: b.classList.contains('is-taken') }));
+  /**
+   * Opens a strip button's popover by a click, as a reader does, and answers the one popover the body holds then. A
+   * second click closes it again, and the checks read the popover as it stood.
+   */
+  const popoverOf = async (page, button) => {
+    button?.click();
+    await page.settle(150);
+    const open = document.querySelectorAll('.strip-popover');
+    const popover = open.length === 1 ? open[0] : null;
+    if (popover !== null) {
+      button.click();
+      await page.settle(50);
+    }
+    return popover;
+  };
+  /** A table popover's cell: the row whose first cell links the account, under the head that words the fact's key. */
+  const cellOf = (popover, accountId, column) => {
+    const at = [...(popover?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent === keyWord(column));
+    const tr = [...(popover?.querySelectorAll('tbody tr') ?? [])].find((r) => r.querySelector('td a')?.textContent === accountId);
+    return at < 0 ? null : (tr?.children[at] ?? null);
+  };
+  /** A list row of a popover, or of one of its groups, by its label: the chips of its `dd` as `label value`. */
+  const popoverRowOf = (popover, label) => {
+    const row = [...(popover?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === label);
+    return row ? [...row.querySelectorAll('dd .chip')].map(chipWords) : null;
+  };
+  /** The chips renderer's chips, the one kind of popover that is a row of chips alone. */
+  const chipsOf = (popover) => [...(popover?.querySelectorAll(':scope > .chips > .chip') ?? [])].map(chipWords);
+  const groupOfPopover = (popover, label) => [...(popover?.querySelectorAll('.strip-popover__group') ?? [])].find((g) => g.querySelector('h5')?.textContent === label) ?? null;
+  const rowsRead = (popover) => [...(popover?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent}: ${[...r.querySelectorAll('dd .chip')].map(chipWords).join(' / ')}`).join(' | ');
+  const stationButton = (card, id) => card?.querySelector(`.decision-strip .strip-station[data-station="${id}"]`) ?? null;
+  /**
+   * A strip word's horizontal span as the component placed it: jsdom lays nothing out, so the inline position is what
+   * a check can read.
+   */
+  const spanOf = (el) => ({ from: parseFloat(el?.style.left ?? 'NaN'), to: parseFloat(el?.style.left ?? 'NaN') + parseFloat(el?.style.width || '0') });
+  const centerOf = (el) => (spanOf(el).from + spanOf(el).to) / 2;
+  const groupOf = (card, word) => [...(card?.querySelectorAll('.decision-strip .strip-group') ?? [])].find((g) => g.textContent === word) ?? null;
+  const stubsOf = (card, word) => [...(card?.querySelectorAll('.decision-strip .strip-stub') ?? [])].filter((w) => w.textContent === word);
+  const onTrack = (s) => s?.button.classList.contains('strip-station--track') ?? false;
+  const pairsOf = (card) => stationsOf(card).map((s) => [s.step, s.verdict]);
+  /** The pairs the model gives, the line's before the track's, for a record whose sequence a check does not spell. */
+  const modelPairs = (record, row) => {
+    const { stations } = stationModel(record, row, CLOCK_ORIGIN);
+    return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
+  };
+  const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed']];
   const kvRows = (dl) => [...(dl?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ dd: r.querySelector('dd'), label: r.querySelector('dt')?.textContent ?? '' }));
   const ddWords = (dd) => {
     const chips = [...(dd?.querySelectorAll('.chip') ?? [])];
@@ -7896,6 +8643,11 @@ m.unmount();
   const sentenceOf = (card) => [...(card?.querySelectorAll('.decision-card__sentence > span') ?? [])].map((s) => (s.querySelector('a') ? `[${s.textContent}]` : s.textContent)).join(' ');
   const verdictChipsOf = (card) => [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].map(chipWords);
   const candidateRows = (card) => [...(card?.querySelectorAll('.decision-card__candidates tbody tr') ?? [])];
+  /** The Pace column's header as the card words it, from the window the first subscription member's score read. */
+  const paceWord = (record) => {
+    const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
+    return id === null ? 'Pace' : `Pace, ${{ seven_day: '7-day', seven_day_fable: 'Fable week' }[id] ?? id.replace(/_/g, ' ')} left per hour`;
+  };
   /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
   const story = async (id, seq = 1, kinds = '') => {
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: kinds ? kinds.split(',') : undefined, limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
@@ -7909,30 +8661,122 @@ m.unmount();
   const scan = (where, root) => {
     if (root) scanned.push({ root: root.cloneNode(true), where });
   };
+  /**
+   * The open card draws the strip where the walk list stood: its stations in order, a leaf per candidate table row in
+   * the table's order up to eight and then "and N more", and the one taken terminus reading the kind's word.
+   */
+  const stripDrawn = (what, card, expected) => {
+    const rows = candidateRows(card).map((tr) => [tr.querySelector('td a')?.textContent ?? '', tr.querySelector('.decision-card__judged .badge')?.textContent ?? '']);
+    const leaves = leavesOf(card).map((l) => [l.account, l.badge]);
+    const fanned = rows.length <= 8 ? JSON.stringify(leaves) === JSON.stringify(rows) : leaves.length === 9 && leaves[8][1] === `and ${rows.length - 8} more` && leaves.slice(0, 8).every(([a, b]) => rows.some(([x, y]) => x === a && y === b));
+    const taken = terminiOf(card).filter((t) => t.taken);
+    const kind = card?.querySelector('.decision-card__verdict > .badge')?.textContent ?? null;
+    results.push({
+      name: `/routing-log the ${what}'s card draws the strip in the walk's place with its stations in order`,
+      ok: card !== null && card.querySelector('.decision-card__walk') === null && card.querySelectorAll('.decision-strip').length === 1 && JSON.stringify(pairsOf(card)) === JSON.stringify(expected) && fanned && taken.length === 1 && kind !== null && taken[0].badge === kind,
+      missing: [pairsOf(card).map((x) => x.join(' ')).join(' / '), `expected ${JSON.stringify(expected)}`, `leaves ${JSON.stringify(leaves)}`, `rows ${JSON.stringify(rows)}`, JSON.stringify(terminiOf(card))],
+    });
+  };
+
+  /** The renderer the spec's inventory names for a strip button's popover, spelled here to hold the strip to it. */
+  const inventoryOf = (record, model, button) => {
+    if (button.classList.contains('strip-candidate')) return model.leaves[Number(button.dataset.leaf)]?.more > 0 ? 'table' : 'candidate';
+    if (button.classList.contains('strip-terminus')) return button.classList.contains('is-taken') ? 'outcome' : 'sentence';
+    const s = model.stations.find((x) => x.id === button.dataset.station);
+    if (s === undefined) return null;
+    const firedAt = record.walk.findIndex((w) => w.step.startsWith('move:') && w.verdict === 'fired');
+    const step = s.id === 'move' ? record.walk[firedAt] : s.index === null ? undefined : record.walk[s.index];
+    if (s.id !== 'move' && s.step.startsWith('move:') && step?.verdict === 'not_run' && firedAt >= 0 && s.index > firedAt) return 'chips';
+    if (s.step === 'selection' || step === undefined || (step.verdict === 'not_run' && step.facts.length === 0)) return 'sentence';
+    if (['cap_filter', 'cool', 'eligible', 'pick'].includes(s.step)) return 'table';
+    if (s.step === 'hold') return 'hold';
+    if (s.step.startsWith('rung:')) return 'rung';
+    return s.known ? 'list' : 'chips';
+  };
+  /** The head a strip button's popover reads: the step's whole word, Move, a partition's own word, an account, a way out. */
+  const headOf = (model, button) => {
+    if (button.classList.contains('strip-candidate')) {
+      const leaf = model.leaves[Number(button.dataset.leaf)];
+      return leaf?.accountId ?? leaf?.badge ?? null;
+    }
+    if (button.classList.contains('strip-terminus')) return model.termini.find((t) => t.kind === button.dataset.terminus)?.word ?? null;
+    const s = model.stations.find((x) => x.id === button.dataset.station);
+    return s === undefined ? null : s.id === 'move' ? 'Move' : s.id.startsWith('partitions:') ? s.head : (STEP_NAME[s.step] ?? s.step);
+  };
+  /**
+   * Every station, leaf and terminus of the open card opens one popover by a click: its class names the inventory's
+   * renderer, its title the button's head, every list row holds a label and chips, and its inline width bound is the
+   * least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16, which jsdom's empty
+   * boxes floor at 0.
+   */
+  const popoversOpen = async (what, page, card, record, row) => {
+    const model = stationModel(record, row, CLOCK_ORIGIN);
+    const buttons = [...(card?.querySelectorAll('.decision-strip .strip-station, .decision-strip .strip-candidate, .decision-strip .strip-terminus') ?? [])];
+    const wrong = [];
+    for (const button of buttons) {
+      const name = button.getAttribute('aria-label');
+      const popover = await popoverOf(page, button);
+      if (popover === null) {
+        wrong.push(`${name}: no popover, or more than one`);
+        continue;
+      }
+      scan(`${what} popover ${name}`, popover);
+      const renderer = inventoryOf(record, model, button);
+      const title = popover.querySelector('.strip-popover__title')?.textContent ?? null;
+      const rows = [...popover.querySelectorAll('.kv__row')];
+      const box = card?.getBoundingClientRect();
+      const view = document.documentElement.clientWidth;
+      const shown = Math.max(0, Math.min(box?.right ?? 0, view) - Math.max(box?.left ?? 0, 0));
+      const bound = `${Math.min(720, Math.max(0, view - 16), Math.max(0, (box?.width ?? 0) - 16), Math.max(0, shown - 16))}px`;
+      if (!popover.classList.contains(`strip-popover--${renderer}`)) wrong.push(`${name}: ${popover.className}, not ${renderer}`);
+      if (title === null || title !== headOf(model, button)) wrong.push(`${name}: the title reads ${title}, not ${headOf(model, button)}`);
+      if (!rows.every((r) => (r.querySelector('dt')?.textContent ?? '') !== '' && r.querySelector('dd .chip') !== null)) wrong.push(`${name}: a row without its label or its chips: ${rowsRead(popover)}`);
+      if (popover.style.maxWidth !== bound) wrong.push(`${name}: max width ${popover.style.maxWidth}, not ${bound}`);
+    }
+    results.push({
+      name: `/routing-log every station, leaf and terminus of the ${what}'s card opens a popover of its renderer with its head and its rows`,
+      ok: buttons.length > 0 && wrong.length === 0 && document.querySelectorAll('.strip-popover').length === 0,
+      missing: [`${buttons.length} buttons`, ...wrong.slice(0, 8)],
+    });
+  };
 
   {
-    const { card, page, panel, record } = await story('req_f8085653-422');
+    const { card, page, panel, record, row: summary } = await story('req_f8085653-422');
     scan('renewal', card);
-    const lines = walkOf(card);
-    const moves = lines.filter((l) => ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].includes(l.step));
-    const pin = lines.find((l) => l.step === 'Pin');
+    stripDrawn('renewal', card, RENEWAL_STATIONS);
+    await popoversOpen('renewal', page, card, record, summary);
+    const stations = stationsOf(card);
+    // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
+    const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
+    const bracket = groupOf(card, 'Moves');
+    const fires = stubsOf(card, 'fires');
+    const renew = stations.at(-1);
     const row = rowOf(page, 'req_f8085653-422/1');
+    // Each rule's popover lists the facts it read, the pin's reads its idle age under Age, and Renew's its account.
+    const rules = [];
+    for (const s of moves) rules.push(await popoverOf(page, s.button));
+    const pin = await popoverOf(page, stationButton(card, 'pin'));
+    const renewed = await popoverOf(page, renew?.button);
     results.push({
       name: "/routing-log the renewal's card reads no rule fired, five move lines and idle",
       ok:
         row?.classList.contains('is-open') && row.getAttribute('aria-expanded') === 'true' && panel?.querySelector('td')?.getAttribute('colspan') === '9' &&
         card?.querySelector('.decision-card__verdict > .badge')?.textContent === 'renewed' && sentenceOf(card) === `Renewed on [${record.outcome.accountId}]` &&
         verdictChipsOf(card).includes('no rule fired') && verdictChipsOf(card).includes('pin warm') &&
-        moves.length === 5 && moves.every((l) => l.verdict === 'no' && l.chips.length > 0) && lines.some((l) => l.step === 'Renew' && l.verdict === 'renewed') &&
-        pin?.chips.some((c) => c.startsWith('idle ')) && JSON.stringify(lines.map((l) => l.n)) === JSON.stringify(lines.map((_, i) => String(i + 1))),
-      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...lines.map((l) => `${l.n} ${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+        moves.length === 5 && moves.every((s) => s.state === 'is-taken' && s.verdict === 'no' && centerOf(s.button) >= spanOf(bracket).from && centerOf(s.button) <= spanOf(bracket).to) &&
+        rules.length === 5 && rules.every((p) => p !== null && p.querySelectorAll('.kv__row').length > 0 && [...p.querySelectorAll('.kv__row')].every((r) => r.querySelector('dd .chip') !== null)) &&
+        fires.length === 5 && fires.every((w) => moves.some((s) => parseFloat(w.style.left) > centerOf(s.button) && parseFloat(w.style.left) < centerOf(s.button) + 20)) &&
+        !stations.some((s) => s.state === 'is-idle') && renew?.step === 'Renew' && renew.verdict === 'renewed' && renew.state === 'is-taken' && renew.second.length === 0 && renew.button.classList.contains('strip-station--above') &&
+        JSON.stringify(terminiOf(card)) === JSON.stringify([{ badge: 'renewed', kind: 'chosen', taken: true }]) &&
+        (popoverRowOf(groupOfPopover(pin, 'Age'), 'idle') ?? []).some((c) => c.startsWith('idle ')) && stations.every((s, i) => s.button.dataset.index === String(i)),
+      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...stations.map((s) => `${s.button.dataset.index} ${s.step} ${s.verdict} (${s.state}): ${s.second.join(' / ')}`), `${fires.length} fires stubs`, bracket?.textContent ?? 'no Moves bracket', JSON.stringify(terminiOf(card)), `Pin: ${rowsRead(pin)}`, ...rules.map((p) => rowsRead(p))],
     });
     // The re-made drawer check: a renewal reads as the pin continued, renewed in place on the account it was on.
     const out = outcomeOf(card);
     results.push({
       name: '/routing-log a card reads a renewed pin as continued',
-      ok: lines.at(-1)?.step === 'Renew' && lines.at(-1)?.chips.includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !lines.some((l) => l.step === 'Pick'),
-      missing: [JSON.stringify(out['Pin written']), lines.at(-1)?.chips.join(' / ') ?? 'no line'],
+      ok: renew?.step === 'Renew' && (popoverRowOf(renewed, 'on') ?? []).includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !stations.some((s) => s.step === 'Pick'),
+      missing: [JSON.stringify(out['Pin written']), renew ? `${renew.step}: ${rowsRead(renewed)}` : 'no station'],
     });
     results.push({
       name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
@@ -7979,15 +8823,19 @@ m.unmount();
   }
   {
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
-    const { card, page, record } = await story('req_b2bed817-a58');
+    const { card, page, record, row } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    const lines = walkOf(card);
-    const rungs = lines.filter((l) => l.step.startsWith('Rung: '));
+    stripDrawn('static placement', card, modelPairs(record, row));
+    await popoversOpen('static placement', page, card, record, row);
+    const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
-    const staticLine = rungs.find((l) => l.step === 'Rung: static');
-    const hash = staticLine?.li.querySelector('.decision-card__hash');
-    const warm = staticLine?.li.querySelector('.decision-card__warm');
+    // The static rung's popover draws the entry it took in its Entry group, its warm-until time once, on the TTL row.
+    const rung = await popoverOf(page, rungs.at(-1)?.button);
+    const entry = groupOfPopover(rung, 'Entry');
+    const hash = entry?.querySelector('.decision-card__hash');
+    const ttl = popoverRowOf(entry, 'TTL') ?? [];
+    const warmth = [...(rung?.querySelectorAll('.chip') ?? [])].filter((c) => (c.textContent ?? '').startsWith('warm until'));
     const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
     const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
     const mine = prefixCell(chosen.accountId);
@@ -7995,13 +8843,15 @@ m.unmount();
     results.push({
       name: "/routing-log the static placement's card reads the three rung lines, the hash chip of eight characters with the full hash in its title, the warm-until chip and the candidate table's Prefix cells",
       ok:
-        JSON.stringify(rungs.map((l) => `${l.step} ${l.verdict}`)) === JSON.stringify(['Rung: content none', 'Rung: with main none', 'Rung: static match']) &&
+        JSON.stringify(rungs.map((s) => `${s.step} ${s.verdict}`)) === JSON.stringify(['content none', 'with main none', 'static match']) &&
+        rungs.every((s) => centerOf(s.button) >= spanOf(groupOf(card, 'Rungs')).from && centerOf(s.button) <= spanOf(groupOf(card, 'Rungs')).to) && rungs.at(-1)?.button.classList.contains('is-decisive') &&
         chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
-        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash?.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
+        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 &&
+        ttl.includes(until(chosen.prefix.staticMatch)) && warmth.length === 1 &&
         mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
         refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
-        !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
-      missing: [...rungs.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+        !`${card?.textContent ?? ''}${rung?.textContent ?? ''}`.includes(chosen.prefix.static.hash.slice(0, 8)),
+      missing: [...rungs.map((s) => `${s.step} ${s.verdict}`), rungs.at(-1)?.step ?? 'no static rung', rowsRead(rung), `${hash?.textContent} ${hash?.getAttribute('title')}`, `TTL: ${ttl.join(' / ')}, ${warmth.length} warm-until chips`, mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
     });
     // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
     // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.
@@ -8022,21 +8872,30 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_da52d141-a5a');
+    const { card, page, record, row } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    const lines = walkOf(card);
-    const steps = lines.map((l) => `${l.step} ${l.verdict}`);
-    const cool = lines.find((l) => l.step === 'Cool reading');
-    const rules = lines.find((l) => l.step === 'Rules after spent');
-    const landed = lines.find((l) => l.step === 'Rung: static');
+    stripDrawn('spent move', card, modelPairs(record, row));
+    await popoversOpen('spent move', page, card, record, row);
+    const stations = stationsOf(card);
+    const steps = stations.map((s) => `${s.step} ${s.verdict}`);
+    const cool = stations.find((s) => s.step === 'Cool reading');
+    // The rules after a fired one never ran, so they stand idle on the line while the move rides the track, and each
+    // one's popover names the rules the fired one cut short with its own marked.
+    const rules = stations.filter((s) => ['overage', 'return to plan', 'drain', 'shed'].includes(s.step));
+    const landed = stations.find((s) => s.step === 'static');
+    const coolReading = await popoverOf(page, cool?.button);
+    const rung = await popoverOf(page, landed?.button);
+    const cut = await popoverOf(page, rules[0]?.button);
     results.push({
       name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
       ok:
         sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
-        steps.includes('Spent fired') && JSON.stringify(rules?.chips) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules?.verdict === 'not run' &&
-        cool?.verdict === 'preferred' && cool.chips.includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
-        landed?.verdict === 'match' && landed.chips.includes(`on ${record.outcome.accountId}`) && steps.indexOf('Spent fired') < steps.indexOf('Cool reading preferred'),
-      missing: [sentenceOf(card), ...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+        steps.includes('spent fired') && JSON.stringify(rules.map((s) => s.step)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules.every((s) => s.verdict === 'not run' && s.state === 'is-idle' && !onTrack(s)) &&
+        JSON.stringify(chipsOf(cut)) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && cut?.querySelector('.chips > .chip.is-marked')?.textContent === 'overage' &&
+        cool?.verdict === 'preferred' && cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent === 'yes' && steps.includes('Cap filter passed') &&
+        landed?.verdict === 'match' && (popoverRowOf(rung, 'on') ?? []).includes(`on ${record.outcome.accountId}`) &&
+        steps.indexOf('spent fired') < steps.indexOf('Move moved') && steps.indexOf('Move moved') < steps.indexOf('Cool reading preferred') && onTrack(stations.find((s) => s.id === 'move')) && onTrack(cool),
+      missing: [sentenceOf(card), ...stations.map((s) => `${s.step} ${s.verdict}${onTrack(s) ? ' (track)' : ''}: ${s.second.join(' / ')}`), `cut short: ${chipsOf(cut).join(' / ')}`, `cool ${cellOf(coolReading, record.outcome.accountId, 'cool')?.textContent}`, `static: ${rowsRead(rung)}`],
     });
     // The re-made drawer check: the move and the rung that placed it read on one card.
     results.push({
@@ -8048,37 +8907,63 @@ m.unmount();
   }
   {
     // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
-    const { card, page, record } = await story('req_868264bc-611');
+    const { card, page, record, row } = await story('req_868264bc-611');
     scan('shed move', card);
-    const shed = walkOf(card).find((l) => l.step === 'Shed');
+    stripDrawn('shed move', card, [
+      ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
+      ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
+    ]);
+    await popoversOpen('shed move', page, card, record, row);
+    const shed = stationsOf(card).find((s) => s.step === 'shed');
+    // The fired rule's popover reads its round in the Round group.
+    const fired = groupOfPopover(await popoverOf(page, shed?.button), 'Round');
     const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
     const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
+    // The moved row's tone reads on the card's verdict badge, the strip's Move station and the terminus it reached.
+    const toneClasses = [
+      rowOf(page, 'req_868264bc-611/1')?.querySelector('td.routing-log__kind .badge')?.className ?? 'no row badge',
+      card?.querySelector('.decision-card__verdict > .badge')?.className ?? 'no card badge',
+      card?.querySelector('.decision-strip .strip-station[data-station="move"] .badge')?.className ?? 'no Move station badge',
+      card?.querySelector('.decision-strip .strip-terminus.is-taken .badge')?.className ?? 'no taken terminus badge',
+    ];
     page.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
-    const ran = walkOf(round.card).find((l) => l.step === 'Shed');
-    const marks = [...(ran?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
+    stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
+    await popoversOpen('shedding round', round.page, round.card, round.record, round.row);
+    const ran = stationsOf(round.card).find((s) => s.step === 'shed');
+    // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
+    const roundGroup = groupOfPopover(await popoverOf(round.page, ran?.button), 'Round');
+    const marksRow = [...(roundGroup?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'marks');
+    const marks = [...(marksRow?.querySelectorAll('dd .chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
     const sessions = (round.record.outcome.shedMarks ?? []).map((m) => m.sessionId);
     results.push({
       name: "/routing-log the shed move's card reads the round and its marks",
       ok:
-        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && shed.chips.includes('round within dwell') && shed.chips.includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
-        ran?.verdict === 'no' && ran.chips.includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
+        ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
         JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
-      missing: [shed?.chips.join(' / ') ?? 'no shed line', JSON.stringify(ddWords(mark?.dd)), ran?.chips.join(' / ') ?? 'no round line'],
+      missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station'],
     });
+    results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
   }
   {
-    const { card, page, record } = await story('req_69e30548-32e', 1);
+    const { card, page, record, row } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    stripDrawn('hold', card, modelPairs(record, row));
+    await popoversOpen('hold', page, card, record, row);
+    const hold = stationsOf(card).find((s) => s.step === 'Hold');
+    const held = await popoverOf(page, hold?.button);
     const out = outcomeOf(card);
     const bound = record.outcome.hold?.boundMs;
     results.push({
       name: "/routing-log the hold's card reads its place and bound",
-      ok: sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && hold.chips.includes('place cohort') && hold.chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && hold.chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
-      missing: [sentenceOf(card), hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(out.Hold)],
+      ok:
+        sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && JSON.stringify(hold.second) === JSON.stringify(['cohort', 'bound 1 min']) &&
+        (popoverRowOf(held, 'place') ?? []).includes('place cohort') && (popoverRowOf(held, 'on') ?? []).includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && (popoverRowOf(held, 'bound') ?? []).includes('bound 1 min') &&
+        JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
+      missing: [sentenceOf(card), hold ? `${hold.verdict}: ${hold.second.join(' / ')}` : 'no hold station', rowsRead(held), JSON.stringify(out.Hold)],
     });
     // The held-on member is at its cap, which its chip says beneath the badge.
     const heldOn = candidateRows(card).find((tr) => tr.classList.contains('is-chosen'));
@@ -8090,7 +8975,10 @@ m.unmount();
     const after = await openRow(page, 'req_69e30548-32e/2');
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
-    const { cohort, heldMs } = (await api.getDecision('req_69e30548-32e', 2)).outcome.cohortHold;
+    const second = await api.getDecision('req_69e30548-32e', 2);
+    stripDrawn('placement after the hold', placed, modelPairs(second, undefined));
+    await popoversOpen('placement after the hold', page, placed, second, undefined);
+    const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the account a hold waited on and how long it waited',
       ok: JSON.stringify(outcomeOf(placed).Hold) === JSON.stringify([`on ${cohort}`, 'cohort', `freed after ${waitText(heldMs)}`]),
@@ -8100,17 +8988,23 @@ m.unmount();
   }
   {
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
-    const { card, page, record } = await story('req_e8b7eb13-060', 1);
+    const { card, page, record, row } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    stripDrawn('strategy hold', card, modelPairs(record, row));
+    await popoversOpen('strategy hold', page, card, record, row);
+    const hold = stationsOf(card).find((s) => s.step === 'Hold');
+    const held = await popoverOf(page, hold?.button);
     results.push({
       name: "/routing-log a held card reads the hold's place on the strategy's pick",
-      ok: record.outcome.hold?.cohort === null && hold?.chips.includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
-      missing: [hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(outcomeOf(card).Hold)],
+      ok: record.outcome.hold?.cohort === null && hold?.second[0] === 'strategy pick' && (popoverRowOf(held, 'place') ?? []).includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
+      missing: [hold ? hold.second.join(' / ') : 'no hold station', rowsRead(held), JSON.stringify(outcomeOf(card).Hold)],
     });
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
-    const { heldMs, waitedOn } = (await api.getDecision('req_e8b7eb13-060', 2)).outcome.cohortHold;
+    const second = await api.getDecision('req_e8b7eb13-060', 2);
+    stripDrawn('placement after a strategy hold', after, modelPairs(second, undefined));
+    await popoversOpen('placement after a strategy hold', page, after, second, undefined);
+    const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
       ok: JSON.stringify(outcomeOf(after).Hold) === JSON.stringify([`on ${waitedOn.at(-1)}`, 'strategy pick', `freed after ${waitText(heldMs)}`]),
@@ -8121,8 +9015,10 @@ m.unmount();
   {
     // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
     const [id, seq] = ['req_77634945-72b', 2];
-    const { card, page, record } = await story(id, seq);
+    const { card, page, record, row } = await story(id, seq);
     scan('exhaustion after a hold', card);
+    stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
+    await popoversOpen('exhaustion after a hold', page, card, record, row);
     results.push({
       name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
       ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
@@ -8131,25 +9027,43 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_51d0e2b8-7a0');
+    const { card, page, record, row } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    const line = walkOf(card).find((l) => l.step === 'Exhausted');
+    stripDrawn('exhaustion', card, modelPairs(record, row));
+    await popoversOpen('exhaustion', page, card, record, row);
+    const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
-    const drawn = [...(line?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => c.textContent);
+    // The story's obstacles name no account, so each one's chip is keyed `obstacle`, and its hover says why.
+    const exhausted = await popoverOf(page, line?.button);
+    const obstacles = [...(exhausted?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'obstacles');
+    const drawn = [...(obstacles?.querySelectorAll('dd .chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => chipWords(c).replace(/^obstacle /, ''));
     results.push({
       name: "/routing-log the exhaustion's card reads the obstacles in order",
       ok:
         sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools#${record.request.poolId}` && line?.verdict === 'exhausted' &&
-        weighed.length > 0 && JSON.stringify(drawn.map((t) => t.replace(/^obstacle/, ''))) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
+        weighed.length > 0 && JSON.stringify(drawn) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
         JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
-      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+      missing: [line ? `${line.step} ${line.verdict}` : 'no station', rowsRead(exhausted), JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    // No member was eligible, so the walk stops at Eligible with none, the one none the scheme reads as a refusal.
+    const eligible = card?.querySelector('.decision-strip .strip-station[data-station="eligible"] .badge');
+    results.push({
+      name: "/routing-log the exhaustion's Eligible station reads none in the critical tone",
+      ok: record.walk.some((s) => s.step === 'eligible' && s.verdict === 'none') && eligible?.textContent === 'none' && eligible.classList.contains('badge--critical'),
+      missing: [eligible ? `${eligible.textContent} ${eligible.className}` : 'no Eligible badge'],
     });
     page.unmount();
   }
   {
-    const { card, page, record } = await story('req_e0a4c6f2-118');
+    const { card, page, record, row } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
-    const lines = walkOf(card);
+    stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
+    await popoversOpen('refusal', page, card, record, row);
+    const stations = stationsOf(card);
+    // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
+    const admission = await popoverOf(page, stationButton(card, 'admission'));
+    const rest = await popoverOf(page, stationButton(card, 'selection'));
+    const reason = popoverRowOf(admission, 'reason') ?? [];
     const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
     for (const f of folds) f.open = true;
     await page.settle(50);
@@ -8159,18 +9073,21 @@ m.unmount();
       name: "/routing-log the refusal's card reads two lines and Pin not looked up",
       ok:
         record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
-        JSON.stringify(lines.map((l) => [l.step, l.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(lines[1]?.chips) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
+        JSON.stringify(stations.map((s) => [s.step, s.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) &&
+        rest?.querySelector('.strip-popover__sentence')?.textContent === 'The rest of the walk did not run: the moves, the rungs and the partitions.' && reason[0] === 'drift hash' &&
         JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
-        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${lines[0]?.chips[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
-      missing: [...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${reason[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Admission: ${rowsRead(admission)}`, rest?.textContent ?? 'no rest of the walk popover', JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
     });
     page.unmount();
   }
   {
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
-    const { card, page } = await story('req_c41d0311-200', 1, 'probe');
+    const { card, page, record, row } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    const steps = walkOf(card).map((l) => l.step);
+    stripDrawn('probe', card, modelPairs(record, row));
+    await popoversOpen('probe', page, card, record, row);
+    const steps = stationsOf(card).map((s) => s.step);
     results.push({
       name: "/routing-log the probe's card is the decision card",
       ok: card !== null && steps.includes('Probe') && steps.includes('Pin') && candidateRows(card).length > 0 && card.querySelector('.decision-card__foot') !== null,
@@ -8181,6 +9098,8 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
+    stripDrawn('failover attempt', card, modelPairs(record, row));
+    await popoversOpen('failover attempt', page, card, record, row);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
       ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
@@ -8190,20 +9109,254 @@ m.unmount();
   }
   {
     // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
-    const { card, page, record } = await story('req_ef099b34-453');
+    const { card, page, record, row } = await story('req_ef099b34-453');
     scan('fresh placement', card);
-    const lines = walkOf(card);
+    stripDrawn('fresh placement', card, [
+      ['Pin', 'none'],
+      ['Eligible', 'match'],
+      ['Spent', 'off'],
+      ['At cap', '0 out'],
+      ['Above ceiling', 'off'],
+      ['Winding down', '0 out'],
+      ['Floor', '0 out'],
+      ['content', 'none'],
+      ['with main', 'none'],
+      ['static', 'none'],
+      ['Pick', 'chosen'],
+    ]);
+    await popoversOpen('fresh placement', page, card, record, row);
+    const stations = stationsOf(card);
+    const pick = stations.find((s) => s.step === 'Pick');
+    const lookup = groupOfPopover(await popoverOf(page, stations[0]?.button), 'Lookup');
     results.push({
       name: '/routing-log a card reads a fresh placement',
-      ok: sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && lines[0]?.chips.includes('found none') && lines.some((l) => l.step === 'Pick' && l.verdict === 'chosen') && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
-      missing: lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`),
+      ok:
+        sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && stations[0]?.step === 'Pin' && (popoverRowOf(lookup, 'found') ?? []).includes('found none') && pick?.verdict === 'chosen' &&
+        pick.button.classList.contains('strip-station--above') && leavesOf(card).some((l) => l.chosen && l.account === record.outcome.accountId) && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Lookup: ${rowsRead(lookup)}`, JSON.stringify(leavesOf(card))],
+    });
+    page.unmount();
+  }
+  {
+    // A pinned popover closes on Escape and on a click outside it, and one a hover opened closes on Escape while the
+    // pointer rests on its station.
+    const { card, page } = await story('req_ef099b34-453');
+    const pick = stationButton(card, 'pick');
+    const open = () => [...document.querySelectorAll('.strip-popover')];
+    const escape = () => document.body.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+    const seen = [];
+    pick?.click();
+    await page.settle(150);
+    seen.push(`clicked: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}, selected ${pick?.classList.contains('is-selected')}`);
+    escape();
+    await page.settle(50);
+    seen.push(`Escape: ${open().length} open, selected ${pick?.classList.contains('is-selected')}`);
+    pick?.click();
+    await page.settle(150);
+    seen.push(`clicked again: ${open().length} open`);
+    card?.querySelector('.decision-card__sentence')?.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+    await page.settle(50);
+    seen.push(`a click outside: ${open().length} open`);
+    // A hover marks no anchor expanded and leaves focus on the control that held it, opening and closing alike.
+    const resting = card?.querySelector('.decision-card__sentence a') ?? null;
+    resting?.focus();
+    const rest = () => `aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}, aria-controls ${pick?.getAttribute('aria-controls') ?? null}, focus kept ${resting !== null && document.activeElement === resting}`;
+    pick?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+    await page.settle(150);
+    seen.push(`hovered: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned')}, ${rest()}`);
+    await pressKey(page, 'Escape');
+    seen.push(`Escape: ${open().length} open, ${rest()}`);
+    results.push({
+      name: '/routing-log Escape closes a pinned popover, a click outside closes it too, and Escape closes a hover-opened one',
+      ok:
+        JSON.stringify(seen) ===
+        JSON.stringify([
+          'clicked: 1 open, pinned true, selected true',
+          'Escape: 0 open, selected false',
+          'clicked again: 1 open',
+          'a click outside: 0 open',
+          'hovered: 1 open, pinned false, aria-expanded null, aria-controls null, focus kept true',
+          'Escape: 0 open, aria-expanded null, aria-controls null, focus kept true',
+        ]),
+      missing: seen,
+    });
+    page.unmount();
+  }
+  {
+    // The strip by keyboard and by ear on the fresh placement and the shed move: the buttons' names in the record's
+    // order, Enter or Space into the pick's popover, Escape and Shift+Tab back to the station, a pinned popover closing
+    // once focus leaves it and its station or Tab passes its last link, and a drawing that says nothing.
+    const named = (el) => (el === null || el === document.body ? 'the body' : (el.getAttribute('aria-label') ?? el.className ?? el.tagName));
+    const seen = { back: [], blur: [], enter: [], escape: [], names: [], space: [], svg: [], tab: [] };
+    const held = { back: true, blur: true, enter: true, escape: true, names: true, space: true, svg: true, tab: true };
+    for (const [what, id] of [
+      ['fresh placement', 'req_ef099b34-453'],
+      ['shed move', 'req_868264bc-611'],
+    ]) {
+      const { card, page, record, row } = await story(id);
+      const strip = card?.querySelector('.decision-strip') ?? null;
+      const model = stationModel(record, row, CLOCK_ORIGIN);
+      const names = [...(strip?.querySelectorAll('.strip-station, .strip-candidate, .strip-terminus') ?? [])].map((b) => b.getAttribute('aria-label'));
+      const expected = [
+        ...[...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')].map(stationName),
+        ...model.leaves.map(leafName),
+        ...model.termini.filter((t) => t.drawn).map(terminusName),
+      ];
+      held.names &&= names.length > 0 && JSON.stringify(names) === JSON.stringify(expected);
+      seen.names.push(`${what}: ${JSON.stringify(names)} against ${JSON.stringify(expected)}`);
+
+      const pick = strip?.querySelector('.strip-station[data-step="pick"]') ?? null;
+      pick?.focus();
+      await pressKey(page, 'Enter', pick);
+      const opened = [...document.querySelectorAll('.strip-popover')];
+      const popover = opened.length === 1 ? opened[0] : null;
+      const into = popover !== null && popover.contains(document.activeElement);
+      const expanded = pick?.getAttribute('aria-expanded') ?? null;
+      const controls = pick?.getAttribute('aria-controls') ?? null;
+      const entered = pick !== null && into && expanded === 'true' && controls !== null && controls === popover.id;
+      held.enter &&= entered;
+      seen.enter.push(`${what}: ${opened.length} open, focus on ${named(document.activeElement)}, aria-expanded ${expanded}, aria-controls ${controls} for ${popover?.id ?? 'no popover'}`);
+
+      await pressKey(page, 'Escape');
+      const left = document.querySelectorAll('.strip-popover').length;
+      held.escape &&= entered && left === 0 && document.activeElement === pick && pick.getAttribute('aria-expanded') === null;
+      seen.escape.push(`${what}: open with focus inside ${entered}, then ${left} open, focus on ${named(document.activeElement)}, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+
+      // Space pins as Enter does, and Shift+Tab off the popover's root lands back on the station with it still pinned.
+      await pressKey(page, ' ', pick);
+      const spaced = [...document.querySelectorAll('.strip-popover')];
+      const spacedIn = spaced.length === 1 && spaced[0].classList.contains('is-pinned') && spaced[0].contains(document.activeElement) && pick?.getAttribute('aria-expanded') === 'true';
+      held.space &&= spacedIn;
+      seen.space.push(`${what}: ${spaced.length} open, pinned ${spaced[0]?.classList.contains('is-pinned') ?? false}, focus on ${named(document.activeElement)}, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+      await pressKey(page, 'Tab', spaced[0], { shiftKey: true });
+      const back = document.querySelectorAll('.strip-popover').length;
+      held.back &&= spacedIn && document.activeElement === pick && back === 1 && pick.getAttribute('aria-expanded') === 'true';
+      seen.back.push(`${what}: from the popover's root to ${named(document.activeElement)} with ${back} open, aria-expanded ${pick?.getAttribute('aria-expanded') ?? null}`);
+      await pressKey(page, 'Escape');
+
+      // The Eligible station's table links each member's account, and a station follows it on the line.
+      const stations = [...(strip?.querySelectorAll('.strip-station') ?? [])];
+      const eligible = strip?.querySelector('.strip-station[data-step="eligible"]') ?? null;
+      const next = eligible === null ? undefined : stations[stations.indexOf(eligible) + 1];
+      // Focus leaving the station for another control closes the popover it pinned.
+      eligible?.focus();
+      eligible?.click();
+      await page.settle(150);
+      const blurFrom = [...document.querySelectorAll('.strip-popover')].length;
+      const onAnchor = eligible !== null && document.activeElement === eligible;
+      next?.focus();
+      await page.settle(150);
+      const blurTo = document.querySelectorAll('.strip-popover').length;
+      held.blur &&= blurFrom === 1 && onAnchor && next !== undefined && document.activeElement === next && blurTo === 0;
+      seen.blur.push(`${what}: ${blurFrom} pinned with focus on its station ${onAnchor}, then focus on ${named(document.activeElement)} with ${blurTo} open`);
+
+      eligible?.click();
+      await page.settle(150);
+      const pinned = [...document.querySelectorAll('.strip-popover')];
+      const links = [...(pinned[0]?.querySelectorAll('a') ?? [])];
+      const last = links.at(-1) ?? null;
+      last?.focus();
+      const onLink = last !== null && document.activeElement === last;
+      await pressKey(page, 'Tab', last);
+      const after = document.querySelectorAll('.strip-popover').length;
+      held.tab &&= pinned.length === 1 && pinned[0].classList.contains('is-pinned') && onLink && next !== undefined && document.activeElement === next && after === 0;
+      seen.tab.push(`${what}: ${pinned.length} pinned with ${links.length} links, focus on its last link ${onLink}, then Tab to ${named(document.activeElement)} with ${after} open`);
+
+      const drawings = [...(strip?.querySelectorAll('svg') ?? [])];
+      held.svg &&= drawings.length === 1 && drawings.every((svg) => svg.getAttribute('aria-hidden') === 'true' && (svg.textContent ?? '').trim() === '');
+      seen.svg.push(`${what}: ${drawings.length} drawings, ${drawings.map((svg) => `aria-hidden ${svg.getAttribute('aria-hidden')}, text ${JSON.stringify((svg.textContent ?? '').trim())}`).join(' / ')}`);
+      page.unmount();
+    }
+    results.push({ name: "/routing-log the strip's buttons read their names in the record's order", ok: held.names, missing: seen.names });
+    results.push({ name: '/routing-log Enter on the pick station opens its popover with focus inside it and the station expanded', ok: held.enter, missing: seen.enter });
+    results.push({ name: '/routing-log Escape closes the popover and returns focus to the station', ok: held.escape, missing: seen.escape });
+    results.push({ name: "/routing-log Tab from a pinned popover's last link onto the next station closes it", ok: held.tab, missing: seen.tab });
+    results.push({ name: '/routing-log Space on the pick station pins its popover with focus inside it, as Enter does', ok: held.space, missing: seen.space });
+    results.push({ name: "/routing-log Shift+Tab from a pinned popover's root returns focus to its station", ok: held.back, missing: seen.back });
+    results.push({ name: "/routing-log focus leaving a pinned popover's station for another control closes it", ok: held.blur, missing: seen.blur });
+    results.push({ name: "/routing-log the strip's drawing is hidden from readers and carries no text", ok: held.svg, missing: seen.svg });
+  }
+  {
+    // Every hover on the strip and in a pinned popover is a description a reader hears: the titled element, or the
+    // leaf button for its chip, names an entry of the log card's description host whose text is the title. The fresh
+    // placement's Pick holds the Pace cells, the static placement's rungs the hash chip, its first leaf the Pace and
+    // prefix chips and its outcome a titled row, and the fast failover a leaf whose chip says why the member was
+    // passed over.
+    const read = [];
+    const wrong = [];
+    const kinds = new Set();
+    const describes = (where, host, root) => {
+      for (const el of root?.querySelectorAll('[title]') ?? []) {
+        const by = el.closest('.strip-candidate') ?? el;
+        const id = by.getAttribute('aria-describedby');
+        const entry = id ? document.getElementById(id) : null;
+        const kind = by.classList.contains('strip-candidate') ? 'leaf' : el.classList.contains('decision-card__hash') ? 'hash' : el.classList.contains('chip') ? 'chip' : el.tagName.toLowerCase();
+        read.push(kind);
+        if (entry !== null && host !== null && host.contains(entry) && entry.closest('[data-descriptions]') !== null && entry.textContent === el.getAttribute('title')) kinds.add(kind);
+        else wrong.push(`${where}: a ${kind} titled ${JSON.stringify(el.getAttribute('title').slice(0, 60))} names ${id === null ? 'no description' : `${id}, ${entry === null ? 'which is not in the page' : JSON.stringify((entry.textContent ?? '').slice(0, 60))}`}`);
+      }
+    };
+    for (const [what, id, seq, pins] of [
+      ['fresh placement', 'req_ef099b34-453', 1, (strip) => [strip?.querySelector('.strip-station[data-step="pick"]')]],
+      ['static placement', 'req_b2bed817-a58', 1, (strip) => [...(strip?.querySelectorAll('.strip-station[data-step^="rung:"], .strip-candidate[data-leaf="0"], .strip-terminus.is-taken') ?? [])]],
+      ['fast failover', 'req_4b0e9d17-c31', 2, () => []],
+    ]) {
+      const { card, page } = await story(id, seq);
+      const host = card?.closest('section.card') ?? null;
+      const strip = card?.querySelector('.decision-strip') ?? null;
+      describes(`${what} strip`, host, strip);
+      for (const button of pins(strip)) {
+        button?.click();
+        await page.settle(150);
+        const open = [...document.querySelectorAll('.strip-popover')];
+        if (open.length !== 1) wrong.push(`${what}: ${button?.getAttribute('aria-label')} opened ${open.length} popovers`);
+        describes(`${what} popover ${button?.getAttribute('aria-label')}`, host, open[0]);
+        button?.click();
+        await page.settle(50);
+      }
+      page.unmount();
+    }
+    const wanted = ['chip', 'dd', 'hash', 'leaf', 'td'];
+    results.push({
+      name: "/routing-log every hover on the strip and in its popovers is described through the log card's host",
+      ok: wrong.length === 0 && wanted.every((k) => kinds.has(k)),
+      missing: [`read ${read.length}: ${[...new Set(read)].join(', ')}, described ${[...kinds].join(', ')}, wanted ${wanted.join(', ')}`, ...wrong.slice(0, 8)],
+    });
+  }
+  {
+    // A Pace pick: the header names the window the record read, each member's Pace cell says on hover what its score
+    // divided, and the row's By chip how the strategy ranks.
+    const { card, page, record } = await story('req_ef099b34-453');
+    const header = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].find((th) => th.textContent.startsWith('Pace'))?.textContent ?? '';
+    // Pace sits third from the end whatever a key's merged windows span.
+    const paceTitle = (tr) => tr.children[tr.children.length - 3]?.getAttribute('title') ?? '';
+    const titles = candidateRows(card).map((tr) => ({ id: tr.querySelector('td a')?.textContent, title: paceTitle(tr) }));
+    const kind = (id) => record.candidates.find((c) => c.accountId === id)?.kind;
+    const oauth = titles.filter((t) => kind(t.id) === 'oauth');
+    const keys = titles.filter((t) => kind(t.id) === 'api_key');
+    const chip = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip');
+    const hint = chip?.getAttribute('title') ?? '';
+    results.push({
+      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover and the By chip its hint",
+      ok:
+        header === paceWord(record) && header !== 'Pace' && oauth.length > 0 && oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ h/.test(t.title)) &&
+        keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
+      missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
+    });
+    const described = document.getElementById(chip?.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+    results.push({
+      name: "/routing-log a Pace row's By chip is described by its hint through the page's host",
+      ok: described.startsWith('Pace: the account with the most of its window left') && described === hint,
+      missing: [chip?.getAttribute('aria-describedby') ?? 'no aria-describedby', described],
     });
     page.unmount();
   }
   {
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
-    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
+    const { card, page, record, row } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
+    stripDrawn('fast failover', card, modelPairs(record, row));
+    await popoversOpen('fast failover', page, card, record, row);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
     results.push({
@@ -8215,14 +9368,20 @@ m.unmount();
   }
   {
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
-    const { card, page, record } = await story('req_52f62e67-839');
+    const { card, page, record, row } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    const line = walkOf(card).find((l) => l.step === 'Rung: with main');
+    stripDrawn('with main placement', card, modelPairs(record, row));
+    await popoversOpen('with main placement', page, card, record, row);
+    const line = stationsOf(card).find((s) => s.step === 'with main');
+    // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
+    const rung = await popoverOf(page, line?.button);
     const read = outcomeOf(card)['Cache read'] ?? [];
     results.push({
       name: '/routing-log a card reads a placement with the main conversation against the input, since it promised no size',
-      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && line.li.querySelector('.decision-card__hash') === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
-      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(read)],
+      ok:
+        record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && rung !== null && groupOfPopover(rung, 'Entry') === null && rung.querySelector('.decision-card__hash') === null &&
+        read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
+      missing: [line ? `${line.step} ${line.verdict}: ${rowsRead(rung)}` : 'no station', JSON.stringify(read)],
     });
     page.unmount();
   }
@@ -8243,7 +9402,8 @@ m.unmount();
     results.push({
       name: '/routing-log the candidate table reads all three windows on a subscription member and one merged reading on a key',
       ok:
-        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', 'Pace', 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
+        record.candidates.some((c) => c.kind === 'oauth' && c.pace?.window) &&
+        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', paceWord(record), 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
         /^\d+%$/.test(fableCells[2]?.[0] ?? '') && /^(head|poll|predicted|stored) /.test(fableCells[2]?.[2] ?? '') && keyRow?.children[2]?.getAttribute('colspan') === '3' && /^worst bucket \d+%$/.test(keyRow?.children[2]?.textContent ?? ''),
       missing: [headers.join(','), JSON.stringify(fableCells), keyRow?.textContent ?? 'no key member'],
     });
@@ -8315,7 +9475,7 @@ m.unmount();
     api.getDecision = original;
     results.push({
       name: "/routing-log a record the retention took reads its sentence in the card's place",
-      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-card__walk') === null,
+      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-strip') === null && panel?.querySelector('.decision-card__walk') === null,
       missing: [panel?.textContent ?? 'no panel'],
     });
     page.unmount();
@@ -8487,7 +9647,7 @@ m.unmount();
       await page.settle(800);
       const panels = [...page.container.querySelectorAll('.routing-log__panel')];
       for (const p of panels) scan('the hour', p.querySelector('.decision-card, .event-detail'));
-      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-card__walk, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
+      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-strip, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
     };
     const second = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
@@ -8507,7 +9667,7 @@ m.unmount();
     const wrong = [];
     let read = 0;
     for (const { root, where } of scanned) {
-      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence')];
+      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence, .strip-station__word, .strip-station__second > span, .strip-candidate__account, .strip-terminus__word')];
       for (const n of nodes) {
         if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'User agent') continue;
         read += 1;
@@ -8924,6 +10084,24 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics choosing 7-day on the toggle moves both cards', ok: pressed('Window usage') === '7-day' && pressed('Pace') === '7-day', missing: [pressed('Window usage'), pressed('Pace')] });
   const meta = m.container.querySelector('#accounts .analytics-section__meta')?.textContent?.trim() ?? '';
   results.push({ name: '/analytics the Accounts meta names window usage and pace', ok: meta === 'Peak utilization, window usage, pace, ineligible time, and pin churn per account', missing: [meta] });
+}
+{
+  // The breakdown tables are picked by card title: the Cache tab draws the placements table under the same card class,
+  // and that one has its own check.
+  const BREAKDOWNS = [
+    ['Traffic', 'Traffic by key', ['Key']],
+    ['Cache', 'Misses by reason by key', ['Key']],
+    ['Cache', 'Cache by model', ['Model']],
+  ];
+  let read = 0;
+  for (const [label, title, fill] of BREAKDOWNS) {
+    await tab(m, label);
+    const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
+    if (table) read += 1;
+    columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
+    fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title: ${title}`, table);
+  }
+  results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
@@ -9464,6 +10642,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     rows: [...(card(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim())),
   });
   await tab(m, 'Cache');
+  columnsMarked('/analytics the placements table marks Rung as its fill column', m.container.querySelector('.placements-table'), ['Rung']);
+  fillTitles('/analytics every Rung cell of the placements table carries its own text as its title', m.container.querySelector('.placements-table'));
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -9483,6 +10663,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
   });
   await tab(m, 'Burn');
+  columnsMarked('/analytics the budgets table marks Pool and Account as its fill columns', m.container.querySelector('.budgets-table'), ['Pool', 'Account']);
+  fillTitles('/analytics every Pool and Account cell of the budgets table carries its own text as its title', m.container.querySelector('.budgets-table'));
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
@@ -9772,7 +10954,56 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const unfiltered = trafficRows();
     const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
-    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    // The run is UTC and the time format the settings' default, so the minute reads on the 24-hour clock.
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created [A-Z][a-z]{2} \d{2}, \d{4}, \d{2}:\d{2}( [AP]M)?\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    {
+      // The month's buckets are six hours wide from 00:00 UTC. The runner's zone is UTC, so a tick on midnight there
+      // is the date alone and a tick on another boundary carries its time, and under a zone where 00:00 UTC is 17:00
+      // the evening before, every tick carries the local time beside the viewer's date. Recharts draws an axis only
+      // inside a sized container, so each read mounts its own page under the burn checks' measure, and the zone goes
+      // back to UTC before anything else renders.
+      const measure = window.HTMLElement.prototype.getBoundingClientRect;
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+      };
+      const monthAxis = async () => {
+        const page = await mount('/analytics');
+        [...page.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === '30d')?.click();
+        await page.settle(700);
+        const read = {
+          label: page.container.querySelector('#traffic .recharts-xAxis .recharts-label')?.textContent?.trim() ?? '',
+          ticks: [...page.container.querySelectorAll('#traffic .recharts-xAxis .recharts-cartesian-axis-tick text')].map((t) => t.textContent?.trim() ?? ''),
+        };
+        page.unmount();
+        return read;
+      };
+      let utc = { label: '', ticks: [] };
+      let zoned = { label: '', ticks: [] };
+      try {
+        utc = await monthAxis();
+        process.env.TZ = 'America/Los_Angeles';
+        zoned = await monthAxis();
+      } finally {
+        process.env.TZ = 'UTC';
+        window.HTMLElement.prototype.getBoundingClientRect = measure;
+      }
+      await tab(m, 'Burn');
+      const headTitle = [...m.container.querySelectorAll('.budgets-table thead th')].find((th) => th.textContent?.trim() === 'Period ends')?.getAttribute('title') ?? 'no title';
+      await tab(m, 'Traffic');
+      results.push({
+        name: "/analytics the day ticks print the viewer's date with the time where the boundary is not local midnight, the axis says days start at 00:00 UTC, and the budgets head says a period ends at midnight UTC",
+        ok:
+          utc.label === 'days start at 00:00 UTC' &&
+          utc.ticks.length > 0 &&
+          utc.ticks.every((t) => /^[A-Z][a-z]{2} \d{2}( (06|12|18):00)?$/.test(t)) &&
+          utc.ticks.some((t) => /^[A-Z][a-z]{2} \d{2}$/.test(t)) &&
+          zoned.ticks.length > 0 &&
+          zoned.ticks.every((t) => /^[A-Z][a-z]{2} \d{2} (05|11|17|23):00$/.test(t)) &&
+          zoned.ticks.some((t) => / 17:00$/.test(t)) &&
+          headTitle === 'a period ends at midnight UTC',
+        missing: [`axis: ${utc.label}`, `utc: ${utc.ticks.join(', ')}`, `zoned: ${zoned.ticks.join(', ')}`, `head title: ${headTitle}`],
+      });
+    }
     {
       // The mock's raw rows rather than the page's sums of them: an hour both generations filled would still
       // split into two key groups, so only the rows show it. The runner's zone is UTC, so the holder's day reads
@@ -10527,7 +11758,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
   const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
-  const COLUMNS = ['Key', 'Session', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
+  // The optional columns the control offers: the Session column is the row's identity and is always drawn.
+  const COLUMNS = ['Key', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
   const HIDDEN = ['Last request', 'Agents', 'Next probe'];
   {
     // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
@@ -10544,16 +11776,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
         offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
-        JSON.stringify(shown) === JSON.stringify(['', '', ...COLUMNS.filter((c) => !HIDDEN.includes(c))]) &&
+        JSON.stringify(shown) === JSON.stringify(['', 'Session', ...COLUMNS.filter((c) => !HIDDEN.includes(c)), '']) &&
         label === `Columns (${COLUMNS.length - HIDDEN.length})` &&
         m.container.querySelector('.cols-popover') === null,
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
     });
   }
   results.push({
-    name: '/sessions the first data cell holds the actions menu',
-    ok: rows().length > 0 && rows().every((r) => r.children[1]?.querySelector('.menu__trigger') !== null && r.children[1]?.textContent?.trim() === '···'),
-    missing: rows().slice(0, 3).map((r) => r.children[1]?.innerHTML ?? 'no cell'),
+    name: '/sessions the Session header is the first with text and the last cell of every row holds the menu',
+    ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
+    missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
   await showColumn(m, 'Next probe');
@@ -10658,7 +11890,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const all = heads();
     results.push({
       name: '/sessions no longer carries an Epoch, a Created or an Expires column',
-      ok: JSON.stringify(all) === JSON.stringify(['', '', ...COLUMNS]) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
+      ok: JSON.stringify(all) === JSON.stringify(['', 'Session', ...COLUMNS, '']) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
       missing: all,
     });
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
@@ -10713,32 +11945,98 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     const named = heads();
     const sessionAt = named.indexOf('Session');
+    results.push({ name: '/sessions the Session column leads after the gutter and Key follows it', ok: sessionAt === 1 && named.indexOf('Key') === 2, missing: named });
+    {
+      // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
+      // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
+      const read = columnClasses(m.container.querySelector('.sessions-table'));
+      results.push({
+        name: '/sessions every header cell after the gutter is fit or fill, and Session is the one fill column',
+        ok: read.heads[0] === 'none' && read.heads.slice(1).every((c) => c === 'fit' || c === 'fill') && JSON.stringify(read.fills) === JSON.stringify(['Session']) && read.rows > 0 && read.cellsOff.length === 0,
+        missing: [JSON.stringify(read.heads), JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
+      });
+    }
     const listed = await api.listSessions();
-    const cellOf = (r) => ({ label: r.children[sessionAt]?.firstChild?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
-    const forked = listed.find((s) => s.forkedFrom !== null);
-    const forkRow = forked ? rows().find((r) => cellOf(r).title === forked.sessionId && cell(r, 'Key')?.textContent === forked.keyId) : undefined;
-    const link = forkRow?.children[sessionAt]?.querySelector('a.badge');
-    const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
+    // The cell's id line, while the whole id rides the cell's
+    // title.
+    const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
+    // A row is its key, its holder and its session id, the three the route keys a session by.
+    const sessionOf = (r) => listed.find((s) => s.sessionId === cellOf(r).title && s.keyId === cell(r, 'Key')?.firstChild?.textContent && s.historical === (cell(r, 'Key')?.querySelector('.sub') !== null));
+    // The story forks two sessions, each beside its base: one on the base's own account, one on another. The badge
+    // reads the relation off the two listed rows' Account cells, names the base's account label on the title and
+    // describes itself to a reader that never hovers.
+    const accountLabel = new Map((await api.listAccounts()).map((a) => [a.id, a.label]));
+    const rowOf = (s) => rows().find((r) => sessionOf(r) === s);
+    const accountOf = (r) => cell(r, 'Account')?.querySelector('a')?.textContent?.trim() ?? null;
+    const forks = listed
+      .filter((s) => s.forkedFrom !== null)
+      .map((s) => {
+        const row = rowOf(s);
+        const base = listed.find((b) => b.sessionId === s.forkedFrom && b.keyId === s.keyId);
+        const baseRow = base ? rowOf(base) : undefined;
+        const link = row?.children[sessionAt]?.querySelector('a.badge');
+        const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
+        const described = link?.getAttribute('aria-describedby');
+        return {
+          base,
+          baseRow,
+          description: described ? m.container.querySelector(`[id="${described}"]`)?.textContent ?? null : null,
+          link,
+          relation: row && baseRow && accountOf(row) !== null && accountOf(baseRow) !== null ? (accountOf(row) === accountOf(baseRow) ? 'same account' : 'on another account') : null,
+          session: s,
+          target,
+          title: link?.getAttribute('title') ?? '',
+        };
+      });
+    const badgeWords = (f) => `fork of ${f.session.forkedFrom.slice(0, 13)}… at ${f.session.forkDepth}, ${f.relation}`;
+    const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
+    const wrongFork = forks.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
+    const wrongTarget = forks.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
     results.push({
-      name: '/sessions a forked session carries a fork badge that links to its base session\'s row',
-      ok:
-        forked !== undefined &&
-        link?.textContent?.trim() === `fork at ${forked.forkDepth}` &&
-        link.classList.contains('badge--accent') &&
-        (link.getAttribute('title') ?? '').includes(forked.forkedFrom) &&
-        target?.tagName === 'TR' &&
-        cellOf(target).title === forked.forkedFrom &&
-        cell(target, 'Key')?.textContent === forked.keyId,
-      missing: [String(forked?.sessionId), link?.outerHTML ?? 'no link', target?.textContent?.slice(0, 80) ?? 'no target row'],
+      name: '/sessions each fork badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
+      ok: forks.length === 2 && forks.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
+      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
     });
+    const same = forks.find((f) => f.relation === 'same account');
+    const target = same?.target ?? null;
     const expandedBefore = m.container.querySelectorAll('.srow__detail').length;
-    link?.click();
+    same?.link?.click();
     await m.settle(150);
     results.push({
       name: '/sessions following a fork link marks the base row current and leaves the forked row closed',
       ok: target?.getAttribute('aria-current') === 'true' && m.container.querySelectorAll('tr[aria-current="true"]').length === 1 && m.container.querySelectorAll('.srow__detail').length === expandedBefore,
       missing: [String(target?.getAttribute('aria-current')), String(m.container.querySelectorAll('.srow__detail').length)],
     });
+    {
+      // A released or expired pin leaves the last ledgered request's account on the row, so the relation reads only
+      // while both pins are live: with the base's pin taken away and its account still listed, the badge keeps the
+      // neutral words and still follows to the row.
+      const base = same?.base ?? null;
+      const forked = same?.session ?? null;
+      const { listSessions } = api;
+      api.listSessions = async () => (await listSessions.call(api)).map((s) => (base !== null && s.sessionId === base.sessionId && s.keyId === base.keyId && !s.historical ? { ...s, pinned: false } : s));
+      const page = await mount('/sessions');
+      const at = [...page.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+      const rowIn = (s) => [...page.container.querySelectorAll('tbody tr.srow')].find((r) => r.children[at]?.getAttribute('title') === s?.sessionId && sessionCell(page, r, 'Key')?.firstChild?.textContent === s?.keyId && sessionCell(page, r, 'Key')?.querySelector('.sub') === null);
+      const forkRow = rowIn(forked);
+      const baseRowIn = rowIn(base);
+      const badge = forkRow?.children[at]?.querySelector('a.srow__fork') ?? null;
+      const described = badge?.getAttribute('aria-describedby');
+      const read = {
+        baseAccount: sessionCell(page, baseRowIn, 'Account')?.querySelector('a')?.textContent?.trim() ?? null,
+        description: described ? (page.container.querySelector(`[id="${described}"]`)?.textContent ?? null) : null,
+        href: badge?.getAttribute('href') ?? null,
+        title: badge?.getAttribute('title') ?? null,
+        words: badge?.textContent?.trim() ?? null,
+      };
+      results.push({
+        name: "/sessions a fork whose base lost its pin keeps the neutral badge with its follow description while the base's account is still listed",
+        ok: forked !== null && base !== null && read.baseAccount === base.accountId && read.words === `fork at ${forked.forkDepth}` && read.title === `Branched from session ${forked.forkedFrom} at depth ${forked.forkDepth}. Follow to its row` && read.description === read.title && read.href === `#${baseRowIn?.id}`,
+        missing: [JSON.stringify(read), baseRowIn?.id ?? 'no base row'],
+      });
+      api.listSessions = listSessions;
+      page.unmount();
+    }
   }
 
   // A session with no ledgered requests cannot open the analytics view.
@@ -10749,7 +12047,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(120);
     return [...(row?.querySelectorAll('.menu__list button') ?? [])];
   };
-  results.push({ name: '/sessions keeps the row to one overflow menu', ok: [...(busyRow()?.querySelectorAll('td button') ?? [])].length === 1, missing: [...(busyRow()?.querySelectorAll('td button') ?? [])].map((b) => b.textContent?.trim() ?? '') });
+  results.push({
+    name: '/sessions keeps the row to one overflow menu, in its last cell',
+    ok: [...(busyRow()?.querySelectorAll('td button') ?? [])].length === 1 && busyRow()?.lastElementChild?.querySelector('button.menu__trigger') !== null,
+    missing: [...(busyRow()?.querySelectorAll('td button') ?? [])].map((b) => b.textContent?.trim() ?? ''),
+  });
   {
     const items = await openMenu(barren);
     results.push({
@@ -11084,10 +12386,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(600);
     const forkCell = cell(rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.sessionId), 'Session');
     const badge = forkCell?.querySelector('.badge--accent');
+    const unheld = `Branched from session ${forked?.forkedFrom} at depth ${forked?.forkDepth}, which this list does not hold`;
+    const describedBy = badge?.getAttribute('aria-describedby');
+    const description = describedBy ? (m.container.querySelector(`[id="${describedBy}"]`)?.textContent ?? null) : null;
     results.push({
-      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link',
-      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null,
-      missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined)],
+      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link, the unheld base on its title and in its description',
+      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
+      missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined), String(description)],
     });
   }
 }
@@ -11838,8 +13143,8 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
-  results.push({ name: '/settings the cards run client block, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Appearance', 'About']) && m.container.querySelector('.price-table') === null, missing: titles });
-  const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
+  results.push({ name: '/settings the cards run Appearance, About, client block', ok: JSON.stringify(titles) === JSON.stringify(['Appearance', 'About', 'Downstream client configuration']) && m.container.querySelector('.price-table') === null, missing: titles });
+  const subtitle = [...m.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration')?.querySelector('.card__subtitle')?.textContent;
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
@@ -12621,12 +13926,14 @@ m.unmount();
   });
 
   // A badge outside every host keeps its title alone, so the sweep reads every page for one that lost its description;
-  // the fork marker draws its own badge-styled element rather than a Badge.
+  // the fork marker draws its own badge-styled element rather than a Badge. A badge whose title only repeats its text
+  // (the Keys Status badge) carries no description on purpose, since a reader would say the text twice.
   const loose = [];
   const counts = [];
+  const repeats = (badge) => badge.getAttribute('aria-describedby') === null && badge.getAttribute('title') === badge.textContent?.trim();
   const sweep = (where) => {
     const badges = [...page.container.querySelectorAll('.badge[title]:not(.srow__fork)')];
-    for (const badge of badges) if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
+    for (const badge of badges) if (!describes(badge) && !repeats(badge)) loose.push(`${where}: ${why(badge)}`);
     // The drawer's route draws the list under it too, whose badges would meet the count for a drawer that drew none.
     const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
     counts.push({ onPage: own.length, seen: badges.length, where });

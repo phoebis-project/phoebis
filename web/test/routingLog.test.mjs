@@ -155,7 +155,7 @@ const EVENTS = [
   ['window reset', event('window_reset', { next_reset: ms(19, 0), observed: 'sample', reset_at: at, utilization_before: 0.92, window: 'five_hour' }), '5h reset', ['was 92%']],
   ['router started', event('router_started', { pins_loaded: 10, version: '0.1.0' }, { accountId: null }), 'restart', ['pins 10']],
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
-  ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account, and the next attempt is at 2026-09-16 13:53:00 UTC' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
+  ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
   ['poll backoff ended', event('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: at }), 'clean poll', ['lasted 25 min']],
   ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'jobs' }), 'daily budget', ['spent $20.40 of $20.00']],
   ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'jobs' }), 'monthly budget', ['spent $18.20']],
@@ -250,7 +250,7 @@ test('every event kind has its words and its tone', () => {
 
 test('every decision kind has its words and its tone', () => {
   assert.deepEqual(d.DECISION_KIND_LABEL, { exhausted: 'exhausted', held: 'held', moved: 'moved', placed: 'placed', refused: 'refused', renewed: 'renewed' });
-  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'accent', placed: 'accent', refused: 'critical', renewed: 'neutral' });
+  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' });
 });
 
 test('the step and verdict words', () => {
@@ -262,10 +262,15 @@ test('the step and verdict words', () => {
   for (const [step, name] of Object.entries(steps)) assert.equal(d.STEP_NAME[step], name, step);
   assert.equal(d.STEP_NAME.selection, 'Rest of the walk');
   const tones = {
-    answered: 'warning', blocked: 'warning', bound: 'accent', chosen: 'accent', dropped: 'warning', exhausted: 'warning', fell_through: 'warning', fired: 'accent', found: 'neutral', held: 'warning', match: 'accent',
-    no: 'neutral', none: 'neutral', not_run: 'neutral', passed: 'neutral', placed: 'accent', preferred: 'accent', refused: 'warning', released: 'warning', renewed: 'accent',
+    answered: 'critical', blocked: 'warning', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', found: 'neutral', held: 'warning', match: 'good',
+    moved: 'warning', no: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', passed: 'good', placed: 'good', preferred: 'warning', refused: 'critical', released: 'warning', renewed: 'good',
   };
   for (const [verdict, tone] of Object.entries(tones)) assert.equal(d.verdictTone(verdict), tone, verdict);
+  assert.deepEqual([...d.TONED_VERDICTS].sort(), Object.keys(tones).sort());
+  assert.equal(d.verdictTone('none', 'eligible'), 'critical');
+  assert.equal(d.verdictTone('none', 'pin'), 'neutral');
+  assert.equal(d.verdictTone('match', 'eligible'), 'good');
+  assert.equal(d.verdictTone('a_word_added_later'), 'neutral');
 });
 
 test('a fact value is drawn by its unit', () => {
@@ -789,4 +794,50 @@ test('the card carries the hover hints of the hold, the promise and the placemen
   const verdict = d.verdictChips(promised, row);
   assert.equal(verdict.find((c) => c.value === 'static rung').title, d.PLACED.static(2));
   assert.equal(verdict.find((c) => c.label === 'cache hit').title, d.PROMISE_HINT.static);
+});
+
+test("the Pace cell's title names the share, the hours, the deadline and the rate, and the header names the window", () => {
+  const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
+  const reset = Date.UTC(2026, 8, 19, 8, 30);
+  const read = { deadline: iso(reset), end: null, hours: 66, remaining: 0.08, reset: iso(reset), score: 0.08 / 66, window: 'seven_day' };
+  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  const end = ms(16, 44);
+  assert.equal(
+    title({ deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23, window: 'seven_day_fable' }),
+    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. The highest wins.",
+  );
+  assert.equal(
+    title({ deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }),
+    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. The highest wins.',
+  );
+  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  // Under an hour the hours read one decimal, and from an hour on the whole hours.
+  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 0.4 h to its reset at Sep 19 08:30: 19.05 %/h. The highest wins.');
+  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. The highest wins.');
+  // A pace written without the field reads as the null window.
+  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. The highest wins.');
+  const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
+  const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
+  assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');
+  assert.equal(title(null), null);
+
+  const header = (window) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...read, window } })] }));
+  assert.equal(header('seven_day_fable'), 'Pace, Fable week left per hour', 'the first subscription member names it, past a key');
+  assert.equal(header('seven_day'), 'Pace, 7-day left per hour');
+  assert.equal(header('seven_day_opus'), 'Pace, seven day opus left per hour');
+  assert.equal(header(null), 'Pace');
+  assert.equal(d.paceHeader(record({ candidates: [key] })), 'Pace', 'API key members alone name no window');
+});
+
+test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
+  assert.equal(
+    d.PACE_HINT,
+    "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.",
+  );
+  const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
+  assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);
+  const held = d.byOf(decision({ by: by('hold', 'strategy_pick'), kind: 'held', tier: [0, 0, 0] }));
+  assert.deepEqual([held.value, held.title], ['Pace P0', d.PACE_HINT]);
+  assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
+  assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
 });

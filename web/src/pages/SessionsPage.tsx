@@ -9,15 +9,15 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 
+// The optional columns: the Session column is the row's identity and the table's fill column, so it is always drawn.
 const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
-  { id: 'session', label: 'Session' },
   { id: 'model', label: 'Model' },
   { id: 'account', label: 'Account' },
   { id: 'lastUsed', label: 'Last used' },
@@ -81,8 +81,11 @@ const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>)
 /** The row's element id, so a fork's badge can link to its base; a session id may hold characters an id may not. */
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
 
-const sessionLabel = (session: Session) =>
-  shortId(session.sessionId, 13);
+/**
+ * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it
+ * at a label's width.
+ */
+const sessionLabel = (session: Session, chars?: number) => (chars === undefined ? session.sessionId : shortId(session.sessionId, chars));
 
 /**
  * When the pool stopped probing: the longest idle window the router resolves for the pool's recipes, counted from the
@@ -214,7 +217,8 @@ export function SessionsPage() {
       (e: unknown) => notify(e instanceof Error ? e.message : String(e)),
     );
   };
-  const listedIds = useMemo(() => new Set((rows ?? []).map((r) => rowDomId(r.session))), [rows]);
+  // The listed rows by element id, so a fork's badge finds its base's row and reads the account the base sits on.
+  const listedRows = useMemo(() => new Map((rows ?? []).map((r) => [rowDomId(r.session), r])), [rows]);
   const followFork = (id: string) => {
     // jsdom leaves scrollIntoView undefined.
     document.getElementById(id)?.scrollIntoView?.({ block: 'center' });
@@ -228,8 +232,8 @@ export function SessionsPage() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  // The expand gutter and the menu are drawn whatever the control hides.
-  const columns = visible.size + 2;
+  // The expand gutter, the Session column and the menu are drawn whatever the control hides.
+  const columns = visible.size + 3;
 
   return (
     <div className="stack">
@@ -348,19 +352,20 @@ export function SessionsPage() {
             <table className="table sessions-table">
               <thead>
                 <tr>
+                  {/* The gutter keeps its own width and takes neither column class, whose 1% would outrank it. */}
                   <th className="sessions-table__gutter" />
-                  <th />
-                  {visible.has('key') && <th>Key</th>}
-                  {visible.has('session') && <th>Session</th>}
-                  {visible.has('model') && <th>Model</th>}
-                  {visible.has('account') && <th>Account</th>}
-                  {visible.has('lastUsed') && <th>Last used</th>}
-                  {visible.has('requests') && <th className="right">Requests</th>}
-                  {visible.has('lastRequest') && <th>Last request</th>}
-                  {visible.has('agents') && <th className="right">Agents</th>}
-                  {visible.has('companion') && <th>Companion</th>}
-                  {visible.has('cacheWarming') && <th>Cache warming</th>}
-                  {visible.has('nextProbe') && <th>Next probe</th>}
+                  <th className="col-fill">Session</th>
+                  {visible.has('key') && <th className="col-fit">Key</th>}
+                  {visible.has('model') && <th className="col-fit">Model</th>}
+                  {visible.has('account') && <th className="col-fit">Account</th>}
+                  {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
+                  {visible.has('requests') && <th className="col-fit right">Requests</th>}
+                  {visible.has('lastRequest') && <th className="col-fit">Last request</th>}
+                  {visible.has('agents') && <th className="col-fit right">Agents</th>}
+                  {visible.has('companion') && <th className="col-fit">Companion</th>}
+                  {visible.has('cacheWarming') && <th className="col-fit">Cache warming</th>}
+                  {visible.has('nextProbe') && <th className="col-fit">Next probe</th>}
+                  <th className="col-fit" />
                 </tr>
               </thead>
               <tbody>
@@ -375,7 +380,7 @@ export function SessionsPage() {
                     current={current === rowDomId(row.session)}
                     expireAfterSeconds={expireAfterSeconds}
                     forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
-                    listedIds={listedIds}
+                    listedRows={listedRows}
                     onFollowFork={followFork}
                     onOpen={(path) => navigate(path)}
                     onRelease={() => setPending(row)}
@@ -395,7 +400,7 @@ export function SessionsPage() {
         confirmLabel="Release"
         body={
           pending
-            ? `Session ${sessionLabel(pending.session)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
+            ? `Session ${sessionLabel(pending.session, SESSION_CHARS)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
             : ''
         }
         onConfirm={onConfirmRelease}
@@ -413,7 +418,7 @@ function SessionRows({
   current,
   expireAfterSeconds,
   forkBase,
-  listedIds,
+  listedRows,
   onFollowFork,
   onOpen,
   onRelease,
@@ -425,7 +430,7 @@ function SessionRows({
   expireAfterSeconds: number | null;
   /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
   forkBase: string | null;
-  listedIds: Set<string>;
+  listedRows: ReadonlyMap<string, Row>;
   now: number;
   onFollowFork: (id: string) => void;
   onOpen: (path: string) => void;
@@ -453,6 +458,11 @@ function SessionRows({
   // Analytics reads the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   const trafficSession = session.sessionId;
+  // The base's row where the list holds it: the fork badge reads the account relation off the two listed rows, and
+  // only while both pins are live, since a released or expired pin leaves the last ledgered request's account on the
+  // row.
+  const baseRow = forkBase === null ? null : (listedRows.get(forkBase) ?? null);
+  const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   return (
     <>
       <tr
@@ -473,22 +483,26 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and lead the row so they stay reachable at
-            1280 px whatever the columns after them need. */}
-        <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-          <Menu
-            align="left"
-            label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
-            items={[
-              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
-              // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
-              { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
-              ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
-            ]}
-          />
+        <td className="mono col-fill" title={session.sessionId}>
+          <span className="srow__id">{sessionLabel(session)}</span>
+          {session.forkedFrom !== null && forkBase !== null && (
+            <ForkBadge
+              base={baseRow ? forkBase : null}
+              baseAccount={baseAccountId === null ? null : { id: baseAccountId, label: baseRow?.account?.label ?? baseAccountId }}
+              depth={session.forkDepth}
+              from={session.forkedFrom}
+              onFollow={onFollowFork}
+              rowAccountId={session.pinned ? session.accountId : null}
+            />
+          )}
+          {(session.epoch ?? 1) > 1 && (
+            <span className="sub srow__epoch" title="How many times this session's pin was re-created">
+              epoch {session.epoch}
+            </span>
+          )}
         </td>
         {visible.has('key') && (
-          <td className="mono">
+          <td className="mono col-fit">
             {session.keyId}
             {session.historical && (
               <span className="sub" title={HISTORICAL_HINT}>
@@ -497,19 +511,8 @@ function SessionRows({
             )}
           </td>
         )}
-        {visible.has('session') && (
-          <td className="mono" title={session.sessionId}>
-            {sessionLabel(session)}
-            {session.forkedFrom !== null && forkBase !== null && <ForkBadge base={listedIds.has(forkBase) ? forkBase : null} depth={session.forkDepth} from={session.forkedFrom} onFollow={onFollowFork} />}
-            {(session.epoch ?? 1) > 1 && (
-              <span className="sub srow__epoch" title="How many times this session's pin was re-created">
-                epoch {session.epoch}
-              </span>
-            )}
-          </td>
-        )}
         {visible.has('model') && (
-          <td className="mono nowrap" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
+          <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
             <span className="srow__pin">
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
               <OtherPins agents={otherModels} />
@@ -517,7 +520,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('account') && (
-          <td title={account ? KIND_HINT[account.kind] : undefined} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
+          <td className="col-fit" title={account ? KIND_HINT[account.kind] : undefined} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
             <span className="srow__account">
               {session.accountId === null ? (
                 <span className="muted">-</span>
@@ -532,7 +535,7 @@ function SessionRows({
         )}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
-          <td title={fmtAbsolute(lastUsed)}>
+          <td className="col-fit" title={fmtAbsolute(lastUsed)}>
             {fmtRelative(lastUsed, now)}
             {expiresAt && (
               <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
@@ -542,18 +545,18 @@ function SessionRows({
           </td>
         )}
         {visible.has('requests') && (
-          <td className="right num" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
+          <td className="right num col-fit" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
             {hasTraffic ? fmtInt(session.requests) : <span className="muted">0</span>}
           </td>
         )}
         {visible.has('lastRequest') && (
-          <td title={session.lastRequestAt ? fmtAbsolute(session.lastRequestAt) : undefined}>
+          <td className="col-fit" title={session.lastRequestAt ? fmtAbsolute(session.lastRequestAt) : undefined}>
             {session.lastRequestAt ? <span className="num">{fmtRelative(session.lastRequestAt, now)}</span> : <span className="muted">none</span>}
           </td>
         )}
-        {visible.has('agents') && <td className="right num">{session.agents}</td>}
+        {visible.has('agents') && <td className="right num col-fit">{session.agents}</td>}
         {visible.has('companion') && (
-          <td>
+          <td className="col-fit">
             {session.companion === 'reporting' ? (
               <>
                 <Badge tone="good" dot title={COMPANION_HINT.reporting}>
@@ -580,7 +583,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('cacheWarming') && (
-          <td>
+          <td className="col-fit">
             {session.keepalive.state && !row.noRecipe ? (
               <>
                 <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
@@ -596,7 +599,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('nextProbe') && (
-          <td title={session.keepalive.nextProbeAt ? fmtAbsolute(session.keepalive.nextProbeAt) : undefined}>
+          <td className="col-fit" title={session.keepalive.nextProbeAt ? fmtAbsolute(session.keepalive.nextProbeAt) : undefined}>
             {session.keepalive.nextProbeAt ? (
               <span className="num">{fmtRelative(session.keepalive.nextProbeAt, now)}</span>
             ) : (
@@ -604,6 +607,19 @@ function SessionRows({
             )}
           </td>
         )}
+        {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and close the row: the id leads it, so a
+            reader scans ids down the first column, and the actions stay reachable at the row's end at 1280 px. */}
+        <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <Menu
+            label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
+            items={[
+              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
+              // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
+              { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
+              ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
+            ]}
+          />
+        </td>
       </tr>
       {open && (
         <tr className="srow__detail">
@@ -683,21 +699,55 @@ function SessionRows({
 
 /**
  * A forked session's marker: a link to its base's row where the base is listed, the base's id where it is not. The
- * link stops at the row, whose click and Enter would otherwise open it.
+ * link stops at the row, whose click and Enter would otherwise open it. The title describes the badge through the
+ * card's host, so a reader that never hovers hears the relation.
  */
-function ForkBadge({ base, depth, from, onFollow }: { base: string | null; depth: number | null; from: string; onFollow: (id: string) => void }) {
+function ForkBadge({
+  base,
+  baseAccount,
+  depth,
+  from,
+  onFollow,
+  rowAccountId,
+}: {
+  base: string | null;
+  /**
+   * The listed base's account while its pin is live, its label as the Accounts page names it. Null off an unlisted
+   * base or one whose pin is gone.
+   */
+  baseAccount: { id: string; label: string } | null;
+  depth: number | null;
+  from: string;
+  onFollow: (id: string) => void;
+  /** The row's own account while its pin is live, and null off a row whose pin is gone. */
+  rowAccountId: string | null;
+}) {
   const at = depth === null ? '' : ` at depth ${depth}`;
+  const short = shortId(from, SESSION_CHARS);
+  // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a live pin,
+  // is never claimed to be on the same account or another.
+  const relation = base !== null && baseAccount !== null && rowAccountId !== null ? (baseAccount.id === rowAccountId ? 'same account' : 'on another account') : null;
+  const title =
+    base === null
+      ? `Branched from session ${from}${at}, which this list does not hold`
+      : relation === null
+        ? `Branched from session ${from}${at}. Follow to its row`
+        : `Branched from session ${from}${at} on ${baseAccount?.label}. Follow to its row`;
+  const described = useDescription(title);
+  const hosted = described && !described.sibling ? described.id : undefined;
+  const words = base === null ? `fork of ${short}` : relation === null ? (depth === null ? 'fork' : `fork at ${depth}`) : `fork of ${short}${depth === null ? '' : ` at ${depth}`}, ${relation}`;
   if (base === null)
     return (
-      <span className="badge badge--accent srow__fork" title={`Branched from session ${from}${at}, which this list does not hold`}>
-        fork of {shortId(from, 13)}
+      <span className="badge badge--accent srow__fork" title={title} aria-describedby={hosted}>
+        {words}
       </span>
     );
   return (
     <a
       className="badge badge--accent srow__fork"
       href={`#${base}`}
-      title={`Branched from session ${from}${at}. Follow to its row`}
+      title={title}
+      aria-describedby={hosted}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -705,7 +755,7 @@ function ForkBadge({ base, depth, from, onFollow }: { base: string | null; depth
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      {depth === null ? 'fork' : `fork at ${depth}`}
+      {words}
     </a>
   );
 }

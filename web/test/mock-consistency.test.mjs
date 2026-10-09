@@ -50,7 +50,31 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, aheadOf: d.aheadOf, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+}
+
+/** Every decision record of the story, read as the routing log answers them, newest first. */
+async function decisionsOf(s) {
+  const from = iso(Math.min(...s.requests.map((r) => Date.parse(r.at))) - HOUR);
+  const records = [];
+  let cursor;
+  do {
+    const page = await s.api.listRoutingLog({ cursor, from, limit: 200, to: iso(s.now) });
+    // Each mock answer waits out its latency, so a page's records are read together rather than one by one.
+    records.push(...(await Promise.all(page.rows.filter((row) => row.type === 'decision').map((row) => s.api.getDecision(row.requestId, row.seq)))));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return records.filter((r) => r !== null);
+}
+
+/**
+ * The set a record's partitions narrow: a move's destinations (the cap filter's facts name them), else the eligible
+ * members.
+ */
+function narrowedSetOf(r) {
+  const capFilter = r.walk.find((w) => w.step === 'cap_filter');
+  const among = capFilter ? new Set(capFilter.facts.map((f) => f.accountId)) : null;
+  return r.candidates.filter((c) => (among ? among.has(c.accountId) : c.obstacle === null));
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -200,7 +224,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
       'every subscription keeps the identity it last paired with',
     );
-    const pairing = await s.api.startPairing('legacy');
+    const pairing = await s.api.startPairing({ accountId: 'legacy' });
     const preview = await s.api.completePairing(pairing.id, { code: 'code', state: pairing.state });
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
   });
@@ -362,6 +386,178 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
+  });
+
+  test(`a Fable request's member without the model week's reading scores untouched on the model week, at ${at}`, async () => {
+    const s = await story;
+    const records = (await decisionsOf(s)).filter((r) => r.request.canonicalModel.includes('fable') && r.candidates.some((c) => c.pace !== null));
+    const unread = records.flatMap((r) => r.candidates.filter((c) => c.kind === 'oauth' && c.pace !== null && c.windows.seven_day_fable === undefined).map((c) => [r, c]));
+    assert.ok(records.length > 0 && unread.length > 0, 'the story runs a Fable request under Pace past a member that reports no model week');
+    for (const [r, c] of unread) {
+      assert.deepEqual([c.pace.remaining, c.pace.reset, c.pace.window], [1, null, 'seven_day_fable'], `${r.requestId}: ${c.accountId}`);
+      assert.ok(s.lib.candidateCells(c, r, s.now).paceTitle.startsWith('100% of the Fable week left'), `${r.requestId}: ${c.accountId}`);
+    }
+    for (const r of records) for (const c of r.candidates) if (c.kind === 'oauth' && c.pace !== null) assert.equal(c.pace.window, 'seven_day_fable', r.requestId);
+  });
+
+  test(`every record that reaches the rungs carries one partitions step before them, a hold its pick and an exhaustion the walk the engine writes, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    assert.ok(records.length > 20);
+    // Two run-outs keep a member out on a cooldown or a credits block at the moment the bound ran out, so the engine
+    // would name that block in the exhaustion, while the story's row reports the accounts at their cap, an untimed
+    // answer.
+    const untimedBesideABlock = new Set(['req_48db1b37-495/3', 'req_151f3e2e-d99/2']);
+    const seen = { exhausted: 0, held: 0, ranOut: 0 };
+    for (const r of records) {
+      const id = `${r.requestId}/${r.seq}`;
+      const steps = r.walk.map((w) => w.step);
+      const walk = `${id}: ${steps.join(', ')}`;
+      const firstRung = steps.findIndex((x) => x.startsWith('rung:'));
+      const partitions = steps.flatMap((x, i) => (x === 'partitions' ? [i] : []));
+      const pick = r.walk.find((w) => w.step === 'pick');
+      if (!['exhausted', 'held', 'moved', 'placed'].includes(r.outcome.kind)) continue;
+      assert.ok(firstRung >= 0, walk);
+      assert.equal(partitions.length, 1, walk);
+      assert.ok(partitions[0] < firstRung, `${walk}: partitions after the rungs`);
+      const slot = steps.findIndex((x) => x === 'hold' || x === 'exhausted');
+      if (r.outcome.kind === 'held') {
+        seen.held += 1;
+        assert.equal(pick?.verdict, 'chosen', walk);
+        assert.ok(steps.indexOf('pick') < slot, `${walk}: no pick before the hold`);
+        assert.equal(r.candidates.find((c) => c.accountId === r.outcome.accountId)?.rank, 1, `${id}: the held-on member's rank`);
+      } else if (r.outcome.kind === 'exhausted') {
+        seen.exhausted += 1;
+        assert.deepEqual([r.walk[partitions[0]].verdict, pick?.verdict], ['none', 'none'], walk);
+        assert.ok(steps.indexOf('pick') < slot, `${walk}: no pick before the exhaustion`);
+        assert.ok(!steps.includes('bound'), walk);
+        // Past a hold's bound the relay passes the account it waited on over and selects again, so the answer is an
+        // empty eligible set with every account the request waited on attempted.
+        if (s.lib.requestById.get(r.requestId).errorCode === 'accounts_at_cap') {
+          seen.ranOut += 1;
+          assert.equal(r.walk.find((w) => w.step === 'eligible')?.verdict, 'none', walk);
+          assert.ok(r.candidates.every((c) => c.obstacle !== null), `${id}: a member left eligible`);
+          for (const h of r.request.holds) assert.equal(r.candidates.find((c) => c.accountId === h.accountId)?.obstacle?.name, 'attempted', `${id}: ${h.accountId}`);
+          // The exhaustion is named after the members' obstacles, and with every member attempted that reads untimed.
+          assert.equal(r.outcome.exhaustion?.kind, 'untimed', id);
+          assert.equal(r.candidates.every((c) => c.obstacle.name === 'attempted'), !untimedBesideABlock.has(id), `${id}: ${r.candidates.map((c) => `${c.accountId} ${c.obstacle.name}`).join(', ')}`);
+        }
+      } else {
+        // A rung places the request itself, and the strategy picks only where no rung matched.
+        assert.equal(pick?.verdict, r.outcome.rung === null ? 'chosen' : undefined, walk);
+      }
+    }
+    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0, JSON.stringify(seen));
+    assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
+  });
+
+  test(`every partitions step reads the five facts the derivation gives over the record's own set, none past the set, at ${at}`, async () => {
+    const s = await story;
+    const d = s.lib;
+    const records = await decisionsOf(s);
+    let seen = 0;
+    for (const r of records) {
+      const steps = r.walk.map((w) => w.step);
+      if (!steps.some((x) => x.startsWith('rung:'))) continue;
+      const set = narrowedSetOf(r);
+      const expected = d.partitionsOf(set.map((c) => ({ ...c })), d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
+      for (const w of r.walk.filter((x) => x.step === 'partitions')) {
+        seen += 1;
+        assert.deepEqual(w.facts.map((f) => [f.key, f.value]), expected.map((f) => [f.key, f.value]), `${r.requestId}/${r.seq}`);
+        assert.deepEqual(w.facts.map((f) => f.key), ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']);
+        // The engine writes a partition's count bare, as it writes its words.
+        assert.ok(w.facts.every((f) => f.unit === null), `${r.requestId}/${r.seq}: ${w.facts.map((f) => f.unit).join(', ')}`);
+        for (const f of w.facts) {
+          if (typeof f.value === 'number') assert.ok(f.value >= 0 && f.value <= set.length, `${r.requestId}: ${f.key} ${f.value} over ${set.length}`);
+          else assert.ok(['fell_through', 'held', 'off'].includes(String(f.value)), `${r.requestId}: ${f.key} ${f.value}`);
+        }
+      }
+    }
+    assert.ok(seen > 10);
+
+    const read = (id, keys) => {
+      const w = records.find((r) => `${r.requestId}/${r.seq}` === id)?.walk.find((x) => x.step === 'partitions');
+      return [w?.verdict, (w?.facts ?? []).filter((f) => keys.includes(f.key)).map((f) => [f.key, f.value])];
+    };
+    // The cohort hold waits with every member it could take at its cap, under a non-Fable model and no ceiling.
+    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'above_ceiling']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['above_ceiling', 'off']]]);
+    // Nothing is left to narrow, so the step reads none with every count 0 or off, the floor off on a round-robin pool.
+    assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']), ['none', [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]]);
+
+    const pairs = (facts) => facts.map((f) => [f.key, f.value]);
+    const member = (accountId, o = {}) => ({ accountId, credits: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
+    const haiku = { canonicalModel: 'claude-haiku-4-5-20251001', kind: 'inference' };
+    const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
+    // The cap drops the member at it, and the wind-down then falls through rather than empty the set.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['above_ceiling', 'off'], ['winding_down', 'fell_through'], ['floor', 'off']]);
+    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left.
+    const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+    // Under Pace a member at the floor drops while one above it is left.
+    const all = d.poolById.get('all');
+    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { pace: { remaining: all.paceFloor } })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 1]]);
+    // A token count takes no slot, so the cap keeps every member, even with each at it.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]);
+    // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
+    // the account the request waits on or passes over.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+  });
+
+  test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
+    const s = await story;
+    const d = s.lib;
+    const records = await decisionsOf(s);
+    // Two Fable turns of the Sunday night went to nightly, and a record reads the account a turn went to off that
+    // attempt's own answer, whose head reads nightly's 5-hour window spent, so the spent partition drops the very
+    // account the drawn turn was placed on.
+    const spentByOwnAnswer = new Set(['req_8821a268-cc9/1', 'req_427edcaa-3b3/1']);
+    let seen = 0;
+    for (const r of records) {
+      const partitions = r.walk.find((w) => w.step === 'partitions');
+      if (!partitions || !['held', 'moved', 'placed'].includes(r.outcome.kind)) continue;
+      const id = `${r.requestId}/${r.seq}`;
+      const named = r.candidates.find((c) => c.accountId === r.outcome.accountId);
+      assert.ok(named !== undefined, `${id}: ${r.outcome.accountId} is no candidate`);
+      // A member stays through a partition that dropped others only by passing it alone, and through one that fell
+      // through or held the set whole.
+      const alone = d.partitionsOf([{ ...named }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
+      const kept = narrowedSetOf(r).includes(named) && partitions.facts.every((f, i) => typeof f.value !== 'number' || alone[i].value === 0);
+      seen += 1;
+      assert.equal(kept, !spentByOwnAnswer.has(id), `${id}: ${r.outcome.kind} on ${named.accountId} over ${partitions.facts.map((f) => `${f.key} ${f.value}`).join(', ')}`);
+    }
+    assert.ok(seen > 10);
+  });
+
+  test(`the story lists two forks, one on its base's account and one on another, at ${at}`, async () => {
+    const s = await story;
+    // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
+    // among them is the slot the story pinned its fork on.
+    const listed = s.sessions.filter((x) => !x.historical);
+    const forks = s.sessions.filter((x) => x.forkedFrom !== null);
+    assert.equal(forks.length, 2, `${forks.length} forks are listed`);
+    const pairs = forks.map((fork) => {
+      const base = s.sessions.find((x) => x.sessionId === fork.forkedFrom && x.keyId === fork.keyId);
+      assert.ok(base, `${fork.sessionId}'s base ${fork.forkedFrom} is listed under ${fork.keyId}`);
+      return { base, fork };
+    });
+    const same = pairs.filter((p) => p.fork.accountId === p.base.accountId);
+    const other = pairs.filter((p) => p.fork.accountId !== p.base.accountId);
+    assert.equal(same.length, 1, "one fork sits on its base's account");
+    assert.equal(other.length, 1, 'one fork sits on another account than its base');
+    assert.deepEqual([same[0].fork.sessionId, same[0].base.sessionId], [listed[5].sessionId, listed[3].sessionId], 'the same-account fork and its base');
+    assert.deepEqual([other[0].fork.sessionId, other[0].base.sessionId], [listed[2].sessionId, listed[1].sessionId], 'the other-account fork and its base');
+  });
+
+  test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {
+    const s = await story;
+    const lead = (accountId, windowId) => {
+      const w = s.accounts.find((a) => a.id === accountId).windows.find((x) => x.id === windowId);
+      return s.aheadOf(w, w.periodHours * HOUR, s.now);
+    };
+    assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
+    assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);
+    assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
   test(`every plan-funded row of a weighted model carries non-null shares and no API key, overage or fast row carries one, at ${at}`, async () => {

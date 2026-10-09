@@ -2926,6 +2926,153 @@ fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
     }
 }
 
+/// The bundle a pairing's confirm hands the store, with tokens that are obviously not real.
+fn paired_bundle() -> NewBundle {
+    NewBundle {
+        access_token: Secret::new("at-test-not-a-token"),
+        refresh_token: Some(Secret::new("rt-test-not-a-token")),
+        issued_at: 1_799_996_400_000,
+        expires_at: 1_800_000_000_000,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    }
+}
+
+/// The row a confirm builds for a pairing started before its row existed: bound to `account_uuid` and born paired.
+fn paired_row(id: &str, account_uuid: &str) -> AccountRow {
+    AccountRow {
+        identity: Some(Identity {
+            account_uuid: account_uuid.into(),
+            email: format!("{id}@example.invalid"),
+            organization_uuid: None,
+        }),
+        state_cause: StateCause::Paired,
+        ..account(id, AccountKind::Oauth)
+    }
+}
+
+#[test]
+fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_write() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let subscription = SubscriptionRow {
+        plan: Some("max".into()),
+        tier: Some("default_claude_max_5x".into()),
+        since: Some(1_773_482_400_000),
+        trial_ends_at: None,
+    };
+    let profile = r#"{"account":{"uuid":"00000000-0000-4000-8000-000000000001"}}"#;
+    let generation = store
+        .create_paired_account(
+            &paired_row("fresh", "00000000-0000-4000-8000-000000000001"),
+            &paired_bundle(),
+            profile,
+            &subscription,
+            5,
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(generation, 1);
+    let row = store.account("fresh").unwrap().unwrap();
+    assert_eq!(
+        (
+            row.state,
+            row.state_cause,
+            row.incarnation,
+            row.lifecycle_generation,
+            row.revision
+        ),
+        (AccountState::Ready, StateCause::Paired, 1, 1, 1)
+    );
+    assert_eq!(
+        row.identity.as_ref().map(|i| i.account_uuid.as_str()),
+        Some("00000000-0000-4000-8000-000000000001")
+    );
+    let credential = store.credentials("fresh").unwrap().unwrap();
+    assert_eq!(
+        (credential.generation, credential.lifecycle_generation),
+        (1, 1)
+    );
+    assert_eq!(credential.access_token.expose(), "at-test-not-a-token");
+    let attempts = store
+        .newest_resolved_refresh_attempts("fresh", 1, 10)
+        .unwrap();
+    assert_eq!(attempts.len(), 1, "the pairing's own resolved attempt");
+    assert_eq!(
+        (
+            attempts[0].outcome.as_str(),
+            attempts[0].detail.as_deref(),
+            attempts[0].credential_generation,
+            attempts[0].resolved_at
+        ),
+        ("committed", Some("pairing"), 1, 5)
+    );
+    let changes = store.registry_changes_after(0, 10).unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        (
+            changes[0].kind.as_str(),
+            changes[0].target.as_str(),
+            changes[0].actor.as_str(),
+            changes[0].at
+        ),
+        ("account_created", "fresh", "admin", 5)
+    );
+    assert_eq!(
+        store.profile_json("fresh").unwrap().as_deref(),
+        Some(profile),
+        "the profile lands in the same write"
+    );
+    let term = store.subscription_term("fresh").unwrap().unwrap();
+    assert_eq!(
+        (term.since, term.trial_ends_at),
+        (Some(1_773_482_400_000), None)
+    );
+
+    let unchanged = |store: &Store| {
+        (
+            store.accounts().unwrap(),
+            store.credentials("fresh").unwrap().map(|c| c.generation),
+            store
+                .newest_resolved_refresh_attempts("fresh", 1, 10)
+                .unwrap()
+                .len(),
+            store.registry_changes_after(0, 10).unwrap().len(),
+        )
+    };
+    let before = unchanged(&store);
+    let same_id = store.create_paired_account(
+        &paired_row("fresh", "00000000-0000-4000-8000-000000000009"),
+        &paired_bundle(),
+        "{}",
+        &subscription,
+        6,
+        "admin",
+    );
+    assert!(
+        matches!(same_id, Err(StoreError::Sqlite(_))),
+        "a taken id answers the constraint itself: {same_id:?}"
+    );
+    let same_identity = store.create_paired_account(
+        &paired_row("second", "00000000-0000-4000-8000-000000000001"),
+        &paired_bundle(),
+        "{}",
+        &subscription,
+        7,
+        "admin",
+    );
+    assert!(
+        matches!(same_identity, Err(StoreError::IdentityTaken)),
+        "an identity another row holds is named: {same_identity:?}"
+    );
+    assert!(store.account("second").unwrap().is_none());
+    assert!(store.credentials("second").unwrap().is_none());
+    assert_eq!(
+        unchanged(&store),
+        before,
+        "neither refused write left anything behind"
+    );
+}
+
 #[test]
 fn an_edit_token_too_wide_for_a_console_number_is_refused_by_its_own_row() {
     let row = AccountRow {
