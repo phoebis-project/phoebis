@@ -262,8 +262,11 @@ pool dialog shows them by bucket.
 
 The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the
 cause. The cause's sentence shows on hover over the state word and again in the row's expanded detail. Every agent
-that has sent a real request keeps its row until its session leaves the engine, so a recipe that ended, or a request
-that was not kept, still shows with its cause.
+that has sent a real request keeps its record in the engine until its session leaves it, and its line in the view with
+it, so a recipe that ended, or a request that was not kept, still shows with its cause. The one line that leaves earlier
+is a subagent's the mod released while its session lives: the view drops it at its next re-read, while the engine keeps
+the record, which refuses a late request and a late probe result under that id and holds its slot of the agent cap until
+the session leaves.
 
 | State | What it means |
 | --- | --- |
@@ -271,7 +274,7 @@ that was not kept, still shows with its cause.
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
 | `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
 | `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
-| `ended` | The recipe was discarded and the agent's row stays: a ceiling, a lapse, an eviction, a release or an end. |
+| `ended` | The recipe was discarded: a ceiling, a lapse, an eviction, a release or an end. |
 
 Each state reads these causes:
 
@@ -391,28 +394,31 @@ session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with a strip of tiles. Sessions, Agents and Retained read the keepalive engine's sessions, agent
 records and retained prompt bytes, each as a count of the cap the bootstrap file sets (`3 of 128`, `12 of 1,024`,
-`40 MiB of 256 MiB`). The Sessions tile's note counts the listed rows whose mod reports or went silent and those with a
-recipe, and the Agents tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by
-outcome, sessions whose cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus
-events. A tile whose read failed draws a dash with the reason on hover, and Try again under the tiles reads them again,
-as a line above the table does for a failed account read. Its table lists one row per session, led by the row's menu,
-and offers eleven columns, eight shown by default (last request, agents and next probe start hidden, and
-the Columns control turns any on): key, session, model, account, last used, requests, last request,
-agents, companion, cache warming, and next probe. The model column reads the family and version, with the whole id on
-hover, and the account cell names the account's kind on hover and to a screen reader. The companion column reads the
-mod's state, `reporting`, `silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person
-was last seen at the terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real
-request: its model, pinned account and TTL, the last request, the last and the next probe, and the probes sent today
-with the requests they kept warm, counted from midnight UTC, the lines running main first, then the busy, idle and
-parked agents, newest last request first inside each group. The line ends on its state word with the cause beside it,
-the cause's sentence on hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle
-word for the agent, with a parked agent's park kind and its deadline or wake time
-(`parked · background · deadline in 1h 12m`), and repeats the state's and the cause's sentences. A session's menu
-offers "View in analytics", "View in observe" and "View in requests" once it has ledgered traffic, the last opening the
-request log on the session's requests inside the narrowest of its ranges that covers the session's last request, "View
-in routing log", which opens the log on that session's decisions, and Release.
-The analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions again every
-15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
+`40 MiB of 256 MiB`), the Agents figure less the subagents the mod released while their session lives, which draw no
+line and keep their slot of the cap until their session leaves, with the records and the released count on hover. The
+Sessions tile's note counts the listed rows whose mod reports or went silent and those with a recipe, and the Agents
+tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by outcome, sessions whose
+cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus events. A tile whose read
+failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as a line above the table
+does for a failed account read. Its table lists one row per session, led by the row's menu, and offers eleven columns,
+eight shown by default (last request, agents and next probe start hidden, and the Columns control turns
+any on): key, session, model, account, last used, requests, last request, agents, companion, cache
+warming, and next probe. The model column reads the family and version, with the whole id on hover, and the account cell
+names the account's kind on hover and to a screen reader. The companion column reads the mod's state, `reporting`,
+`silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person was last seen at the
+terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real request: its model,
+pinned account and TTL, the last request, the last and the next probe, and the probes sent today with the requests they
+kept warm, counted from midnight UTC, the lines running main first, then the busy, idle and parked agents, newest last
+request first inside each group, a subagent the mod released while its session lives drawing no line, and the Agents
+column leaving it out of its count. The line ends on its state word with the cause beside it, the cause's sentence on
+hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word for the agent, with
+a parked agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`), and repeats the
+state's and the cause's sentences. A session's menu offers "View in analytics", "View in observe" and "View in requests"
+once it has ledgered traffic, the last opening the request log on the session's requests inside the narrowest of its
+ranges that covers the session's last request, "View in routing log" whenever the row has a routing session, which opens
+the log on that session's decisions, and Release. The analytics view opens on the requests of the key holder the row
+belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending requests stays on it,
+and its tiles once a minute.
 
 A session
 whose first request that is not auxiliary branched from another conversation at depth 2 or deeper carries a `fork at 3`

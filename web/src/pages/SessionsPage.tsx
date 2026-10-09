@@ -11,7 +11,7 @@ import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, orderRecipes, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -75,6 +75,8 @@ interface Row {
   agents: KeepaliveRecipe[];
   /** Why a session carries no recipe at all; null while it has one. */
   noRecipe: string | null;
+  /** The session's lines the view hides, which its Agents column takes off the engine's record count. */
+  released: number;
   session: Session;
   /** The lines the row draws, in the view's order: the summary, the badges and the expanded lines read this list. */
   shown: KeepaliveRecipe[];
@@ -145,7 +147,16 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
       }
       if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
-    return { account: accountById.get(session.accountId ?? '') ?? null, agents, noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null, session, shown: orderRecipes(agents) };
+    // The full list stays beside the lines drawn: the causes of a session without a line read every record, and a
+    // session whose lines the mod all released still holds records, so it is no session without a recipe.
+    return {
+      account: accountById.get(session.accountId ?? '') ?? null,
+      agents,
+      noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null,
+      released: releasedCount(agents),
+      session,
+      shown: orderRecipes(agents.filter((a) => !isReleasedLine(a))),
+    };
   });
 }
 
@@ -216,6 +227,7 @@ export function SessionsPage() {
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
   const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with the keepalive mod, ${fmtInt(withRecipe)} with a recipe` : null;
+  const hidden = releasedCount(recipeData ?? []);
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -265,9 +277,18 @@ export function SessionsPage() {
 
       <div className="stat-grid stat-grid--caps">
         <Tile label="Sessions" value={o ? <span className="nowrap">{`${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} error={overviewError} />
+        {/* The overview is read once a minute and the recipes every 15 seconds, so the figure can trail the hidden
+            lines by a read, which is accepted. Only a line the recipes list carries comes off, so a record that never
+            drew a line is never subtracted. */}
         <Tile
           label="Agents"
-          value={o ? <span className="nowrap">{`${fmtInt(o.limits.agents.count)} of ${fmtInt(o.limits.agents.max)}`}</span> : null}
+          value={
+            o ? (
+              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap. ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.`}>
+                {`${fmtInt(Math.max(0, o.limits.agents.count - hidden))} of ${fmtInt(o.limits.agents.max)}`}
+              </span>
+            ) : null
+          }
           note={o ? `${fmtInt(o.agents.busy)} busy, ${fmtInt(o.agents.idle)} idle, ${fmtInt(o.agents.parked)} parked` : null}
           error={overviewError}
         />
@@ -566,7 +587,8 @@ function SessionRows({
             {session.lastRequestAt ? <span className="num">{fmtRelative(session.lastRequestAt, now)}</span> : <span className="muted">none</span>}
           </td>
         )}
-        {visible.has('agents') && <td className="right num">{session.agents}</td>}
+        {/* The sessions and the recipes are read apart, so the count stops at zero while the two disagree. */}
+        {visible.has('agents') && <td className="right num">{Math.max(0, session.agents - row.released)}</td>}
         {visible.has('companion') && (
           <td>
             {session.companion === 'reporting' ? (

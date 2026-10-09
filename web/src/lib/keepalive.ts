@@ -185,3 +185,19 @@ export function requestsRange(lastRequestAt: string | null, now: number): Reques
   const age = now - Date.parse(lastRequestAt);
   return REQUEST_RANGES.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
 }
+
+/**
+ * Whether a recipe line is one the mod released under a live session, which the view hides at its next re-read. A
+ * line of a session the mod ended, or one the operator released, keeps its ended state and stays listed, so an
+ * ended session keeps its lines.
+ */
+export function isReleasedLine(agent: Pick<KeepaliveRecipe, 'agentState' | 'cause'>): boolean {
+  return agent.agentState === 'released' && agent.cause === 'agent_released';
+}
+
+/**
+ * How many of a list's lines the view hides, which the Agents column and the Agents tile take off the engine's counts.
+ */
+export function releasedCount(agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): number {
+  return agents.filter(isReleasedLine).length;
+}

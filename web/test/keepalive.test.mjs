@@ -78,3 +78,17 @@ test('requestsRange picks the narrowest range that covers the last request, with
   );
   assert.equal(d.requestsRange(null, NOW), null);
 });
+
+test('releasedCount counts the lines the view hides and nothing else', () => {
+  const at = ms(14, 20);
+  const released = (agentId, cause) => ({ ...recipe(agentId, 'released', at), cause });
+  const live = [recipe('main', 'busy', at), recipe('b4', 'busy', at), recipe('i9', 'idle', at), recipe('p2', 'parked', at), recipe('u7', 'unknown', at)];
+  assert.equal(d.releasedCount(live), 0);
+  assert.equal(d.releasedCount([live[0], released('3e', 'agent_released'), live[2], released('91', 'agent_released'), live[3]]), 2);
+  assert.equal(d.releasedCount([released('3e', 'agent_released'), released('91', 'agent_released'), released('a0', 'agent_released')]), 3);
+  assert.equal(d.releasedCount([released('3e', 'session_ended'), released('91', 'released')]), 0);
+  assert.deepEqual(
+    [released('3e', 'agent_released'), released('3e', 'session_ended'), released('3e', 'released')].map((r) => d.isReleasedLine(r)),
+    [true, false, false],
+  );
+});

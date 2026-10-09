@@ -10167,13 +10167,17 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
   {
     // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
-    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe.
+    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe. The Agents
+    // figure leaves out the subagents the mod released under a live session, which draw no line, and its title names
+    // them beside the records.
     const ov = await api.getKeepaliveOverview();
+    const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released').length;
     const strip = [...m.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
     const read = (label) => strip.find(([l]) => l === label) ?? [];
+    const agentsTitle = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     const want = [
       ['Sessions', `${ov.limits?.sessions.count} of 128`],
-      ['Agents', `${ov.limits?.agents.count} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
+      ['Agents', `${ov.limits?.agents.count - hidden} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -10182,8 +10186,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         ov.limits?.sessions.count > 0 &&
         ov.limits?.agents.count > 0 &&
+        hidden > 0 &&
+        agentsTitle.includes(`The engine holds ${ov.limits?.agents.count} agent records`) &&
+        agentsTitle.includes(`${hidden} of them are subagents the mod released`) &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
-      missing: strip.map((t) => t.join(' | ')),
+      missing: [...strip.map((t) => t.join(' | ')), `hidden ${hidden}`, agentsTitle || 'no Agents title'],
     });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
@@ -10762,6 +10769,30 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         long !== undefined &&
         long.title === long.id,
       missing: lines.map((l) => `${l.id} ${l.word}${l.title === l.id ? '' : ` title ${l.title}`}`),
+    });
+    row?.click();
+    await m.settle(150);
+  }
+  // A subagent the mod released under a live session draws no line, and the Agents column and tile leave the released
+  // lines out of their counts by taking them off the engine's record counts. The column stays on.
+  {
+    const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
+    const ov = await api.getKeepaliveOverview();
+    await showColumn(m, 'Agents');
+    const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === hidden[0]?.sessionId);
+    row?.click();
+    await m.settle(150);
+    const lines = [...m.container.querySelectorAll('.srow__detail .agents__row:not(.agents__row--head)')].map((l) => ({
+      id: l.firstElementChild?.textContent?.trim() ?? '',
+      word: l.querySelector('.agents__life .badge')?.textContent?.trim() ?? '',
+    }));
+    const count = cell(row, 'Agents')?.textContent?.trim();
+    const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
+    const want = `${ov.limits?.agents.count - hidden.length} of 1,024`;
+    results.push({
+      name: '/sessions a released line is not listed and the Agents column and tile leave it out of their counts',
+      ok: hidden.length > 0 && lines.length === 4 && lines.every((l) => l.word !== 'released' && !['e7c1', '91aa'].includes(l.id)) && count === '4' && count === String(lines.length) && tile === want,
+      missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`, `tile ${tile ?? 'absent'}, want ${want}`],
     });
     row?.click();
     await m.settle(150);
