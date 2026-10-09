@@ -1335,7 +1335,7 @@ impl Inner {
             return true;
         }
         tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-            "a keepalive recipe lapsed before its probe; the probe was skipped");
+            "a keepalive recipe lapsed before its probe, so the probe was skipped");
         if !agent.hold_counted {
             lapsed.push(Skipped {
                 key: key.clone(),
