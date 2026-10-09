@@ -1996,7 +1996,8 @@
   font-weight: 600;
 }
 
-.decision-card__title {
+.decision-card__title,
+.strip-popover__group h5 {
   margin: 0 0 6px;
   font-size: 12px;
   font-weight: 600;
@@ -2251,13 +2252,6 @@
   gap: 8px 20px;
 }
 
-.strip-popover__group h5 {
-  margin: 0 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
 .strip-popover .kv__row.is-marked dt {
   font-weight: 600;
   color: var(--ink);
@@ -2327,7 +2321,8 @@
   padding-left: 10px;
 }
 
-.decision-card__candidates tbody tr:nth-child(even) td {
+.decision-card__candidates tbody tr:nth-child(even) td,
+.strip-popover .table tbody tr:nth-child(even) td {
   background: var(--surface-2);
 }
 

@@ -595,7 +595,8 @@ test("the rung's entry rows read the matched entry and never the deeper refused 
   const entry = plan.block.groups.find((g) => g.label === 'Entry');
   assert.deepEqual(entry.rows.map((r) => r.label), ['hash', 'depth', 'prefix', 'written', 'TTL', 'live', 'on']);
   assert.equal(entry.rows[0].entry, match);
-  assert.deepEqual(entry.rows.slice(1).map((r) => r.chips.map(chipText)), [[`depth ${match.depth}`], [`prefix ${d.fmtCompact(match.prefixTokens)}`], [`written ${d.formatFact(match.writtenAt, 'time', NOW)}`], [`TTL ${d.formatFact(match.ttlMs, 'ms', NOW)}`], [`live ${match.live ? 'yes' : 'no'}`], [`on ${chosen.accountId}`]]);
+  // The TTL row carries the entry's warm-until time, the one place the popover draws it.
+  assert.deepEqual(entry.rows.slice(1).map((r) => r.chips.map(chipText)), [[`depth ${match.depth}`], [`prefix ${d.fmtCompact(match.prefixTokens)}`], [`written ${d.formatFact(match.writtenAt, 'time', NOW)}`], [`TTL ${d.formatFact(match.ttlMs, 'ms', NOW)}`, d.warmUntil(match, NOW)], [`live ${match.live ? 'yes' : 'no'}`], [`on ${chosen.accountId}`]]);
   assert.ok(!JSON.stringify(plan).includes(chosen.prefix.static.hash), 'the deeper refused entry is nowhere in the plan');
   assert.deepEqual(plan.unplaced, [{ key: 'hash', reason: 'drawn from the entry' }]);
 });

@@ -238,7 +238,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           );
         })}
       </div>
-      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} id={popoverId} now={now} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
+      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} id={popoverId} onClose={close} pinned={popover.pinned} plan={anchorPlan(popover.at, model, record, row, now)} />}
     </div>
   );
 }

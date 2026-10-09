@@ -7775,7 +7775,8 @@ m.unmount();
   /**
    * Every station, leaf and terminus of the open card opens one popover by a click: its class names the inventory's
    * renderer, its title the button's head, every list row holds a label and chips, and its inline width bound is the
-   * least of 720 px, the window less 16 and the card less 16, which jsdom's empty boxes floor at 0.
+   * least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16, which jsdom's empty
+   * boxes floor at 0.
    */
   const popoversOpen = async (what, page, card, record, row) => {
     const model = stationModel(record, row, CLOCK_ORIGIN);
@@ -7792,7 +7793,9 @@ m.unmount();
       const renderer = inventoryOf(record, model, button);
       const title = popover.querySelector('.strip-popover__title')?.textContent ?? null;
       const rows = [...popover.querySelectorAll('.kv__row')];
-      const bound = `${Math.min(720, window.innerWidth - 16, Math.max(0, (card?.getBoundingClientRect().width ?? 0) - 16))}px`;
+      const box = card?.getBoundingClientRect();
+      const shown = Math.max(0, Math.min(box?.right ?? 0, window.innerWidth) - Math.max(box?.left ?? 0, 0));
+      const bound = `${Math.min(720, window.innerWidth - 16, Math.max(0, (box?.width ?? 0) - 16), Math.max(0, shown - 16))}px`;
       if (!popover.classList.contains(`strip-popover--${renderer}`)) wrong.push(`${name}: ${popover.className}, not ${renderer}`);
       if (title === null || title !== headOf(model, button)) wrong.push(`${name}: the title reads ${title}, not ${headOf(model, button)}`);
       if (!rows.every((r) => (r.querySelector('dt')?.textContent ?? '') !== '' && r.querySelector('dd .chip') !== null)) wrong.push(`${name}: a row without its label or its chips: ${rowsRead(popover)}`);
@@ -7895,11 +7898,12 @@ m.unmount();
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
-    // The static rung's popover draws the entry it took in its Entry group.
+    // The static rung's popover draws the entry it took in its Entry group, its warm-until time once, on the TTL row.
     const rung = await popoverOf(page, rungs.at(-1)?.button);
     const entry = groupOfPopover(rung, 'Entry');
     const hash = entry?.querySelector('.decision-card__hash');
-    const warm = entry?.querySelector('.decision-card__warm');
+    const ttl = popoverRowOf(entry, 'TTL') ?? [];
+    const warmth = [...(rung?.querySelectorAll('.chip') ?? [])].filter((c) => (c.textContent ?? '').startsWith('warm until'));
     const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
     const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
     const mine = prefixCell(chosen.accountId);
@@ -7910,11 +7914,12 @@ m.unmount();
         JSON.stringify(rungs.map((s) => `${s.step} ${s.verdict}`)) === JSON.stringify(['content none', 'with main none', 'static match']) &&
         rungs.every((s) => centerOf(s.button) >= spanOf(groupOf(card, 'Rungs')).from && centerOf(s.button) <= spanOf(groupOf(card, 'Rungs')).to) && rungs.at(-1)?.button.classList.contains('is-decisive') &&
         chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
-        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
+        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 &&
+        ttl.includes(until(chosen.prefix.staticMatch)) && warmth.length === 1 &&
         mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
         refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
         !`${card?.textContent ?? ''}${rung?.textContent ?? ''}`.includes(chosen.prefix.static.hash.slice(0, 8)),
-      missing: [...rungs.map((s) => `${s.step} ${s.verdict}`), rungs.at(-1)?.step ?? 'no static rung', rowsRead(rung), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+      missing: [...rungs.map((s) => `${s.step} ${s.verdict}`), rungs.at(-1)?.step ?? 'no static rung', rowsRead(rung), `${hash?.textContent} ${hash?.getAttribute('title')}`, `TTL: ${ttl.join(' / ')}, ${warmth.length} warm-until chips`, mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
     });
     // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
     // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.

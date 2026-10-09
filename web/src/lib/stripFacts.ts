@@ -4,12 +4,12 @@ import { own } from '@/lib/analytics';
 import { PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
-import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, walkLines, WINDOW_WORD, words } from '@/lib/routingLog';
+import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, walkLines, warmUntil, WINDOW_WORD, words } from '@/lib/routingLog';
 
 // A popover's plan: the facts of one station, leaf or terminus as plain data in the console's words, which
 // `StripPopover` draws and the unit tests read.
 
-/** A label and its chips. A rung's entry draws its hash and warmth first. */
+/** A label and its chips. A rung's entry draws its hash first. */
 export interface PlanRow { chips: Chip[]; entry?: PrefixEntry; label: string; marked?: boolean; title?: string }
 export interface PlanGroup { label: string | null; rows: PlanRow[] }
 export interface PlanColumn { key: string; label: string; numeric: boolean; title?: string }
@@ -161,6 +161,7 @@ function rungOf(step: WalkStep, record: DecisionRecord, at: number, now: number)
     for (const key of ['depth', 'prefix_tokens', 'account_id']) take(key);
     for (const f of take('hash')) unplaced.push({ key: f.key, reason: 'drawn from the entry' });
     const holder = record.candidates.find((c) => [c.prefix.content, c.prefix.contentMatch, c.prefix.static, c.prefix.staticMatch].includes(entry));
+    const until = warmUntil(entry, now);
     list.push({
       label: 'Entry',
       rows: [
@@ -168,7 +169,7 @@ function rungOf(step: WalkStep, record: DecisionRecord, at: number, now: number)
         { chips: [plain(fmtInt(entry.depth), 'depth')], label: 'depth' },
         { chips: [plain(fmtCompact(entry.prefixTokens), 'prefix')], label: 'prefix' },
         { chips: [plain(formatFact(entry.writtenAt, 'time', now), 'written')], label: 'written' },
-        { chips: [plain(formatFact(entry.ttlMs, 'ms', now), 'TTL')], label: 'TTL' },
+        { chips: [plain(formatFact(entry.ttlMs, 'ms', now), 'TTL'), ...(until === null ? [] : [plain(until)])], label: 'TTL' },
         { chips: [plain(entry.live ? 'yes' : 'no', 'live')], label: 'live' },
         ...(entry.refusedBy === null ? [] : [{ chips: [plain(words(entry.refusedBy), 'refused by')], label: 'refused by' }]),
         ...(holder === undefined ? [] : [{ chips: [accountChip(holder.accountId, 'on')], label: 'on' }]),

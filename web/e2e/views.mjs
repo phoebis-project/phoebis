@@ -2710,7 +2710,7 @@ async function stripWords(theme, where) {
   for (const hit of got.hits) failures.push(`${theme} /routing-log: ${where}: a station label runs into a leaf row or a bracket (${hit})`);
 }
 
-/** The popover's viewports: the card's two, and one where the window, not the card, bounds the popover's width. */
+/** The popover's viewports: the card's two, and one where the card is wider than the window. */
 const POPOVER_VIEWPORTS = [
   { height: 800, width: 1280 },
   { height: 900, width: 1440 },
@@ -2719,13 +2719,15 @@ const POPOVER_VIEWPORTS = [
 
 /**
  * Opens the popover of the open card's station that `stationOf` finds at each viewport and reads its box inside the
- * card's less 8 px either side and on screen, its inline width bound the least of 720 px, the window less 16 and the
- * card less 16, its table's heads on at most two lines, and nothing in it scrolling sideways. Escape closes it after
- * each reading.
+ * card's less 8 px either side and inside the part of the card on screen and the window less 8 px either side, its
+ * inline width bound the least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16,
+ * its table's heads on at most two lines, and nothing in it scrolling sideways. `table` holds that it draws a table,
+ * and `striped` that its table's second row takes the candidate table's even-row color and its first row does not.
+ * Escape closes it after each reading.
  */
-async function popoverBounds(theme, what, stationOf) {
+async function popoverBounds(theme, what, stationOf, { striped = false, table = false, viewports = POPOVER_VIEWPORTS } = {}) {
   const say = (message) => failures.push(`${theme} /routing-log: ${message}`);
-  for (const { height, width } of POPOVER_VIEWPORTS) {
+  for (const { height, width } of viewports) {
     const where = `${what}'s popover at ${width} by ${height}`;
     await page.setViewportSize({ height, width });
     // The strip redraws for the new width once a resize has settled for 120 ms, which only the page's clock moves.
@@ -2744,21 +2746,27 @@ async function popoverBounds(theme, what, stationOf) {
       const popover = open[0];
       const p = popover.getBoundingClientRect();
       const c = card.getBoundingClientRect();
+      const shown = { left: Math.max(c.left, 0), right: Math.min(c.right, window.innerWidth) };
       // A head's lines are the distinct tops of its text's line boxes.
       const lines = (el) => {
         const range = document.createRange();
         range.selectNodeContents(el);
         return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
       };
+      const fill = (td) => (td ? getComputedStyle(td).backgroundColor : null);
       return {
-        bound: Math.min(720, window.innerWidth - 16, Math.max(0, c.width - 16)),
-        inner: window.innerWidth,
+        bound: Math.min(720, window.innerWidth - 16, Math.max(0, c.width - 16), Math.max(0, shown.right - shown.left - 16)),
         card: { left: c.left, right: c.right, width: c.width },
+        // The candidate table's first even row that is not tinted for the chosen member.
+        evenRow: fill(card.querySelector('.decision-card__candidates tbody tr:nth-child(even):not(.is-chosen) td')),
         heads: [...popover.querySelectorAll('thead th')].map((th) => ({ lines: lines(th), text: th.textContent })),
+        inner: window.innerWidth,
         maxWidth: popover.style.maxWidth,
         pinned: popover.classList.contains('is-pinned'),
         popover: { client: popover.clientWidth, left: p.left, right: p.right, scroll: popover.scrollWidth, width: p.width },
         renderer: [...popover.classList].find((n) => n.startsWith('strip-popover--')) ?? null,
+        rows: [...popover.querySelectorAll('.strip-popover__table tbody tr')].slice(0, 2).map((tr) => fill(tr.cells[0])),
+        shown,
         wraps: [...popover.querySelectorAll('.table-wrap')].map((w) => ({ client: w.clientWidth, scroll: w.scrollWidth })),
       };
     });
@@ -2768,12 +2776,15 @@ async function popoverBounds(theme, what, stationOf) {
       continue;
     }
     if (!got.pinned) say(`${where}: the click left the popover unpinned`);
-    if (got.maxWidth !== `${got.bound}px`) say(`${where}: the width bound reads ${got.maxWidth}, not the ${got.bound}px of 720 px, the window less 16 and the card (${got.card.width}px) less 16`);
+    if (got.maxWidth !== `${got.bound}px`) say(`${where}: the width bound reads ${got.maxWidth}, not the ${got.bound}px of 720 px, the window less 16, the card (${got.card.width}px) less 16 and its part on screen (${got.shown.left} to ${got.shown.right}px) less 16`);
     if (got.popover.width > got.bound + 0.5) say(`${where} is ${got.popover.width}px wide, past its ${got.bound}px bound`);
     if (got.popover.left < got.card.left + 8 - 0.5 || got.popover.right > got.card.right - 8 + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, outside the card's ${got.card.left} to ${got.card.right}px less 8 px either side`);
-    if (got.popover.left < -0.5 || got.popover.right > got.inner + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, off the ${got.inner}px window`);
+    if (got.popover.left < got.shown.left + 8 - 0.5 || got.popover.right > got.shown.right - 8 + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, outside the card's part on screen, ${got.shown.left} to ${got.shown.right}px, less 8 px either side`);
+    if (got.popover.left < 8 - 0.5 || got.popover.right > got.inner - 8 + 0.5) say(`${where} spans ${got.popover.left} to ${got.popover.right}px, outside the ${got.inner}px window less 8 px either side`);
     for (const h of got.heads.filter((x) => x.lines > 2)) say(`${where}: the "${h.text}" head runs to ${h.lines} lines`);
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
+    if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
+    if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
     if ((await page.locator('.strip-popover').count()) !== 0) say(`${where}: Escape left the popover open`);
@@ -2789,8 +2800,9 @@ async function popoverBounds(theme, what, stationOf) {
  * kind badge's box, and the strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are
  * read on the first rung placement the page lists. The router's seed places no request by a rung and records no move,
  * so there that check stands down and the shed move's badge colors are the story's alone. A station's popover keeps
- * inside the card at the two viewports and at 700 by 800: the mock pass reads the shed move's Move station and the
- * fresh placement's Pick station, the seeded router's pass the station its first card's candidates hang from.
+ * inside the card at the two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest
+ * popover), its Cool reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the
+ * seeded router's pass the station its first card's candidates hang from.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -2928,6 +2940,10 @@ async function decisionCard(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await advance(2 * CLOCK_STEP_MS);
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
+  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box.
+  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
+  // The shed move's pick scores two members, so its table has a second row to stripe.
+  await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0]] });
   // The fresh placement at 14:09:41 opens on its request's page too, so the hour the page shows cannot hide it.
   const fresh = 'req_ef099b34-453';
   const placed = (await page.evaluate(() => Date.now())) - (20 * 60 + 19) * 1_000;
