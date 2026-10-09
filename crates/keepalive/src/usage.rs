@@ -87,12 +87,22 @@ impl ProbeUsage {
         Some(usage)
     }
 
+    /// The bus's usage of a stream phase or a completion. A five-minute column without a one-hour column is the
+    /// relay's filing of a bare `cache_creation_input_tokens`, the older wire shape, which the stream's
+    /// `message_delta` repeats without the split the `message_start` gave: the column alone proves no TTL, so it
+    /// reads as a write of unknown TTL, as `Usage::merge` reads it. With the one-hour column there, the two
+    /// columns are the split.
     pub fn from_bus(usage: &phoebis_bus::Usage) -> ProbeUsage {
-        let five_minutes = usage.cache_write_5m_tokens.unwrap_or(0);
-        let one_hour = usage.cache_write_1h_tokens.unwrap_or(0);
+        let (five_minutes, one_hour, write) = match usage.cache_write_1h_tokens {
+            Some(one_hour) => {
+                let five_minutes = usage.cache_write_5m_tokens.unwrap_or(0);
+                (five_minutes, one_hour, five_minutes + one_hour)
+            }
+            None => (0, 0, usage.cache_write_5m_tokens.unwrap_or(0)),
+        };
         ProbeUsage {
             read: usage.cache_read_tokens.unwrap_or(0),
-            write: five_minutes + one_hour,
+            write,
             output: usage.output_tokens.unwrap_or(0),
             five_minutes,
             one_hour,

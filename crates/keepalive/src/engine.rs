@@ -2399,20 +2399,54 @@ impl Inner {
             return;
         }
         observation.expected = usage.evidence();
-        agent.ttl_ms = usage.ttl_ms(
-            agent.ttl_ms,
-            observation
-                .dispatched_ms
-                .unwrap_or(observation.recipe.ttl_ms),
-        );
+        let previous_ms = agent.ttl_ms;
+        let requested_ms = observation
+            .dispatched_ms
+            .unwrap_or(observation.recipe.ttl_ms);
+        agent.ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
         if observation.ttl_ms > 0 && observation.ttl_ms < agent.ttl_ms {
             agent.ttl_ms = observation.ttl_ms;
         }
+        note_ttl_change(
+            key,
+            agent_id,
+            previous_ms,
+            agent.ttl_ms,
+            requested_ms,
+            &usage,
+        );
         observation.ttl_ms = agent.ttl_ms;
         agent.expires = Some(agent.cache_started + agent.ttl_ms);
         agent.jitter_frac = rand::random::<f64>();
         self.set_reason(key, agent_id, Reason::Scheduled);
     }
+}
+
+/// The one line at a TTL decision, written only when the TTL moved, so a settled recipe's two stream phases and its
+/// probes stay silent. The counts are the evidence the decision read, never a body.
+pub(crate) fn note_ttl_change(
+    key: &SessionKey,
+    agent_id: &str,
+    previous_ms: i64,
+    ttl_ms: i64,
+    requested_ms: i64,
+    usage: &ProbeUsage,
+) {
+    if previous_ms == ttl_ms {
+        return;
+    }
+    tracing::debug!(
+        key = %key.0,
+        agent = %agent_id,
+        previous_ms,
+        ttl_ms,
+        requested_ms,
+        read = usage.read,
+        write = usage.write,
+        five_minutes = usage.five_minutes,
+        one_hour = usage.one_hour,
+        "a keepalive recipe's TTL changed on cache evidence"
+    );
 }
 
 impl Engine {

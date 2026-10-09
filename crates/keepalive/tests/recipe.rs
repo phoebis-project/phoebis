@@ -455,6 +455,36 @@ fn ttl_is_read_only_evidence_and_mixed_markers_take_the_shorter() {
             FIVE_MINUTES_MS,
             FIVE_MINUTES_MS,
         ),
+        (
+            "bare_total_keeps_the_prior",
+            ProbeUsage {
+                write: 100,
+                ..Default::default()
+            },
+            ONE_HOUR_MS,
+            0,
+            ONE_HOUR_MS,
+        ),
+        (
+            "bare_total_reads_the_request",
+            ProbeUsage {
+                write: 100,
+                ..Default::default()
+            },
+            0,
+            ONE_HOUR_MS,
+            ONE_HOUR_MS,
+        ),
+        (
+            "bare_total_alone_is_five_minutes",
+            ProbeUsage {
+                write: 100,
+                ..Default::default()
+            },
+            0,
+            0,
+            FIVE_MINUTES_MS,
+        ),
     ] {
         assert_eq!(usage.ttl_ms(prior, requested), want, "{name}");
     }
@@ -539,10 +569,39 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
             read: 2,
             write: 3,
             output: 7,
-            five_minutes: 3,
+            five_minutes: 0,
             one_hour: 0,
             input: 4,
             speed: None
+        },
+        "a five-minute column without a one-hour column is the bare total of the older wire shape or a split with the five-minute member alone, and the bus merge reads both as the bare total too"
+    );
+    let five_minute_split = phoebis_bus::Usage {
+        cache_write_5m_tokens: Some(3),
+        cache_write_1h_tokens: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        ProbeUsage::from_bus(&five_minute_split),
+        ProbeUsage {
+            write: 3,
+            five_minutes: 3,
+            one_hour: 0,
+            ..Default::default()
+        }
+    );
+    let one_hour_split = phoebis_bus::Usage {
+        cache_write_5m_tokens: Some(0),
+        cache_write_1h_tokens: Some(7),
+        ..Default::default()
+    };
+    assert_eq!(
+        ProbeUsage::from_bus(&one_hour_split),
+        ProbeUsage {
+            write: 7,
+            five_minutes: 0,
+            one_hour: 7,
+            ..Default::default()
         }
     );
 }

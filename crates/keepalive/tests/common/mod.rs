@@ -844,14 +844,21 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
 
 impl Captured {
     /// Makes the capture this thread's subscriber until the guard drops. A `#[tokio::test]` polls the engine, the
-    /// relay and the probes on the case's own thread, so every line the case drives lands here.
-    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+    /// relay and the probes on the case's own thread, so every line the case drives lands here. A case that reads a
+    /// debug line captures at `Level::DEBUG`.
+    pub fn install_at(&self, level: tracing::Level) -> tracing::subscriber::DefaultGuard {
         tracing::subscriber::set_default(
             tracing_subscriber::fmt()
                 .with_ansi(false)
+                .with_max_level(level)
                 .with_writer(self.clone())
                 .finish(),
         )
+    }
+
+    /// `install_at` at INFO, the level the warning cases read.
+    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+        self.install_at(tracing::Level::INFO)
     }
 
     pub fn text(&self) -> String {

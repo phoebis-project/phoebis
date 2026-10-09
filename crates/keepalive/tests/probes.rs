@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
+use phoebis_bus::Outcome;
 use phoebis_keepalive::{
-    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, MAIN_AGENT, MAX_WORKERS,
+    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, FIVE_MINUTES_MS, MAIN_AGENT,
+    MAX_WORKERS, ONE_HOUR_MS,
 };
 use phoebis_relay::Accounting;
 use phoebis_store::AccountState;
@@ -1492,6 +1494,148 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
         r.status("main").next_probe_at,
         Some(start + 540_000),
         "late usage did not undo the completed refresh"
+    );
+}
+
+/// The stream's `message_delta` repeats the write total without its split, which the relay files under the
+/// five-minute column alone. That column without a one-hour column proves no TTL, so a recipe whose start proved
+/// the hour keeps it through the delta and through a second turn that reads beside a smaller write. A probe whose
+/// answer reports a five-minute write then moves the TTL to five minutes. Each change writes one debug line, two in
+/// all: the first arming from no TTL to the hour, and the probe's landing from the hour to five minutes.
+#[tokio::test]
+async fn a_running_total_without_the_split_keeps_the_hour() {
+    let captured = Captured::default();
+    let _guard = captured.install_at(tracing::Level::DEBUG);
+    let mut r = rig(RigSpec::default()).await;
+    let body = BODY.replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    let selected_hour = |id: &str| {
+        phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            pin_epoch: Some(1),
+            started_at: r.now(),
+            cache_ttl_ms: Some(ONE_HOUR_MS),
+            selection: None,
+        })
+    };
+    let phase = |id: &str, phase: phoebis_bus::Phase| {
+        phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phase),
+        })
+    };
+    let split = |read: u64, one_hour: u64| phoebis_bus::Usage {
+        cache_read_tokens: Some(read),
+        cache_write_5m_tokens: Some(0),
+        cache_write_1h_tokens: Some(one_hour),
+        ..Default::default()
+    };
+    let bare = |read: u64, total: u64| phoebis_bus::Usage {
+        cache_read_tokens: Some(read),
+        cache_write_5m_tokens: Some(total),
+        cache_write_1h_tokens: None,
+        ..Default::default()
+    };
+    // The first turn: the start proves the hour, the delta repeats the total unsplit.
+    let first = r.now();
+    r.engine.observe(r.observed("one", "main", &body));
+    r.engine.observe(selected_hour("one"));
+    r.engine.observe(phase(
+        "one",
+        phoebis_bus::Phase::MessageStart {
+            usage: split(0, 51_177),
+        },
+    ));
+    r.engine.observe(phase(
+        "one",
+        phoebis_bus::Phase::MessageDelta {
+            usage: bare(0, 51_177),
+        },
+    ));
+    r.engine
+        .observe(r.complete("one", Outcome::Succeeded, Some(split(0, 51_177))));
+    assert_eq!(
+        r.status("main").cache_ttl_ms,
+        ONE_HOUR_MS,
+        "the delta's bare total keeps the hour"
+    );
+    assert_eq!(
+        r.status("main").next_probe_at,
+        Some(first + 3_600_000 - 360_000)
+    );
+    // The second turn reads the first's prefix beside a smaller one-hour write, and its delta is bare again.
+    r.advance(5_000);
+    let second = r.now();
+    r.engine.observe(r.observed("two", "main", &body));
+    r.engine.observe(selected_hour("two"));
+    r.engine.observe(phase(
+        "two",
+        phoebis_bus::Phase::MessageStart {
+            usage: split(51_177, 11_186),
+        },
+    ));
+    r.engine.observe(phase(
+        "two",
+        phoebis_bus::Phase::MessageDelta {
+            usage: bare(51_177, 11_186),
+        },
+    ));
+    r.engine
+        .observe(r.complete("two", Outcome::Succeeded, Some(split(51_177, 11_186))));
+    assert_eq!(
+        r.status("main").cache_ttl_ms,
+        ONE_HOUR_MS,
+        "a read beside a one-hour write keeps the hour"
+    );
+    assert_eq!(
+        r.status("main").next_probe_at,
+        Some(second + 3_600_000 - 360_000)
+    );
+    // The probe at that due time reads nothing back and writes the whole prefix for five minutes.
+    let prefix = 51_177 + 11_186;
+    let due = second + 3_600_000 - 360_000;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, prefix));
+    r.advance(due - r.now());
+    r.step().await;
+    assert_eq!(
+        r.status("main").cache_ttl_ms,
+        FIVE_MINUTES_MS,
+        "the probe's five-minute write moves the TTL"
+    );
+    assert_eq!(r.status("main").next_probe_at, Some(due + 300_000 - 30_000));
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("a keepalive recipe's TTL changed on cache evidence"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "the first arming and the probe's landing:\n{text}"
+    );
+    assert!(
+        lines[0].contains("DEBUG")
+            && lines[0].contains("agent=main")
+            && lines[0].contains("previous_ms=0")
+            && lines[0].contains("ttl_ms=3600000")
+            && lines[0].contains("one_hour=51177"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("previous_ms=3600000")
+            && lines[1].contains("ttl_ms=300000")
+            && lines[1].contains(&format!("five_minutes={prefix}")),
+        "{}",
+        lines[1]
     );
 }
 
