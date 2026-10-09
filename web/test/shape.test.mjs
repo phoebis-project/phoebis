@@ -55,9 +55,15 @@ test('a pass-through hook that names its kinds admits them, so a stored stream r
   assert.deepEqual(same(want, { body: 7 }, '', 0, passthrough), ['.body: number where an object, null or a string is expected']);
 });
 
-test('a window-keyed map takes any window, a share map a null entry, and an object entry is held to the first entry of the fixture', () => {
+test('a window-keyed map takes any window, a request row\'s share map a null entry, and an object entry is held to the first entry of the fixture', () => {
   const want = shapeOf({ cacheShares: { five_hour: { read: 1, write: 2 } }, costShares: { five_hour: 1 }, windows: {} });
-  const got = { cacheShares: { five_hour: { read: 1, write: 2 }, seven_day_fable: { read: 3, write: 4 } }, costShares: { five_hour: 1, seven_day: null, seven_day_fable: 2 }, windows: { five_hour: { lead: 0.1 } } };
+  const got = { cacheShares: { five_hour: { read: 1, write: 2 }, seven_day_fable: { read: 3, write: 4 } }, costShares: { five_hour: 1, seven_day_fable: 2 }, windows: { five_hour: { lead: 0.1 } } };
   assert.deepEqual(same(want, got), []);
   assert.deepEqual(same(want, { ...got, cacheShares: { seven_day: { read: 1 } }, costShares: { five_hour: 'one' } }), ['.cacheShares.seven_day.write: only in the decoded fixture', '.costShares.five_hour: string against number']);
+  // A request row carries an applicable window the cost model could not price as null; a group's map drops it, as
+  // the route does, so a null there is a finding.
+  const rows = shapeOf({ requests: [{ costShares: { five_hour: 1 } }] });
+  assert.deepEqual(same(rows, { requests: [{ costShares: { five_hour: 1, seven_day: null } }] }), []);
+  assert.deepEqual(same(shapeOf({ request: { costShares: { five_hour: 1 } } }), { request: { costShares: { seven_day: null } } }), []);
+  assert.deepEqual(same(want, { ...got, costShares: { five_hour: 1, seven_day: null } }), ['.costShares.seven_day: object against number']);
 });

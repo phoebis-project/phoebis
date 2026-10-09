@@ -1555,12 +1555,14 @@ const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 const heldRng = createRng(6_133);
 
 /**
- * Who paid for a request, as the ledger keys its rollups: a fast answer's credits before anything, then the head's
- * overage flag, else the plan. An API key account's rows file under `plan` here too, the kind telling them apart.
+ * Who paid for a request, as the ledger keys its rollups off the answer that served it: a fast answer's credits
+ * before anything, then the head's overage flag, else the plan. A request no attempt served files under `plan`
+ * whatever speed it asked for, and an API key account's standard answers file under `plan` here too, the kind
+ * telling them apart.
  */
 const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
   const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
-  if ((last?.response.speed ?? r.shape.requestedSpeed) === 'fast') return 'fast';
+  if (last?.response.speed === 'fast') return 'fast';
   return last?.overageInUse === true ? 'overage' : 'plan';
 };
 
@@ -1601,8 +1603,8 @@ function rollups(): HourlyRollup[] {
       sessionId,
       funding,
       // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
-      // before any attempt files under the speed it asked for, as the ledger files it.
-      speed: funding === 'fast' ? 'fast' : 'standard',
+      // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
+      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
       requests: {
         // A stream that ended short committed its 200 and still is no success, so it counts on its own.
         incomplete: list.filter((r) => r.outcome === 'incomplete').length,

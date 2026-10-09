@@ -40,8 +40,10 @@ export interface HourlyRollup {
   /** Attempts that moved to another member before the request succeeded. */
   failovers: number;
   /**
-   * Who paid for the hour's requests, as the ledger keys its rollups: a fast answer's credits, the head's overage, or
-   * the plan. An API key account's rows file under `plan` here too, the account's kind telling them apart.
+   * Who paid for the hour's requests, as the ledger keys its rollups off the served answer: a fast answer's credits
+   * (`fast` on an API key account as on a subscription), the head's overage, or the plan. An API key account's
+   * standard answers file under `plan` here too, the account's kind telling them apart, and so does a request no
+   * attempt served.
    */
   funding: 'fast' | 'overage' | 'plan';
   histograms: LatencyHistograms;
@@ -156,8 +158,8 @@ const NO_SHARES: GroupShares = { cacheShares: null, costShares: null, planOutput
  * A subscription account's shares of its windows over its plan-funded rows, summed as the route sums a group: the
  * cost and cache shares over the rows the Include probes rule admits, the probe share over the probe rows apart, and
  * the wasted share the probe share times the group's wasted-probe dollars over its probe-cost dollars, the
- * plan-funded probe rows alone on both sides. A window any row prices null is carried null in the cost shares and
- * left out of the cache and probe shares, as the route answers them, and a row with no token prices nothing.
+ * plan-funded probe rows alone on both sides. A window any row prices null is left out of all three maps, as the
+ * route answers them (a request row keeps such a window as a key with null), and a row with no token prices nothing.
  */
 function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier: string): GroupShares {
   const cost = new Map<string, WindowSum>();
@@ -192,7 +194,7 @@ function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier:
   const priced = (map: Map<string, WindowSum>) => [...map.entries()].filter(([, s]) => !s.unpriced);
   return {
     cacheShares: Object.fromEntries(priced(read).flatMap(([window, r]) => { const w = write.get(window); return w === undefined || w.unpriced ? [] : [[window, { read: r.sum, write: w.sum }]]; })),
-    costShares: Object.fromEntries([...cost.entries()].map(([window, s]) => [window, s.unpriced ? null : s.sum])),
+    costShares: Object.fromEntries(priced(cost).map(([window, s]) => [window, s.sum])),
     planOutputTokens: countedPlan.reduce((n, r) => n + r.tokens.output, 0),
     planRequests: countedPlan.reduce((n, r) => n + r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error, 0),
     probeShares: Object.fromEntries(priced(probe).map(([window, s]) => [window, { cost: s.sum, wasted: ratio === null ? null : s.sum * ratio }])),

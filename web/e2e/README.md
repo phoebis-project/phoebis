@@ -30,7 +30,9 @@ placement and budget tables, the request table's fit, the request pages' widths,
 every view's shot is taken, the speed filter, the traffic cards (each Analytics check opens the tab
 it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the Unit
 select in the Cost, Cache and Cache warming heads (inside the head, below the tab strip and inside the viewport at 1280
-and 400 px), the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's
+and 400 px), the fast lane, the request drawer, which opens once the request list's shot is taken (its chips in the
+status badge's type, and the Estimated cost row's share chips and muted equivalent on one line each inside the cell at
+1280 by 800 and 1440 by 900), the routing log's
 decision card, which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the
 card at 1280 by 800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on
 the first rung placement the log lists), the subscription end editor, the catalog popup, the key dialog's Access

@@ -433,8 +433,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const counted = plan.filter((r) => r.kind !== 'probe');
       const probes = plan.filter((r) => r.kind === 'probe');
       const cost = summed(counted, tier, usageOf);
-      assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).sort(), `${g.key}'s windows`);
-      for (const [w, want] of Object.entries(cost)) close(g.costShares[w], want, `${g.key}'s ${w}`);
+      // An unpriced window is absent from the group's map, as the route answers it; a request row keeps the key with null.
+      assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).filter((w) => cost[w] !== null).sort(), `${g.key}'s windows`);
+      for (const [w, want] of Object.entries(g.costShares ?? {})) close(want, cost[w], `${g.key}'s ${w}`);
       const read = summed(counted, tier, (r) => ({ ...usageOf(r), cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }));
       const write = summed(counted, tier, (r) => ({ ...usageOf(r), cacheRead: 0, input: 0, output: 0 }));
       // An unpriced window is absent from the cache and probe maps, as the route answers them.
@@ -456,6 +457,34 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       compared += 1;
     }
     assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
+  });
+
+  test(`every rollup's funding reads the answer that served its requests, a request no attempt served filing under plan, at ${at}`, async () => {
+    const s = await story;
+    // The ledger keys a rollup's funding off the served answer: a fast answer files fast whatever the account's
+    // kind, a head in overage files overage, and a request no attempt served, whatever speed it asked for, files
+    // plan. The requested speed names the speed key alone.
+    const fundingOf = (r) => {
+      const last = r.attempts[r.attempts.length - 1];
+      return last?.response.speed === 'fast' ? 'fast' : last?.overageInUse === true ? 'overage' : 'plan';
+    };
+    const laneOf = (hour, keyId, poolId, accountId, model, kind, sessionId) => [hour, keyId, poolId, accountId, model, kind, sessionId].join('|');
+    const expected = new Map();
+    for (const r of s.requests) {
+      const lane = laneOf(iso(startOfHour(Date.parse(r.at))), r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId);
+      expected.set(lane, new Set([...(expected.get(lane) ?? []), fundingOf(r)]));
+    }
+    const filed = new Map();
+    for (const r of s.allRollups) {
+      const lane = laneOf(r.hour, r.keyId, r.poolId, r.accountId, r.model, r.kind, r.sessionId);
+      filed.set(lane, new Set([...(filed.get(lane) ?? []), r.funding]));
+    }
+    for (const [lane, want] of expected) assert.deepEqual([...(filed.get(lane) ?? [])].sort(), [...want].sort(), `the rollups of ${lane}`);
+    const unserved = s.requests.filter((r) => r.attempts.length === 0 && r.shape.requestedSpeed === 'fast');
+    if (unserved.length > 0) {
+      const lane = laneOf(iso(startOfHour(Date.parse(unserved[0].at))), unserved[0].keyId, unserved[0].poolId, '-', unserved[0].model, unserved[0].kind, unserved[0].sessionId);
+      assert.ok(filed.get(lane)?.has('plan'), `${unserved[0].id} asked for fast and no attempt served it, so its rollup files under plan`);
+    }
   });
 }
 

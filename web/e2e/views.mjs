@@ -2288,9 +2288,8 @@ function readRequestsTable() {
  * The request list's default columns against its card with the drawer closed: the table's need, its wrap's width and
  * the Cost column's width are recorded at the pass's 1280 by 800. The Client text gives up its room behind an
  * ellipsis, the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room. The
- * fit itself is recorded rather than asserted while the Cost column draws share labels, the widest text it carries:
- * the column width rule gives the fill column up, and the task that applies it re-arms the fit assertion here and
- * in the share measure below.
+ * fit is recorded rather than asserted until the column width rule applies to this table, here and in the share
+ * measure below: the Cost column draws share labels, the widest text it carries.
  */
 async function requestsTableFits(theme) {
   const read = await readRequestsTable();
@@ -2311,8 +2310,8 @@ async function requestsTableFits(theme) {
  * request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds
  * one API key account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells
  * whose main line or `.sub` reads one is asserted above zero: a page with no share cell would measure the table
- * without the widest text. The need, the wrap's width and the Cost column's width are recorded; the fit is asserted
- * once the column width rule is applied to this table, which re-arms it here and in `requestsTableFits`.
+ * without the widest text. The need, the wrap's width and the Cost column's width are recorded; the fit is recorded
+ * rather than asserted until the column width rule applies to this table, here and in `requestsTableFits`.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
@@ -2607,17 +2606,41 @@ async function fastLane(theme, path) {
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
  * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
- * type and height, and the request class badge its box. The Phases legend lists the seven phases, and the token bar
- * draws a segment wherever the Usage table holds tokens (a request that ended with no answer holds none and draws
- * none). A request that ended with no answer draws no chip, so then the chips are read on the newest request that
- * answered 200. The router's seeded answers name no stop reason, speed or region, so there the ids' chips carry that
- * measure. It runs after the list view's shot, so that shot stays the list alone.
+ * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
+ * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
+ * line after them (a request billed in dollars draws no chip there, which is recorded). The Phases legend lists the
+ * seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request that ended with
+ * no answer holds none and draws none). A request that ended with no answer draws no chip, so then the chips are
+ * read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or region, so
+ * there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
   const counted = (where, got) => {
     if (got.phases !== 7) say(`${where}: the Phases legend lists ${got.phases} phases, not seven`);
     if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
+  };
+  // The cost row's share chips take the status badge's type, sit on one line each inside the cell, and the muted
+  // equivalent follows them on one line inside it; a cost row with no chip (a request billed in dollars) is recorded.
+  const costRow = (where, got) => {
+    if (got.cost === null) {
+      say(`${where} has no Estimated cost row to read`);
+      return;
+    }
+    if (got.cost.chips.length === 0) return;
+    const inside = (e) => e.left >= got.cost.cell.left && e.right <= got.cost.cell.right;
+    for (const c of got.cost.chips) {
+      if (got.reference !== null && c.box !== got.reference) say(`${where}: the cost row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+      if (c.lines !== 1) say(`${where}: the cost row's "${c.text}" chip takes ${c.lines} lines`);
+      if (!inside(c.edges)) say(`${where}: the cost row's "${c.text}" chip ${JSON.stringify(c.edges)} leaves its cell ${JSON.stringify(got.cost.cell)}`);
+    }
+    if (got.cost.equivalent === null) say(`${where}: the cost row's chips carry no equivalent after them`);
+    else {
+      if (got.cost.equivalent.lines !== 1) say(`${where}: the cost row's equivalent "${got.cost.equivalent.text}" takes ${got.cost.equivalent.lines} lines`);
+      if (!inside(got.cost.equivalent.edges)) say(`${where}: the cost row's equivalent ${JSON.stringify(got.cost.equivalent.edges)} leaves its cell ${JSON.stringify(got.cost.cell)}`);
+      const last = got.cost.chips[got.cost.chips.length - 1].edges;
+      if (got.cost.equivalent.edges.top < last.top || (got.cost.equivalent.edges.top === last.top && got.cost.equivalent.edges.left < last.right)) say(`${where}: the cost row's equivalent ${JSON.stringify(got.cost.equivalent.edges)} sits before its last chip ${JSON.stringify(last)}`);
+    }
   };
   await page.locator('.requests__table tbody tr').first().click();
   await advance(LOAD_MS);
@@ -2644,10 +2667,31 @@ async function requestDrawerCompact(theme) {
       const status = rowOf('Status')?.querySelector('.badge');
       const requestClass = rowOf('Client')?.querySelector('.badge');
       const head = document.querySelector('.drawer__head');
+      // The lines an element's text takes, read off its client rects as the request table's reader reads a cell.
+      const lines = (el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+      };
+      const edges = (el) => {
+        const r = el.getBoundingClientRect();
+        return { bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
+      };
+      // The Estimated cost row's value cell: the share chips and the muted equivalent of a plan-funded request.
+      const costCell = [...document.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+      const equivalent = costCell?.querySelector('.muted') ?? null;
       return {
         answer: rowOf('Answer')?.textContent ?? null,
         badge: requestClass && status ? { box: badgeBox(requestClass), reference: badgeBox(status), text: requestClass.textContent } : null,
         chips: [...document.querySelectorAll('.drawer .kv__row')].flatMap((r) => [...r.querySelectorAll('dd .chip')].map((c) => ({ box: box(c), row: r.querySelector('dt')?.textContent, text: c.textContent }))),
+        cost:
+          costCell === null
+            ? null
+            : {
+                cell: edges(costCell),
+                chips: [...costCell.querySelectorAll('.chip')].map((c) => ({ box: box(c), edges: edges(c), lines: lines(c), text: c.textContent })),
+                equivalent: equivalent === null ? null : { edges: edges(equivalent), lines: lines(equivalent), text: equivalent.textContent },
+              },
         drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
         head: head ? Math.round(head.getBoundingClientRect().height) : null,
         heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
@@ -2681,6 +2725,7 @@ async function requestDrawerCompact(theme) {
     counted(where, got);
     chips += got.chips.length;
     for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+    costRow(where, got);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();

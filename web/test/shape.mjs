@@ -25,8 +25,12 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * plain count) still takes the ordinary type check below. */
 const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.cacheShares', '.probeShares', '.windows'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
-/** The entry kinds a map admits beside its first entry's own: a share map carries null for a window a row could not be priced on. */
-const MAP_ENTRY_KINDS = { '.costShares': ['null', 'number'] };
+/**
+ * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map
+ * (`.requests[n].costShares`, a request detail's `.request.costShares`) carries null for an applicable window the cost
+ * model could not price, while a group's map drops such a window, so a null there is a finding.
+ */
+const MAP_ENTRY_KINDS = [[/(^\.request|\.requests\[\d+\])\.costShares$/, ['null', 'number']]];
 
 const kindOf = (v) => (v === null || v === undefined ? 'null' : Array.isArray(v) ? 'list' : typeof v);
 
@@ -58,7 +62,7 @@ export function same(want, got, path = '', depth = 0, passthrough = () => false)
     if (typeof got !== 'object' || Array.isArray(got)) return [`${path}: ${kindOf(got)} where a map is expected`];
     const entryShape = Object.values(want)[0];
     if (entryShape === undefined) return [];
-    const kinds = MAP_ENTRY_KINDS[MAP_PATHS.find((suffix) => path.endsWith(suffix))] ?? [];
+    const kinds = MAP_ENTRY_KINDS.find(([at]) => at.test(path))?.[1] ?? [];
     // An object entry is held to the fixture's first entry's shape; a scalar one to its type, or a kind the map admits.
     return Object.entries(got).flatMap(([k, v]) => (kinds.includes(kindOf(v)) ? [] : typeof entryShape === 'object' ? same(entryShape, v, `${path}.${k}`, depth + 1, passthrough) : typeof v === entryShape ? [] : [`${path}.${k}: ${typeof v} against ${entryShape}`]));
   }
