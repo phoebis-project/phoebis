@@ -97,7 +97,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   ledger_behind: "The router refused the probe while its ledger was catching up. The probe is sent again after the answer's wait.",
   missing_account: "The last probe's answer named no account, so the engine cannot tell where it landed.",
   no_cache_evidence: "The request's answer showed no cache read or write, so there was no entry to keep warm.",
-  no_probe_cache_evidence: "The last probe's answer showed no cache read or write.",
+  no_probe_cache_evidence: "The last probe's answer showed no cache read or write. The next attempt is scheduled with backoff.",
   opted_out: "The session's key opts out of cache warming, so the request was not kept.",
   overage: 'The account is on extra usage and the pool policy skips probes there.',
   owner_mismatch: 'The request named another owner than the one the keepalive mod registered, so the engine kept nothing from it.',

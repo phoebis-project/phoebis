@@ -51,7 +51,7 @@ pub(crate) struct ProbeJob {
 
 pub(crate) struct ProbeResult {
     pub status: u16,
-    /// The relay's id of the exchange, which the probe's ledger request row carries; `None` for an answer the relay
+    /// The relay's id of the exchange, which the probe's ledger request row carries. `None` for an answer the relay
     /// never built.
     pub request_id: Option<String>,
     pub account: Option<String>,

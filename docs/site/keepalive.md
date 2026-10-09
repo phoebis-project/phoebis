@@ -207,7 +207,8 @@ the main conversation, because the user can type while a background command, a s
 its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window never
 runs past the recipe's break-even. A wakeup is a real request, so a cron that fires or a command that exits restarts the
 window. A silent session, one whose lease lapsed, is probed under the window from its last real request for every agent,
-and the park rules do not apply to it.
+and the park rules do not apply to it. A session restored at a router restart reads silent but keeps its park rules for
+one lease length after the load or until its registration arrives, and the silent rule applies after that.
 
 **Parked on a background command or a subagent.** The main conversation or a subagent reported `parked` with kind
 `background` is probed until the return, at most `max_parked_seconds` after the park began. A real request or a state
@@ -516,10 +517,11 @@ memory.
 
 At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and its
 sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the same
-instance again, and the session is re-adopted with its recipes, so its next probe lands warm. A recipe whose entry
-expired while the router was down ends with `expired_at_restart`, and a session the mod had ended is dropped. The probes
-such a recipe left unanswered settle as wasted once the registry holds its agent without them, so a crash between that
-save and the ledger's write leaves them uncounted rather than counted twice. A prompt that no longer opens under the
-storage key is dropped too, and its agent keeps everything else. The bootstrap file's `keepalive` limits in force at the
-start bound what comes back: when they are lower than before, the newest sessions, agents and recipes are restored and
-the rest are evicted.
+instance again, and the session is re-adopted with its recipes, so its next probe lands warm. A session saved attended
+keeps its park rules for one lease length after the load or until its registration arrives, then the silent-session rule
+applies. A recipe whose entry expired while the router was down ends with `expired_at_restart`, and a session the mod
+had ended is dropped. The probes such a recipe left unanswered settle as wasted only after the registry has dropped them
+from the agent: a save that fails sends nothing, and a crash between that save and the ledger's write leaves them
+uncounted rather than counted twice. A prompt that no longer opens under the storage key is dropped too, and its agent
+keeps everything else. The bootstrap file's `keepalive` limits in force at the start bound what comes back: when they
+are lower than before, the newest sessions, agents and recipes are restored and the rest are evicted.

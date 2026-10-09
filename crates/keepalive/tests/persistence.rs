@@ -14,7 +14,7 @@ use phoebis_keepalive::{
     Ack, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
     LEASE_MS,
 };
-use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
+use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
 
 const DAY: i64 = 86_400_000;
@@ -1012,6 +1012,38 @@ async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
     );
 }
 
+/// Lands a marker row and waits for it. The ledger writes its records in order, so everything queued before the marker
+/// has landed once it shows, and a negative read after it proves a write did not happen rather than that it had not
+/// happened yet. `marks` counts the markers this test landed so far.
+async fn settle_ledger(r: &Rig, marks: &mut u64) {
+    *marks += 1;
+    r.ledger.record(Record::Keepalive(KeepaliveDelta {
+        at: NOW,
+        key_id: "desktop".into(),
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        canonical_model: "marker".into(),
+        kind: "marker".into(),
+        probes_skipped: 1,
+        ..Default::default()
+    }));
+    let want = *marks;
+    wait_for(Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let landed: u64 = rows
+            .iter()
+            .filter(|row| row.kind == "marker")
+            .map(|row| row.probes_skipped)
+            .sum();
+        (landed == want).then_some(())
+    })
+    .await;
+}
+
 /// The wasted probes the ledger holds right now, by reason, read once.
 fn wasted_now(r: &Rig) -> BTreeMap<String, u64> {
     let rows =
@@ -1139,7 +1171,8 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     let load = on_own_thread(async move { engine.load_persisted().await });
     // The load's save has read its batch and waits on the held registry.
     second.persist_reached(1, 1).await;
-    std::thread::sleep(Duration::from_millis(300));
+    let mut marks = 0;
+    settle_ledger(&r, &mut marks).await;
     assert_eq!(
         wasted_now(&r),
         BTreeMap::new(),
@@ -1166,7 +1199,7 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     let third = r.restart().await;
     third.load_persisted().await;
     third.flush_persisted().await;
-    std::thread::sleep(Duration::from_millis(300));
+    settle_ledger(&r, &mut marks).await;
     assert_eq!(wasted_now(&r), BTreeMap::from([("expired".to_string(), 1)]));
 }
 
@@ -1204,10 +1237,68 @@ async fn a_release_after_the_quiesce_is_refused_and_leaves_the_final_save_author
         "the final save carries the recipe"
     );
     assert_eq!(saved_field(&r, "session", "main", "reason"), "scheduled");
-    std::thread::sleep(Duration::from_millis(300));
+    settle_ledger(&r, &mut 0).await;
     assert_eq!(
         wasted_now(&r),
         BTreeMap::new(),
         "no probe settles under a release that never happened"
+    );
+}
+
+/// A save that fails at the load holds the settlements back: the ledger learns of a wasted probe only from the flush
+/// whose save dropped it from the agent, so a restart before that counts it once at most.
+#[tokio::test]
+async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_that_lands() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    r.engine.flush_persisted().await;
+    // The router is down past the entry's expiry, and the registry refuses every agent row when it comes back.
+    r.advance(400_000);
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    let mut marks = 0;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1)
+    );
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::new(),
+        "a save that failed sends nothing to the ledger"
+    );
+    // The process dies before another save: the next one finds the probe still unanswered in the registry.
+    let third = r.restart().await;
+    third.load_persisted().await;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(wasted_now(&r), BTreeMap::new());
+    conn.execute_batch("DROP TRIGGER refuse_insert; DROP TRIGGER refuse_update;")
+        .unwrap();
+    third.flush_persisted().await;
+    assert_eq!(
+        wasted(&r, 1).await,
+        BTreeMap::from([("expired".to_string(), 1)]),
+        "the settlement goes out with the save that lands"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "unanswered"),
+        serde_json::json!([])
+    );
+    let fourth = r.restart().await;
+    fourth.load_persisted().await;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::from([("expired".to_string(), 1)]),
+        "a later load finds the probe settled"
     );
 }

@@ -777,6 +777,13 @@ impl Inner {
         snapshot
     }
 
+    /// The settlements held for a landed save go to the ledger's queue, which the flush drains once the lock is
+    /// released.
+    pub(crate) fn release_settled(&mut self) {
+        let held = std::mem::take(&mut self.settlements_after_save);
+        self.settlements.extend(held);
+    }
+
     /// Retires what a landed save carried: an entry leaves only while its revision is the one saved, so a change
     /// since the snapshot keeps it dirty for the next flush.
     pub(crate) fn acknowledge(&mut self, snapshot: &Snapshot) {
@@ -1084,22 +1091,25 @@ impl Engine {
                 return;
             }
             inner.restore_persisted(loaded, now, &self.parts.limits, self.parts.timing);
+            // The registry first, then the ledger: the settlements wait for the save that carries each ended recipe's
+            // agent without the probes they settle, so a failed save sends nothing and a crash between the save and
+            // the ledger's write leaves a wasted probe unwritten rather than written again by the next load.
+            let settled = std::mem::take(&mut inner.settlements);
+            inner.settlements_after_save.extend(settled);
         }
-        // The registry first, then the ledger: the save carries each ended recipe's agent without the probes the load
-        // settled, so a crash between the two leaves a wasted probe unwritten rather than written again by the next
-        // load, which would find it still unanswered.
         self.flush_persisted().await;
-        self.flush();
     }
 
     /// A snapshot, its save and its acknowledgment, on the blocking pool under the flush lock whole: two flushes never
     /// overlap, an older batch never follows a newer one to the store, and a flush whose caller went away still runs
-    /// to its end, so the shutdown's flush queues behind it. A failed save keeps every row dirty for the next flush.
+    /// to its end, so the shutdown's flush queues behind it. A failed save keeps every row dirty for the next flush
+    /// and holds back the settlements waiting on it; a landed save releases them, and they reach the ledger here.
     pub async fn flush_persisted(self: &Arc<Self>) {
         let engine = self.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || engine.flush_blocking()).await {
             tracing::warn!(%error, "the keepalive's flush did not finish");
         }
+        self.flush();
     }
 
     fn flush_blocking(&self) {
@@ -1114,17 +1124,22 @@ impl Engine {
         let snapshot = self.lock().persist_snapshot(now);
         self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
         self.persist_progress.notify_waiters();
+        // Nothing to write means the registry already holds every row, which releases the held settlements too.
         if snapshot.is_empty() {
+            self.lock().release_settled();
             return;
         }
         if snapshot.batch.is_empty() {
-            self.lock().acknowledge(&snapshot);
+            let mut inner = self.lock();
+            inner.acknowledge(&snapshot);
+            inner.release_settled();
             return;
         }
         match self.parts.store.save_keepalive(&snapshot.batch) {
             Ok(()) => {
                 let mut inner = self.lock();
                 inner.acknowledge(&snapshot);
+                inner.release_settled();
                 if std::mem::take(&mut inner.persist_failing) {
                     tracing::info!("the keepalive's state reaches the registry again");
                 }

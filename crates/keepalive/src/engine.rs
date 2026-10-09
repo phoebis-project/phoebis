@@ -913,6 +913,9 @@ pub(crate) struct Inner {
     pub running: usize,
     pub closed: bool,
     pub settlements: Vec<Settlement>,
+    /// The settlements the load queued, held until a save has dropped their probes from the agents: a failed save
+    /// then sends nothing to the ledger, and a restart before a landed save settles each probe once rather than twice.
+    pub settlements_after_save: Vec<Settlement>,
     /// Due probes a gate withheld this tick, ledgered as skipped, each with the recipe state the hold left, read under
     /// the lock that placed it: a real request between the tick and the flush would otherwise file a gate's skip
     /// under the state it moved the recipe to.
@@ -1098,6 +1101,7 @@ impl Inner {
             running: 0,
             closed: false,
             settlements: Vec::new(),
+            settlements_after_save: Vec::new(),
             skipped: Vec::new(),
             bus_gaps: 0,
             gap_backlog: 0,
