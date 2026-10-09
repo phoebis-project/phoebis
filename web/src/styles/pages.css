@@ -980,7 +980,10 @@
   background: color-mix(in srgb, var(--surface-3) 70%, transparent);
 }
 
-/* The window's used share, in the window's tone, so the bar reads against the now line. */
+/*
+ * The window's used share, in the window's tone, so the bar reads against the now line. The tone's soft background,
+ * as the lane chips draw it, keeps the ink label legible where it crosses the fill.
+ */
 .lane__used {
   position: absolute;
   top: 0;
@@ -990,15 +993,15 @@
 }
 
 .lane__used--good {
-  background: var(--good);
+  background: var(--good-soft);
 }
 
 .lane__used--warn {
-  background: var(--warning);
+  background: var(--warning-soft);
 }
 
 .lane__used--low {
-  background: var(--critical);
+  background: var(--critical-soft);
 }
 
 .lane__reset-mark {
@@ -1073,7 +1076,7 @@
 }
 
 .lane__swatch--used {
-  background: var(--good);
+  background: var(--good-soft);
 }
 
 .lane__swatch--past {

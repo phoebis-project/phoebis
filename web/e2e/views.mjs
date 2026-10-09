@@ -1963,10 +1963,30 @@ async function quotaLaneChips(theme) {
     return {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
       fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+      // The label starts where the fill starts, so each tone's fill is read under the label of its own bar.
+      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => ({ background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(el.parentElement.querySelector('.lane__label') ?? el.parentElement).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null })),
     };
   });
   const lanes = read.chips;
   measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify(read.fill)}`);
+  // One figure per tone: the lane label's ink over the fill it crosses, by the WCAG contrast formula.
+  const luminance = (rgb) => {
+    const [r, g, b] = (rgb.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map((n) => {
+      const c = Number(n) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  };
+  const byTone = new Map(read.fills.map((f) => [f.tone, { ...f, ratio: contrast(f.ink, f.background) }]));
+  measurements.push(`${theme} /quota#quota-windows label over fill ${JSON.stringify([...byTone.values()].map((f) => [f.tone, f.ink, f.background, f.ratio]))}`);
+  if (mock && ['good', 'low', 'warn'].some((tone) => !byTone.has(tone))) say(`the story fills bars in every tone, yet only ${[...byTone.keys()].join(', ') || 'none'} drew`);
+  for (const f of byTone.values()) {
+    if (f.ratio < 4.5) say(`the label reads ${f.ink} over the ${f.tone} fill ${f.background} at ${f.ratio}:1, under 4.5:1`);
+  }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
   if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
   for (const chip of lanes) {
