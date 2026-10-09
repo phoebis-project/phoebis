@@ -2003,8 +2003,8 @@
 
 /* The decision strip: the walk as stations on a line, the path the decision took in the accent and every branch it
    left as an idle stub. Every color is a theme token, so both themes draw it with no rule of their own. A label's
-   lines are the ones the layout counts (16 px, the badge's 22 px box, 3 px apart), so the fan meets its host's label
-   where the layout put it. */
+   lines are the ones the layout counts (16 px, the badge's 22 px box, 3 px apart), and the strip lays out again with
+   the drawn height of a label whose words wrapped. */
 .decision-strip {
   position: relative;
   overflow-x: auto;
@@ -2104,16 +2104,10 @@
   flex-direction: column;
   gap: 3px;
   align-items: center;
-  justify-content: flex-start;
   text-align: center;
 }
 
-/* A word that wraps grows away from the line, and the badge keeps to its node, so the second line stays clear of the
-   stub words that rise beside the host. */
-.strip-station--above {
-  justify-content: flex-end;
-}
-
+/* Above the line the badge keeps to its node, so the second line stays clear of the stub words beside the host. */
 .strip-station--above .strip-station__second {
   order: 1;
 }

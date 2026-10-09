@@ -466,8 +466,8 @@ const ROW_FOOT = 4;
 const BELOW_LINE = 104;
 const TICK = 14;
 const LEAF_GAP = 16;
-// A leaf is centered on its row and 24 px tall.
-const LEAF_HALF = 12;
+/** A leaf is centered on its row and 24 px tall. */
+export const LEAF_HALF = 12;
 // The label box the strip's stylesheet draws: its near edge 12 px off the station's center, a 16 px line for the name
 // and one for the second line, the console's 22 px badge box (an 18 px line in 2 px of padding), 3 px apart.
 const LABEL_OFFSET = 12;
@@ -478,6 +478,11 @@ const BRACKET_OVERHANG = 14;
 const BRACKET_RISE = 36;
 // A track bracket clears the labels the track's stations carry above it.
 const TRACK_BRACKET_RISE = 62;
+/** A bracket's ticks reach this far down from its line, and its word stands this far above it. */
+export const BRACKET_TICK = 6;
+export const BRACKET_WORD_RISE = 20;
+// The room a bracket's ticks keep above a label under them.
+const BRACKET_CLEAR = 3;
 
 const sum = (weights: number[]) => weights.reduce((n, w) => n + w, 0);
 const sameGroup = (a: Station, b: Station) => a.group !== null && a.group === b.group;
@@ -507,6 +512,9 @@ function drop(from: Point, to: Point): string {
 
 const labelHeight = (s: Station) => LABEL_LINE + (s.second.length > 0 ? LABEL_GAP + LABEL_LINE : 0) + (s.badge !== '' ? LABEL_GAP + LABEL_BADGE : 0);
 
+/** A station's label height in px, from the rendered label where the caller measured one. */
+export type LabelHeights = Readonly<Record<string, number>>;
+
 /** A path does not run on from a station the walk never reached. */
 const leaving = (from: Station, into: PathState): PathState => (from.state === 'idle' ? 'idle' : into);
 
@@ -525,8 +533,13 @@ function edgesAndStubs(line: Station[], points: Record<string, Point>): StripPat
   return paths;
 }
 
-function finish(model: StripModel, width: number, f: Frame): StripLayout {
+function finish(model: StripModel, width: number, f: Frame, measured: LabelHeights | undefined): StripLayout {
   const { line, paths, points, unit, xEnd, y0, yu } = f;
+  // A rendered label is taller than counted where its words wrapped, which only the console's font decides.
+  const heightOf = (s: Station) => {
+    const h = measured?.[s.id];
+    return h !== undefined && h > 0 ? h : labelHeight(s);
+  };
   const termini: Partial<Record<TerminusKind, Point>> = {};
   const last = line[line.length - 1];
   const decisive = model.stations.find((s) => s.id === model.decisive);
@@ -549,7 +562,7 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
     // A host the track comes down into keeps its label below the line, clear of the accent entering it from above. A
     // station a taken curve drops from carries its label above, clear of the drop.
     const above = s.level === 'track' || (s.id === model.host && s.id !== f.descent) || s.id === dropFrom;
-    const height = labelHeight(s);
+    const height = heightOf(s);
     const p = points[s.id];
     labels[s.id] = { above, height, top: above ? p.y - LABEL_OFFSET - height : p.y + LABEL_OFFSET, width: labelWidth(unit) };
   }
@@ -562,6 +575,12 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
     const label = labels[model.host];
     const top = label.above ? host.y + RADIUS : label.top + label.height;
     firstRow = Math.max(firstRow, top + LEAF_HALF);
+    // A leaf runs left from the fan as far as its words take it, so the rows keep below every label under a line that
+    // reaches past the leaves' right edge.
+    for (const s of model.stations) {
+      const l = labels[s.id];
+      if (s.id !== model.host && !l.above && points[s.id].x - l.width / 2 < host.x - LEAF_GAP) firstRow = Math.max(firstRow, l.top + l.height + LABEL_GAP + LEAF_HALF);
+    }
     const rows = model.leaves.map((_, i) => firstRow + i * ROW);
     paths.push({ d: `M${host.x} ${top} V${rows[rows.length - 1]}`, kind: 'fan', state: 'idle' });
     model.leaves.forEach((l, i) => {
@@ -571,7 +590,9 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
   }
   const brackets = model.brackets.map((b) => {
     const xs = b.stations.map((id) => points[id].x);
-    return { from: Math.min(...xs) - BRACKET_OVERHANG, to: Math.max(...xs) + BRACKET_OVERHANG, word: b.word, y: b.level === 'line' ? y0 - BRACKET_RISE : yu - TRACK_BRACKET_RISE };
+    const rise = b.level === 'line' ? y0 - BRACKET_RISE : yu - TRACK_BRACKET_RISE;
+    const clear = b.stations.filter((id) => labels[id].above).map((id) => labels[id].top - BRACKET_TICK - BRACKET_CLEAR);
+    return { from: Math.min(...xs) - BRACKET_OVERHANG, to: Math.max(...xs) + BRACKET_OVERHANG, word: b.word, y: Math.min(rise, ...clear) };
   });
   return {
     brackets,
@@ -589,12 +610,13 @@ function finish(model: StripModel, width: number, f: Frame): StripLayout {
 }
 
 /** One line of stations: a fresh placement, a renewal, a short walk. */
-function layoutLine(model: StripModel, width: number): StripLayout {
+function layoutLine(model: StripModel, width: number, measured: LabelHeights | undefined, dy: number): StripLayout {
   const line = model.stations;
   const weights = line.slice(1).map((s, i) => (sameGroup(line[i], s) ? IN_GROUP : BETWEEN));
   const end = model.shape === 'pinned' ? END_PINNED : END_FRESH;
   const unit = Math.min(UNIT_MAX, (width - LEFT - RIGHT) / (sum(weights) + end));
-  const y0 = model.branch?.kind === 'rung' ? Y0_RUNG : Y0;
+  const y0 = (model.branch?.kind === 'rung' ? Y0_RUNG : Y0) + dy;
+  const yu = YU + dy;
   const points: Record<string, Point> = {};
   let x = LEFT;
   line.forEach((s, i) => {
@@ -605,16 +627,18 @@ function layoutLine(model: StripModel, width: number): StripLayout {
   const paths = edgesAndStubs(line, points);
   if (model.branch?.kind === 'rung') {
     const from = points[model.branch.from];
-    paths.push({ d: `M${from.x} ${y0} C${from.x} ${YU + BEND} ${from.x} ${YU} ${from.x + CORNER} ${YU} H${xEnd - CORNER} C${xEnd} ${YU} ${xEnd} ${YU + BEND} ${xEnd} ${y0 - INTO_TERMINUS}`, kind: 'track', state: 'taken' });
+    paths.push({ d: `M${from.x} ${y0} C${from.x} ${yu + BEND} ${from.x} ${yu} ${from.x + CORNER} ${yu} H${xEnd - CORNER} C${xEnd} ${yu} ${xEnd} ${yu + BEND} ${xEnd} ${y0 - INTO_TERMINUS}`, kind: 'track', state: 'taken' });
   }
-  return finish(model, width, { descent: null, into: model.branch?.kind === 'rung' ? 'chosen' : null, line, paths, points, unit, xEnd, y0, yu: YU });
+  return finish(model, width, { descent: null, into: model.branch?.kind === 'rung' ? 'chosen' : null, line, paths, points, unit, xEnd, y0, yu }, measured);
 }
 
 /**
  * A move's continuation: the line to the fired rule, the rise to the Move station and the steps after it on the
  * track. The rules it cut short and Renew spread on the line below, clear of the line the candidates hang from.
  */
-function layoutMove(model: StripModel, width: number, fired: string): StripLayout {
+function layoutMove(model: StripModel, width: number, fired: string, measured: LabelHeights | undefined, dy: number): StripLayout {
+  const y0 = MOVE_Y0 + dy;
+  const yu = MOVE_YU + dy;
   const lineStations = model.stations.filter((s) => s.level === 'line');
   const firedAt = lineStations.findIndex((s) => s.id === fired);
   const before = lineStations.slice(0, firedAt + 1);
@@ -630,40 +654,48 @@ function layoutMove(model: StripModel, width: number, fired: string): StripLayou
   let x = MOVE_LEFT;
   before.forEach((s, i) => {
     if (i > 0) x += lineWeights[i - 1] * unit;
-    points[s.id] = { x, y: MOVE_Y0 };
+    points[s.id] = { x, y: y0 };
   });
   const xFired = x;
   x += RISE * unit;
   track.forEach((s, i) => {
     if (i > 0) x += trackWeights[i - 1] * unit;
-    points[s.id] = { x, y: MOVE_YU };
+    points[s.id] = { x, y: yu };
   });
   const xLast = x;
   if (renewed !== undefined) {
     x += unit;
-    points[renewed.id] = { x, y: MOVE_Y0 };
+    points[renewed.id] = { x, y: y0 };
   }
   const xEnd = x + MOVE_END * unit;
   const spread = after.filter((s) => s !== renewed);
   const host = model.host === null ? undefined : points[model.host];
   const to = renewed !== undefined ? x : host !== undefined ? host.x : x;
   spread.forEach((s, i) => {
-    points[s.id] = { x: xFired + ((to - xFired) * (i + 1)) / (spread.length + 1), y: MOVE_Y0 };
+    points[s.id] = { x: xFired + ((to - xFired) * (i + 1)) / (spread.length + 1), y: y0 };
   });
   const line = [...before, ...spread, ...(renewed === undefined ? [] : [renewed])];
   const paths = edgesAndStubs(line, points);
   const xMove = track.length > 0 ? points[track[0].id].x : xFired;
-  const rise = `M${xFired} ${MOVE_Y0} C${xFired} ${MOVE_YU + CORNER} ${xFired + RISE_LEAN} ${MOVE_YU} ${xMove} ${MOVE_YU}`;
-  const down = (xTo: number, yTo: number) => `H${xTo - CORNER} C${xTo} ${MOVE_YU} ${xTo} ${MOVE_YU + BEND} ${xTo} ${yTo}`;
+  const rise = `M${xFired} ${y0} C${xFired} ${yu + CORNER} ${xFired + RISE_LEAN} ${yu} ${xMove} ${yu}`;
+  const down = (xTo: number, yTo: number) => `H${xTo - CORNER} C${xTo} ${yu} ${xTo} ${yu + BEND} ${xTo} ${yTo}`;
   // The continuation ends at the terminus its outcome names, as the line does, or comes down into Renew when the pin
   // renewed in place.
   const named = model.termini.find((t) => t.state === 'taken')?.kind ?? 'chosen';
-  const end = renewed !== undefined ? down(points[renewed.id].x, MOVE_Y0) : named === 'chosen' ? down(xEnd, MOVE_Y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: MOVE_YU }, { x: xEnd, y: MOVE_Y0 + TERMINUS_DROP[named] })}`;
+  const end = renewed !== undefined ? down(points[renewed.id].x, y0) : named === 'chosen' ? down(xEnd, y0 - INTO_TERMINUS) : `H${xLast} ${tail({ x: xLast, y: yu }, { x: xEnd, y: y0 + TERMINUS_DROP[named] })}`;
   paths.push({ d: `${rise} ${end}`, kind: 'track', state: 'taken' });
-  return finish(model, width, { descent: renewed?.id ?? null, into: renewed === undefined ? named : null, line, paths, points, unit, xEnd, y0: MOVE_Y0, yu: MOVE_YU });
+  return finish(model, width, { descent: renewed?.id ?? null, into: renewed === undefined ? named : null, line, paths, points, unit, xEnd, y0, yu }, measured);
 }
 
-/** Every coordinate and path the strip draws, for a width the caller floors at 640 px. */
-export function layoutStrip(model: StripModel, width: number): StripLayout {
-  return model.branch?.kind === 'move' ? layoutMove(model, width, model.branch.from) : layoutLine(model, width);
+/**
+ * Every coordinate and path the strip draws, for a width the caller floors at 640 px. `measured` holds the heights of
+ * the labels the caller drew taller than the counted lines, and a missing or zero reading keeps the count.
+ */
+export function layoutStrip(model: StripModel, width: number, measured?: LabelHeights): StripLayout {
+  const draw = (dy: number) => (model.branch?.kind === 'move' ? layoutMove(model, width, model.branch.from, measured, dy) : layoutLine(model, width, measured, dy));
+  const first = draw(0);
+  // A taller label above its line, or the bracket it lifts, can reach past the surface's top, so the whole strip moves
+  // down by that much.
+  const reach = Math.min(0, ...Object.values(first.labels).map((l) => l.top), ...first.brackets.map((b) => b.y - BRACKET_WORD_RISE));
+  return reach < 0 ? draw(Math.ceil(-reach)) : first;
 }

@@ -417,3 +417,37 @@ test("the layout spaces by weight and keeps the surface's height", async () => {
   assert.ok(renewLabel.top + renewLabel.height > 176 + d.RADIUS);
   assert.equal(capped.leaves[0].y, 176 + 76);
 });
+
+test("a label's measured height moves the leaf rows below it and the track's bracket above it", async () => {
+  const freshModel = modelOf(await recordOf('req_ef099b34-453/1'));
+  const counted = d.layoutStrip(freshModel, 958);
+  // A missing or a zero reading leaves the counted metrics, as jsdom's boxes do.
+  assert.deepEqual(d.layoutStrip(freshModel, 958, { pick: 0 }), counted);
+  const oneLine = counted.labels['rung:with_main'].height;
+  // "with main" wrapped onto a second 16 px line below the line, left of the leaves' right edge.
+  const fresh = d.layoutStrip(freshModel, 958, { 'rung:with_main': oneLine + 16 });
+  const label = fresh.labels['rung:with_main'];
+  assert.deepEqual([label.above, label.height, label.top], [false, oneLine + 16, counted.labels['rung:with_main'].top]);
+  assert.ok(fresh.leaves[0].y - d.LEAF_HALF >= label.top + label.height, `the first leaf row (top ${fresh.leaves[0].y - d.LEAF_HALF}) starts below the label (bottom ${label.top + label.height})`);
+  assert.ok(fresh.leaves.every((p, i) => i === 0 || p.y - fresh.leaves[i - 1].y === 30), 'the rows keep their 30 px');
+  assert.equal(fresh.height, Math.max(fresh.leaves[0].y + freshModel.leaves.length * 30 + 4, fresh.y0 + 104), 'the surface grows with the rows');
+  assert.equal(fresh.y0, counted.y0);
+
+  const shedModel = modelOf(await recordOf('req_868264bc-611/1'));
+  const shedCounted = d.layoutStrip(shedModel, 958);
+  const rise = shedCounted.labels['rung:with_main'].height + 16;
+  // The same word wrapped above the track, under the Rungs bracket.
+  const shed = d.layoutStrip(shedModel, 958, { 'rung:with_main': rise });
+  const above = shed.labels['rung:with_main'];
+  const rungs = shed.brackets.find((b) => b.word === 'Rungs');
+  assert.deepEqual([above.above, above.height], [true, rise]);
+  assert.equal(above.top, shed.stations['rung:with_main'].y - 12 - rise, 'the label rises from the node by its measured height');
+  assert.ok(rungs.y + d.BRACKET_TICK + 3 <= above.top, `the bracket's ticks (to ${rungs.y + d.BRACKET_TICK}) clear the label (top ${above.top}) by 3 px`);
+  assert.ok(rungs.y - d.BRACKET_WORD_RISE >= 0, 'the bracket word stays inside the surface');
+  assert.ok(Object.values(shed.labels).every((l) => l.top >= 0), 'every label stays inside the surface');
+  // Room above the track is made by moving the whole strip down, so the rest of the drawing keeps its shape.
+  const down = shed.y0 - shedCounted.y0;
+  assert.equal(shed.yu - shedCounted.yu, down);
+  assert.ok(shedModel.stations.every((s) => shed.stations[s.id].y === shedCounted.stations[s.id].y + down && shed.stations[s.id].x === shedCounted.stations[s.id].x));
+  assert.equal(shed.height, shedCounted.height + down);
+});

@@ -2683,6 +2683,34 @@ async function firstDecisionOpen(theme) {
 }
 
 /**
+ * Where the open card's strip draws one word into another: a station label into a leaf row or a bracket (its word and
+ * its ticks) is a failure, a label against another label or a stub's word a measure line. Every box is the drawn one.
+ */
+function stripOverlaps() {
+  const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+  if (!strip) return null;
+  const box = (el) => el.getBoundingClientRect();
+  const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+  const union = (a, b) => ({ bottom: Math.max(a.bottom, b.bottom), left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), top: Math.min(a.top, b.top) });
+  // A label's drawn box takes in a word that runs out of its button, not the button alone.
+  const labels = [...strip.querySelectorAll('.strip-station')].map((el) => ({ box: [...el.children].reduce((b, c) => union(b, box(c)), box(el)), name: el.dataset.station }));
+  const leaves = [...strip.querySelectorAll('.strip-candidate')].map((el) => ({ box: box(el), name: el.getAttribute('aria-label') }));
+  const ticks = [...strip.querySelectorAll('svg .strip-bracket')];
+  const brackets = [...strip.querySelectorAll('.strip-group')].map((el, i) => ({ box: ticks[i] ? union(box(el), box(ticks[i])) : box(el), name: `${el.textContent} bracket` }));
+  const stubs = [...strip.querySelectorAll('.strip-stub')].map((el) => ({ box: box(el), name: `${el.textContent} stub` }));
+  const pairs = (as, bs, same) => as.flatMap((a, i) => bs.filter((b, j) => (!same || j > i) && meet(a.box, b.box)).map((b) => `${a.name} / ${b.name}`));
+  return { contacts: [...pairs(labels, labels, true), ...pairs(labels, stubs, false)], hits: [...pairs(labels, leaves, false), ...pairs(labels, brackets, false)] };
+}
+
+/** Reads `stripOverlaps` on the open card, failing on a label that runs into a leaf row or a bracket. */
+async function stripWords(theme, where) {
+  const got = await page.evaluate(stripOverlaps);
+  measurements.push(`${theme} /routing-log strip words of ${where} ${JSON.stringify(got)}`);
+  if (got === null) return;
+  for (const hit of got.hits) failures.push(`${theme} /routing-log: ${where}: a station label runs into a leaf row or a bracket (${hit})`);
+}
+
+/**
  * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the strip and the candidate
  * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
  * kind badge's box, and the strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are
@@ -2712,8 +2740,19 @@ async function decisionCard(theme) {
         card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
         log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
         reference: kind ? box(kind) : null,
-        strip: strip ? { client: strip.clientWidth, scroll: strip.scrollWidth } : null,
-        surface: surface ? { height: Math.round(surface.getBoundingClientRect().height), leaves: Number(surface.dataset.leaves), y0: Number(surface.dataset.y0) } : null,
+        strip: strip ? { client: strip.clientWidth, scroll: strip.scrollWidth, svg: Number(strip.querySelector('svg')?.getAttribute('width')) } : null,
+        surface: surface
+          ? {
+              // The rows start below every label that reaches them, so the first row is read where the leaf stands.
+              firstRow: (() => {
+                const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
+                return leaf ? Math.round((leaf.top + leaf.bottom) / 2 - surface.getBoundingClientRect().top) : null;
+              })(),
+              height: Math.round(surface.getBoundingClientRect().height),
+              leaves: Number(surface.dataset.leaves),
+              y0: Number(surface.dataset.y0),
+            }
+          : null,
         table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
       };
     });
@@ -2733,9 +2772,13 @@ async function decisionCard(theme) {
     }
     if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
     if (got.strip.scroll > got.strip.client) say(`${where}: the strip runs ${got.strip.scroll}px in ${got.strip.client}px`);
+    if (got.strip.svg !== Math.max(640, got.strip.client)) say(`${where}: the strip's drawing is ${got.strip.svg}px wide in a ${got.strip.client}px strip, not redrawn for its width`);
     const { leaves, y0 } = got.surface;
-    const rows = Math.max(y0 + 76 + Math.max(leaves, 1) * 30 + 4, y0 + 104);
-    if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves under a line at ${y0}px take`);
+    const first = got.surface.firstRow ?? y0 + 76;
+    const rows = Math.max(first + Math.max(leaves, 1) * 30 + 4, y0 + 104);
+    if (first < y0 + 76) say(`${where}: the first leaf row stands at ${first}px, above the ${y0 + 76}px it starts at under a line at ${y0}px`);
+    if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves from a first row at ${first}px take`);
+    await stripWords(theme, where);
     if (got.table === null) say(`${where} draws no candidate table`);
     else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
     else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
@@ -2791,6 +2834,17 @@ async function decisionCard(theme) {
   }, shed);
   measurements.push(`${theme} /routing-log shed move badges ${JSON.stringify(tones)}`);
   if (tones.row === null || tones.move === null || tones.row !== tones.move) say(`the moved row's badge paints ${tones.row} and the shed move's Move station badge ${tones.move}, not one color`);
+  // Fifteen stations share the shed move's strip, the tightest spacing the story draws.
+  for (const { height, width } of [
+    { height: 800, width: 1280 },
+    { height: 900, width: 1440 },
+  ]) {
+    await page.setViewportSize({ height, width });
+    await advance(2 * CLOCK_STEP_MS);
+    await stripWords(theme, `the shed move's card at ${width} by ${height}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await advance(2 * CLOCK_STEP_MS);
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */

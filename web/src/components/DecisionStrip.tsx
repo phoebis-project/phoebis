@@ -3,7 +3,7 @@ import type { DecisionRecord, DecisionSummary } from '@/api/types';
 import { ChipView } from '@/components/DecisionCard';
 import { Badge } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
-import { layoutStrip, leafName, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
+import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
 
 /** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
 export type StripAnchor = { kind: 'station'; id: string } | { kind: 'leaf'; index: number } | { kind: 'terminus'; id: TerminusKind };
@@ -17,10 +17,6 @@ const STUB_WORD_BELOW = 12;
 // Under a station whose label sits below the line the word starts past that label's own word ("Renew"), which the
 // stub's end would put it across.
 const STUB_WORD_PAST_LABEL = 24;
-const GROUP_WORD_RISE = 20;
-// The ticks reach 6 px under the bracket, which clears the labels a track's stations carry under it by 3 px.
-const BRACKET_TICK = 6;
-const LEAF_HALF = 12;
 const TERMINUS_WORD_X = 14;
 // A terminus word sits level with its node: centered on the badge's 22 px box, or on its own 16 px line when stacked.
 const TERMINUS_ROW_HALF = 11;
@@ -29,6 +25,7 @@ const TERMINUS_LINE_HALF = 8;
 const PAINT_ORDER: Record<PathState, number> = { idle: 0, inferred: 1, taken: 2 };
 
 const keyOf = (a: StripAnchor) => (a.kind === 'leaf' ? `leaf:${a.index}` : `${a.kind}:${a.id}`);
+const sameHeights = (a: LabelHeights, b: LabelHeights) => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, h]) => b[id] === h);
 const classes = (...names: (string | false)[]) => names.filter(Boolean).join(' ');
 
 /**
@@ -67,7 +64,22 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
     };
   }, []);
   const model = useMemo(() => stationModel(record, row, now), [record, row, now]);
-  const layout = useMemo(() => layoutStrip(model, width), [model, width]);
+  const counted = useMemo(() => layoutStrip(model, width), [model, width]);
+  const [measured, setMeasured] = useState<LabelHeights>({});
+  const layout = useMemo(() => (Object.keys(measured).length > 0 ? layoutStrip(model, width, measured) : counted), [counted, measured, model, width]);
+  // A label whose words wrapped stands taller than the layout counts, which only the drawn box tells, so every draw reads
+  // the labels and lays the strip out once more with the heights that differ. jsdom's empty boxes read as no height.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el === null) return;
+    const next: Record<string, number> = {};
+    for (const button of el.querySelectorAll<HTMLElement>('.strip-station')) {
+      const id = button.dataset.station;
+      const height = Math.round(button.getBoundingClientRect().height);
+      if (id !== undefined && height > 0 && height !== counted.labels[id]?.height) next[id] = height;
+    }
+    if (!sameHeights(next, measured)) setMeasured(next);
+  }, [counted, measured]);
   const picked = selected ? keyOf(selected) : null;
   const open = (anchor: StripAnchor) => () => onOpen?.(anchor);
   // The line's stations left to right, then the track's, so Tab walks the strip in the record's order.
@@ -111,7 +123,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
               data-step={s.step}
               data-index={i}
               aria-label={stationName(s)}
-              style={{ height: label.height, left: p.x - label.width / 2, top: label.top, width: label.width }}
+              style={{ left: p.x - label.width / 2, top: label.top, width: label.width }}
               onClick={open(anchor)}
             >
               <span className="strip-station__word">{s.word}</span>
@@ -127,7 +139,7 @@ export function DecisionStrip({ now, onOpen, record, row, selected }: { now: num
           );
         })}
         {layout.brackets.map((b, i) => (
-          <span key={`group-${i}`} className={classes('strip-group', !model.brackets[i]?.recorded && 'is-unrecorded')} style={{ left: b.from, top: b.y - GROUP_WORD_RISE, width: b.to - b.from }}>
+          <span key={`group-${i}`} className={classes('strip-group', !model.brackets[i]?.recorded && 'is-unrecorded')} style={{ left: b.from, top: b.y - BRACKET_WORD_RISE, width: b.to - b.from }}>
             {b.word}
           </span>
         ))}
