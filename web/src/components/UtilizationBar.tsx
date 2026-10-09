@@ -1,13 +1,16 @@
 import { useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { Legend } from '@/components/charts/Tooltip';
 import { fmtPct } from '@/lib/format';
+import { leadWords } from '@/lib/presets';
+import { aheadOf } from '@/lib/quota';
+import { WINDOW_HOURS } from '@/lib/windows';
 
-/** A member's shared-window readings as fractions; null where its row reports no such window. */
+/** A member's shared-window readings, each with the reset its lead over pace needs. Null where its row reports no such window. */
 export interface MemberReading {
-  fiveHour: number | null;
+  fiveHour: { resetsAt: string | null; utilization: number } | null;
   id: string;
   label: string;
-  sevenDay: number | null;
+  sevenDay: { resetsAt: string | null; utilization: number } | null;
 }
 
 interface Threshold {
@@ -18,6 +21,8 @@ interface Threshold {
 
 const KEY_STEPS: Record<string, number> = { ArrowDown: -1, ArrowLeft: -1, ArrowRight: 1, ArrowUp: 1, PageDown: -10, PageUp: 10 };
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+/** A lead's place on the lead track, which runs from 100 points behind pace to 100 ahead. A lead past either end stays on the track. */
+const onLead = (lead: number) => clamp((lead + 1) / 2, 0, 1) * 100;
 
 function Handle({ label, min, max, threshold, track }: { label: string; max: number; min: number; threshold: Threshold; track: RefObject<HTMLDivElement | null> }) {
   const { onChange, value } = threshold;
@@ -62,27 +67,33 @@ function Handle({ label, min, max, threshold, track }: { label: string; max: num
 }
 
 /**
- * The select-below threshold as a handle over the members' current 5-hour and 7-day readings, 0 to 100 %. The handle
- * drags or takes the arrow keys, a percent a step; it draws while the threshold is on and only with `expert`, since
- * the plain view leaves that threshold to the expert view unless a refusal shows its field there, when the caller
- * passes the flag so the shown field keeps its handle. The shedding margin draws no handle: it is a lead over pace,
- * which no point on an axis of absolute readings can stand for.
+ * Two tracks over the members' current 5-hour and 7-day readings. The upper one is their used shares, 0 to 100 %, with
+ * the select-below threshold as a handle: it drags or takes the arrow keys, a percent a step, and draws while the
+ * threshold is on and only with `expert`, since the plain view leaves that threshold to the expert view unless a
+ * refusal shows its field there, when the caller passes the flag so the shown field keeps its handle. The shedding
+ * margin is a lead over pace, which no point on an axis of used shares can stand for, so it draws on the lower track,
+ * where each reading is a point at its lead: the margin as a line and the cool band under it while shed-ahead is on.
  */
-export function UtilizationBar({ expert, readings, selectBelow }: { expert: boolean; readings: MemberReading[]; selectBelow: Threshold | null }) {
+export function UtilizationBar({ expert, margin, now, readings, selectBelow }: { expert: boolean; margin: number | null; now: number; readings: MemberReading[]; selectBelow: Threshold | null }) {
   const track = useRef<HTMLDivElement>(null);
-  const ticks = readings.flatMap((r) =>
+  // The window's length comes off WINDOW_HOURS, the table the decoder sets a reading's periodHours from, so the lead
+  // here is the one the Quota card's pace words print.
+  const windows = readings.flatMap((r) =>
     (
       [
         ['5h', '5-hour', r.fiveHour],
         ['7d', '7-day', r.sevenDay],
       ] as const
-    ).flatMap(([id, name, u]) => (u === null ? [] : [{ id, key: `${r.id}-${id}`, left: clamp(u, 0, 1) * 100, title: `${r.label}: ${name} ${fmtPct(u)}` }])),
+    ).flatMap(([id, name, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, lead: aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now), name, used: w.utilization }])),
   );
+  // The band spans the leads a cool destination may hold above pace, up to the margin less the hysteresis band of 5
+  // points, so a margin at or under 5 leaves none to shade.
+  const band = margin === null ? 0 : clamp(margin - 5, 0, 100) / 2;
   return (
     <div className="ubar">
       <div className="ubar__track" ref={track}>
-        {ticks.map((t) => (
-          <span key={t.key} className={`ubar__tick ubar__tick--${t.id}`} style={{ left: `${t.left}%` }} title={t.title} />
+        {windows.map((w) => (
+          <span key={w.key} className={`ubar__tick ubar__tick--${w.id}`} style={{ left: `${clamp(w.used, 0, 1) * 100}%` }} title={`${w.label}: ${w.name} ${fmtPct(w.used)}`} />
         ))}
         {expert && selectBelow && <Handle label="Select-below threshold" min={0} max={100} threshold={selectBelow} track={track} />}
       </div>
@@ -91,6 +102,18 @@ export function UtilizationBar({ expert, readings, selectBelow }: { expert: bool
         <span style={{ left: 0, position: 'absolute' }}>0%</span>
         <span style={{ left: '50%', position: 'absolute', transform: 'translateX(-50%)' }}>50%</span>
         <span style={{ position: 'absolute', right: 0 }}>100%</span>
+      </div>
+      <div className="ubar__track ubar__track--lead" role="img" aria-label="Lead over pace by member and window">
+        {band > 0 && <span className="ubar__band" style={{ left: '50%', width: `${band}%` }} title="cool under here" />}
+        {windows.map((w) => (
+          <span key={w.key} className={`ubar__tick ubar__tick--${w.id}`} style={{ left: `${onLead(w.lead)}%` }} title={`${w.label}: ${w.name} ${fmtPct(w.used)} used, ${fmtPct(w.used - w.lead)} elapsed, ${leadWords(w.lead)}`} />
+        ))}
+        {margin !== null && <span className="ubar__margin" style={{ left: `${onLead(margin / 100)}%` }} title={`Shedding margin: ${margin} ${margin === 1 ? 'point' : 'points'}`} />}
+      </div>
+      <div className="ubar__scale num" aria-hidden="true">
+        <span style={{ left: 0, position: 'absolute' }}>-100</span>
+        <span style={{ left: '50%', position: 'absolute', transform: 'translateX(-50%)' }}>on pace</span>
+        <span style={{ position: 'absolute', right: 0 }}>+100</span>
       </div>
       <Legend
         items={[

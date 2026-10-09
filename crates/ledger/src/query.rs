@@ -1271,6 +1271,14 @@ pub struct ProbeCounts {
 pub struct GroupRow {
     pub key: String,
     pub label: String,
+    /// The key's id under `group_by=key`, so a reader prints the holder's creation in its own zone. Absent for
+    /// another dimension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. Absent for
+    /// the live key, the reserved id and another dimension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_created_at: Option<i64>,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -1425,6 +1433,15 @@ impl LiveKeys {
         }
     }
 
+    /// The holder a key group names beside its label, for a reader that prints the creation instant in its own
+    /// zone: the id, and an earlier holder's generation. The live key and the reserved id carry no generation.
+    pub fn holder_of(&self, key: &str) -> (String, Option<i64>) {
+        match key.rsplit_once('@') {
+            Some((id, generation)) => (id.into(), generation.parse().ok()),
+            None => (key.into(), None),
+        }
+    }
+
     /// The lifetime a `keys=` selector names: a bare id is `(id, the live generation)`, `<id>@<generation>` is
     /// that pair; `None` for a bare id no live key holds, a malformed generation, or the reserved id.
     pub fn lifetime_of<'s>(&self, selector: &'s str) -> Option<(&'s str, i64)> {
@@ -1534,6 +1551,8 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
     GroupRow {
         key: key.into(),
         label,
+        key_id: None,
+        key_created_at: None,
         requests: sum.requests,
         succeeded: sum.succeeded,
         rate_limited: sum.rate_limited,
@@ -1647,12 +1666,15 @@ impl GroupSums {
             .0
             .iter()
             .map(|(k, (sum, probes, _))| {
-                let label = if group_by == "key" {
-                    live.label_of(k)
+                if group_by == "key" {
+                    let mut row = group_row(k, sum, probes, live.label_of(k));
+                    let (key_id, key_created_at) = live.holder_of(k);
+                    row.key_id = Some(key_id);
+                    row.key_created_at = key_created_at;
+                    row
                 } else {
-                    label_of(k)
-                };
-                group_row(k, sum, probes, label)
+                    group_row(k, sum, probes, label_of(k))
+                }
             })
             .collect();
         out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));

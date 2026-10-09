@@ -911,9 +911,9 @@
 }
 
 /*
- * Neutral pill, tone on the number only: the row's color belongs to its lane.
  * One width for every chip in the column, so the labels start and the numbers
- * end on two straight lines whatever the window is called.
+ * end on two straight lines whatever the window is called. A chip with a share
+ * takes its tone whole, as the card chips do.
  */
 .tl-chip {
   display: flex;
@@ -935,16 +935,22 @@
   font-weight: 700;
 }
 
-.tl-chip__pct--good {
+.tl-chip--good {
   color: var(--good-ink);
+  background: var(--good-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--warn {
+.tl-chip--warn {
   color: var(--warning-ink);
+  background: var(--warning-soft);
+  border-color: transparent;
 }
 
-.tl-chip__pct--low {
+.tl-chip--low {
   color: var(--critical-ink);
+  background: var(--critical-soft);
+  border-color: transparent;
 }
 
 .lane__track {
@@ -974,14 +980,37 @@
   background: color-mix(in srgb, var(--surface-3) 70%, transparent);
 }
 
-/* The share of the current window already spent, so the bar reads as a clock. */
-.lane__elapsed {
+/* The fill's clip at the pill's own radius, so a fill that reaches the bar's end keeps the rounded corners rather than
+   drawing square ones past them. The reset mark sits outside it, since it stands past the bar's edge. */
+.lane__clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/*
+ * The window's used share, in the window's tone, so the bar reads against the now line. The tone's soft background,
+ * as the lane chips draw it, keeps the ink label legible where it crosses the fill.
+ */
+.lane__used {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  background: color-mix(in srgb, var(--lane-color) 55%, var(--surface));
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.lane__used--good {
+  background: var(--good-soft);
+}
+
+.lane__used--warn {
+  background: var(--warning-soft);
+}
+
+.lane__used--low {
+  background: var(--critical-soft);
 }
 
 .lane__reset-mark {
@@ -1053,6 +1082,10 @@
 
 .lane__swatch--next {
   border: 1px dashed color-mix(in srgb, var(--series-1) 45%, transparent);
+}
+
+.lane__swatch--used {
+  background: var(--good-soft);
 }
 
 .lane__swatch--past {
@@ -1253,9 +1286,23 @@
   white-space: nowrap;
 }
 
-/* A model's levels read as one list; the id and the name beside them wrap first. */
-.catalog__levels {
+/* The id shrinks and cuts while its long-context badge keeps its own width, and the gap stands where a space would. */
+.catalog__model {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.catalog__id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.catalog__model > .badge {
+  flex: none;
 }
 
 .req-totals {
@@ -1295,6 +1342,22 @@
 .pool,
 .key-row {
   scroll-margin-top: 68px;
+}
+
+/* A badge is an atomic box the cell's ellipsis cannot reach, so in a fill cell it narrows with the cell and cuts its
+   own label instead, the dot kept whole. */
+.key-row .badge {
+  max-width: 100%;
+}
+
+.key-row .badge__dot {
+  flex: none;
+}
+
+.key-row__badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pool__head {
@@ -1381,7 +1444,10 @@
   vertical-align: middle;
 }
 
+/* A fit column is as wide as one line of its widest cell, so a row's two badges stay on that line rather than
+   stacking. */
 .serving .chips {
+  flex-wrap: nowrap;
   gap: 6px;
 }
 
@@ -1441,6 +1507,20 @@
   align-items: center;
 }
 
+/* The row stays on one line and lets the name shrink, so the email, the pool note and the badge beside it keep their
+   place while the name cuts. */
+.members-table td:first-child .row,
+.members-table td:first-child label {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.members-table__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A held row draws no checkbox and no Priority field, so blanks of their size keep its name in line with the names
    around it and the row as tall as theirs. The checkbox's box is the browser's own, 13 px inside 3 px and 4 px
    margins. */
@@ -1455,19 +1535,27 @@
   visibility: hidden;
 }
 
+/* The numeric columns are fit columns, which would shrink to their headers, so the minimums keep each input wide
+   enough for its figure. */
 .members-table th:nth-child(2),
 .members-table td:nth-child(2) {
-  width: 96px;
+  min-width: 96px;
 }
 
 .members-table th:nth-child(3),
 .members-table td:nth-child(3) {
-  width: 140px;
+  min-width: 140px;
 }
 
 .members-table th:nth-child(4),
 .members-table td:nth-child(4) {
-  width: 150px;
+  min-width: 150px;
+}
+
+/* A fit column would shrink the select to its header and clip the longest option, so each select keeps the width of
+   its widest option. */
+.rules-table .select {
+  min-width: max-content;
 }
 
 /* The grid's selects keep the dialog's type, which the table's smaller size would shrink below the selects around it. */
@@ -1629,6 +1717,38 @@
 
 .ubar__tick--7d {
   background: var(--series-4);
+}
+
+/* The lead track's center mark, on pace, drawn first so a tick or the band at the center paints over it. */
+.ubar__track--lead::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  background: var(--ink-2);
+  border-radius: 1px;
+}
+
+.ubar__margin {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 18px;
+  margin-left: -1px;
+  background: var(--serious);
+  border-radius: 1px;
+}
+
+/* Translucent, so the center mark and the track show through where the band starts. */
+.ubar__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--good-soft);
+  opacity: 0.8;
 }
 
 .ubar__handle {
@@ -3194,10 +3314,22 @@
   font-family: var(--font-sans);
 }
 
-/* The Session cell is monospace for the id; the fork badge reads as the other badges do. */
-.srow__fork {
-  margin-left: 6px;
+/* The id line alone: the column's free width cuts a long id with an ellipsis, the whole id on the cell's title. */
+.srow__id {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Session cell is monospace for the id, and the fork badge reads as the other badges do. It sits on the line under
+   the id and wraps its words when the column is narrower than they are, so a cut id never clips it or its link. */
+.sessions-table .srow__fork {
+  max-width: 100%;
+  margin-top: 2px;
   font-family: var(--font-sans);
+  text-align: left;
+  white-space: normal;
 }
 
 .srow[aria-current='true'] td {
@@ -3799,6 +3931,12 @@
 .analytics-section__meta {
   font-size: 12.5px;
   color: var(--ink-2);
+}
+
+/* Nine reason headers on one line each leave the group column its padding alone at 1280, so they wrap and each fit
+   column sizes to its widest word or figure. The class outranks the fit rule's nowrap. */
+.misses-table th.col-fit {
+  white-space: normal;
 }
 
 .filters__range {

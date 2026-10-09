@@ -110,6 +110,7 @@
         "usage": {
           "error": null,
           "fetched_at": 1000000,
+          "held_until": null,
           "poll": {
             "backoff_since": null,
             "last_attempt_at": 1000000,

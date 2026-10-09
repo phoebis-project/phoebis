@@ -122,9 +122,9 @@ with keys cannot be deleted: `409 pool still has keys`.
 Each strategy's rule, as the pool dialog's Strategy hint states it (the pool dialog's "Prioritize subscription accounts"
 toggle sets `prefer_subscription`):
 
-**`pace`**: Within the first priority tier that has an eligible account, the one with the most weekly allowance left
-per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are
-random.
+**`pace`**: Within the first priority tier that has an eligible account, the one with the most allowance left in the
+window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window
+resets or the subscription ends. An unsampled account counts as untouched, and ties are random.
 
 **`priority`**: Within the first priority tier that has an eligible account, any of them at random.
 
@@ -441,7 +441,9 @@ together as three presets beside custom: balanced (0.5, 600 s, 900 s, the defaul
 conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move replays the round over the
 pool's own sessions on each member ahead of pace, leaves out the pins of a subscription account on its plan whose tier
 the cost model does not size, which the round still ranks on the model's anchor rates and sheds, and keeps a pin whose
-burn the cost model cannot price in the order unmarked, as the round does.
+burn the cost model cannot price in the order unmarked, as the round does. The Utilization thresholds group draws each
+member's used share and, under it, each window's lead over pace with the shedding margin and the cool band marked, and
+the form's preview names the members ahead of pace by the margin with their window and lead.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the

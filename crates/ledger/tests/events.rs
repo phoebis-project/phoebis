@@ -879,6 +879,37 @@ async fn an_account_replaced_under_its_id_between_two_ticks_writes_the_old_holde
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_row_born_ready_by_a_pairing_records_its_transition_from_unpaired() {
+    let up = FakeUpstream::start(vec![]).await;
+    // `b` is the seeded holder: `a` reaches the store after the mirror's spawn, so it is a holder the mirror never saw.
+    let h = harness(&up, &[oauth("b", B, 0)], (0, None), polled_every_50_ms()).await;
+    h.store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "a".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Paired,
+        })
+        .unwrap();
+    let expected = [transition("unpaired", "ready", "paired", None)];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == expected).then_some(())
+    })
+    .await;
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    up.shutdown().await;
+}
+
 /// A harness over a ledger whose newest row, the previous run's last, is at `down_since`.
 async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());

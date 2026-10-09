@@ -185,11 +185,11 @@ test('two hot members in one unit share the burn by weight, and members in two u
   // The four pins mark 7 of 10; the second member marks 18 of 20.
   const same = replay([hot, second, cool], [...four, ...heavy('window_share')]);
   assert.deepEqual([same.sessions, same.warm, same.members, same.unit, same.burnShare.toFixed(3)], [3, 1, 2, 'window_share', (25 / 30).toFixed(3)]);
-  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in window share, across 2 accounts.');
+  assert.equal(d.shedPreviewLine(same, true), `2 members run ahead of pace by the margin: hot (5-hour, 90 points ahead) and second (5-hour, 85 points ahead). A round there would move 3 sessions (1 warm), 83% of the hot members' recent burn together, in window share, to a cool sibling.`);
   const mixed = replay([hot, second, cool], [...four, ...heavy('usd')]);
   assert.deepEqual([mixed.unit, mixed.averaged, mixed.burnShare.toFixed(3)], [null, true, ((0.7 + 0.9) / 2).toFixed(3)], 'a window share and dollars cannot be summed, so each member counts once');
   assert.equal(same.averaged, false);
-  assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each account's burn on average, across 2 accounts.");
+  assert.equal(d.shedPreviewLine(mixed, true), `2 members run ahead of pace by the margin: hot (5-hour, 90 points ahead) and second (5-hour, 85 points ahead). A round there would move 3 sessions (1 warm), 80% of each member's recent burn on average, to a cool sibling.`);
 });
 
 test('a pool previews its own pins on a shared account, so one pin per pool sheds nothing', () => {
@@ -199,7 +199,7 @@ test('a pool previews its own pins on a shared account, so one pin per pool shed
   assert.equal(preview([mine, theirs]).sessions, 1, 'over every pin on the account the heavier one is marked');
   const own = preview([mine]);
   assert.deepEqual([own.sessions, own.cool], [0, true], "the pool's one pin is its slice's last unmarked pin");
-  assert.equal(d.shedPreviewLine(own, true), 'Would move 0 sessions, 0 warm, 0% of the burn in window share.');
+  assert.equal(d.shedPreviewLine(own, true), `1 member runs ahead of pace by the margin: hot (5-hour, 90 points ahead). A round there would move 0 sessions (0 warm), 0% of the hot members' recent burn together, in window share, to a cool sibling.`);
 });
 
 test('an api_key member reads cool while its worst live bucket holds room, whatever the margin', () => {
@@ -230,19 +230,108 @@ test('with no member under the band the preview marks sessions it cannot move', 
   const near = account('near', 0.78);
   const stuck = replay([hot, near], four);
   assert.deepEqual([stuck.sessions, stuck.cool], [2, false]);
-  assert.equal(d.shedPreviewLine(stuck, true), 'Would mark 2 sessions, 1 warm, 70% of the burn in window share, but no member reads under the band to take them.');
+  assert.equal(d.shedPreviewLine(stuck, true), `1 member runs ahead of pace by the margin: hot (5-hour, 90 points ahead). A round there would mark 2 sessions (1 warm), 70% of the hot members' recent burn together, in window share, but no sibling reads under the margin less 5 points, so the sessions would be marked and stay.`);
   const cooling = d.shedPreview(pool({ members: [member('hot'), member('cool', 'cooldown')] }), [hot, cool], four, NOW, SIZED);
   assert.equal(cooling.cool, false, 'a member the router skips is no destination');
   const open = replay([hot, near, cool], four);
-  assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
+  assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, `1 member runs ahead of pace by the margin: hot (5-hour, 90 points ahead). A round there would move 2 sessions (1 warm), 70% of the hot members' recent burn together, in window share, to a cool sibling.`]);
   assert.equal(d.shedPreviewLine(open, false), 'No round runs while shed ahead of pace is off.');
-  assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin.');
+  assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin: the closest is cool, 20 points ahead.');
 });
 
 test('while the cost model is loading or did not load the preview names the model and counts nothing', () => {
   const round = replay([hot, cool], four);
   assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading, and window-share pins are counted once it is read.');
   assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost model did not load, so window-share pins cannot be counted.');
-  assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read model counts as before');
+  assert.equal(d.shedPreviewLine(round, true, 'ready'), `1 member runs ahead of pace by the margin: hot (5-hour, 90 points ahead). A round there would move 2 sessions (1 warm), 70% of the hot members' recent burn together, in window share, to a cool sibling.`, 'a read model counts as before');
   assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, model or not');
+});
+
+/** A window of which `elapsed` has passed, so its lead over pace is its utilization less that share. */
+const windowAt = (id, utilization, elapsed) => {
+  const periodHours = id === '5h' ? 5 : 168;
+  return { id, label: id, observedAt: at(NOW), periodHours, resetsAt: at(NOW + periodHours * 60 * MINUTE * (1 - elapsed)), utilization };
+};
+const oauth = (id, ...windows) => ({ id, kind: 'oauth', label: id, windows });
+const leadOf = (entry) => [entry.id, entry.window, entry.lead.toFixed(2)];
+
+test('the preview names the hot members with their leading window and lead', () => {
+  // `fast` reaches the margin on its 5-hour window alone, `slow` on its 7-day window alone, and `both` on both, where
+  // the round takes the 5-hour window first though its lead is the smaller.
+  const fast = oauth('fast', windowAt('5h', 0.9, 0), windowAt('7d', 0.2, 0));
+  const slow = oauth('slow', windowAt('5h', 0.1, 0), windowAt('7d', 0.9, 0));
+  const both = oauth('both', windowAt('5h', 0.85, 0), windowAt('7d', 0.9, 0));
+  const round = d.shedPreview(pool({ members: [member('slow'), member('fast'), member('both')] }), [fast, both, slow], [], NOW, SIZED);
+  assert.deepEqual(
+    round.hot.map(leadOf),
+    [
+      ['slow', '7d', '0.90'],
+      ['fast', '5h', '0.90'],
+      ['both', '5h', '0.85'],
+    ],
+    "the pool's member order, and the 5-hour window first where both reach the margin",
+  );
+  assert.deepEqual([round.members, round.closest, round.hot[0].label], [3, null, 'slow']);
+});
+
+test('the preview names the closest member when none is ahead', () => {
+  // Every lead under the 0.8 margin: `behind` trails on both windows, `near` leads on its 7-day window.
+  const behind = oauth('behind', windowAt('5h', 0.5, 0.53), windowAt('7d', 0.5, 0.6));
+  const trailing = d.shedPreview(pool({ members: [member('behind')] }), [behind], [], NOW, SIZED);
+  assert.deepEqual([trailing.hot, leadOf(trailing.closest)], [[], ['behind', '5h', '-0.03']], 'the larger of its two leads, 3 points behind on the 5-hour window');
+  assert.equal(d.shedPreviewLine(trailing, true), 'No member is ahead of pace by the margin: the closest is behind, 3 points behind.');
+  const near = oauth('near', windowAt('5h', 0.1, 0), windowAt('7d', 0.3, 0));
+  const ahead = d.shedPreview(pool({ members: [member('behind'), member('near')] }), [behind, near], [], NOW, SIZED);
+  assert.deepEqual(leadOf(ahead.closest), ['near', '7d', '0.30'], 'ahead of pace and still under the margin');
+  assert.equal(d.shedPreviewLine(ahead, true), 'No member is ahead of pace by the margin: the closest is near, 30 points ahead.');
+  // One point reads in the singular, and a lead that rounds to no point reads on pace.
+  const line = (account) => d.shedPreviewLine(d.shedPreview(pool({ members: [member(account.id)] }), [account], [], NOW, SIZED), true);
+  assert.equal(line(oauth('one', windowAt('5h', 0.51, 0.5))), 'No member is ahead of pace by the margin: the closest is one, 1 point ahead.');
+  assert.equal(line(oauth('even', windowAt('5h', 0.504, 0.5))), 'No member is ahead of pace by the margin: the closest is even, on pace.');
+  assert.equal(line(oauth('close', windowAt('5h', 0.507, 0.5))), 'No member is ahead of pace by the margin: the closest is close, on pace.', 'a lead under a hundredth reads on pace, as the Quota card prints it');
+  // An API-key member has no shared window, so a pool of them alone has no closest member.
+  const keyed = { id: 'key', kind: 'api_key', label: 'key', windows: [] };
+  const none = d.shedPreview(pool({ members: [member('key')] }), [keyed], [], NOW, SIZED);
+  assert.deepEqual([none.hot, none.closest], [[], null]);
+  assert.equal(d.shedPreviewLine(none, true), 'No member is ahead of pace by the margin.');
+});
+
+test('the preview line reads the hot members, the round and the closest member in its three shapes', () => {
+  // Half of each window elapsed: primary leads by 14 points on its 5-hour window, nightly by 9 on its 7-day one, and
+  // spare trails on both, under the band of a margin of 8. Each hot member marks 7 of its 10 burn.
+  const primary = oauth('primary', windowAt('5h', 0.64, 0.5), windowAt('7d', 0.3, 0.5));
+  const nightly = oauth('nightly', windowAt('5h', 0.2, 0.5), windowAt('7d', 0.59, 0.5));
+  const spare = oauth('spare', windowAt('5h', 0.1, 0.5), windowAt('7d', 0.1, 0.5));
+  const pins = [...four.map((p) => ({ ...p, accountId: 'primary' })), ...four.map((p) => ({ ...p, accountId: 'nightly', sessionId: `n-${p.sessionId}` }))];
+  const sized = new Set(['nightly', 'primary', 'spare']);
+  const read = (accounts, over) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), shedAheadOfPace: 0.08, ...over }), accounts, pins, NOW, sized);
+  const cool = read([primary, nightly, spare]);
+  assert.deepEqual(cool.hot.map(leadOf), [
+    ['primary', '5h', '0.14'],
+    ['nightly', '7d', '0.09'],
+  ]);
+  assert.equal(
+    d.shedPreviewLine(cool, true),
+    "2 members run ahead of pace by the margin: primary (5-hour, 14 points ahead) and nightly (7-day, 9 points ahead). A round there would move 4 sessions (2 warm), 70% of the hot members' recent burn together, in window share, to a cool sibling.",
+  );
+  const stuck = read([primary, nightly]);
+  assert.equal(
+    d.shedPreviewLine(stuck, true),
+    "2 members run ahead of pace by the margin: primary (5-hour, 14 points ahead) and nightly (7-day, 9 points ahead). A round there would mark 4 sessions (2 warm), 70% of the hot members' recent burn together, in window share, but no sibling reads under the margin less 5 points, so the sessions would be marked and stay.",
+  );
+  const none = read([primary, nightly, spare], { shedAheadOfPace: 0.2 });
+  assert.deepEqual([none.hot, leadOf(none.closest)], [[], ['primary', '5h', '0.14']]);
+  assert.equal(d.shedPreviewLine(none, true), 'No member is ahead of pace by the margin: the closest is primary, 14 points ahead.');
+});
+
+test("the preview's share reads as the hot members' aggregate in one unit and as a per-member average across units", () => {
+  const second = account('second', 0.85);
+  const heavy = (unit) => [pin('big', 18, false, { accountId: 'second', burnUnit: unit }), pin('small', 2, false, { accountId: 'second', burnUnit: unit })];
+  const inDollars = four.map((p) => ({ ...p, burnUnit: 'usd' }));
+  // 7 of 10 and 18 of 20 in one unit sum to 25 of 30, while a window share and dollars average their own 70% and 90%.
+  const line = (sessions) => d.shedPreviewLine(replay([hot, second, cool], sessions), true);
+  const hot2 = '2 members run ahead of pace by the margin: hot (5-hour, 90 points ahead) and second (5-hour, 85 points ahead).';
+  assert.equal(line([...four, ...heavy('window_share')]), `${hot2} A round there would move 3 sessions (1 warm), 83% of the hot members' recent burn together, in window share, to a cool sibling.`);
+  assert.equal(line([...inDollars, ...heavy('usd')]), `${hot2} A round there would move 3 sessions (1 warm), 83% of the hot members' recent burn together, in dollars, to a cool sibling.`);
+  assert.equal(line([...four, ...heavy('usd')]), `${hot2} A round there would move 3 sessions (1 warm), 80% of each member's recent burn on average, to a cool sibling.`);
 });

@@ -243,14 +243,14 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
       <table className="table dash__recent">
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Key</th>
-            <th>Account</th>
-            <th>Model</th>
-            <th>Status</th>
-            <th className="right">TTFB</th>
-            <th className="right">Tokens</th>
-            <th className="right">Cost</th>
+            <th className="col-fit">Time</th>
+            <th className="col-fill">Key</th>
+            <th className="col-fit">Account</th>
+            <th className="col-fit">Model</th>
+            <th className="col-fit">Status</th>
+            <th className="right col-fit">TTFB</th>
+            <th className="right col-fit">Tokens</th>
+            <th className="right col-fit">Cost</th>
           </tr>
         </thead>
         <tbody>
@@ -274,26 +274,28 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                 const shown = shortModel(r.model);
                 return (
                   <tr key={r.id}>
-                    <td className="num" title={fmtAbsolute(r.at)}>
+                    <td className="num col-fit" title={fmtAbsolute(r.at)}>
                       <Link to={`/requests/${r.id}`}>{fmtTime(r.at)}</Link>
                       <span className="sub mono">{shortId(r.id, 12)}</span>
                     </td>
-                    <td className="mono">{r.keyId}</td>
-                    <td>{r.accountId}</td>
-                    <td className="mono nowrap" title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
+                    <td className="mono col-fill" title={r.keyId ?? undefined}>
+                      {r.keyId}
+                    </td>
+                    <td className="col-fit">{r.accountId}</td>
+                    <td className="mono nowrap col-fit" title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
                       <span className="dash__model" style={{ maxWidth: `${MODEL_CHARS}ch` }}>
                         {shown}
                       </span>
                     </td>
-                    <td>
+                    <td className="col-fit">
                       <StatusBadge status={r.status} attempts={r.attempts.length} />
                     </td>
-                    <td className="right num">{fmtMs(r.ttfbMs)}</td>
-                    <td className="right num">
+                    <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>
+                    <td className="right num col-fit">
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <td className="right num">{fmtUsd(r.costUsd)}</td>
+                    <td className="right num col-fit">{fmtUsd(r.costUsd)}</td>
                   </tr>
                 );
               })}

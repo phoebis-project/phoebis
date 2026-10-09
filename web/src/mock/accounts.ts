@@ -249,7 +249,7 @@ export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
-  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
+  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, heldUntil: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'legacy') {
     return {
@@ -257,6 +257,7 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
       accountId: a.id,
       error: null,
       fetchedAt: ago(2 * DAY + 3 * HOUR),
+      heldUntil: null,
       poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
@@ -264,19 +265,20 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
   if (a.id === 'secondary') {
     const nextAttemptAt = ahead(4 * MINUTE);
-    // The hold sentence as the router writes it, its instant cut to whole seconds.
-    const lastError = `the usage endpoint rate-limited the account, and the next attempt is at ${nextAttemptAt.slice(0, 10)} ${nextAttemptAt.slice(11, 19)} UTC`;
+    // The router's hold sentence names the endpoint alone, and the deadline rides the snapshot as the poll's next attempt.
+    const lastError = 'the usage endpoint rate-limited the account';
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: null,
       fetchedAt: ago(47 * MINUTE),
+      heldUntil: nextAttemptAt,
       poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastError, lastOutcome: 'rate_limited', nextAttemptAt, rateLimitedInARow: 6 },
       status: 'success',
     };
   }
   const poll = QUOTA_SNAPSHOT_SAMPLE.poll && { ...QUOTA_SNAPSHOT_SAMPLE.poll, lastAttemptAt: ago(40_000), lastCleanAt: ago(40_000) };
-  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), poll, status: 'success' };
+  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), heldUntil: null, poll, status: 'success' };
 }
 
 const SAMPLE_STEP = 5 * MINUTE;

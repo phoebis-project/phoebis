@@ -510,6 +510,27 @@ test("a dialog's write reaches no toast when refused, since the dialog draws the
   assert.equal(failures, others.length, 'a write no dialog draws keeps the toast');
 });
 
+test('a pairing start posts the account id or the new account quietly', async () => {
+  let failures = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => undefined });
+  const body = JSON.parse(readFileSync(new URL('./fixtures/pairing_started.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const api = new HttpApi();
+  await api.startPairing({ accountId: 'primary' });
+  await api.startPairing({ id: 'fresh', label: 'Fresh' });
+  assert.deepEqual(
+    calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body)]),
+    [
+      ['POST', '/admin/oauth/sessions', { account_id: 'primary', login: 'claude_ai' }],
+      ['POST', '/admin/oauth/sessions', { login: 'claude_ai', new: { id: 'fresh', label: 'Fresh' } }],
+    ],
+    'an existing row travels as account_id, a row to create as new',
+  );
+  stub(() => answer(409, { error: 'an account with this id exists' }));
+  await assert.rejects(api.startPairing({ id: 'primary', label: 'Primary' }), (e) => e instanceof ApiError && e.status === 409 && e.message === 'an account with this id exists');
+  assert.equal(failures, 0, 'the pairing dialog draws the refusal in its own callout, so no toast');
+});
+
 test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {
   let failures = 0;
   let unauthorized = 0;

@@ -33,6 +33,8 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
 export { fmtCompact, fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
+// The pace mark's offset, so the check and the meter place it by one arithmetic.
+export { remainingTimeShare } from '@/lib/quota';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { keyWord, STEP_NAME } from '@/lib/routingLog';

@@ -25,6 +25,8 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   incomplete: 0,
   keptWarm: { requests: 0, tokens: 0 },
   key,
+  keyCreatedAt: null,
+  keyId: null,
   label,
   percentiles: { durationMs: quartet(emptyHistogram()), outputTps: quartet(emptyHistogram()), ttfbMs: quartet(emptyHistogram()), ttftMs: quartet(emptyHistogram()) },
   probeCostUsd: 0,
@@ -99,7 +101,7 @@ function latestGenerations(rows: RequestLog[]): Map<string, number> {
 
 /**
  * The breakdown route's labels: `unattributed` for a row no key or client was read for, and under `key` the id
- * alone for its newest generation and `<id> (deleted, created 2026-09-14 09:31 UTC)` for an earlier one
+ * alone for its newest generation and `<id> (deleted, created Sep 14, 2026, 09:31)` for an earlier one
  * (`<id> (deleted)` at generation 0). The rows stand in for the router's registry here, so the newest generation
  * among them reads as the live one.
  */

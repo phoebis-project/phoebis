@@ -449,6 +449,22 @@
   transition: width 240ms ease-out;
 }
 
+/* The mark stands past the track's edges, so a marked meter clips nothing. The fill keeps its own radius. */
+.meter--marked {
+  position: relative;
+  overflow: visible;
+}
+
+.meter__mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  border-radius: 1px;
+}
+
 .meter--good {
   background: var(--good-track);
 }
@@ -1390,6 +1406,27 @@ textarea.input {
   display: block;
   font-size: 11.5px;
   color: var(--ink-2);
+}
+
+/* A column is either fit (as wide as its widest cell) or fill (the width the fit columns leave, cut with an ellipsis,
+   the whole value on the cell's title). A table that takes the classes marks every column one or the other, so no
+   column is left to the browser's content spread. A column with a fixed width of its own takes neither, since
+   `width: 1%` here would outrank it. Two fill columns share the free width. */
+.table .col-fit {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.table .col-fill {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table td.col-fill .sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Stat tiles */

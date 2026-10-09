@@ -16,21 +16,16 @@ answers `502 the key check failed: ...` with the reason after the colon. Neither
 ## Through the console
 
 Open Accounts and choose Add account. The dialog's subtitle names the choice: subscription logins share your Claude.ai
-quota, while API keys bill per token against a Console workspace. Pick OAuth login, give the account an id
-(lowercase letters, digits, and dashes; it names the account in every log and URL) and a label, then choose Start
-pairing.
+quota, while API keys bill per token against a Console workspace. Pick OAuth login and give the account a label. The id
+the router will use is shown under it, derived from the label, and customize opens it for editing. Choose Start
+pairing. The account appears in the list once the pairing is confirmed. A pairing you cancel leaves no account.
 
-The pairing dialog runs three steps.
+The pairing dialog runs two steps.
 
-### Log in
+### Log in and paste the address
 
 Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback
-address; keep that tab open for the next step.
-
-### Paste the address
-
-Paste the URL your browser landed on, or the code alone. The page will not load, since nothing listens on that
-port; the URL in the address bar is complete, and the code alone works too.
+address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code alone.
 
 ### Confirm
 
@@ -38,9 +33,9 @@ Confirm the identity shown, the account's email and organization, to store the r
 
 The console starts every pairing as a `claude_ai` login, authorizing against `claude.com`; a `console` login,
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
-after it starts, and the dialog shows the remaining time. Starting again from the same console session, after a reload
-or a closed tab, replaces the pairing left standing; a pairing another session started, or one being confirmed, has to
-finish or expire first.
+after it starts, and the dialog shows the remaining time. Starting again from the same console session replaces the
+pairing left standing, for an existing account and for a new one alike. A pairing another session started, or one being
+confirmed, has to finish or expire first.
 
 ![The Accounts view: the list on the left, the selected account's actions, identity, usage, cooling-down block,
 and credential on the right](assets/accounts-light.png#only-light)
@@ -63,8 +58,16 @@ curl -sS -c jar.txt -X POST https://phoebis.example/admin/session \
   -d '{"secret":"'"$PHOEBIS_ADMIN_SECRET"'"}'
 ```
 
-Start a pairing session for the account slot. The answer carries an `id` and an `authorization_url`; `login`
-selects `claude_ai` (the default) or `console`:
+Start a pairing session for a new account: the row is written when the pairing is confirmed. The answer carries an
+`id` and an `authorization_url`, and `login` selects `claude_ai` (the default) or `console`:
+
+```sh
+curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions \
+  -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
+  -d '{"new":{"id":"primary","label":"Primary"},"login":"claude_ai"}'
+```
+
+To pair an existing slot again, name it with `account_id`:
 
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions \
@@ -118,12 +121,13 @@ every example above, and sends no `Origin`.
 | `funding_required` | The upstream named an `api_key` account's credit balance | Clear funding, back to `ready` |
 | `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | Reauth, funding, or Disconnect |
 | `reauth_required` | A definitive credential failure; see note below | Re-pair, or a new `api_key` secret |
-| `unpaired` | No credential yet, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
+| `unpaired` | Created ahead of pairing, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
 
-Starting or running a pairing session leaves the account's state unchanged, `unpaired` or `reauth_required` for a
-re-pair, for the whole flow; the console tracks progress through the pairing session's own status instead.
-Renewing an access token leaves the account's state at `ready` for the whole attempt, win or lose; only a
-definitive failure moves it.
+A pairing session on an existing row leaves its state unchanged, `unpaired` or `reauth_required` for a re-pair, for
+the whole flow. The console tracks progress through the session's own status. A session started with `new` has no row
+until the confirm writes it `ready`, and a cancel, an expiry or a failure before that leaves nothing. Renewing an
+access token leaves the account's state at `ready` for the whole attempt, win or lose; only a definitive failure moves
+it.
 
 `reauth_required` follows a single definitive failure, never a retry count: a 401 on an `api_key` account, an
 `oauth` refresh that finds no stored token, gets a 401 or `invalid_grant` from the token endpoint, or resolves to

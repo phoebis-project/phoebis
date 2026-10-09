@@ -741,6 +741,22 @@ async function expertView(on) {
 }
 
 /**
+ * Closes the open dialog by Escape and answers the discard question where one comes up. The question is counted
+ * after a settle rather than waited for: a dialog whose form the measure left unchanged closes at once, and Chromium
+ * answers an Escape without a fresh activation with an uncancelable cancel, which closes without asking. The
+ * measurement names which way the dialog left.
+ */
+async function closeByEscape(dialog, label, say) {
+  await page.keyboard.press('Escape');
+  await settle();
+  const question = page.getByRole('dialog', { name: 'Discard changes?' });
+  const asked = (await question.count()) === 1;
+  if (asked) await question.getByRole('button', { name: 'Discard', exact: true }).click();
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed unchanged on Escape'}`);
+}
+
+/**
  * The Cache TTL, Cache diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
  * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
  * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
@@ -827,8 +843,7 @@ async function poolCachingControls(theme) {
   compare('main', 'planMain', ['border', 'font', 'height', 'padding']);
   compare('marker', 'policy', ['border', 'height', 'radius', 'width']);
   compare('diagnostics', 'capture', ['border', 'height', 'radius', 'width']);
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await closeByEscape(dialog, `${theme} /pools caching controls dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -885,8 +900,7 @@ async function poolSelectBelow(theme) {
     const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.shedAhead[key]);
     if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the shed-ahead control's`);
   }
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await closeByEscape(dialog, `${theme} /pools select below dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -916,6 +930,7 @@ async function poolRoutingCards(theme) {
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
   }
+  // The margin line draws at the field's value, which opens at the default of 20 for a pool that stores none.
   await settle();
   const measure = () =>
     dialog.evaluate((el) => {
@@ -940,10 +955,21 @@ async function poolRoutingCards(theme) {
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
+      // The lead track under the used-share one: each tick and the margin line sit inside it when their centers fall
+      // within its box.
+      const leadTrack = shown(el.querySelector('.ubar__track--lead'));
+      const leadBox = leadTrack?.getBoundingClientRect();
+      const inLead = (node) => {
+        const b = node.getBoundingClientRect();
+        return b.left + b.width / 2 >= leadBox.left - 1 && b.left + b.width / 2 <= leadBox.right + 1;
+      };
+      const leadTicks = leadTrack ? [...leadTrack.querySelectorAll('.ubar__tick')] : [];
+      const marginLine = leadTrack?.querySelector('.ubar__margin');
       return {
         affinityPill: box(idlePill('Session affinity')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
+        lead: leadTrack && leadBox ? { margin: marginLine ? inLead(marginLine) : null, ticks: leadTicks.length, ticksInside: leadTicks.every(inLead) } : null,
         migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
@@ -980,9 +1006,11 @@ async function poolRoutingCards(theme) {
   }
   if (!read.handle) say('the utilization bar draws no select-below handle with select-below on');
   else if (!read.handle.inside || read.handle.value === null) say(`the select-below handle sits off its track (${JSON.stringify(read.handle)})`);
-  if (!read.preview || !/^(Would (move|mark)|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  if (!read.lead) say('the utilization bar draws no lead track');
+  else if (!read.lead.ticksInside) say(`a lead tick sits off its track (${JSON.stringify(read.lead)})`);
+  else if (read.lead.margin !== true) say(`the lead track draws no margin line inside it with shed ahead of pace on (${JSON.stringify(read.lead)})`);
+  if (!read.preview || !/^(\d+ members? runs? ahead of pace|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -1207,10 +1235,7 @@ async function poolDialogWalk(theme, mode) {
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await settle();
   };
-  const close = async () => {
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(null, 'the dialog stayed open after Escape'));
-  };
+  const close = () => closeByEscape(dialog, `${theme} /pools ${mode} dialog`, (what) => sayIn(null, what));
   try {
     await open();
   } catch (error) {
@@ -1316,6 +1341,69 @@ async function poolDialogWalk(theme, mode) {
     }
     return found;
   };
+  // Each Priority and budget input against its column's width (96, 140 and 150 px) less the cell's horizontal padding,
+  // read off the first row that draws all three: a held row draws a blank in place of its Priority input.
+  const memberInputs = async () => {
+    const read = await dialog.evaluate((el) => {
+      const row = [...(el.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelectorAll('input[type="number"]').length === 3);
+      if (!row) return null;
+      return [...row.children].slice(1).map((td) => {
+        const s = getComputedStyle(td);
+        const input = td.querySelector('input');
+        return { input: input ? input.getBoundingClientRect().width : null, padding: parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) };
+      });
+    });
+    measurements.push(`${theme} /pools ${mode} dialog members inputs ${JSON.stringify(read)}`);
+    if (read === null) return sayIn('Members', 'no member row draws its three inputs to measure');
+    [96, 140, 150].forEach((width, i) => {
+      const box = read[i];
+      if (!box || box.input === null) sayIn('Members', `column ${i + 2} draws no input`);
+      else if (box.input < width - box.padding - 1) sayIn('Members', `the column ${i + 2} input is ${box.input} px wide, under the column's ${width} px less its ${box.padding} px of padding`);
+    });
+  };
+  // Each select of the model rules table against its widest option, whose text is measured in a span that takes the
+  // select's font: a select clips a long option inside its own box, which its scrollWidth does not report.
+  const ruleSelects = async () => {
+    const read = await dialog.evaluate((el) => {
+      const selects = [...el.querySelectorAll('[data-rule-set="plan"] table select')];
+      if (selects.length === 0) return null;
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position: absolute; visibility: hidden; white-space: nowrap';
+      document.body.append(probe);
+      const hundredths = (n) => Math.round(n * 100) / 100;
+      const widths = selects.map((select) => {
+        const s = getComputedStyle(select);
+        for (const p of ['fontFamily', 'fontSize', 'fontStyle', 'fontWeight', 'letterSpacing']) probe.style[p] = s[p];
+        const widest = Math.max(
+          ...[...select.options].map((o) => {
+            probe.textContent = o.text;
+            return probe.getBoundingClientRect().width;
+          }),
+        );
+        return { label: select.getAttribute('aria-label'), room: hundredths(select.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)), widest: hundredths(widest) };
+      });
+      probe.remove();
+      return widths;
+    });
+    measurements.push(`${theme} /pools ${mode} dialog model rules selects ${JSON.stringify(read)}`);
+    if (read === null) return sayIn('Cache TTL', 'the model rules table draws no select to measure');
+    for (const s of read) if (s.room < s.widest - 1) sayIn('Cache TTL', `${s.label} holds ${s.room}px inside its padding for its widest option's ${s.widest}px`);
+  };
+  // A hidden group lays out at 0 px, so each table is measured while its group shows. The router's seed carries no
+  // model override, so the model rules table is drawn in the mock pass alone.
+  const tables = async (group) => {
+    if (group === 'Members') {
+      await tableColumns(theme, `pools ${mode} dialog`, '.members-table', ['Account']);
+      await memberInputs();
+    }
+    if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
+    if (group === 'Cache TTL' && expert) {
+      if (mock) {
+        await tableColumns(theme, `pools ${mode} dialog`, 'dialog[open] [data-rule-set="plan"] table', ['Model']);
+        await ruleSelects();
+      } else measurements.push(`${theme} /pools ${mode} dialog model rules table: not drawn against the seed, which carries no model override`);
+    }
+  };
   for (const group of labels) {
     try {
       await railEntry(dialog, group).click();
@@ -1324,6 +1412,7 @@ async function poolDialogWalk(theme, mode) {
       found.push(...(await dependents(group)));
       measurements.push(`${theme} /pools ${mode} dialog ${group} ${JSON.stringify(line)}`);
       for (const what of found) sayIn(group, what);
+      await tables(group);
     } catch (error) {
       sayIn(group, error instanceof Error ? error.message : String(error));
     }
@@ -1375,7 +1464,8 @@ async function poolDialogWalk(theme, mode) {
     measurements.push(`${theme} /pools ${mode} dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
-    // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
+    // the right padding. An empty name refuses Identity, which dots Identity and its parent, and the close below
+    // discards it through the question it raises.
     await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="shared"]').fill('');
     await settle();
     const dots = await dialog.evaluate((el) =>
@@ -1507,6 +1597,37 @@ async function poolKeyMenus(theme) {
   if (mock && !(counts.some((n) => n > 1) && counts.includes(1))) say(`the story's pools hold ${JSON.stringify(counts)} keys, not one pool with several and one with a single key`);
   await page.evaluate((y) => window.scrollTo(0, y), scrolled);
   await atRest();
+}
+
+/**
+ * The badge of the Keys table's fill cells, the Status pill: a badge is an atomic box the cell's ellipsis cannot
+ * reach, so each one ends inside its cell's content box and cuts its own label with the ellipsis instead. Whether a
+ * label is cut is recorded rather than asserted, since the fills' room differs between the mock's story and the
+ * router's seed.
+ */
+async function keyBadges(theme) {
+  const say = (what) => failures.push(`${theme} /keys badges: ${what}`);
+  const read = await page.evaluate(() =>
+    [...document.querySelectorAll('.card--table tbody tr.key-row td.col-fill .badge')].map((badge) => {
+      const cell = badge.closest('td');
+      const label = badge.querySelector('.key-row__badge-label');
+      const hundredths = (n) => Math.round(n * 100) / 100;
+      return {
+        cut: label ? label.scrollWidth > label.clientWidth : null,
+        edge: hundredths(cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight)),
+        ellipsis: label ? getComputedStyle(label).textOverflow === 'ellipsis' : null,
+        right: hundredths(badge.getBoundingClientRect().right),
+        text: badge.textContent?.trim() ?? '',
+      };
+    }),
+  );
+  measurements.push(`${theme} /keys badges ${JSON.stringify(read)}`);
+  if (read.length === 0) return say('no badge in a fill cell to measure');
+  for (const b of read) {
+    if (b.right > b.edge + 1) say(`the ${b.text} badge ends at ${b.right}px, past its cell's content edge at ${b.edge}px`);
+    if (b.cut === null) say(`the ${b.text} badge wraps no label for the ellipsis to cut`);
+    else if (b.cut && !b.ellipsis) say(`the ${b.text} badge cuts its label without an ellipsis`);
+  }
 }
 
 /**
@@ -1644,12 +1765,11 @@ async function keysPageMenus(theme) {
 }
 
 /**
- * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
+ * The Settings cards in the order an operator uses them, the client block last with its own snippet, and the
  * listener hint at the gaps its styles give it, 10 px under the block and 14 px over the variable list (the list's own
  * top margin), so a hint that drifts toward or away from either neighbour fails. The hint reads at the subtitle's size,
  * the size the page's other hints take.
- * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
- * limits and the admin secret's badge read as lines of the same list.
+ * About's lines run in their order at the Storage path line's type and one gap between every two.
  */
 async function settingsOrder(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
@@ -1660,11 +1780,12 @@ async function settingsOrder(theme) {
     const pre = document.querySelector('pre.snippet');
     const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
     const list = hint?.nextElementSibling?.matches('.envdl') ? hint.nextElementSibling : null;
-    const subtitle = cards[0]?.querySelector('.card__subtitle');
+    const client = cards.find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
+    const subtitle = client?.querySelector('.card__subtitle');
     return {
       above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
       below: hint && list ? Math.round((list.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
-      blockFirst: Boolean(pre && cards[0]?.contains(pre)),
+      blockLast: Boolean(pre && cards[cards.length - 1]?.contains(pre)),
       hintLines: hint ? Math.round(hint.getBoundingClientRect().height / parseFloat(getComputedStyle(hint).lineHeight)) : null,
       hintSize: hint ? getComputedStyle(hint).fontSize : null,
       subtitleSize: subtitle ? getComputedStyle(subtitle).fontSize : null,
@@ -1672,7 +1793,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
-  const want = ['Downstream client configuration', 'Appearance', 'About'];
+  const want = ['Appearance', 'About', 'Downstream client configuration'];
   if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
   const about = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -1696,7 +1817,7 @@ async function settingsOrder(theme) {
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
   if (offType.length > 0) say(`About's ${offType.join(', ')} read at another type than Storage path's ${storage}`);
   if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
-  if (!read.blockFirst) say("the client block's snippet is not in the first card");
+  if (!read.blockLast) say("the client block's snippet is not in the last card");
   if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
   else if (read.above !== 10 || read.below !== 14) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, not 10 and 14`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
@@ -1831,9 +1952,16 @@ async function quotaPollLines(theme) {
 }
 
 /**
+ * The card chips' computed tones by name, read on the Accounts section and compared against the lane chips on the
+ * Quota windows section, which the page never draws beside the cards. Empty in the router's pass, which draws no card.
+ */
+let cardTones = {};
+
+/**
  * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
- * longer reset cell may wrap but never runs past its column. The router's seed has no subscription account, so only
+ * longer reset cell may wrap but never runs past its column. Every live window's meter carries its pace mark inside
+ * the meter's horizontal bounds and taller than the track. The router's seed has no subscription account, so only
  * the story's pass has chips to read.
  */
 async function quotaChips(theme) {
@@ -1845,14 +1973,29 @@ async function quotaChips(theme) {
       return Math.round(box.height / line);
     };
     const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' });
+    const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
+      marks: [...document.querySelectorAll('.qcard__windows .meter--marked')].map((meter) => {
+        const track = meter.getBoundingClientRect();
+        const mark = meter.querySelector('.meter__mark')?.getBoundingClientRect() ?? null;
+        return { height: mark ? Math.round(mark.height) : null, inside: mark !== null && mark.left >= track.left - 0.5 && mark.right <= track.right + 0.5, left: mark ? Math.round(mark.left - track.left) : null, taller: mark !== null && mark.height > track.height, title: meter.getAttribute('title') ?? '', track: Math.round(track.height) };
+      }),
       resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
+      tones: Object.fromEntries(['good', 'low', 'warn'].map((name) => [name, tone(document.querySelector(`.qcard__windows .qchip--${name}`))])),
     };
   });
   measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  measurements.push(`${theme} /quota pace marks ${JSON.stringify(read.marks.map((m) => [m.title, m.left, m.height, m.track]))}`);
+  cardTones = read.tones;
   if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
+  if (mock && read.marks.length === 0) say('the story has live windows, yet no meter carries a pace mark');
+  if (mock && Object.values(read.tones).some((t) => t === null)) say('the story draws all three card tones, yet one is missing');
+  for (const mark of read.marks) {
+    if (!mark.inside) say(`the pace mark of ${JSON.stringify(mark.title)} stands outside its meter`);
+    if (!mark.taller) say(`the pace mark of ${JSON.stringify(mark.title)} is no taller than its ${mark.track}px track`);
+  }
   for (const chip of read.chips) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
   }
@@ -1871,16 +2014,58 @@ async function quotaChips(theme) {
 
 /**
  * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
- * it on one line. Only the mock pass draws the section.
+ * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
+ * current bar lays its used fill out at the share the page computed, within a pixel, and the lane label's ink reads
+ * at 4.5:1 or better over every tone's fill, which the mock pass demands a fill of each tone for, since the story
+ * fills bars in all three. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
-  const lanes = await page.evaluate(() => [...document.querySelectorAll('.tl-chip')].map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' })));
-  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))}`);
+  const read = await page.evaluate(() => {
+    const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'primary');
+    const bar = lane?.querySelector('.lane__bar--live') ?? null;
+    const used = bar?.querySelector('.lane__used') ?? null;
+    return {
+      chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
+      fill: bar && used ? { bar: bar.getBoundingClientRect().width, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+      // The label starts where the fill starts, so each tone's fill is read under the label of its own bar.
+      fills: [...document.querySelectorAll('.lane__bar--live .lane__used')].map((el) => {
+        const bar = el.closest('.lane__bar');
+        return { background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null };
+      }),
+    };
+  });
+  const lanes = read.chips;
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify(read.fill)}`);
+  // One figure per tone: the lane label's ink over the fill it crosses, by the WCAG contrast formula.
+  const luminance = (rgb) => {
+    const [r, g, b] = (rgb.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).map((n) => {
+      const c = Number(n) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  };
+  const byTone = new Map(read.fills.map((f) => [f.tone, { ...f, ratio: contrast(f.ink, f.background) }]));
+  measurements.push(`${theme} /quota#quota-windows label over fill ${JSON.stringify([...byTone.values()].map((f) => [f.tone, f.ink, f.background, f.ratio]))}`);
+  if (mock && ['good', 'low', 'warn'].some((tone) => !byTone.has(tone))) say(`the story fills bars in every tone, yet only ${[...byTone.keys()].join(', ') || 'none'} drew`);
+  for (const f of byTone.values()) {
+    if (f.ratio < 4.5) say(`the label reads ${f.ink} over the ${f.tone} fill ${f.background} at ${f.ratio}:1, under 4.5:1`);
+  }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
+  if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
   for (const chip of lanes) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
+    if (chip.tone === null) continue;
+    const card = cardTones[chip.tone];
+    if (!card) say(`the chip ${JSON.stringify(chip.text)} is toned ${chip.tone}, which no card chip drew`);
+    else if (card.background !== chip.background || card.color !== chip.color) say(`the chip ${JSON.stringify(chip.text)} draws ${chip.background} on ${chip.color}, where the ${chip.tone} card chip draws ${card.background} on ${card.color}`);
   }
+  if (mock && read.fill === null) say("primary's current bar draws no used fill");
+  if (read.fill && Math.abs(read.fill.width - (read.fill.share / 100) * read.fill.bar) > 1) say(`primary's used fill is ${read.fill.width}px of its ${read.fill.bar}px bar, where the page computed ${read.fill.share}%`);
 }
 
 /**
@@ -2353,6 +2538,26 @@ async function analyticsTables(theme) {
       if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);
       for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
     }
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
+ * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
+ * again, its nine figure headers wrapped so the group column keeps its room) and the placements table on Cache
+ * (Rung), and the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view
+ * returns to Traffic afterwards, as the other Analytics checks leave it.
+ */
+async function analyticsColumns(theme) {
+  await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
+  try {
+    if (!(await tabTo(theme, 'Cache'))) return;
+    await tableColumns(theme, 'analytics', '.misses-table table', ['Key']);
+    await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
+    if (!(await tabTo(theme, 'Burn'))) return;
+    await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
   } finally {
     await tabTo(theme, 'Traffic');
   }
@@ -3278,8 +3483,7 @@ async function subscriptionEndForm(theme) {
 
 /**
  * The Add account dialog on Accounts: the type control keeps its content width, which the body's flex column
- * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs, the mono Id as
- * tall as the Label.
+ * would otherwise stretch across the dialog, and the id line sits under the Label input, flush with its left edge.
  */
 async function addAccountDialog(theme) {
   const say = (what) => failures.push(`${theme} /accounts add account: ${what}`);
@@ -3290,27 +3494,24 @@ async function addAccountDialog(theme) {
     const read = await dialog.evaluate((el) => {
       const body = el.querySelector('.dialog__body');
       const style = body ? getComputedStyle(body) : null;
-      const input = (text) => {
-        const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
-        const box = field?.querySelector('input')?.getBoundingClientRect();
-        return box ? { height: box.height, left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
-      };
+      const box = (b) => (b ? { bottom: Math.round(b.bottom), left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width) } : null);
+      const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Label');
+      const line = [...el.querySelectorAll('p.field__hint')].find((p) => p.textContent?.trim().startsWith('Id:'));
       const type = el.querySelector('[aria-label="Account type"]')?.getBoundingClientRect();
       return {
         body: body && style ? Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) : null,
-        id: input('Id'),
-        label: input('Label'),
+        label: box(field?.querySelector('input')?.getBoundingClientRect()),
+        line: box(line?.getBoundingClientRect()),
         type: type ? Math.round(type.width) : null,
       };
     });
     measurements.push(`${theme} /accounts add account ${JSON.stringify(read)}`);
     if (!read.type || !read.body) say('the type control and the body are not both drawn to measure');
     else if (read.type >= read.body) say(`the type control is ${read.type} px across a ${read.body} px body rather than its content width`);
-    if (!read.id || !read.label) say('the Id and Label inputs are not both drawn to compare');
+    if (!read.label || !read.line) say('the Label input and the id line are not both drawn to compare');
     else {
-      if (read.id.top !== read.label.top) say(`the Id input's top at ${read.id.top} px differs from the Label input's at ${read.label.top} px`);
-      if (read.id.width !== read.label.width) say(`the Id input is ${read.id.width} px wide against the Label input's ${read.label.width} px`);
-      if (Math.abs(read.id.height - read.label.height) > 1) say(`the Id input is ${read.id.height} px tall against the Label input's ${read.label.height} px`);
+      if (read.line.top < read.label.bottom) say(`the id line's top at ${read.line.top} px is above the Label input's bottom at ${read.label.bottom} px`);
+      if (Math.abs(read.line.left - read.label.left) > 1) say(`the id line's left edge at ${read.line.left} px is off the Label input's at ${read.label.left} px`);
     }
   } catch (error) {
     say(`the dialog never opened (${error instanceof Error ? error.message : String(error)})`);
@@ -3365,6 +3566,7 @@ async function catalogDialog(theme) {
     failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /accounts catalog: an Effort levels cell against its Name cell`));
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
+    await tableColumns(theme, 'accounts catalog', 'dialog[open] table', ['Model', 'Name']);
     if (mock) {
       await atRest();
       await dialog.screenshot({ path: join(shots, theme, 'accounts-catalog.png') });
@@ -3443,7 +3645,7 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
  * leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every
- * dialog leaves by Escape.
+ * dialog leaves by Escape, through the discard question where the walk changed it.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -3458,10 +3660,7 @@ async function keyDialogGeometry(theme) {
     await row.locator('.menu__trigger').click();
     await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
   };
-  const close = async (mode) => {
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(mode, 'the dialog stayed open after Escape'));
-  };
+  const close = (mode) => closeByEscape(dialog, `${theme} /keys dialog ${mode}`, (what) => sayIn(mode, what));
   const walk = async (mode, view) => {
     const frame = await dialog.evaluate((el) => {
       const box = el.getBoundingClientRect();
@@ -3549,7 +3748,7 @@ async function keyDialogGeometry(theme) {
       await close('edit');
     } catch (error) {
       sayIn(`${view} view`, error instanceof Error ? error.message : String(error));
-      await page.keyboard.press('Escape').catch(() => {});
+      await close(`${view} view`).catch(() => {});
     }
   }
   await expertView(false).catch(() => {});
@@ -3569,7 +3768,7 @@ async function keyDialogGeometry(theme) {
     await close('revoked');
   } catch (error) {
     sayIn('revoked', error instanceof Error ? error.message : String(error));
-    await page.keyboard.press('Escape').catch(() => {});
+    await close('revoked').catch(() => {});
   }
   await atRest();
 }
@@ -3846,10 +4045,154 @@ async function sessionsTableFits(theme) {
 }
 
 /**
- * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
- * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its center, and the entries draw a list 160 px wide, 32.85 px per entry over 10 px of padding
- * and borders.
+ * Every header cell of `selector` after its `fixed` leading ones carries col-fit or col-fill, the col-fill ones read
+ * `fill` in order, and each row's cell carries its header's class. A fit column is as wide as the larger of its widest
+ * cell's inline content plus that cell's horizontal padding and the cells' `min-width`, within 1 px, the header among
+ * the cells: a block child (a `.sub` line) spans its cell whatever it holds, so it is read by its own inline runs or
+ * its own `min-width` (the budgets meter's floor), whichever is wider, rather than its box, while an inline child's
+ * box counts whole, its padding included. A flex container's items are
+ * one run of boxes with their gaps (a Standing cell's badges), and a form control is its box whatever its display (a
+ * select's options draw no boxes of their own). An out-of-flow child (a screen-reader-only description, a select's
+ * chevron) takes no room in its cell and is left out. A fit cell whose wrapping row of flex items reaches a second
+ * line (a Standing cell's badges stacked) fails, since the one-run read measures a stacked run at the column's width
+ * and would pass it. Two or more fill
+ * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
+ * exists, else its parent element. `fixed` counts the leading columns that keep a width of their own (the Sessions
+ * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
+ * row spans its cells would otherwise pass on its header alone. The measurement records every column's class, width
+ * and content.
+ */
+async function tableColumns(theme, view, selector, fill, fixed = 0) {
+  const say = (what) => failures.push(`${theme} /${view} ${selector}: ${what}`);
+  const read = await page.evaluate((sel) => {
+    const table = document.querySelector(sel);
+    if (!table) return null;
+    const wrap = table.closest('.table-wrap') ?? table.parentElement;
+    const ths = [...table.querySelectorAll('thead th')];
+    // A detail row spans the table with one cell, so only the rows shaped like the head are read.
+    const rows = [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length);
+    const inline = (display) => display.startsWith('inline') || display === 'contents';
+    // A form control is a box whatever its display, since a select's options draw no boxes of their own.
+    const atomic = (node) => node.matches('button, input, select, textarea');
+    const inlineWidth = (el) => {
+      // A flex container lays its items on one line, so they are read as one run of boxes, the gaps included.
+      const items = ['flex', 'inline-flex'].includes(getComputedStyle(el).display);
+      let widest = 0;
+      let run = [];
+      const flush = () => {
+        if (run.length === 0) return;
+        const range = document.createRange();
+        range.setStartBefore(run[0]);
+        range.setEndAfter(run[run.length - 1]);
+        widest = Math.max(widest, range.getBoundingClientRect().width);
+        run = [];
+      };
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) run.push(node);
+        else if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        else if (['absolute', 'fixed'].includes(getComputedStyle(node).position)) continue;
+        else if (items || atomic(node) || inline(getComputedStyle(node).display)) run.push(node);
+        else {
+          flush();
+          // A block child's min-width sizes the column even when the child draws no inline content (a meter's floor).
+          widest = Math.max(widest, inlineWidth(node), parseFloat(getComputedStyle(node).minWidth) || 0);
+        }
+      }
+      flush();
+      return widest;
+    };
+    const classOf = (c) => (c.classList.contains('col-fit') ? (c.classList.contains('col-fill') ? 'both' : 'fit') : c.classList.contains('col-fill') ? 'fill' : 'none');
+    const hundredths = (n) => Math.round(n * 100) / 100;
+    // A row of flex items that wraps is the one way a cell's items reach a second line, so only a wrapping row
+    // container is read, and its lines are counted off the items' boxes: an item whose top sits at or under the box
+    // before it starts a line. Items of unequal height on one line (a meter beside its figure) keep distinct tops, so
+    // the tops alone would read a line too many.
+    const linesOf = (c) => {
+      const wraps = (n) => {
+        const s = getComputedStyle(n);
+        return ['flex', 'inline-flex'].includes(s.display) && s.flexDirection.startsWith('row') && s.flexWrap !== 'nowrap';
+      };
+      const flex = [c, ...c.children].find(wraps);
+      if (!flex) return 1;
+      const boxes = [...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect());
+      return boxes.filter((b, i) => i > 0 && b.top >= boxes[i - 1].bottom - 1).length + 1;
+    };
+    const columns = ths.map((th, i) => {
+      const cells = [th, ...rows.map((r) => r.children[i])];
+      const needs = cells.map((c) => {
+        const s = getComputedStyle(c);
+        return Math.max(inlineWidth(c) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight), parseFloat(s.minWidth) || 0);
+      });
+      return {
+        cellsOff: cells.slice(1).filter((c) => classOf(c) !== classOf(th)).length,
+        cls: classOf(th),
+        label: th.textContent?.trim() ?? '',
+        need: hundredths(Math.max(...needs)),
+        stacked: cells.slice(1).filter((c) => linesOf(c) > 1).length,
+        width: hundredths(th.getBoundingClientRect().width),
+      };
+    });
+    return { client: wrap.clientWidth, columns, rows: rows.length, scroll: table.scrollWidth };
+  }, selector);
+  measurements.push(`${theme} /${view} ${selector} columns ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px over ${read.rows} rows: ${JSON.stringify(read.columns.map((c) => [c.label, c.cls, c.width, c.need]))}`}`);
+  if (read === null) return say('no table to measure');
+  if (mock && read.rows === 0) say('no rows to measure');
+  const named = (c, i) => c.label || `column ${i}`;
+  read.columns.forEach((c, i) => {
+    if (i < fixed) {
+      if (c.cls !== 'none') say(`${named(c, i)} keeps a width of its own yet carries col-${c.cls}`);
+    } else if (c.cls !== 'fit' && c.cls !== 'fill') say(`${named(c, i)} carries ${c.cls === 'both' ? 'both classes' : 'neither col-fit nor col-fill'}`);
+    if (c.cellsOff > 0) say(`${c.cellsOff} cells of ${named(c, i)} lack the header's class`);
+    if (i >= fixed && c.cls === 'fit' && Math.abs(c.width - c.need) > 1) say(`${named(c, i)} is ${c.width}px wide against its content's ${c.need}px`);
+    if (i >= fixed && c.cls === 'fit' && c.stacked > 0) say(`${c.stacked} cells of ${named(c, i)} stack their items on more than one line`);
+  });
+  const fills = read.columns.slice(fixed).filter((c) => c.cls === 'fill');
+  if (JSON.stringify(fills.map((c) => c.label)) !== JSON.stringify(fill)) say(`the fill columns read ${JSON.stringify(fills.map((c) => c.label))}, not ${JSON.stringify(fill)}`);
+  if (fills.length > 1 && Math.max(...fills.map((c) => c.width)) - Math.min(...fills.map((c) => c.width)) > 1) say(`the fill columns are ${fills.map((c) => c.width).join(' and ')}px wide, not equal`);
+  if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+}
+
+/**
+ * The Session column shows more of a session id than the thirteen characters a label cuts at: with the default columns
+ * at 1280 by 800 the first row's id line holds the whole id as its text, which the cell's ellipsis alone
+ * cuts, and the cell's content width holds more than thirteen of its characters (the router's seed names its sessions
+ * in thirteen characters, so the characters shown, the smaller of the id's length and that room, are recorded rather
+ * than asserted);
+ * the id is monospace, so one character's width is read off the line's first eight, which are never behind the
+ * ellipsis.
+ */
+async function sessionIdWidth(theme) {
+  const say = (what) => failures.push(`${theme} /sessions id width: ${what}`);
+  const read = await page.evaluate(() => {
+    const at = [...document.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === 'Session');
+    const cells = [...document.querySelectorAll('.sessions-table tbody tr.srow')].map((r) => r.children[at]).filter(Boolean);
+    const lineOf = (td) => td.querySelector('.srow__id');
+    const cell = cells[0];
+    if (!cell) return null;
+    const line = lineOf(cell);
+    const text = line?.firstChild;
+    if (!line || !text || text.nodeType !== Node.TEXT_NODE) return { line: line ? 'no text node' : 'absent', title: cell.getAttribute('title') };
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, Math.min(8, text.data.length));
+    const perChar = range.getBoundingClientRect().width / Math.min(8, text.data.length);
+    const s = getComputedStyle(cell);
+    const content = cell.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+    const fits = Math.floor(content / perChar);
+    return { content: Math.round(content), fits, length: text.data.length, line: 'drawn', perChar: Math.round(perChar * 100) / 100, shown: Math.min(text.data.length, fits), text: text.data, title: cell.getAttribute('title') };
+  });
+  measurements.push(`${theme} /sessions id width ${JSON.stringify(read)}`);
+  if (read === null) return say('no session row to measure');
+  if (read.line !== 'drawn') return say(`the first row's Session cell draws ${read.line === 'absent' ? 'no id line' : 'an id line without a text node'}`);
+  if (read.text !== read.title) say(`the id line reads ${JSON.stringify(read.text)}, not the whole id ${JSON.stringify(read.title)} the cell's title carries`);
+  if (read.fits <= 13) say(`the cell's ${read.content}px hold ${read.fits} characters, not more than thirteen`);
+}
+
+/**
+ * A Sessions row's menu closes the row, so its list opens leftward from the trigger: aligned to the trigger's left
+ * edge it would run past the table wrap's right edge, which clips it. The trigger sits in the row's last cell, the
+ * list's right edge lies at or left of the wrap's, each item takes a pointer at its center, and the entries draw a list
+ * 160 px wide, 32.85 px per entry over 10 px of padding and borders.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3867,6 +4210,7 @@ async function sessionRowMenu(theme) {
     const list = lists[0];
     const box = list.getBoundingClientRect();
     const edge = wrap.getBoundingClientRect();
+    const cell = document.querySelector('.sessions-table tbody tr.srow .menu__trigger')?.closest('td') ?? null;
     const items = [...list.querySelectorAll('[role="menuitem"]')].map((item) => {
       const b = item.getBoundingClientRect();
       const x = Math.round(b.left + b.width / 2);
@@ -3876,6 +4220,7 @@ async function sessionRowMenu(theme) {
     });
     return {
       items,
+      last: cell !== null && cell === cell.parentElement?.lastElementChild,
       list: { height: Math.round(box.height), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) },
       lists: 1,
       placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
@@ -3890,7 +4235,8 @@ async function sessionRowMenu(theme) {
   // 10 px of padding and borders, then 32.85 px per entry (7 px of padding twice over the 13 px font's 1.45 leading),
   // as the four entries measured 141 px.
   const height = Math.round(10 + 32.85 * read.items.length);
-  if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
+  if (!read.last) say("the trigger sits in a cell other than the row's last");
+  if (read.list.right > read.wrap.right) say(`the list ends at ${read.list.right}px, right of the table wrap's edge at ${read.wrap.right}px`);
   if (read.items.length === 0) say('the list draws no item');
   if (read.list.width !== 160 || read.list.height !== height) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by ${height}px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
@@ -3962,47 +4308,99 @@ async function agentLines(theme) {
 }
 
 /**
- * The Sessions table's fork badge against the row's other badges: the fork badge
- * measures the box the Companion and Cache warming badges do
- * and sits on the session id's line. Both seeds record a fork, so both passes measure the fork
- * badge; only the mock's pass fails when none is drawn.
+ * The Sessions table's fork badge against the row's other badges: it sits under the session id's line in the face of
+ * the Companion and Cache warming badges (its height is free, since it wraps its words when the column is narrower
+ * than they are). Both seeds record a fork, so both passes measure the fork badge, and only the mock's pass fails when
+ * none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
   const read = await page.evaluate(() => {
-    const badge = (el) => {
+    const face = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}`;
     };
     const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim());
     const companion = heads.indexOf('Companion');
     const warming = heads.indexOf('Cache warming');
     const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
-    // The badge is centered on the id's line when the two share it, and sits below it when the cell wrapped.
-    const beside = (() => {
-      const label = fork?.closest('td')?.firstChild;
+    // The badge sits under the id's line, so its middle lies below that line's bottom.
+    const below = (() => {
+      const label = fork?.closest('td')?.querySelector('.srow__id');
       if (!fork || !label) return null;
-      const range = document.createRange();
-      range.selectNodeContents(label);
-      const line = range.getBoundingClientRect();
+      const line = label.getBoundingClientRect();
       const box = fork.getBoundingClientRect();
-      const middle = (box.top + box.bottom) / 2;
-      return middle > line.top && middle < line.bottom;
+      return (box.top + box.bottom) / 2 > line.bottom;
     })();
+    const rowBadge = rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean);
     return {
-      beside,
-      forkBadge: badge(fork),
-      rowBadge: badge(rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean)),
+      below,
+      forkBadge: face(fork),
+      rowFace: face(rowBadge),
     };
   });
   measurements.push(`${theme} /sessions fork mark ${JSON.stringify(read)}`);
   if (read.forkBadge === null) {
     if (mock) say('the story forks a session, yet no fork badge is drawn');
   } else {
-    if (read.forkBadge !== read.rowBadge) say(`the fork badge measures ${read.forkBadge} against the row badge's ${read.rowBadge}`);
-    if (read.beside !== true) say('the fork badge wraps under the session id rather than sitting beside it');
+    if (read.forkBadge !== read.rowFace) say(`the fork badge reads in ${read.forkBadge} against the row badge's ${read.rowFace}`);
+    if (read.below !== true) say("the fork badge sits on the session id's line rather than under it");
+  }
+}
+
+/**
+ * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
+ * center, with the default columns.
+ * The badge sits under the id and wraps its words when the column is narrower than they are, so
+ * its height is free and its width is what the measurement records beside its cell's. The story forks two sessions
+ * beside their bases, so the mock pass requires two links; the router pass measures the links its seed draws and
+ * records their count.
+ */
+async function sessionForkBadges(theme) {
+  const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const links = [...document.querySelectorAll('.sessions-table a.srow__fork')].map((a) => {
+        // A fork row can sit under the fold at 800 px, where no point of the viewport reaches it, so each link is
+        // brought into view for its hit test; the page is scrolled back to its top after.
+        a.scrollIntoView({ block: 'center' });
+        const td = a.closest('td');
+        const s = getComputedStyle(td);
+        const cell = td.getBoundingClientRect();
+        const box = a.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        const r = (n) => Math.round(n * 10) / 10;
+        return {
+          bottom: r(box.bottom),
+          cell: { bottom: r(cell.bottom), left: r(cell.left + parseFloat(s.paddingLeft)), right: r(cell.right - parseFloat(s.paddingRight)), width: r(cell.width) },
+          clickable: hit !== null && a.contains(hit),
+          cut: a.scrollWidth > a.clientWidth,
+          left: r(box.left),
+          lines: Math.round(box.height / parseFloat(getComputedStyle(a).lineHeight)),
+          right: r(box.right),
+          text: a.textContent?.trim(),
+          width: r(box.width),
+        };
+      });
+      window.scrollTo(0, 0);
+      return links;
+    });
+  for (const [set, on] of [
+    ['the default columns', false],
+  ]) {
+    const links = await read();
+    measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}`);
+    if (mock && links.length !== 2) say(`${links.length} fork links are drawn with ${set}, not the story's two`);
+    for (const l of links) {
+      const name = `"${l.text}" with ${set}`;
+      if (!(l.width > 0)) say(`${name} has no width`);
+      if (l.left < l.cell.left - 0.5 || l.right > l.cell.right + 0.5) say(`${name} runs from ${l.left} to ${l.right}px, outside its cell's content from ${l.cell.left} to ${l.cell.right}px`);
+      if (l.bottom > l.cell.bottom + 0.5) say(`${name} ends at ${l.bottom}px, under its cell's bottom at ${l.cell.bottom}px`);
+      if (l.cut) say(`${name} cuts its words`);
+      if (!l.clickable) say(`${name} takes no pointer at its center`);
+    }
   }
 }
 
@@ -4063,6 +4461,87 @@ async function forkLink(theme) {
 }
 
 /**
+ * A console served over plain HTTP has no `navigator.clipboard`: the accessor lives on the prototype, so it is
+ * deleted there, and a copy listener records what the page had selected at each copy instant, for the measures that
+ * read the copy command.
+ */
+const withoutClipboard = () =>
+  page.evaluate(() => {
+    delete Navigator.prototype.clipboard;
+    window.__e2eCopied = null;
+    document.addEventListener('copy', () => {
+      const active = document.activeElement;
+      window.__e2eCopied = active instanceof HTMLTextAreaElement ? active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0) : (document.getSelection()?.toString() ?? '');
+    });
+  });
+
+/**
+ * Clicks a Copy `button` (an element handle: the button's accessible name changes with its state, so a locator by
+ * name would lose it at the click) and reads Copied within a second with the recorded text equal to `expected`.
+ * Lengths alone reach the output, so no secret does.
+ */
+async function copiedByCommand(button, expected, label, say) {
+  await button.click();
+  try {
+    await page.waitForFunction((el) => el.textContent?.trim() === 'Copied', button, { timeout: 1_000 });
+  } catch {
+    say(`Copy reads ${JSON.stringify(((await button.textContent()) ?? '').trim())} a second after the click, not Copied`);
+    return;
+  }
+  const recorded = await page.evaluate(() => window.__e2eCopied);
+  const lengths = JSON.stringify({ expected: expected.length, recorded: recorded === null ? null : recorded.length });
+  measurements.push(`${label} copy by command ${lengths}`);
+  if (recorded !== expected) say(`the copy command took other text than the one beside the button ${lengths}`);
+}
+
+/**
+ * The Settings view's Copy snippet without a clipboard copies the client block beside it. A reload after it brings
+ * the accessor back, and the clock stands, so the views after it draw the instants they drew without the measure.
+ */
+async function copyFallback(theme) {
+  const say = (what) => failures.push(`${theme} /settings: ${what}`);
+  await withoutClipboard();
+  const expected = (await page.locator('pre.snippet').first().textContent()) ?? '';
+  await copiedByCommand(await page.getByRole('button', { name: 'Copy snippet' }).elementHandle(), expected, `${theme} /settings`, say);
+  await page.reload();
+  await booted();
+}
+
+/**
+ * The Key created dialog's Copy without a clipboard, inside a modal: a key is created on the Keys view and its
+ * secret copied by the command. The creation moves the page clock, so it runs after every shot on a load of its own,
+ * and in the mock pass alone: the mock's story is rebuilt at the next load, where the router's registry would keep
+ * the key and refuse its second creation.
+ */
+async function copyFallbackModal(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  await page.goto(`${base}/keys`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
+  await withoutClipboard();
+  const dialog = page.locator('dialog[open]');
+  const created = page.getByRole('dialog', { name: 'Key created' });
+  try {
+    await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('copy check');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+    // The mock answers the creation on a timer of its own, which the paused clock holds until it is advanced.
+    await advance(600);
+    await created.waitFor({ state: 'visible', timeout: 15_000 });
+  } catch (error) {
+    say(`the Key created dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const secret = ((await created.locator('.secret code').textContent()) ?? '').trim();
+  await copiedByCommand(await created.locator('.secret button').elementHandle(), secret, `${theme} /keys`, say);
+  await created.getByRole('button', { name: 'Done' }).click();
+  await advance(CLOCK_STEP_MS);
+  await created.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => say('the Key created dialog stayed open after Done'));
+}
+
+/**
  * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
  * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin and moves only when
  * `advance` moves it.
@@ -4114,6 +4593,7 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
+        await tableColumns(theme, '', '.dash__recent', ['Key']);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
@@ -4122,9 +4602,12 @@ try {
         await sessionsLead(theme);
         await costReference(theme);
         await sessionsTableFits(theme);
+        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1);
+        await sessionIdWidth(theme);
         await sessionRowMenu(theme);
         await agentLines(theme);
         await sessionForkMark(theme);
+        await sessionForkBadges(theme);
         await probeBarSlots(theme);
       }
       if (view.path === '/pools') {
@@ -4135,6 +4618,7 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);
       }
@@ -4143,12 +4627,14 @@ try {
         await burnCards(theme);
         await planLegend(theme);
         await analyticsTables(theme);
+        await analyticsColumns(theme);
         await trafficCards(theme);
         await analyticsTabs(theme);
         await stickyStrip(theme);
       }
       if (view.path === '/settings') await settingsOrder(theme);
       if (view.path === '/accounts') {
+        await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
         await subscriptionEndForm(theme);
@@ -4156,11 +4642,14 @@ try {
         await catalogDialog(theme);
       }
       if (view.path === '/keys') {
+        await tableColumns(theme, 'keys', '.card--table table', ['Name', 'Models', 'Status']);
+        await keyBadges(theme);
         await keysPoolSelect(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
       }
+      if (view.path === '/models') await tableColumns(theme, 'models', '.models__rules table', ['Pattern']);
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         await speedFilter(theme);
@@ -4184,6 +4673,7 @@ try {
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
+      if (view.path === '/settings') await copyFallback(theme);
     }
   }
   // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
@@ -4205,6 +4695,15 @@ try {
     at = `${theme} /requests default pages`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await requestPageWidths(theme);
+  }
+  // The Key created dialog's Copy creates a key and moves the page clock, so it runs after every shot, in the mock
+  // pass alone.
+  if (mock) {
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /keys copy by command`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await copyFallbackModal(theme);
+    }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a
   // right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's

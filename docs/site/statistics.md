@@ -359,21 +359,27 @@ same slots in the same order, so a card with more to say moves no rule against i
 rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and the poll reading. Every window share on
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
-A window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
-reading. The Extra usage line reads the month's spend against its limit, in the serious tone while requests bill as
-extra usage and in the muted ink while they do not, and reads off or not reported in the muted ink when extra usage is
-disabled or the account has not reported it. The reason the provider gave for it sits inside the line, cut to the line's
-width, with the whole message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then
-say when the plan of an account marked cancelled ends, in the serious tone inside a week, and when the trial of an
-account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint
-and how it answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next
-attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message,
-when the snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a
-row. Refresh reads the endpoint now unless the account is backing off, and records the reading as the poll does. The
-page counts a card that shows an error, whose last poll failed, or that is backing off as needing attention.
+A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
+window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
+reading. Each live window's meter carries a pace mark at the share of the window still to come, so a remaining share
+that reaches past the mark is behind pace and one short of it ahead, and the meter's title names the lead: 12% ahead of
+pace, 5% behind pace, or on pace. The Extra usage line reads the month's spend against its limit, in the serious tone
+while requests bill as extra usage and in the muted ink while they do not, and reads off or not reported in the muted
+ink when extra usage is disabled or the account has not reported it. The reason the provider gave for it sits inside the
+line, cut to the line's width, with the whole message on hover. The chips start with the plan, named by its tier (Max
+20x, Max 5x or Pro), then say when the plan of an account marked cancelled ends, in the serious tone inside a week, and
+when the trial of an account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last
+asked the endpoint and how it answered, a failed poll naming its reason cut to the line's width, and, while the account
+backs off, the next attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed
+poll's whole message, when the snapshot shown was read, since when the account backs off, and how many rate-limited
+answers it has had in a row. Refresh reads the endpoint now unless the account is backing off, and records the reading
+as the poll does. The page counts a card that shows an error, whose last poll failed, or that is backing off as needing
+attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
+view. Each lane's current bar fills from the window's start to its used share in the window's tone, so a fill past the
+now line is ahead of pace and one short of it behind, and the lane's chips take the tone of their share, as the cards'
+do. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
 window opens after it, and the window that spans it stops there.
 
 The fast-mode reading is on the account page's Usage card: a Fast mode line with the share of the fast lane's input and
@@ -598,12 +604,14 @@ request folds under the reserved value alongside a keepalive credit, and a reque
 reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
 `standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
 as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
-with the key that spent them. The earlier holder is labeled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
-and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
-client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
-token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects
-nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*`
-as two groups, every other agent under `other`.
+with the key that spent them. The earlier holder is labeled `<id> (deleted, created Sep 14, 2026, 09:31)`, the date and
+time it was created at minute precision in your zone, or `<id> (deleted)` when the ledger holds no creation time for
+it. The client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the
+folded token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`)
+selects nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups, every other agent under `other`. The charts' day ticks print the date in your zone,
+with the time beside a tick where a bucket boundary is not midnight there, and the axis says that days start at 00:00
+UTC.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
@@ -654,12 +662,12 @@ its subtitle says so.
 
 ### Settings
 
-Settings opens on the downstream client configuration, the environment block that points Claude Code at the router with
-a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and the address the
-listener binds shows beside the block. Then come the appearance and time-format choices, and an About card with the
-version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's each with its
-effective date) and the admin secret's standing. About closes on a pointer: the values the configuration file sets are
-on the [installation page](installation.md), and `phoebis check-config` prints them.
+Settings opens on the appearance and time-format choices, then an About card with the version, the profile, the metrics
+listener, the four storage paths (the price table's and the cost model's each with its effective date) and the admin
+secret's standing. About closes on a pointer: the values the configuration file sets are on the
+[installation page](installation.md), and `phoebis check-config` prints them. The page closes on the downstream client
+configuration, the environment block that points Claude Code at the router with a reason under each line. Its base URL
+is a placeholder for the URL that reaches the proxy listener, and the address the listener binds shows beside the block.
 
 ## Conditions and gauges
 

@@ -381,8 +381,8 @@ impl Store {
         Ok(generation)
     }
 
-    /// The seam `debug_fail_next_credential_commit` arms, checked before either commit's transaction.
-    fn fail_injected_commit(&self) -> Result<(), StoreError> {
+    /// The seam `debug_fail_next_credential_commit` arms, checked before each commit's transaction.
+    pub(crate) fn fail_injected_commit(&self) -> Result<(), StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         if self
             .fail_next_credential_commit
@@ -398,7 +398,7 @@ impl Store {
     /// The body both commits share, inside the caller's transaction, which the caller commits; `now` stamps the
     /// credential row and every attempt it settles.
     #[allow(clippy::too_many_arguments)]
-    fn commit_credentials_in(
+    pub(crate) fn commit_credentials_in(
         &self,
         tx: &rusqlite::Transaction<'_>,
         account_id: &str,

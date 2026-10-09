@@ -20,7 +20,7 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
 
@@ -926,10 +926,12 @@ function BreakdownTable({
   groupLabel,
   columns,
   rows,
+  className = '',
   error = null,
   loading = false,
   subtitle = 'Totals for the selected range and filters',
 }: {
+  className?: string;
   columns: ReactNode[];
   error?: string | null;
   groupLabel: string;
@@ -939,14 +941,14 @@ function BreakdownTable({
   title: string;
 }) {
   return (
-    <Card title={title} subtitle={subtitle} padded={false} className="card--table">
+    <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
       <div className="table-wrap">
         <table className="table">
           <thead>
             <tr>
-              <th>{groupLabel}</th>
+              <th className="col-fill">{groupLabel}</th>
               {columns.map((c, i) => (
-                <th key={i} className="right">
+                <th key={i} className="right col-fit">
                   {c}
                 </th>
               ))}
@@ -955,9 +957,11 @@ function BreakdownTable({
           <tbody>
             {rows.map((r) => (
               <tr key={r.key}>
-                <td className="mono">{r.label}</td>
+                <td className="mono col-fill" title={r.label}>
+                  {r.label}
+                </td>
                 {r.cells.map((c, i) => (
-                  <td key={i} className="right num">
+                  <td key={i} className="right num col-fit">
                     {c}
                   </td>
                 ))}
@@ -1087,6 +1091,7 @@ function MissReasonsByGroup({ groups, groupLabel, loading }: { groupLabel: strin
   return (
     <BreakdownTable
       title={`Misses by reason by ${groupLabel.toLowerCase()}`}
+      className="misses-table"
       loading={loading}
       groupLabel={groupLabel}
       columns={[...order.map(missLabel), 'Expired between turns']}
@@ -1272,13 +1277,14 @@ function CostByGroup({ axis, points, groupBy, groupSlot, loading }: { axis: Time
 const UNFILTERED_NOTE = '. The filters above do not apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
- * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their day ticks print
- * the UTC date and the axis says so once; hour ticks stay local, as the tooltips do.
+ * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
+ * viewer's date with the local time beside it where the boundary is not local midnight, and the axis names the
+ * boundary once; hour ticks stay local, as the tooltips do.
  */
 function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
   if (bucketMs < 6 * HOUR) return { tickFormatter: (v) => fmtHourTick(v) };
   // The label sits under the last tick, so the axis grows a line taller than its 30 px to keep the two apart.
-  return { height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'UTC days' }, tickFormatter: (v) => fmtDayShort(v, 'UTC') };
+  return { height: 40, label: { fill: ink.ink2, fontSize: 11, position: 'insideBottomRight', value: 'days start at 00:00 UTC' }, tickFormatter: (v) => fmtDayTick(v) };
 }
 
 type SpeedRow = { at: number; fast: number; standard: number };
@@ -1586,28 +1592,33 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   return (
     <Card title="Placements by rung" subtitle={`${PLACEMENT_HINT}${unfiltered ? PLACEMENT_UNFILTERED_NOTE : ''}`} padded={false} className="card--table">
       <div className="table-wrap">
-        <table className="table">
+        <table className="table placements-table">
           <thead>
             <tr>
-              <th>Rung</th>
-              <th className="right">Placements</th>
-              <th className="right">Hits</th>
-              <th className="right">Hit share</th>
-              <th className="right">Tokens read</th>
-              <th className="right">Tokens promised</th>
+              <th className="col-fill">Rung</th>
+              <th className="right col-fit">Placements</th>
+              <th className="right col-fit">Hits</th>
+              <th className="right col-fit">Hit share</th>
+              <th className="right col-fit">Tokens read</th>
+              <th className="right col-fit">Tokens promised</th>
             </tr>
           </thead>
           <tbody>
-            {(rows ?? []).map((r) => (
-              <tr key={r.rung}>
-                <td>{placementRungLabel(r.rung)}</td>
-                {placementCells(r).map((cell, i) => (
-                  <td key={i} className="right num">
-                    {cell}
+            {(rows ?? []).map((r) => {
+              const rung = placementRungLabel(r.rung);
+              return (
+                <tr key={r.rung}>
+                  <td className="col-fill" title={rung}>
+                    {rung}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {placementCells(r).map((cell, i) => (
+                    <td key={i} className="right num col-fit">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
             {(rows === null || rows.length === 0) && (
               <tr>
                 <td colSpan={6} className={error ? '' : 'muted'}>
@@ -1632,11 +1643,11 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
         <table className="table budgets-table">
           <thead>
             <tr>
-              <th>Pool</th>
-              <th>Account</th>
-              <th>Spent</th>
-              <th className="right">Budget</th>
-              <th>Period ends</th>
+              <th className="col-fill">Pool</th>
+              <th className="col-fill">Account</th>
+              <th className="col-fit">Spent</th>
+              <th className="right col-fit">Budget</th>
+              <th className="col-fit" title="a period ends at midnight UTC">Period ends</th>
             </tr>
           </thead>
           <tbody>
@@ -1646,11 +1657,13 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
               const reached = b.spentUsd !== null && b.spentUsd >= b.budgetUsd && b.periodEnd !== null && Date.parse(b.periodEnd) > now;
               return (
                 <tr key={`${b.poolId}-${b.accountId}-${b.budgetPeriod}`}>
-                  <td className="mono">{b.poolId}</td>
-                  <td className="mono">
+                  <td className="mono col-fill" title={b.poolId}>
+                    {b.poolId}
+                  </td>
+                  <td className="mono col-fill" title={b.accountId}>
                     <Link to={`/accounts/${b.accountId}`}>{b.accountId}</Link>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <span className="budgets-table__spent">
                       {b.spentUsd === null ? (
                         <span className="muted" title="The ledger has not reported this member's spend yet">
@@ -1670,10 +1683,12 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
                     </span>
                     <Meter value={ratio} tone={reached ? 'low' : ratio >= 0.8 ? 'warn' : 'accent'} thin label={`Spend of ${b.accountId} in pool ${b.poolId} against its budget`} />
                   </td>
-                  <td className="right num">
+                  <td className="right num col-fit">
                     {fmtUsd(b.budgetUsd)} per {b.budgetPeriod}
                   </td>
-                  <td title={b.periodEnd ? fmtAbsolute(b.periodEnd) : undefined}>{b.periodEnd ? <span className="num">{fmtPeriodEnd(b.periodEnd)}</span> : <span className="muted">-</span>}</td>
+                  <td className="col-fit" title={b.periodEnd ? fmtAbsolute(b.periodEnd) : undefined}>
+                    {b.periodEnd ? <span className="num">{fmtPeriodEnd(b.periodEnd)}</span> : <span className="muted">-</span>}
+                  </td>
                 </tr>
               );
             })}

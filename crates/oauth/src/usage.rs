@@ -334,17 +334,15 @@ impl CachedEntry {
         }
     }
 
-    /// The one sentence the held answer and the poll's last error both read.
+    /// The one sentence the held answer and the poll's last error both read. It names the endpoint alone: the
+    /// deadline is `not_before`, which the status answers as `next_attempt_at` for the console to print in the
+    /// viewer's zone.
     fn hold_message(&self) -> String {
-        format!(
-            "the {} endpoint rate-limited the account, and the next attempt is at {}",
-            self.held_by,
-            utc(self.not_before)
-        )
+        format!("the {} endpoint rate-limited the account", self.held_by)
     }
 }
 
-/// `at_ms` as the UTC time the console shows, or the raw milliseconds for one out of range.
+/// `at_ms` as the UTC time the warning log line names, or the raw milliseconds for one out of range.
 fn utc(at_ms: i64) -> String {
     jiff::Timestamp::from_millisecond(at_ms)
         .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
