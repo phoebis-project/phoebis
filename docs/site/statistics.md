@@ -490,26 +490,26 @@ probe decision's included. A card opened on a request that is still running read
 the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
 secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
 the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
-router decided" draws the walk as a line of stations in the engine's order (the pin, every member's eligibility, the
-five partitions, the three rungs, the pick and a hold or an exhaustion, or on a pinned request the five move rules and
-the renewal, a probe or a bound where the record puts it) with its verdict on each, brackets over the partitions, the
-rungs and the moves, the path the decision took in the accent and every branch it did not take as a short stub ("match"
-on a rung, "fires" on a rule, "released" on the renewal). A branch it took runs on a track above the line, and a move's
-continuation (the cool reading, the cap filter, the partitions, the rungs and the pick) rides that track to the Chosen
-terminus. The candidates fan out under the pick in the walk's order with the chosen one tinted and "and N more" past
-eight. The three ways out stand at the line's end (Chosen, Held for a slot, Refused) with the one the decision reached
-filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way out its outcome names. A step
-the record does not carry is drawn dashed before the decisive station and reads "not run" after it. A refusal's walk is
-two stations, the admission refused and the rest of the walk not run, with the reason on the verdict line and in the
-outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover: a table of the members
-for the eligibility, the cool reading, the cap filter and the pick (whose scores read as the Pace column does), a
-grouped list for the pin (lookup, age, warmth) and the shed (windows, round, destinations), a rung's entry (the
-boundary's hash as its first eight characters with the whole hash on hover, its depth, prefix, write, TTL with the
-warm-until time and the gate that refused it), a hold's place, account, slot and bound, a candidate's plan, tier, slots,
-Pace and windows, the outcome's rows on the terminus the decision reached, and for a rule a fired rule cut short the
-names of the rules that did not run. Every list row is a label with its chips, and a step that did not run says so. Tab
-walks the stations, the candidates and the ways out in the record's order, Enter or Space opens the focused one's
-popover and moves into it, and Escape closes it and returns.
+router decided" draws the walk as a strip, a line of stations in the engine's order (the pin, every member's
+eligibility, the five partitions, the three rungs, the pick and a hold or an exhaustion, or on a pinned request the five
+move rules and the renewal, a probe or a bound where the record puts it) with its verdict on each, brackets over the
+partitions, the rungs and the moves, the path the decision took in the accent and every branch it did not take as a
+short stub ("match" on a rung, "fires" on a rule, "released" on the renewal). A branch it took runs on a track above the
+line, and a move's continuation (the cool reading, the cap filter, the partitions, the rungs and the pick) rides that
+track to the Chosen terminus. The candidates fan out under the pick in the walk's order with the chosen one tinted and
+"and N more" past eight. The three ways out stand at the line's end as termini (Chosen, Held for a slot, Refused) with
+the one the decision reached filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way
+out its outcome names. A step the record does not carry is drawn dashed before the decisive station and reads "not run"
+after it. A refusal's walk is two stations, the admission refused and the rest of the walk not run, with the reason on
+the verdict line and in the outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a
+popover: a table of the members for the eligibility, the cool reading, the cap filter and the pick (whose scores read as
+the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round,
+destinations), a rung's entry (the boundary's hash as its first eight characters with the whole hash on hover, its
+depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's place, account, slot and
+bound, a candidate's plan, tier, slots, Pace and windows, the outcome's rows on the terminus the decision reached, and
+for a rule a fired rule cut short the names of the rules that did not run. Every list row is a label with its chips, and
+a step that did not run says so. Tab walks the stations, the candidates and the termini in the record's order, Enter or
+Space opens the focused one's popover and moves into it, and Escape closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
