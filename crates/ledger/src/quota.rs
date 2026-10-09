@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, UsageService, UsageSnapshot};
+use phoebis_oauth::{BackoffEdge, UsageError, UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, sample_from_usage, Report, RouterHandle, FIVE_HOUR, SEVEN_DAY,
@@ -381,7 +381,7 @@ impl QuotaPoll {
                     let (store, usage, ledger, router) =
                         (store.clone(), usage.clone(), ledger.clone(), router.clone());
                     let handle = attempts.spawn(async move {
-                        Self::poll_account(&usage, &ledger, Some(&router), &account).await;
+                        let _ = Self::poll_account(&usage, &ledger, Some(&router), &account).await;
                         if profile_due {
                             Self::refresh_profile(&store, &usage, &router, &account).await;
                         }
@@ -430,16 +430,19 @@ impl QuotaPoll {
         })
     }
 
-    /// One account's snapshot: recorded to the ledger when it is clean and, when `router` is given, reported
-    /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage` and
-    /// `Report::Credits`, before this returns; the clean snapshot is answered. The scheduler and the startup step
-    /// both call it with the router. The profile is `refresh_profile`'s.
+    /// One account's reading through the service's hold, concurrency cap and coalescing, past its cache TTL: a
+    /// clean snapshot is recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
+    /// and, when the snapshot carries the evidence, `Report::Overage` and `Report::Credits`, before this returns.
+    /// The service's answer is returned as it came, so a caller that shows it shows what was recorded: a snapshot
+    /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
+    /// error is a read that never completed. The scheduler calls it with the router and keeps nothing of the
+    /// answer, and the startup step counts a clean snapshot as reported. The profile is `refresh_profile`'s.
     pub async fn poll_account(
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
-    ) -> Option<UsageSnapshot> {
+    ) -> Result<UsageSnapshot, UsageError> {
         // The service's hold, concurrency cap and coalescing apply and its cache TTL does not; a snapshot with
         // an error is a stale one, and a stale sample must not be written under a fresh bucket.
         match usage.poll(&account.id).await {
@@ -478,12 +481,12 @@ impl QuotaPoll {
                             .await;
                     }
                 }
-                Some(snapshot)
+                Ok(snapshot)
             }
-            Ok(_) => None,
+            Ok(snapshot) => Ok(snapshot),
             Err(error) => {
                 tracing::debug!(account = %account.id, %error, "the quota poll got no snapshot");
-                None
+                Err(error)
             }
         }
     }
@@ -552,7 +555,7 @@ impl QuotaPoll {
             let handle = tokio::spawn(async move {
                 let answer =
                     Self::poll_account(&usage, &task_ledger, Some(&router), &account).await;
-                let _ = tx.send(answer.is_some());
+                let _ = tx.send(matches!(answer, Ok(ref s) if s.error.is_none()));
                 Self::refresh_profile(&store, &usage, &router, &account).await;
             });
             ledger.track(handle);

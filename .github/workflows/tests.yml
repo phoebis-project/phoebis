@@ -14,9 +14,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # A step's `if` cannot read `secrets`, so the companion steps test this boolean; the token itself reaches only
-      # the checkout that uses it.
-      HAS_COMPANION_TOKEN: ${{ secrets.COMPANION_READ_TOKEN != '' }}
       # The console is built once below and embedded as it is, as the image's builder does.
       PHOEBIS_SKIP_UI_BUILD: "1"
     steps:
@@ -40,27 +37,6 @@ jobs:
       - run: cargo test --workspace --locked
         env:
           PHOEBIS_UI_EXPECT: bundle
-      # The companion registration test is opt-in in code; the checkout below is what opts in, and only while the
-      # companion repository is private behind a read token.
-      - if: env.HAS_COMPANION_TOKEN == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: daystrom-labs/phoebis-keepalive
-          path: companion
-          token: ${{ secrets.COMPANION_READ_TOKEN }}
-          persist-credentials: false
-      # `cargo test` exits 0 on a filter that matches no test, so the count is what fails the step once the test
-      # is renamed.
-      - if: env.HAS_COMPANION_TOKEN == 'true'
-        shell: bash
-        run: |
-          cargo test -p phoebis-router --test end_to_end the_companion_registers --locked 2>&1 \
-            | tee "$RUNNER_TEMP/companion.log"
-          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/companion.log"
-        env:
-          PHOEBIS_COMPANION_DIR: ${{ github.workspace }}/companion
-      - if: env.HAS_COMPANION_TOKEN != 'true'
-        run: echo "::notice::the companion registration test was skipped because COMPANION_READ_TOKEN is unset"
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

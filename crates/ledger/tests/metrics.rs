@@ -581,12 +581,12 @@ fn the_routing_loops_reserved_pool_label_is_the_ledgers_reserved_id() {
 #[test]
 fn every_registered_family_renders_and_nothing_else_does() {
     let metrics = Metrics::new();
-    metrics.observe_probe("a", "ok");
-    metrics.observe_probe("a", "migrated");
-    metrics.observe_probe("a", "held");
-    metrics.observe_probe("b", "failed");
-    metrics.observe_saving("main", 0.25);
-    metrics.observe_saving("main", 0.5);
+    metrics.observe_probe("main", "landed");
+    metrics.observe_probe("main", "cold");
+    metrics.observe_probe("main", "held");
+    metrics.observe_probe("night", "failed");
+    metrics.observe_skipped("main", "held");
+    metrics.observe_skipped("main", "ended");
     let gauges = RoutingGauges {
         keepalive_agents: phoebis_ledger::KeepaliveAgents {
             busy: 2,
@@ -617,11 +617,12 @@ fn every_registered_family_renders_and_nothing_else_does() {
         r#"phoebis_keepalive_agents{state="busy"} 2"#,
         r#"phoebis_keepalive_agents{state="idle"} 1"#,
         r#"phoebis_keepalive_agents{state="parked"} 0"#,
-        r#"phoebis_keepalive_probes_total{account="a",outcome="held"} 1"#,
-        r#"phoebis_keepalive_probes_total{account="a",outcome="migrated"} 1"#,
-        r#"phoebis_keepalive_probes_total{account="a",outcome="ok"} 1"#,
-        r#"phoebis_keepalive_probes_total{account="b",outcome="failed"} 1"#,
-        r#"phoebis_keepalive_saved_usd_total{pool="main"} 0.75"#,
+        r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 1"#,
+        r#"phoebis_keepalive_probes_total{outcome="failed",pool="night"} 1"#,
+        r#"phoebis_keepalive_probes_total{outcome="held",pool="main"} 1"#,
+        r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#,
+        r#"phoebis_keepalive_skipped_total{pool="main",state="ended"} 1"#,
+        r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }

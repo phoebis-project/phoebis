@@ -6,12 +6,12 @@ use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
-    KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, Refusal, RefusalFacts,
-    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
-    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
-    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WRITER_DEPTH,
+    BurnRates, BurnUnit, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
+    KeyRefusal, LongContextRates, MemberSpend, PinRef, PinUsage, Presented, RateTable,
+    Rates, Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
+    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
+    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -5132,15 +5132,16 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
 }
 
 #[tokio::test]
-async fn a_fast_renewal_weighs_the_plain_copy_by_the_fast_cells_and_lets_the_banded_copy_decay() {
+async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its_row_decay() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    // The fast cells read twice the dollar ones, so a fast token weighs two standard tokens in the plain copy.
+    // The fast cells read twice the dollar ones, so the fast tokens price at a half beside the row's quarter.
+    let rates = BurnRates {
+        fast: flat_rates(0.5),
+        ..quarter_dollar_rates()
+    };
     let config = RouterConfig {
-        rates: BurnRates {
-            fast: flat_rates(0.5),
-            ..quarter_dollar_rates()
-        },
+        rates: rates.clone(),
         ..RouterConfig::default()
     };
     let handle = spawn(store, clock(&now), config).unwrap();
@@ -5177,26 +5178,293 @@ async fn a_fast_renewal_weighs_the_plain_copy_by_the_fast_cells_and_lets_the_ban
         .report(renewal(standard, 62_000, input(1_000), "client", 300_000))
         .await;
     let pins = handle.pins().await.unwrap();
+    let fast_burns = handle.fast_burns().await.unwrap();
     // The pool's burn window is the default 600 s, and the fast fold lands 60 s after the standard one.
     let window = 600.0_f64;
     let decayed = 600.0 / window * (-60.0_f64 / window).exp();
     let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
     assert!(
-        (s1.burn.input - (decayed + 2_000.0 / window)).abs() < 1e-9,
-        "the plain copy folds the thousand fast tokens as two thousand standard ones: {:?}",
-        s1.burn
-    );
-    assert!(
-        (s1.burn_banded.input - decayed).abs() < 1e-9,
-        "the banded copy, the plan share, only decays: {:?}",
+        (s1.burn.input - decayed).abs() < 1e-9 && (s1.burn_banded.input - decayed).abs() < 1e-9,
+        "the row's two copies only decay at a fast renewal: {:?} and {:?}",
+        s1.burn,
         s1.burn_banded
     );
+    let fast = fast_burns[&s1.key()];
+    assert!(
+        (fast.input - 1_000.0 / window).abs() < 1e-9,
+        "the thousand fast tokens land in the pin's fast usage, unweighed: {fast:?}"
+    );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
+    let priced = rates.price_pin(BurnUnit::Usd, s1, &fast).unwrap();
+    assert!(
+        (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
+        "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
+    );
     let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
     assert_eq!(
         (s2.burn.input, s2.burn_banded.input),
         (1_000.0 / window, 1_000.0 / window),
         "a standard renewal folds its tokens unweighed into both copies"
+    );
+    assert!(
+        !fast_burns.contains_key(&s2.key()),
+        "and leaves no fast usage behind"
+    );
+}
+
+/// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
+/// over 1,000 prompt tokens.
+fn long_context_rates(rate: f64, long: f64) -> RateTable {
+    let flat = |r: f64| Rates {
+        input: Some(r),
+        cache_read: Some(r),
+        write_5m: Some(r),
+        write_1h: Some(r),
+        output: Some(r),
+    };
+    let mut table = flat_rates(rate);
+    table.rows.insert("claude-sonnet-5".into(), flat(rate));
+    table.long_context.insert(
+        "claude-sonnet-5".into(),
+        LongContextRates {
+            over: 1_000,
+            rates: flat(long),
+        },
+    );
+    table
+}
+
+/// Session "s1" pinned at 1,000 and renewed fast at 2,000 with a prompt one token over the threshold, under
+/// `rates`: its pin and its fast usage as the task holds them after the fold.
+async fn fast_renewed_over_the_threshold(rates: &BurnRates) -> (PinRow, PinBurn) {
+    let (handle, pin) = pinned_under(rates).await;
+    handle.report(speed_renewal(pin, 2_000, true, 1_001)).await;
+    pin_and_fast_usage(&handle).await
+}
+
+#[tokio::test]
+async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at_the_fast_cells() {
+    // Sonnet 5 at a quarter a token, 1 over 1,000 prompt tokens and a half at the fast cells: the fast tokens land
+    // in the pin's fast usage and price at the half through the fast table, the row's copy folding nothing, so
+    // no later prompt of the pin reprices them.
+    let rates = both_blocks_rates();
+    let (s1, fast) = fast_renewed_over_the_threshold(&rates).await;
+    // The pool's burn window is the default 600 s.
+    let window = 600.0_f64;
+    assert_eq!(
+        s1.burn,
+        PinBurn::default(),
+        "the row's plain copy folds nothing at a fast renewal"
+    );
+    assert!(
+        (fast.input - 1_001.0 / window).abs() < 1e-9,
+        "the fast tokens land in the fast usage, unweighed: {fast:?}"
+    );
+    assert_eq!(s1.last_input_tokens, 1_001);
+    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    assert!(
+        (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
+        "priced through the fast table, the burn reads the fast dollars whatever the pin's last prompt: {priced}"
+    );
+}
+
+#[tokio::test]
+async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at_the_long_context_dollars(
+) {
+    // A row without fast cells reads its own standard and long-context rates in the fast table, as the ledger
+    // builds it, so its fast usage over the threshold prices at the long-context rates, as a fast answer on that
+    // row prices in the ledger.
+    let dollars = long_context_rates(0.25, 1.0);
+    let rates = BurnRates {
+        fast: dollars.clone(),
+        dollars,
+        five_hour: RateTable::unit(),
+    };
+    let (s1, fast) = fast_renewed_over_the_threshold(&rates).await;
+    let window = 600.0_f64;
+    assert!(
+        (fast.input - 1_001.0 / window).abs() < 1e-9,
+        "the fast tokens land in the fast usage: {fast:?}"
+    );
+    let priced = rates.price_pin(BurnUnit::Usd, &s1, &fast).unwrap();
+    assert!(
+        (priced - 1_001.0 / window).abs() < 1e-9,
+        "priced at the long-context rates the pin's last prompt selects: {priced}"
+    );
+}
+
+/// Both blocks on Sonnet 5: a quarter a token at the standard cells, 1 over 1,000 prompt tokens, and a half at the
+/// fast cells whatever the prompt.
+fn both_blocks_rates() -> BurnRates {
+    BurnRates {
+        dollars: long_context_rates(0.25, 1.0),
+        five_hour: RateTable::unit(),
+        fast: flat_rates(0.5),
+    }
+}
+
+/// A client renewal of `pin` at `now`, standard or fast, with `input` uncached tokens as its whole prompt.
+fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
+    Report::PinRenewed {
+        pin,
+        now,
+        usage: Some(PinUsage {
+            input,
+            ..PinUsage::default()
+        }),
+        origin: "client",
+        cache_ttl_ms: 300_000,
+        fast,
+    }
+}
+
+/// Session "s1" pinned at 1,000 under `rates`: the handle and the pin's reference for the renewals that follow.
+async fn pinned_under(rates: &BurnRates) -> (RouterHandle, PinRef) {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        rates: rates.clone(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    (handle, pin)
+}
+
+/// Session "s1"'s pin and its fast usage as the task holds them after the last fold.
+async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
+    let pins = handle.pins().await.unwrap();
+    let pin = pins
+        .into_iter()
+        .find(|p| p.session_id == "s1")
+        .expect("the session holds a pin");
+    let fast = handle
+        .fast_burns()
+        .await
+        .unwrap()
+        .get(&pin.key())
+        .copied()
+        .unwrap_or_default();
+    (pin, fast)
+}
+
+/// One second of session "s1"'s dollar burn as the readers price it: the pin's row at the set its last prompt
+/// selects plus its fast usage through the fast table.
+async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
+    let (pin, fast) = pin_and_fast_usage(handle).await;
+    rates.price_pin(BurnUnit::Usd, &pin, &fast).unwrap()
+}
+
+/// `tokens` folded at `now` onto an average last folded at `at`, over the pool's default 600 s burn window, as
+/// the task folds a renewal: tokens a second.
+fn average_after(average: f64, at: Option<i64>, now: i64, tokens: f64) -> f64 {
+    let window = 600.0;
+    let decayed = match at {
+        None => average,
+        Some(at) => average * (-((now - at) as f64 / 1_000.0) / window).exp(),
+    };
+    decayed + tokens / window
+}
+
+#[tokio::test]
+async fn two_fast_renewals_around_the_threshold_price_at_the_fast_cells_whichever_side_each_prompt_fell(
+) {
+    let rates = both_blocks_rates();
+    let (handle, pin) = pinned_under(&rates).await;
+    handle
+        .report(speed_renewal(pin.clone(), 2_000, true, 1_000))
+        .await;
+    handle.report(speed_renewal(pin, 3_000, true, 1_001)).await;
+    let fast_tokens = average_after(
+        average_after(0.0, None, 2_000, 1_000.0),
+        Some(2_000),
+        3_000,
+        1_001.0,
+    );
+    let priced = dollar_burn(&handle, &rates).await;
+    assert!(
+        (priced - fast_tokens * 0.5).abs() < 1e-9,
+        "the fast cells never move with the prompt, so the dollar burn is a half over every fast token folded and \
+         the second prompt's crossing of the threshold reprices nothing: {priced} against {}",
+        fast_tokens * 0.5
+    );
+}
+
+#[tokio::test]
+async fn a_standard_renewal_crossing_the_threshold_each_way_reprices_the_ordinary_burn_alone() {
+    let rates = both_blocks_rates();
+    let (handle, pin) = pinned_under(&rates).await;
+    // A fast turn at the threshold, then a standard turn one token over it: the ordinary tokens price at the
+    // long-context rate and the fast tokens stay at the fast cells.
+    handle
+        .report(speed_renewal(pin.clone(), 2_000, true, 1_000))
+        .await;
+    handle
+        .report(speed_renewal(pin.clone(), 3_000, false, 1_001))
+        .await;
+    let fast_tokens = average_after(0.0, None, 2_000, 1_000.0);
+    let ordinary_tokens = average_after(0.0, Some(2_000), 3_000, 1_001.0);
+    let fast_decayed = average_after(fast_tokens, Some(2_000), 3_000, 0.0);
+    let crossed_up = dollar_burn(&handle, &rates).await;
+    let expected_up = ordinary_tokens * 1.0 + fast_decayed * 0.5;
+    assert!(
+        (crossed_up - expected_up).abs() < 1e-9,
+        "crossing up, the ordinary tokens read at the long-context rate and the fast tokens at the fast cells: \
+         {crossed_up} against {expected_up}"
+    );
+    // A standard turn back at the threshold: the whole ordinary history reprices at the standard rate, as the
+    // pin's last prompt rules, and the fast tokens still read at the fast cells.
+    handle.report(speed_renewal(pin, 4_000, false, 1_000)).await;
+    let ordinary_back = average_after(ordinary_tokens, Some(3_000), 4_000, 1_000.0);
+    let fast_back = average_after(fast_decayed, Some(3_000), 4_000, 0.0);
+    let crossed_back = dollar_burn(&handle, &rates).await;
+    let expected_back = ordinary_back * 0.25 + fast_back * 0.5;
+    assert!(
+        (crossed_back - expected_back).abs() < 1e-9,
+        "crossing back, the ordinary tokens read at the standard rate and the fast tokens at the fast cells: \
+         {crossed_back} against {expected_back}"
+    );
+}
+
+#[tokio::test]
+async fn mixed_speed_renewals_across_the_threshold_sum_the_ordinary_burn_at_the_last_prompts_set_and_the_fast_burn_at_the_fast_cells(
+) {
+    let rates = both_blocks_rates();
+    let (handle, pin) = pinned_under(&rates).await;
+    // Standard under, fast over, standard over, fast at the threshold: the ordinary and the fast tokens each fold
+    // on their own copy, every copy decaying from the same last fold.
+    let turns = [
+        (2_000, false, 900),
+        (3_000, true, 1_001),
+        (4_000, false, 1_001),
+        (5_000, true, 1_000),
+    ];
+    let (mut ordinary, mut fast, mut at) = (0.0, 0.0, None);
+    for (now, is_fast, input) in turns {
+        handle
+            .report(speed_renewal(pin.clone(), now, is_fast, input))
+            .await;
+        let (plain, fast_tokens) = if is_fast {
+            (0.0, input as f64)
+        } else {
+            (input as f64, 0.0)
+        };
+        ordinary = average_after(ordinary, at, now, plain);
+        fast = average_after(fast, at, now, fast_tokens);
+        at = Some(now);
+    }
+    // The last prompt, 1,000 tokens, is at the threshold, so the ordinary tokens price at the standard rate.
+    let expected = ordinary * 0.25 + fast * 0.5;
+    let priced = dollar_burn(&handle, &rates).await;
+    assert!(
+        (priced - expected).abs() < 1e-9,
+        "the ordinary tokens at the set the last prompt selects plus the fast tokens at the fast cells: {priced} \
+         against {expected}"
     );
 }
 

@@ -6,15 +6,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-# The step scheduler's router-ask counter, see `Engine::router_views`. A dependent's dev-dependency, and this
-# crate's own below, turn it on for a test build, so a release build carries no counter reader.
+# The step scheduler's router-ask counter, see `Engine::router_views`, and the timing seam `KeepaliveTiming::for_start`
+# reads its two variables through. A dependent's dev-dependency, and this crate's own below, turn it on for a test
+# build, so a release build carries neither.
 debug-hooks = []
 
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
 http-body-util = { workspace = true }
-jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-ledger = { path = "../ledger" }
@@ -29,7 +29,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 boring = { workspace = true }
@@ -42,8 +41,10 @@ phoebis-profile = { path = "../profile" }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }
 phoebis-transport = { path = "../transport" }
+# The restart tests and the tier read test reach the rig's registry file past the store: they damage a sealed prompt,
+# hold the file's write lock while a save waits, make a save fail, and rename a column a read names, as an operator's
+# `sqlite3` or a failing disk would.
 rusqlite = { workspace = true }
-tempfile = { workspace = true }
 # The probe deadline is five minutes, so the test that waits it out moves tokio's clock instead of the wall's.
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }

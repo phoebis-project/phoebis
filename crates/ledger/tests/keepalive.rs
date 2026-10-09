@@ -296,9 +296,9 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     );
     assert_eq!(
         (
-            desktop.savings.probe_cost_usd,
-            desktop.savings.wasted_probes,
-            desktop.savings.wasted_probe_usd
+            desktop.probe_cost_usd,
+            desktop.wasted_probes,
+            desktop.wasted_probe_usd
         ),
         (0.0004, 3, 0.0012)
     );

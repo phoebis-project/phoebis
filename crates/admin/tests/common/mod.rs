@@ -14,7 +14,7 @@ use phoebis_admin::{
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
+use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
@@ -114,13 +114,56 @@ pub async fn admin_parts_full() -> Full {
 /// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
 /// wires it: a case that needs the router's own `503 ledger_behind` names a reading it can flip.
 pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, USAGE_TTL, Some(accounting)).await)
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            USAGE_TTL,
+            Some(accounting),
+            None,
+        )
+        .await,
+    )
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, Some(store)).await)
+}
+
+/// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
+pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            USAGE_TTL,
+            None,
+            Some(prices),
+        )
+        .await,
+    )
+}
+
+/// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
+pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            USAGE_TTL,
+            None,
+            Some(prices),
+        )
+        .await,
+    )
 }
 
 fn full_from(parts: Parts) -> Full {
@@ -176,6 +219,7 @@ pub async fn admin_app_paired() -> (Router, FakeUpstream) {
 pub struct Polled {
     pub app: Router,
     pub clock_cell: Arc<AtomicI64>,
+    pub db: Arc<LedgerDb>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
@@ -183,7 +227,7 @@ pub struct Polled {
 }
 
 /// No scheduler runs here, so the test reads the endpoint through `usage.poll` where a running router's
-/// schedule would; a TTL of zero lets every manual refresh past the backoff reach the endpoint.
+/// schedule would, and a manual refresh reads it through the poll's path whatever TTL the test gives the cache.
 pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
     let parts = build_app(
         Some(fixture_identity()),
@@ -192,11 +236,13 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
         None,
         usage_ttl,
         None,
+        None,
     )
     .await;
     Polled {
         app: parts.app,
         clock_cell: parts.clock_cell,
+        db: parts.db,
         router: parts.router,
         store: parts.store,
         up: parts.up,
@@ -614,7 +660,7 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None).await
+    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None, None).await
 }
 
 async fn build_app(
@@ -624,6 +670,7 @@ async fn build_app(
     store: Option<Arc<Store>>,
     usage_ttl: Duration,
     accounting: Option<AccountingSource>,
+    prices: Option<PriceTable>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -748,7 +795,7 @@ async fn build_app(
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceTable::shipped)));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),
@@ -797,7 +844,6 @@ async fn build_app(
         clock: clock.clone(),
         cooldown_fallback: Duration::from_secs(60),
         ledger: ledger.clone(),
-        lifecycle: None,
         limits: KeepaliveLimits::default(),
         max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
@@ -807,6 +853,7 @@ async fn build_app(
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),
+        timing: KeepaliveTiming::default(),
     });
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),

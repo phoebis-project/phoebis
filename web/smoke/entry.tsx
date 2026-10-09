@@ -27,7 +27,8 @@ export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumbe
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
 export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
-export { fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { fmtCompact, fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // A request's native unit, so a check picks the rows it reads by the rule the Cost cell draws them by.
 export { costUnitOf } from '@/lib/requests';
 export { fmtWindows, ringFigures } from '@/lib/rings';

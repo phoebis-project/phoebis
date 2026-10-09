@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtDuration, fmtEndsIn, fmtHourTick, fmtHours, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -71,6 +71,19 @@ test('an earlier holder reads its creation minute in UTC, and one with no creati
   assert.equal(earlierHolderLabel('desktop', 0), 'desktop (deleted)', 'generation 0 is a row filed before the generation column');
   assert.equal(earlierHolderLabel('desktop', Number('abc')), 'desktop (deleted)', 'a generation that is no number');
   assert.equal(earlierHolderLabel('desktop', Infinity), 'desktop (deleted)');
+});
+
+test('a ceiling reads floored: the dialog in days, hours and minutes, the card in whole hours or minutes', () => {
+  assert.deepEqual(
+    [158_760_000, 255_960_000, 11_760_000, 2_760_000, 3_600_000].map(fmtDuration),
+    ['1d 20h', '2d 23h', '3h 16m', '46m', '1h 0m'],
+    'the break-evens at the production leads, each unit floored',
+  );
+  assert.equal(fmtHours(158_760_000), '44h', '44.1 hours never rounds up to 45');
+  assert.equal(fmtHours(255_960_000), '71h');
+  assert.equal(fmtHours(3_600_000), '1h', 'one hour reads in hours');
+  assert.equal(fmtHours(3_599_999), '59m', 'a millisecond short of an hour reads in minutes');
+  assert.equal(fmtHours(2_760_000), '46m');
 });
 
 test('a window share reads as a percent to three significant digits with no trailing zero', () => {

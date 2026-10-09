@@ -73,6 +73,15 @@ export function fmtDuration(ms: number): string {
   return `${d}d ${h % 24}h`;
 }
 
+/**
+ * Whole hours from one hour on and whole minutes below it, floored like `fmtDuration` so a ceiling never reads longer
+ * than it is: `44h` for 44.1 hours, `46m` for 46 minutes.
+ */
+export function fmtHours(ms: number): string {
+  const m = Math.floor(Math.abs(ms) / 60_000);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
+}
+
 /** "in 2h 14m" / "3m ago" style label; `now` is injected so lists tick together. */
 export function fmtRelative(isoTime: string | null, now: number): string {
   if (!isoTime) return '-';

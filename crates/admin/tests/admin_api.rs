@@ -659,6 +659,35 @@ async fn pair_business(app: &axum::Router, cookie: &str) -> axum::response::Resp
     .await
 }
 
+/// The router's sample of the account once it carries the reading taken at `observed_at`, within five seconds:
+/// the poll hands the router its report after it records the ledger's rows, so a read that found the rows can be
+/// one report ahead of the router.
+async fn routed_sample(
+    router: &phoebis_routing::RouterHandle,
+    account_id: &str,
+    observed_at: i64,
+) -> phoebis_routing::UtilizationSample {
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = router
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|(id, sample)| {
+                (id == account_id && sample.observed_at == observed_at).then_some(sample)
+            });
+        if let Some(sample) = found {
+            return sample;
+        }
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the router never held a reading of {account_id} taken at {observed_at}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
 /// Two settled failures, the run `refresh_failed` holds on, with nothing left open for a commit to supersede.
 fn seed_failed_refreshes(store: &phoebis_store::Store) {
     for detail in ["first", "second"] {
@@ -883,11 +912,145 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
 }
 
 #[tokio::test]
+async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_reading() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let asked = || {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
+    };
+    // The endpoint records the poll's request and holds its answer, so the confirm's answer and the reads right
+    // after it land while nothing is recorded yet.
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Gated(Box::new(fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Usage,
+            )
+            .to_vec(),
+        })),
+    );
+    let tracked = h.ledger.tracked();
+    let confirmed = pair_business(&h.app, &cookie).await;
+    assert_eq!(
+        confirmed.status(),
+        200,
+        "the confirm answers before the held endpoint does"
+    );
+    assert_eq!(
+        h.ledger.tracked(),
+        tracked + 1,
+        "the confirm's poll is tracked, so a shutdown aborts it before the channel closes"
+    );
+    let bucket = phoebis_ledger::bucket_of(NOW);
+    assert!(
+        h.db.quota_samples("business", bucket, bucket + 300)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing is recorded before the endpoint answers"
+    );
+    let acct = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(acct["windows"].as_array().map(Vec::len), Some(0), "{acct}");
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while asked() < 1 {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm never polled the endpoint"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(asked(), 1, "the confirm's poll is one request");
+    h.up.release();
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let rows = loop {
+        let rows =
+            h.db.quota_samples("business", bucket, bucket + 300)
+                .await
+                .unwrap();
+        if !rows.is_empty() {
+            break rows;
+        }
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm's poll never recorded a sample"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
+    assert_eq!(
+        rows.iter().map(|r| r.window.as_str()).collect::<Vec<_>>(),
+        ["five_hour", "seven_day"],
+        "one row per window the endpoint reports: {rows:?}"
+    );
+    assert!(rows.iter().all(|r| r.source != "header"), "{rows:?}");
+    let sample = routed_sample(&h.router, "business", NOW).await;
+    assert!(
+        sample.reading("five_hour").is_some(),
+        "the confirm's poll handed the router the windows: {sample:?}"
+    );
+    let acct = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert!(
+        acct["windows"].as_array().is_some_and(|w| !w.is_empty()),
+        "{acct}"
+    );
+    let usage = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(
+        (usage["fetched_at"].as_i64(), usage["error"].is_null()),
+        (Some(NOW), true),
+        "{usage}"
+    );
+
+    // The next bucket, so the refresh's reading is a row of its own.
+    h.clock_cell.store(NOW + 300_000, Ordering::SeqCst);
+    let refreshed = post(
+        &h.app,
+        "/admin/accounts/business/usage/refresh",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refreshed.status(), 200);
+    let refreshed = json(refreshed).await;
+    assert!(refreshed["error"].is_null(), "{refreshed}");
+    assert_eq!(refreshed["fetched_at"], NOW + 300_000);
+    assert_eq!(asked(), 2, "one endpoint request per refresh");
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let rows = loop {
+        let rows =
+            h.db.quota_samples("business", bucket + 300, bucket + 600)
+                .await
+                .unwrap();
+        if !rows.is_empty() {
+            break rows;
+        }
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the refresh never recorded a sample"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
+    assert!(rows.iter().any(|r| r.window == "five_hour"), "{rows:?}");
+    let sample = routed_sample(&h.router, "business", NOW + 300_000).await;
+    assert!(
+        sample.reading("five_hour").is_some(),
+        "the refresh handed the router its reading: {sample:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_fetch() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    // A zero TTL, so every refresh below past the backoff reaches the endpoint and the GET's own reads show.
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    // The default TTL: a refresh reads the endpoint through the poll's path whatever the cache holds and answers the
+    // reading that read made, so the GET's own reads show beside it.
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     let refresh = "/admin/accounts/business/usage/refresh";
@@ -960,7 +1123,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": NOW + 10_000,
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
-            "last_error": "the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:50 UTC",
+            "last_error": "the usage endpoint rate-limited the account, and the next attempt is at 1970-01-01 00:18:50 UTC",
             "last_outcome": "rate_limited",
             "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
@@ -1018,6 +1181,131 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
 }
 
 #[tokio::test]
+async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_recorded() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(1)).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let asked = || {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
+    };
+    let bucket = phoebis_ledger::bucket_of(NOW);
+    // The endpoint records the read's request and holds its answer, so the clock can pass the TTL while the read
+    // is out.
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Gated(Box::new(fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Usage,
+            )
+            .to_vec(),
+        })),
+    );
+    let app = h.app.clone();
+    let c = cookie.clone();
+    let refreshing = tokio::spawn(async move {
+        json(post(&app, "/admin/accounts/business/usage/refresh", "", Some(&c)).await).await
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while asked() < 1 {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the refresh never reached the endpoint"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    // Past the TTL as measured from the send instant, which is what stamps the entry.
+    h.clock_cell.store(NOW + 2_000, Ordering::SeqCst);
+    h.up.release();
+    let refreshed = refreshing.await.unwrap();
+    assert_eq!(
+        asked(),
+        1,
+        "one endpoint request per refresh, whatever the TTL"
+    );
+    assert!(refreshed["error"].is_null(), "{refreshed}");
+    assert_eq!(refreshed["fetched_at"], NOW);
+    let windows = refreshed["windows"].as_array().unwrap();
+    assert!(
+        windows.iter().any(|w| w["key"] == "five_hour"),
+        "{refreshed}"
+    );
+    let read: Vec<(String, f64)> = windows
+        .iter()
+        .filter(|w| !w["utilization"].is_null())
+        .map(|w| {
+            (
+                w["key"].as_str().unwrap().to_string(),
+                w["utilization"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert!(!read.is_empty(), "{refreshed}");
+
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let rows = loop {
+        let rows =
+            h.db.quota_samples("business", bucket, bucket + 300)
+                .await
+                .unwrap();
+        if !rows.is_empty() {
+            break rows;
+        }
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the refresh never recorded its reading"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    };
+    assert_eq!(rows.len(), read.len(), "one row per window read: {rows:?}");
+    for (key, percent) in &read {
+        let row = rows
+            .iter()
+            .find(|r| &r.window == key)
+            .unwrap_or_else(|| panic!("no row under {key}: {rows:?}"));
+        assert_eq!(
+            (row.source.as_str(), row.observed_at, row.utilization),
+            ("poll", Some(NOW), Some(percent / 100.0)),
+            "{row:?}"
+        );
+    }
+    let sample = routed_sample(&h.router, "business", NOW).await;
+    for (key, _) in &read {
+        assert!(
+            sample.reading(key).is_some(),
+            "{key} is missing from the router's reading: {sample:?}"
+        );
+    }
+    let acct = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let routed = acct["windows"].as_array().unwrap();
+    assert_eq!(routed.len(), read.len(), "{acct}");
+    for (key, percent) in &read {
+        let entry = routed
+            .iter()
+            .find(|w| w["id"] == key.as_str())
+            .unwrap_or_else(|| panic!("no window {key} on the account: {acct}"));
+        assert_eq!(
+            entry["utilization"],
+            serde_json::json!(percent / 100.0),
+            "{acct}"
+        );
+    }
+    let latest = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(
+        (&latest["windows"], &latest["fetched_at"]),
+        (&refreshed["windows"], &refreshed["fetched_at"]),
+        "{latest}"
+    );
+    assert_eq!(asked(), 1, "the GET reads nothing");
+}
+
+#[tokio::test]
 async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpaired_account() {
     use common::{delete, get, json, login};
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
@@ -1049,7 +1337,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     .await;
     assert_eq!(removed.status(), 204);
     let no_credential = (
-        Some("no credential is stored for this account; pair it to load quota".into()),
+        Some("no credential is stored for this account, so pair it to load quota".into()),
         true,
         Some(0),
     );
@@ -1081,7 +1369,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     assert_eq!(created.status(), 201);
     let created = json(created).await;
     let no_credential = serde_json::json!({
-        "error": "no credential is stored for this account; pair it to load quota",
+        "error": "no credential is stored for this account, so pair it to load quota",
         "fetched_at": null,
         "poll": null,
     });
@@ -1506,7 +1794,7 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
     use common::{get, json, login, post, NOW};
     // No disconnect anywhere in this test: the operator pairs the quarantined slot again, which is the one
     // way out that used to leave the uncertain attempt blocking every later refresh.
-    let (app, _up, store, manager) =
+    let (app, up, store, manager) =
         common::quarantined_parts("refresh response lost: connection closed").await;
     let cookie = login(&app, "admin-secret").await;
     let started = post(
@@ -1570,11 +1858,26 @@ async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() 
             },
         )
         .unwrap();
+    // The confirm's own poll acquired the paired bundle and the manager cached it. The commit above went around
+    // the manager, so the cache is dropped as a route's commit drops it, and the acquire reads the expiring bundle.
+    manager.invalidate("business");
+    let refreshes = || {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .count()
+    };
+    let before = refreshes();
     let token = manager
         .acquire("business")
         .await
         .expect("the confirmed grant cleared the attempt that was blocking refreshes");
     assert_eq!(token.secret.expose(), "sk-ant-oat01-PLACEHOLDER");
+    assert_eq!(
+        refreshes(),
+        before + 1,
+        "the acquire ran a refresh rather than answering from a cache"
+    );
     assert!(
         manager.recover_on_start().unwrap().is_empty(),
         "a restart has nothing left to quarantine"
@@ -1976,6 +2279,14 @@ fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
 /// The pool `main` over `business` (subscription, Max 20x) and `direct` (api_key) behind key `desktop`, seeded
 /// through one harness with `pins` and handed to a second one: the router task loads its pins at spawn.
 async fn sessions_harness_with(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
+    sessions_harness_priced(phoebis_ledger::PriceTable::shipped(), pins).await
+}
+
+/// `sessions_harness_with` pricing dollars through `prices` rather than the shipped table.
+async fn sessions_harness_priced(
+    prices: phoebis_ledger::PriceTable,
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+) -> common::Full {
     use common::{generation, login, post};
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
@@ -1991,7 +2302,7 @@ async fn sessions_harness_with(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>)
     for pin in pins(generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on(seed.store.clone()).await
+    common::admin_parts_full_on_priced(seed.store.clone(), prices).await
 }
 
 fn session_row(sessions: &serde_json::Value, session: &str) -> serde_json::Value {
@@ -2068,7 +2379,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "an api_key pin always reads the plain copy in dollars per hour: {:?}",
         (burn, unit)
     );
-    // The price table lists no Opus 5.5 on this base, so its dollar reading is the table's dearest-rate fallback.
+    // The shipped table lists Opus 5.5, so its dollar reading is that row's own rate, read as the route reads it.
     let s1_usd_per_hour = phoebis_ledger::PriceTable::shipped()
         .rate_table()
         .price_burn(
@@ -2077,6 +2388,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
                 input: 100.0,
                 ..phoebis_store::PinBurn::default()
             },
+            1_000,
         )
         .unwrap()
         * 3_600.0;
@@ -2147,6 +2459,96 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         ),
         "a passed reset reads as not in overage, so the reading returns to the share: {}",
         row(&recovered_sessions, "s1")
+    );
+}
+
+#[tokio::test]
+async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::Speed;
+    let now = common::NOW;
+    // One Haiku 5.5 row with both blocks in round numbers: the standard cells at 1, the fast cells at 2 and the
+    // long-context cells at 5 over 1,000 prompt tokens.
+    let table = phoebis_ledger::PriceTable::from_yaml(
+        "effective: 2026-01-01\nmodels:\n  claude-haiku-5-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1, fast: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}, \
+         long_context: {over: 1000, input: 5, cache_write_5m: 5, cache_write_1h: 5, cache_read: 5, output: 5}}\n",
+        "test",
+    )
+    .unwrap();
+    let input = |speed, prompt| {
+        table
+            .price_at("claude-haiku-5-5", speed, prompt)
+            .unwrap()
+            .input
+    };
+    // Three api_key pins burning 100 input tokens a second: `s-at` with its last prompt at the threshold,
+    // `s-over` one token over it, and `s-fast` over it, which then answers a fast turn and a standard turn below
+    // the threshold through the router. Its copies were never folded, so nothing decays at those turns.
+    let parts = sessions_harness_priced(table.clone(), |generation| {
+        let haiku = |session: &str, last_input_tokens: u64| phoebis_store::PinRow {
+            model: "claude-haiku-5-5".into(),
+            last_input_tokens,
+            ..burning_opus_pin(session, "direct", generation, now, 100.0, 100.0)
+        };
+        vec![
+            haiku("s-at", 1_000),
+            haiku("s-over", 1_001),
+            phoebis_store::PinRow {
+                burn_at: None,
+                ..haiku("s-fast", 1_001)
+            },
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let usd_per_hour =
+        |tokens: f64, speed, prompt| tokens * input(speed, prompt) / 1_000_000.0 * 3_600.0;
+    for (session, prompt) in [("s-at", 1_000), ("s-over", 1_001)] {
+        let (burn, unit) = burn_of(&sessions, session);
+        assert!(
+            close(burn, usd_per_hour(100.0, Speed::Standard, prompt))
+                && unit.as_deref() == Some("usd"),
+            "{session} reads its burn per hour at the cells its last prompt selects: {:?} against {}",
+            (burn, unit),
+            usd_per_hour(100.0, Speed::Standard, prompt)
+        );
+    }
+    // 60,000 fast input tokens over the pool's default 600 s window are 100 a second at the fast cells, whatever
+    // the prompt. The standard turn's 600 tokens are one a second beside the seeded hundred, and its prompt of
+    // 600 moves the pin's ordinary copy to the standard cells.
+    let renewal = |fast: bool, input: u64| phoebis_routing::Report::PinRenewed {
+        pin: phoebis_routing::PinRef {
+            key_id: "desktop".into(),
+            session_id: "s-fast".into(),
+            agent_id: "main".into(),
+            model: "claude-haiku-5-5".into(),
+            epoch: 1,
+            lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+        },
+        now,
+        usage: Some(phoebis_routing::PinUsage {
+            input,
+            ..phoebis_routing::PinUsage::default()
+        }),
+        origin: "client",
+        cache_ttl_ms: 300_000,
+        fast,
+    };
+    parts.router.report(renewal(true, 60_000)).await;
+    parts.router.report(renewal(false, 600)).await;
+    let expected =
+        usd_per_hour(101.0, Speed::Standard, 600) + usd_per_hour(100.0, Speed::Fast, 600);
+    let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        close(session_row(v, "s-fast")["burn"].as_f64(), expected)
+    })
+    .await;
+    assert_eq!(
+        burn_of(&renewed, "s-fast").1.as_deref(),
+        Some("usd"),
+        "the fast tokens read at the fast cells and the ordinary ones at the set the last prompt selects, summed \
+         in dollars"
     );
 }
 

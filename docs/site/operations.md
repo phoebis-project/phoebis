@@ -55,19 +55,20 @@ names, and nothing derived from the key), and under `registry` and `ledger` each
 `backup` exits 1 with nothing written when the file does not load, when `--to` names a file or a directory that is not
 empty, when it names a directory that group or other can write or that another user owns
 (`{dir}: group or other can write it, or another user owns it. Nothing was written.`), or when either database does not
-exist (`a backup carries both databases; {path} does not exist`). A copy that fails, such as one whose database another
-connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
-`backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written
+exist (`a backup carries both databases, but {path} does not exist`). A copy that fails, such as one whose database
+another connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
+`backup failed: {reason}. Nothing was written to {dir}`. It exits 0 once the manifest is written
 ([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the same
 snapshot, one database at a time.
 
 A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
 and a restore built from only one of them leaves the two databases at different points in the request history.
 
-The key seals every credential in the registry, so a backup that carries the database is useless without the key,
-and dangerous with it. Keep the key somewhere separate, such as a password manager or a secrets store, and never
-beside the database copy. The ledger holds captured bodies, which are prompts, so a ledger backup needs the same
-care as the registry.
+The key seals every credential in the registry, so a backup that carries the database is useless without the key, and
+dangerous with it. The registry also holds the keepalive engine's retained recipes, each prompt sealed under the same
+key, so a restored registry needs its key for them as it does for the credentials. Keep the key somewhere separate, such
+as a password manager or a secrets store, and never beside the database copy. The ledger holds captured bodies, which
+are prompts, so a ledger backup needs the same care as the registry.
 
 ## Restore
 
@@ -122,8 +123,7 @@ start.
 `init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
 The key seals OAuth credential bundles and API-key secrets. `Store::digest_key` also derives, from this same key,
-the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the
-companion.
+the digest every downstream key authenticates against: the secrets the admin API mints and hands to the clients.
 
 There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
 so recovering means discarding the registry's secrets while keeping everything else. Stop the service
@@ -161,7 +161,7 @@ untouched. The next start under the new key finds nothing sealed and seals a new
 - Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
   stored against the old key stops matching a client's presented secret, and every existing downstream key starts
   answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new secrets
-  to the clients and the companion.
+  to the clients.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.
@@ -355,11 +355,8 @@ To re-pin the profile against a new build:
 A GitHub Actions workflow named `Tests` runs on every push to `main` and every pull request. Its `rust` job builds the
 console and embeds it, then runs `cargo fmt --check`, `cargo clippy` with warnings denied and `cargo test` over the
 workspace; its `web` job runs the console's unit tests, its jsdom smoke checks and the mock browser pass under Chromium;
-a third job, `Tests`, reports the two as the one check the branch protection on `main` requires. The companion
-registration test, which drives the keepalive companion's script through the binary, runs only when the repository
-secret `COMPANION_READ_TOKEN` holds a fine-grained token with contents read on the companion repository; without it the
-job prints a notice that the test was skipped and passes. The documentation workflow below and the release workflow are
-separate, so a failed test never blocks the site's build.
+a third job, `Tests`, reports the two as the one check the branch protection on `main` requires. The documentation
+workflow below and the release workflow are separate, so a failed test never blocks the site's build.
 
 The release workflow's jobs run with a read-only token except the build and publish jobs, which write packages, and the
 smoke job, which reads them.

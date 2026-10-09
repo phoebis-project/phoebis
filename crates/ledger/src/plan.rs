@@ -501,12 +501,14 @@ impl SubscriptionCosts {
         let Some((priced, divisor)) = self.priced_window(window) else {
             return RateTable {
                 rows: HashMap::new(),
+                long_context: HashMap::new(),
                 fallback,
             };
         };
         let Some(capacity) = self.anchor_capacity(priced) else {
             return RateTable {
                 rows: HashMap::new(),
+                long_context: HashMap::new(),
                 fallback,
             };
         };
@@ -529,7 +531,11 @@ impl SubscriptionCosts {
                 ))
             })
             .collect();
-        RateTable { rows, fallback }
+        RateTable {
+            rows,
+            long_context: HashMap::new(),
+            fallback,
+        }
     }
 
     /// The tier's capacity over the anchor's on the priced window: what a reader holding anchor rates divides by to

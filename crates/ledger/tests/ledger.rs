@@ -14,11 +14,11 @@ use phoebis_bus::{
     ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
-    list_requests, member_spends, parked_count, parked_summary, run_retention, Assembler,
-    AttemptRecord, AttentionGauges, BodyRecord, BudgetedMember, CacheMapWrite, DecisionRow,
-    EventRecord, LedgerConfig, LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record,
-    Replayed, RequestFilter, RequestRecord, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD,
-    LEDGER_BEHIND_DEPTH,
+    apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
+    read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
+    BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
+    LiveKeys, ParkedSummary, PriceTable, Record, Replayed, RequestFilter, RequestRecord,
+    RollupFilter, RollupSelect, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite, StorageKey, Store};
@@ -6729,5 +6729,81 @@ fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
         db.read_blocking(|c| phoebis_ledger::decision_record(c, "r1", 1))
             .is_err(),
         "the header's size is checked against the bound before any output is sized"
+    );
+}
+
+/// A retried leg that answered twice carries one estimate per answered attempt, each at the set its own prompt
+/// selects, and the hour's rollup sums both.
+#[test]
+fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_selects() {
+    // The test table's Haiku 5.5 row, per million: input 1 and output 5 up to 1,000 prompt tokens, 5 and 25 over.
+    let table = phoebis_ledger::test_tables::api_prices();
+    let db = LedgerDb::open_in_memory().unwrap();
+    let attempt = |attempt: u32, input: u64| AttemptRecord {
+        request_id: "r1".into(),
+        attempt,
+        account_id: "a".into(),
+        account_kind: "api_key".into(),
+        outcome: "succeeded".into(),
+        input_tokens: Some(input),
+        output_tokens: Some(100),
+        ..Default::default()
+    };
+    let mut attempts = vec![attempt(1, 1_000), attempt(2, 1_001)];
+    let unknown = std::sync::atomic::AtomicU64::new(0);
+    let split = phoebis_ledger::price_attempts(&table, "claude-haiku-5-5", &mut attempts, &unknown);
+    let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-12);
+    assert!(
+        close(attempts[0].input_usd, 1_000e-6) && close(attempts[0].output_usd, 500e-6),
+        "{:?}",
+        attempts[0]
+    );
+    assert!(
+        close(attempts[1].input_usd, 5_005e-6) && close(attempts[1].output_usd, 2_500e-6),
+        "{:?}",
+        attempts[1]
+    );
+    assert!((split.total() - 9_005e-6).abs() < 1e-12, "{split:?}");
+    let request = RequestRecord {
+        id: "r1".into(),
+        received_at: 1_000_000,
+        key_id: Some("desktop".into()),
+        pool_id: Some("p".into()),
+        canonical_model: "claude-haiku-5-5".into(),
+        model: "claude-haiku-5-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 2,
+        ..Default::default()
+    };
+    db.insert_request(&request, &attempts, None).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let live = LiveKeys(std::collections::BTreeMap::from([(
+        "desktop".to_string(),
+        0,
+    )]));
+    let groups = breakdown(
+        &apply_filter(rows, &RollupFilter::default()),
+        "model",
+        false,
+        &live,
+        &[],
+    );
+    let group = groups
+        .iter()
+        .find(|g| g.key == "claude-haiku-5-5")
+        .expect("one model group");
+    assert!(
+        (group.cost.input - 6_005e-6).abs() < 1e-12 && (group.cost.output - 3_000e-6).abs() < 1e-12,
+        "{:?}",
+        group.cost
+    );
+    assert!(
+        (group.cost_usd - 9_005e-6).abs() < 1e-12,
+        "the hour's rollup sums both attempts' booked dollars: {}",
+        group.cost_usd
     );
 }

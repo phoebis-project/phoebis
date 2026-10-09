@@ -49,6 +49,9 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+# The end-to-end tests that wait for a probe a second after their request set the keepalive's debug timing, which
+# only this feature reads, so a release build never does.
+phoebis-keepalive = { path = "../keepalive", features = ["debug-hooks"] }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }

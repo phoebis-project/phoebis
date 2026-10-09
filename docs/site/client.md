@@ -24,7 +24,7 @@ no pin.
 
 Points Claude Code at the router's proxy listener. The scheme follows the listener: `http://127.0.0.1:8317` on the
 loopback shape, `https://<host>:8317` when the proxy listener terminates TLS. Every model request and the keepalive
-companion's reports go here. Plain HTTP is accepted on any address, by the router and by the companion alike.
+mod's reports go here. Plain HTTP is accepted on any address, by the router and by the mod alike.
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
@@ -107,23 +107,25 @@ answer: a fast request is served on an account whose fast lane is open, priced i
 to a sibling when an account's fast lane cools (see [Cooldowns and failover](routing.md#cooldowns-and-failover)); it
 draws no plan window.
 
-### For the keepalive companion
+### For the keepalive mod
 
-`CC_KEEPALIVE_MANAGEMENT_URL` and `CC_KEEPALIVE_TOKEN` are not needed; the companion defaults them to
-`ANTHROPIC_BASE_URL` and `CLAUDE_CODE_OAUTH_TOKEN`.
+The keepalive mod installs from its marketplace, inside Claude Code:
+
+```text
+/plugin marketplace add daystrom-labs/phoebis-keepalive
+/plugin install phoebis-keepalive@phoebis
+```
+
+With its options unset, the mod reports to `ANTHROPIC_BASE_URL` under the key in `ANTHROPIC_AUTH_TOKEN`, then
+`CLAUDE_CODE_OAUTH_TOKEN`, so the block above needs no line of its own for it. At session start the mod writes its
+owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's other lines, and the
+client sends it on every model request of the process. The router reads it to tell that process's requests from those
+of another process on the same session id, so binding a session to its process needs no wrapper script.
 
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is worth setting for Fable 5.1 sessions in a pool with cache warming on: at a
 0.025x read price, a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset
 without warming. Through a pool with a cache TTL policy the variable has no effect; the pool decides. See
 [Keepalive](keepalive.md).
-
-### Optional: bind a session to its process
-
-The optional owner binding, `CC_KEEPALIVE_OWNER_ID` paired with `ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id:
-$CC_KEEPALIVE_OWNER_ID"`, hardens what the router already fences: cache warming is fenced by the companion's own
-registration, and this pair binds each request to the process that registered, so a second process resuming the same
-session id cannot inherit its recipes. When both sides name an owner they must agree. It needs a wrapper script, since
-the settings file's environment block holds only static values.
 
 ## Auto mode behind the router
 
@@ -191,8 +193,7 @@ proxy accepts](#what-the-proxy-accepts) says.
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
-| GET | `/v0/resource/plugins/cache-keepalive/events` | router key | the companion's event report |
-| GET | `/v0/resource/plugins/cache-keepalive/snapshot` | router key | the companion's engine snapshot |
+| POST | `/v0/keepalive/events` | router key | the keepalive mod's event report |
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
@@ -203,10 +204,12 @@ The client probes `/api/hello` before it sends anything, and ignores the answer.
 check read `/api/ready` instead: `/api/hello` and `/api/ready` differ when the router loop, the ledger consumer or the
 store died while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
 `/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
-wrong-method and unknown-path answers, carries an Anthropic-shaped error body; the not-ready `503` of `/api/ready`
-reports the router's state and carries the readiness body instead. The two keepalive companion routes are covered on the
-[Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it, so a key id
-created again reaches none of the sessions its previous holder left behind.
+wrong-method and unknown-path answers, carries an Anthropic-shaped error body, with two exceptions. The not-ready `503`
+of `/api/ready` reports the router's state and carries the readiness body instead, and the keepalive route answers a
+report it refuses with `{"code": "<code>"}`, the code the mod reads, while a key it refuses gets the answer
+`/v1/messages` gives. The keepalive route is covered on the [Keepalive](keepalive.md#the-mod) page. Each session
+reported to it belongs to the key generation that registered it, so a key id created again reaches none of the sessions
+its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
 last word: the router never forwards an upstream `401`, and the answer names no account and no reason. `phoebis status`

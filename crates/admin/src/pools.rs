@@ -26,7 +26,7 @@ use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
-const STALE_EDIT: &str = "the pool changed while it was being edited; reload and try again";
+const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -871,6 +871,11 @@ pub(crate) async fn pool_json_from(
         None
     };
     let eligible = |m: &PoolMember| ineligible(m).is_none();
+    let member_accounts: Vec<AccountRow> = accounts
+        .iter()
+        .filter(|a| members.iter().any(|m| m.account_id == a.id))
+        .cloned()
+        .collect();
     let status = if !row.enabled {
         "disabled"
     } else if members.is_empty() || !members.iter().any(eligible) {
@@ -897,6 +902,7 @@ pub(crate) async fn pool_json_from(
         "wind_down_minutes": row.failover.wind_down_minutes,
         "moves_per_hour": moves.iter().map(|(reason, count)| (reason.clone(), *count as f64)).collect::<std::collections::BTreeMap<_, _>>(),
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
+        "keepalive_resolved": state.keepalive.resolve_pool_ceilings(row, &member_accounts),
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,

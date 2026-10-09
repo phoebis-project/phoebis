@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
-import { accountColor } from '@/components/charts/theme';
+import { accountColor, accountSlots } from '@/components/charts/theme';
 import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
@@ -21,7 +21,6 @@ type QuotaSectionId = (typeof QUOTA_SECTIONS)[number]['id'];
 
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
-  const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
@@ -41,6 +40,8 @@ export function QuotaPage() {
 
   // An API-key account carries no quota window, so the page reads the subscription accounts alone.
   const subscriptions = useMemo(() => (accounts.data ?? []).filter(isSubscription), [accounts.data]);
+  // The slot map reads the whole registry, so a lane keeps the color its account has on the Dashboard.
+  const slotOf = useMemo(() => accountSlots((accounts.data ?? []).map((a) => a.id)), [accounts.data]);
   // Each subscription row carries its poll block, so the list read is the one read of every card's standing.
   const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
@@ -59,8 +60,8 @@ export function QuotaPage() {
   const attention = [...snapById.values()].filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
 
   const reload = () => accounts.reload();
-  // The route answers from the account's hold or its cache while either lasts, which is why a refresh can change nothing.
-  const refreshHint = settings.data ? `reads the endpoint now unless the account is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
+  // The route reads through the poll's path, so a refresh inside the account's hold changes nothing.
+  const refreshHint = 'reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll does';
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
@@ -110,7 +111,7 @@ export function QuotaPage() {
         </section>
       ) : (
         <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
-          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} />)}
+          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} slotOf={slotOf} />)}
         </section>
       )}
     </div>
@@ -359,7 +360,7 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
   );
 }
 
-function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) {
+function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: number; slotOf: (id: string) => number | null }) {
   const ink = useChartInk();
   const [mode, setMode] = useState<Mode>('weekly');
   const [offset, setOffset] = useState(0);
@@ -472,7 +473,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
               bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
             }
             return (
-              <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, account.id) }}>
+              <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, slotOf(account.id)) }}>
                 <div className="lane__head">
                   <div className="lane__id">
                     <span className="lane__dot" />

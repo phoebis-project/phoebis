@@ -337,7 +337,7 @@ impl CachedEntry {
     /// The one sentence the held answer and the poll's last error both read.
     fn hold_message(&self) -> String {
         format!(
-            "the {} endpoint rate-limited the account; next attempt at {}",
+            "the {} endpoint rate-limited the account, and the next attempt is at {}",
             self.held_by,
             utc(self.not_before)
         )
@@ -421,9 +421,10 @@ impl UsageService {
         }
     }
 
-    /// Serves the cached snapshot while it is within `cache_ttl`, with no bypass: an admin refresh reaches
-    /// this same path, and a held-down button must not turn into a stream of requests against an endpoint
-    /// that rate-limits per account. Concurrent misses for one account coalesce into a single fetch.
+    /// Serves the cached snapshot while it is within `cache_ttl`, with no bypass, and coalesces concurrent
+    /// misses for one account into a single fetch. The scheduled poll and the admin refresh read through `poll`
+    /// instead, under the same hold and coalescing, so a held-down refresh button cannot turn into a stream of
+    /// requests against an endpoint that rate-limits per account.
     pub async fn snapshot(&self, account_id: &str) -> Result<UsageSnapshot, UsageError> {
         let now = (self.inner.clock)();
         if let Some(snapshot) = self.inner.fresh(account_id, now) {

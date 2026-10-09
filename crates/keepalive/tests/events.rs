@@ -1,13 +1,13 @@
-//! The lifecycle protocol: registration, sequences, generations, leases, and the snapshot the companion
-//! reconciles against; the Go events and lifecycle suites.
+//! The Go events and lifecycle suites over the reporting protocol: registration, sequences, generations, leases,
+//! and the registration acknowledgment the mod reconciles from.
 mod common;
-use std::str::FromStr;
 use std::time::Duration;
 
 use common::*;
 use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
-    decode_query_event, AgentState, Event, EventError, KeepaliveLimits, RecipeState,
+    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind,
+    Reason, RecipeState,
 };
 
 #[tokio::test]
@@ -33,12 +33,11 @@ async fn the_session_bound_counts_live_sessions_only() {
     }
     let refused = rig.event(session_start("t-126")).unwrap_err();
     assert_eq!(refused.code, "session_limit");
-    let snapshot = rig.snapshot();
     assert!(
-        snapshot
-            .sessions
+        rig.engine
+            .sessions()
             .iter()
-            .any(|s| s.session_id == "s-0" && s.ended),
+            .any(|s| s.session_id == "s-0" && s.companion == CompanionState::None),
         "the tombstone is still read"
     );
 }
@@ -93,18 +92,31 @@ fn usage(read: u64, write_5m: u64) -> Usage {
     }
 }
 
+fn refusal(code: &'static str, status: u16) -> EventError {
+    EventError {
+        code,
+        instance_id: None,
+        request_generation: None,
+        status,
+    }
+}
+
+/// A body as the mod sends it: the five members every report carries, then `rest` spliced in.
+fn body(event: &str, sequence: i64, rest: &str) -> String {
+    format!(
+        r#"{{"protocol":1,"event":"{event}","session_id":"session","instance_id":"instance","sequence":{sequence}{rest}}}"#
+    )
+}
+
 #[tokio::test]
-async fn query_events_match_the_contract() {
+async fn json_events_match_the_contract() {
     let mut r = rig(RigSpec::default()).await;
     let ack = r
         .engine
         .apply_event(
             "desktop",
             r.generation("desktop"),
-            decode_query_event(
-                "event=heartbeat&session_id=session&instance_id=instance&sequence=99",
-            )
-            .unwrap(),
+            decode_json_event(body("heartbeat", 99, "").as_bytes()).unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -113,87 +125,151 @@ async fn query_events_match_the_contract() {
             ack.session_id.as_str(),
             ack.instance_id.as_str(),
             ack.agent_id.as_deref(),
-            ack.request_generation
+            ack.request_generation,
+            ack.agents.is_none()
         ),
-        (99, "session", "instance", Some("main"), 0)
+        (99, "session", "instance", None, 0, true),
+        "a heartbeat names no agent and carries main's generation"
     );
-    assert!(
-        ack.lease_expires.ends_with('Z')
-            && jiff::Timestamp::from_str(&ack.lease_expires)
-                .unwrap()
-                .as_millisecond()
-                == r.now() + r.lease_ms(),
-        "{}",
-        ack.lease_expires
-    );
+    assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     r.sequence = 99;
-    for (name, query) in [
+    let main = r#","agent_id":"main","request_generation":0"#;
+    let rows = [
+        ("an unknown member", body("heartbeat", 100, r#","surprise":1"#), "invalid_event"),
         (
-            "unknown parameter",
-            "event=heartbeat&session_id=session&instance_id=instance&sequence=100&surprise=1",
+            "a missing sequence",
+            r#"{"protocol":1,"event":"heartbeat","session_id":"session","instance_id":"instance"}"#.into(),
+            "invalid_event",
+        ),
+        ("a negative sequence", body("heartbeat", -1, ""), "invalid_event"),
+        ("a repeated member", body("heartbeat", 102, r#","sequence":103"#), "invalid_event"),
+        (
+            "a missing protocol",
+            r#"{"event":"heartbeat","session_id":"session","instance_id":"instance","sequence":100}"#.into(),
+            "invalid_event",
+        ),
+        ("a body that is not an object", "[]".into(), "invalid_event"),
+        ("an owner outside session_start", body("heartbeat", 104, r#","owner_id":"o""#), "invalid_event"),
+        (
+            "a previous instance outside session_start",
+            body("heartbeat", 104, r#","previous_instance_id":"i""#),
+            "invalid_event",
+        ),
+        ("an agent on a session event", body("session_end", 104, r#","agent_id":"main""#), "invalid_event"),
+        ("a kind outside activity", body("agent_start", 104, r#","agent_id":"w","kind":"prompt""#), "invalid_event"),
+        ("an activity without its kind", body("activity", 104, main), "invalid_event"),
+        ("an agent event without its agent", body("activity", 104, r#","kind":"prompt""#), "invalid_event"),
+        (
+            "a park kind outside parked",
+            body("state", 104, &format!(r#"{main},"state":"idle","park_kind":"background""#)),
+            "invalid_event",
         ),
         (
-            "missing sequence",
-            "event=heartbeat&session_id=session&instance_id=instance",
+            "a wake time outside parked",
+            body("state", 104, &format!(r#"{main},"state":"busy","wake_at":1"#)),
+            "invalid_event",
         ),
         (
-            "negative sequence",
-            "event=heartbeat&session_id=session&instance_id=instance&sequence=-1",
+            "a deadline outside parked",
+            body("state", 104, &format!(r#"{main},"state":"idle","deadline":1"#)),
+            "invalid_event",
+        ),
+        ("a parked state without its kind", body("state", 104, &format!(r#"{main},"state":"parked""#)), "invalid_event"),
+        (
+            "a scheduled park without its wake time",
+            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"scheduled""#)),
+            "invalid_event",
         ),
         (
-            "repeated parameter",
-            "event=heartbeat&session_id=session&instance_id=instance&sequence=102&sequence=103",
+            "a park of both kinds without its wake time",
+            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"both","deadline":1"#)),
+            "invalid_event",
         ),
+        ("a wake time that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"scheduled","wake_at":1.5"#)), "invalid_event"),
+        ("a deadline that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"background","deadline":1.5"#)), "invalid_event"),
+        ("protocol 2", body("heartbeat", 104, "").replacen(r#""protocol":1"#, r#""protocol":2"#, 1), "unsupported_protocol"),
         (
-            "owner outside session_start",
-            "event=heartbeat&session_id=session&instance_id=instance&sequence=104&owner_id=o",
+            "protocol 2 with a member this protocol lacks",
+            body("heartbeat", 104, r#","surprise":1"#).replacen(r#""protocol":1"#, r#""protocol":2"#, 1),
+            "unsupported_protocol",
         ),
-    ] {
-        assert_eq!(
-            decode_query_event(query).unwrap_err(),
-            EventError {
-                code: "invalid_event",
-                status: 400
-            },
-            "{name}"
-        );
+        ("a bad session id", body("heartbeat", 101, "").replacen(r#""session""#, r#""bad session""#, 1), "invalid_identity"),
+        ("sequence 0", body("heartbeat", 0, ""), "invalid_identity"),
+        ("an unknown state word", body("state", 104, &format!(r#"{main},"state":"asleep""#)), "invalid_state"),
+        (
+            "an unknown park kind",
+            body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"nap","wake_at":1"#)),
+            "invalid_state",
+        ),
+        ("an unknown activity kind", body("activity", 104, &format!(r#"{main},"kind":"nudge""#)), "invalid_state"),
+        ("an unknown event", body("wander", 104, ""), "unknown_event"),
+    ];
+    let mut wrong = Vec::new();
+    for (name, json, code) in rows {
+        let got = decode_json_event(json.as_bytes());
+        if got != Err(refusal(code, 400)) {
+            wrong.push(format!("{name}: {got:?}, want {code}"));
+        }
     }
-    assert_eq!(
-        decode_query_event(
-            "event=heartbeat&session_id=bad%20session&instance_id=instance&sequence=101"
-        )
-        .unwrap_err(),
-        EventError {
-            code: "invalid_identity",
-            status: 400
-        }
-    );
-    assert_eq!(
-        decode_query_event("event=heartbeat&session_id=session&instance_id=instance&sequence=0")
-            .unwrap_err(),
-        EventError {
-            code: "invalid_identity",
-            status: 400
-        }
-    );
-    let oversized = format!(
-        "event=heartbeat&session_id=session&instance_id=instance&sequence=104&agent_id={}",
-        "a".repeat(17 << 10)
-    );
-    assert_eq!(
-        decode_query_event(&oversized).unwrap_err(),
-        EventError {
-            code: "event_too_large",
-            status: 413
-        }
-    );
-    let start = decode_query_event("event=session_start&session_id=s2&instance_id=i2&sequence=1&owner_id=owner-1&previous_instance_id=i1").unwrap();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    let start = decode_json_event(
+        br#"{"protocol":1,"event":"session_start","session_id":"s2","instance_id":"i2","sequence":1,"owner_id":"owner-1","previous_instance_id":"i1"}"#,
+    )
+    .unwrap();
     assert_eq!(
         (
             start.owner_id.as_deref(),
             start.previous_instance_id.as_deref()
         ),
         (Some("owner-1"), Some("i1"))
+    );
+    let parked = decode_json_event(
+        br#"{"protocol":1,"event":"state","session_id":"s","instance_id":"i","sequence":3,"agent_id":"worker","request_generation":2,"state":"parked","park_kind":"both","wake_at":1700000000000,"deadline":1700000600000}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        parked,
+        Event {
+            agent_id: Some("worker".into()),
+            deadline: Some(1_700_000_600_000),
+            event: "state".into(),
+            instance_id: "i".into(),
+            kind: None,
+            owner_id: None,
+            park_kind: Some("both".into()),
+            previous_instance_id: None,
+            protocol: Some(1),
+            request_generation: Some(2),
+            sequence: 3,
+            session_id: "s".into(),
+            state: Some("parked".into()),
+            wake_at: Some(1_700_000_000_000),
+        }
+    );
+    let background = decode_json_event(
+        body(
+            "state",
+            5,
+            &format!(r#"{main},"state":"parked","park_kind":"background""#),
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            background.park_kind.as_deref(),
+            background.deadline,
+            background.wake_at
+        ),
+        (Some("background"), None, None),
+        "a background park needs no deadline"
+    );
+    let presence =
+        decode_json_event(body("activity", 6, &format!(r#"{main},"kind":"presence""#)).as_bytes())
+            .unwrap();
+    assert_eq!(
+        (presence.kind.as_deref(), presence.agent_id.as_deref()),
+        (Some("presence"), Some("main"))
     );
     assert_eq!(
         r.engine
@@ -209,10 +285,7 @@ async fn query_events_match_the_contract() {
                 }
             )
             .unwrap_err(),
-        EventError {
-            code: "unknown_event",
-            status: 400
-        }
+        refusal("unknown_event", 400)
     );
     assert_eq!(
         r.engine
@@ -230,10 +303,7 @@ async fn query_events_match_the_contract() {
                 }
             )
             .unwrap_err(),
-        EventError {
-            code: "invalid_state",
-            status: 400
-        }
+        refusal("invalid_state", 400)
     );
 }
 
@@ -251,13 +321,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         },
     );
-    assert_eq!(
-        stale.unwrap_err(),
-        EventError {
-            code: "stale_sequence",
-            status: 409
-        }
-    );
+    assert_eq!(stale.unwrap_err(), refusal("stale_sequence", 409));
     let other = r.engine.apply_event(
         "desktop",
         r.generation("desktop"),
@@ -269,13 +333,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         },
     );
-    assert_eq!(
-        other.unwrap_err(),
-        EventError {
-            code: "unknown_instance",
-            status: 409
-        }
-    );
+    assert_eq!(other.unwrap_err(), refusal("unknown_instance", 409));
     let conflict = r.engine.apply_event(
         "desktop",
         r.generation("desktop"),
@@ -289,10 +347,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     assert_eq!(
         conflict.unwrap_err(),
-        EventError {
-            code: "instance_conflict",
-            status: 409
-        },
+        refusal("instance_conflict", 409),
         "a replacement must name the instance it replaces"
     );
     let orphan = r.engine.apply_event(
@@ -309,10 +364,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     assert_eq!(
         orphan.unwrap_err(),
-        EventError {
-            code: "unknown_previous_instance",
-            status: 409
-        }
+        refusal("unknown_previous_instance", 409)
     );
     // A same-instance re-registration with a higher sequence renews the lease and keeps agent state.
     r.event(Event {
@@ -329,13 +381,11 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         })
         .unwrap();
+    assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
     assert_eq!(
-        jiff::Timestamp::from_str(&renewed.lease_expires)
-            .unwrap()
-            .as_millisecond(),
-        r.now() + r.lease_ms()
+        (r.agent("worker").state, r.agent("worker").park_kind),
+        (AgentState::Parked, Some(ParkKind::Background))
     );
-    assert_eq!(r.agent("worker").state, AgentState::Parked);
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
     // leaves the companion's own lease alone.
     r.advance(1_000);
@@ -343,23 +393,19 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(r.agent("worker").request_generation),
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(untouched.lease_expires, renewed.lease_expires);
+    assert_eq!(untouched.lease_expires_ms, renewed.lease_expires_ms);
     let reheartbeat = r
         .event(Event {
             event: "heartbeat".into(),
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(
-        jiff::Timestamp::from_str(&reheartbeat.lease_expires)
-            .unwrap()
-            .as_millisecond(),
-        r.now() + r.lease_ms()
-    );
+    assert_eq!(reheartbeat.lease_expires_ms, r.now() + r.lease_ms());
     // Agents: a restart needs the released generation; activity and state need the current one.
     assert_eq!(
         r.event(Event {
@@ -368,10 +414,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "agent_exists",
-            status: 409
-        }
+        refusal("agent_exists", 409)
     );
     assert_eq!(
         r.event(Event {
@@ -382,36 +425,36 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "unknown_agent",
-            status: 409
-        }
+        refusal("unknown_agent", 409)
     );
     assert_eq!(
         r.event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(7),
             ..Default::default()
         })
         .unwrap_err(),
         EventError {
-            code: "stale_request_generation",
-            status: 409
-        }
+            request_generation: Some(0),
+            ..refusal("stale_request_generation", 409)
+        },
+        "the refusal names the current generation"
     );
     r.state("worker", "released");
     assert_eq!(
         r.event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(r.agent("worker").request_generation),
             ..Default::default()
         })
         .unwrap_err(),
         EventError {
-            code: "agent_released",
-            status: 409
+            request_generation: Some(r.agent("worker").request_generation),
+            ..refusal("agent_released", 409)
         }
     );
     let generation = r.agent("worker").request_generation;
@@ -422,10 +465,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "agent_exists",
-            status: 409
-        },
+        refusal("agent_exists", 409),
         "a restart without the generation"
     );
     let restarted = r
@@ -441,37 +481,30 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (Some("worker"), AgentState::Busy)
     );
     // The failed events did not advance the sequence: the next accepted one is one past the last accepted.
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
-    assert_eq!(snapshot.sessions[0].sequence, r.sequence);
+    assert_eq!(restarted.sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
     r.event(Event {
         event: "session_end".into(),
         ..Default::default()
     })
     .unwrap();
-    assert!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended
+    assert_eq!(
+        (
+            r.engine.sessions()[0].companion,
+            r.engine.sessions()[0].agents
+        ),
+        (CompanionState::None, 2)
     );
-    assert!(r
-        .engine
-        .snapshot("desktop", r.generation("desktop"))
-        .sessions[0]
-        .agents
+    assert!(["main", "worker"]
         .iter()
-        .all(|a| a.state == AgentState::Released));
+        .all(|id| r.agent(id).state == AgentState::Released));
     assert_eq!(
         r.event(Event {
             event: "heartbeat".into(),
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "instance_ended",
-            status: 409
-        }
+        refusal("instance_ended", 409)
     );
     // A replacement that names the ended instance takes over with a fresh main agent.
     let replaced = r
@@ -493,11 +526,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (
             replaced.instance_id.as_str(),
             replaced.request_generation,
-            r.engine
-                .snapshot("desktop", r.generation("desktop"))
-                .sessions[0]
-                .agents
-                .len()
+            r.engine.sessions()[0].agents
         ),
         ("next", 0, 1)
     );
@@ -515,7 +544,8 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
     })
     .await;
     // The same session id under another key is another session: neither key sees the other's.
-    r.engine
+    let laptop = r
+        .engine
         .apply_event(
             "laptop",
             r.generation("laptop"),
@@ -528,23 +558,14 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
             },
         )
         .unwrap();
+    assert_eq!(laptop.instance_id, "elsewhere");
     assert_eq!(
         r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions
-            .len(),
-        1
-    );
-    assert_eq!(
-        r.engine.snapshot("laptop", r.generation("laptop")).sessions[0].instance_id,
-        "elsewhere"
-    );
-    assert_eq!(
-        r.engine
-            .snapshot("nobody", r.generation("nobody"))
-            .sessions
-            .len(),
-        0
+            .sessions()
+            .iter()
+            .map(|s| (s.key_id.as_str(), s.session_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("desktop", "session"), ("laptop", "session")]
     );
     assert_eq!(
         r.engine
@@ -560,10 +581,7 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
                 }
             )
             .unwrap_err(),
-        EventError {
-            code: "session_limit",
-            status: 429
-        }
+        refusal("session_limit", 429)
     );
     r.event(Event {
         event: "agent_start".into(),
@@ -578,10 +596,7 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "agent_limit",
-            status: 429
-        },
+        refusal("agent_limit", 429),
         "three agents across two sessions"
     );
     assert_eq!(r.engine.stats().sessions, 2);
@@ -619,18 +634,15 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     let armed = r.engine.recipes();
     let reason = r.status("main").reason;
     assert_eq!(
-        (armed.len(), armed[0].state, armed[0].reason),
-        (1, RecipeState::Armed, None)
+        (armed.len(), armed[0].state, armed[0].cause),
+        (1, RecipeState::Retained, Reason::Scheduled)
     );
     r.advance(90_000);
     r.engine.expire();
-    let session = &r
-        .engine
-        .snapshot("desktop", r.generation("desktop"))
-        .sessions[0];
-    assert!(
-        session.ended,
-        "the companion sees an ended instance and re-registers"
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Silent,
+        "the lapse leaves the session unattended, and the mod re-registers"
     );
     // A silent companion says nothing about the recipe: the lapse is counted, and the views keep reading the
     // reason the recipe's own last probe left.
@@ -642,10 +654,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "instance_ended",
-            status: 409
-        }
+        refusal("instance_ended", 409)
     );
     let again = r
         .event(Event {
@@ -654,11 +663,9 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         })
         .unwrap();
     assert_eq!(again.instance_id, "instance");
-    assert!(
-        !r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended,
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Reporting,
         "the same instance re-adopted the session"
     );
     let counts = r.engine.reasons();
@@ -671,7 +678,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
 }
 
 #[tokio::test]
-async fn the_snapshot_carries_only_what_the_companion_reconciles() {
+async fn the_registration_acknowledgment_carries_only_what_the_mod_reconciles() {
     let mut r = rig(RigSpec::default()).await;
     r.event(Event {
         event: "agent_start".into(),
@@ -679,8 +686,8 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
         ..Default::default()
     })
     .unwrap();
-    let encoded =
-        serde_json::to_string(&r.engine.snapshot("desktop", r.generation("desktop"))).unwrap();
+    let ack = r.reregister();
+    let encoded = serde_json::to_string(&ack).unwrap();
     for forbidden in [
         "account",
         "usage",
@@ -695,22 +702,16 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
     ] {
         assert!(
             !encoded.contains(forbidden),
-            "snapshot leaks {forbidden}: {encoded}"
+            "the acknowledgment leaks {forbidden}: {encoded}"
         );
     }
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
     assert_eq!(
-        (
-            snapshot.sessions.len(),
-            snapshot.sessions[0].session_id.as_str(),
-            snapshot.sessions[0].instance_id.as_str(),
-            snapshot.sessions[0].ended
-        ),
-        (1, "session", "instance", false)
+        (ack.session_id.as_str(), ack.instance_id.as_str()),
+        ("session", "instance")
     );
-    let agents = &snapshot.sessions[0].agents;
     assert_eq!(
-        agents
+        ack.agents
+            .expect("a registration's acknowledgment lists the session's agents")
             .iter()
             .map(|a| (a.agent_id.as_str(), a.state))
             .collect::<Vec<_>>(),
@@ -725,8 +726,18 @@ async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_th
         ..RigSpec::default()
     })
     .await;
+    assert_eq!(
+        r.engine.sessions().len(),
+        1,
+        "the registered session is live before its expiry"
+    );
     r.advance(2);
     r.engine.expire();
+    assert!(
+        r.engine.sessions().is_empty(),
+        "the expiry ends the silent session: {:?}",
+        r.engine.sessions()
+    );
     assert_eq!((r.engine.stats().sessions, r.engine.stats().agents), (0, 0));
     assert_eq!(
         r.engine
@@ -761,10 +772,7 @@ async fn the_session_expiry_sweep_removes_a_silent_session_and_close_quiesces_th
             ..Default::default()
         })
         .unwrap_err(),
-        EventError {
-            code: "quiesced",
-            status: 503
-        }
+        refusal("quiesced", 503)
     );
     assert_eq!(
         (r2.engine.stats().agents, r2.engine.stats().retained_bytes),

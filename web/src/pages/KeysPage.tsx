@@ -26,7 +26,7 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Extend pool rules', value: 'extend' },
   { label: 'Replace pool rules', value: 'replace' },
 ];
-const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
+const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 
 export function KeysPage() {
   const now = useNow();
@@ -75,7 +75,7 @@ export function KeysPage() {
   // match it during the read and after a failed one, and the select holds an option for the id: without one it would
   // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
   // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
-  // own effect goes first. All pools is the empty string, which no pool id can be, since `all` is a real pool's id.
+  // own effect goes first. All pools is the empty string, which no pool id can be, since a pool may be named `all`.
   const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
   const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
   const writePool = (id: string) => {
@@ -427,7 +427,7 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
 export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
-  const [poolId, setPoolId] = useState('all');
+  const [poolId, setPoolId] = useState('');
   const [longContextTwins, setLongContextTwins] = useState(true);
   const [modelRules, setModelRules] = useState<ModelRule[]>([]);
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
@@ -480,9 +480,10 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setError(null);
     setStale(null);
   }, [open, existing, initialPoolId, initialGroup]);
-  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do. An updater,
+  // so it never replaces the pool the reset above queued in the same render.
   useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId((current) => (current === '' ? pools[0].id : current));
   }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
@@ -570,14 +571,14 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     access: (
       <div className="cells">
         {existing && (
-          <Field label="Enabled" beside hint="Off refuses the key and keeps it, so it can come back on without a new secret; a revoked key cannot.">
+          <Field label="Enabled" beside hint="Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.">
             {/* The route refuses to re-enable a revoked key, so its switch says so rather than offering it. */}
             <span title={existing.status === 'revoked' ? 'a revoked key cannot be re-enabled' : undefined}>
               <Toggle checked={enabled} onChange={setEnabled} label="Enabled" disabled={existing.status === 'revoked'} />
             </span>
           </Field>
         )}
-        <Field label="Expiry" hint="An expired key is refused; its history stays in the ledger.">
+        <Field label="Expiry" hint="An expired key is refused, but its history stays in the ledger.">
           <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} aria-label="Expiry">
             {existing && <option value="keep">Keep the current expiry</option>}
             {!existing && <option value="never">No expiration</option>}
@@ -590,7 +591,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           </Select>
         </Field>
         <Expert>
-          <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
+          <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own. On keeps them whatever the pool says.">
             <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
               <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
               <option value="on">On</option>
@@ -619,7 +620,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         <Expert>
           {/* Field's frame without its label element: a label forwards a click on its text to the first control
               inside, which here would flip the mode. */}
-          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone.">
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in gray, after this key's own. Replace applies this key's rules alone.">
             {/* Its own block, so the segmented control keeps its content width. */}
             <div>
               <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
@@ -627,7 +628,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           </Field>
         </Expert>
         <Expert>
-          <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
+          <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id, so the twin lets it use the long-context window the upstream reports.">
             <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
           </Field>
         </Expert>
@@ -641,7 +642,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           beside
           hint={
             <>
-              Sessions on this key never get cache-warming probes, even when the pool keeps caches warm; the pool&apos;s Keepalive is on the <PageLink to="/pools">Pools page</PageLink>.
+              Sessions on this key never get cache-warming probes, even when the pool keeps caches warm. The pool&apos;s Keepalive is on the <PageLink to="/pools">Pools page</PageLink>.
             </>
           }
         >
@@ -664,7 +665,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
             plain
             hint={
               <>
-                Stores the full JSON of each exchange for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. Inherit follows the pool; any value is capped by the bootstrap&apos;s limit.
+                Stores the full JSON of each exchange for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. Inherit follows the pool, and any value is capped by the bootstrap&apos;s limit.
               </>
             }
           >

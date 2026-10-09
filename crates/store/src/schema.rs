@@ -78,11 +78,13 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (46, V46),
     (47, V47),
     (48, V48),
+    (49, V49),
+    (50, V50),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 48;
+pub const SCHEMA_VERSION: u32 = 50;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -452,7 +454,7 @@ FROM pins;
 DROP TABLE pins;
 ALTER TABLE pins_next RENAME TO pins;
 ALTER TABLE pools ADD COLUMN affinity_mode TEXT NOT NULL DEFAULT 'always';
-ALTER TABLE pools ADD COLUMN subagent_placement TEXT NOT NULL DEFAULT 'by_cohort';
+ALTER TABLE pools ADD COLUMN subagent_placement TEXT NOT NULL DEFAULT 'by_strategy';
 ALTER TABLE pools ADD COLUMN session_placement TEXT NOT NULL DEFAULT 'by_strategy';
 ALTER TABLE pools ADD COLUMN min_shared_prefix_tokens INTEGER NOT NULL DEFAULT 20000;
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass';
@@ -703,3 +705,29 @@ ALTER TABLE api_keys ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
 CREATE TABLE IF NOT EXISTS pool_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
 "#;
+
+// The keepalive engine's state, so a restart keeps its sessions, its agents with their retained prompts and the
+// idle-age counters. An agent row carries one versioned payload of the agent's fields rather than a column per field,
+// so a field the engine reshapes moves the payload's version and no column. The prompt sits beside it sealed under the
+// storage key, with the header block, the size and the dispatch TTL the probe replays it with.
+const V49: &str = r#"
+CREATE TABLE keepalive_sessions (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id)
+);
+CREATE TABLE keepalive_agents (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL,
+  body_sealed BLOB, body_nonce BLOB, headers TEXT NOT NULL, body_size INTEGER NOT NULL, dispatched_ms INTEGER, fast INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id, agent_id)
+);
+CREATE TABLE keepalive_idle_returns (
+  pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, bucket)
+);
+"#;
+
+// Nothing reads the day budgets once the keepalive has no daily probe cap.
+const V50: &str = "DROP TABLE keepalive_budgets;";

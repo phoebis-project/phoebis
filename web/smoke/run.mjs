@@ -66,7 +66,9 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+// Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
+const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
 const results = [];
 /**
@@ -687,10 +689,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota counts the subscription accounts with the noun that number takes', ok: count === `${subscriptions.length} accounts`, missing: [count, `${subscriptions.length} subscription accounts listed`] });
-  // The route answers from the account's hold or its cache inside either, so the button says when it reads the
-  // endpoint.
+  // The route reads through the poll's path, so the button says it reads the endpoint unless the account's hold
+  // answers.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
-  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
+  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff holds and records the reading', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll does'), missing: [...new Set(hints)] });
   // The story's legacy carries the provider's reason for its extra usage being off, drawn inside the Extra usage line
   // and whole in its title. Mounted again with the reason cleared, the same card draws none.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
@@ -1140,7 +1142,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
       'Cancelled',
       'Ends',
-      "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
+      "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
     ]);
     const before = field()?.value;
     box()?.click();
@@ -1203,7 +1205,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts Disconnect says what the route deletes and what stays', confirm?.textContent ?? '', ["Deletes primary's credential. Pool memberships and request history stay; re-pairing stores the credential again."]);
+  expect('/accounts Disconnect says what the route deletes and what stays', confirm?.textContent ?? '', ["Deletes primary's credential. Pool memberships and request history stay, and re-pairing stores the credential again."]);
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
@@ -1250,8 +1252,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
   results.push({
-    name: "/accounts Add account suggests personal for an OAuth account's id and label, and Console workspace for an API key's label",
-    ok: JSON.stringify(oauthHints) === '["personal","personal"]' && hints()[1] === 'Console workspace',
+    name: "/accounts Add account suggests home for an OAuth account's id and label, and office and Office workspace for an API key's id and label",
+    ok: JSON.stringify(oauthHints) === '["home","home"]' && JSON.stringify(hints()) === '["office","Office workspace"]',
     missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
   });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
@@ -1286,7 +1288,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const next = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in');
   next?.click();
   await m.settle(200);
-  expect('/accounts pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
+  expect('/accounts pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load, since nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
   const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
   results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
   results.push({ name: '/accounts pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
@@ -1452,7 +1454,7 @@ expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
   const quarantined = [...m.container.querySelectorAll('.detail__badges .badge')].find((b) => b.textContent?.trim() === 'quarantined');
   results.push({
     name: '/accounts/nightly a quarantined credential carries its badge and the way out',
-    ok: quarantined?.classList.contains('badge--critical') === true && quarantined.getAttribute('title') === "the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it",
+    ok: quarantined?.classList.contains('badge--critical') === true && quarantined.getAttribute('title') === "the last refresh's outcome is uncertain, so re-pair or wait for the next start to resolve it",
     missing: [quarantined ? `${quarantined.className} ${quarantined.getAttribute('title')}` : 'no quarantined badge'],
   });
   const coolingCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cooling down');
@@ -2085,7 +2087,7 @@ const tab = async (page, label) => {
     name: "/analytics a subscription member's spent cell reads its metered spend, an API-key member's its whole spend",
     ok:
       card?.querySelector('.card__subtitle')?.textContent ===
-        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
+        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend. The range and the filters above do not apply here" &&
       metered?.querySelector('.num')?.textContent === 'metered $12.50' &&
       metered?.querySelector('.num .muted')?.textContent === 'metered ' &&
       (whole?.querySelector('.num')?.textContent ?? '').startsWith('$') &&
@@ -2098,7 +2100,7 @@ const tab = async (page, label) => {
 // The pool dialog checks below read every field, the expert ones included; the plain view's checks come further on.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Overflow workspace', 'jobs', 'Research workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random, with subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Overflow workspace', 'jobs', 'Research workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
 {
   const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
   const card = (name) => cards.get(name);
@@ -2121,7 +2123,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok:
       JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('jobs')) === JSON.stringify([['load shedding', '/pools?edit=jobs&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
-      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode']]),
+      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
     missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
@@ -2134,7 +2136,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: '/pools the status sentence says what the badge means for each pool, its accounts linked',
     ok:
-      sentence('all') === 'Degraded: 2 of 4 members take fresh sessions; the next one goes to primary.' &&
+      sentence('all') === 'Degraded: 2 of 4 members take fresh sessions, and the next one goes to primary.' &&
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
       sentence('jobs') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
       JSON.stringify(linked('jobs')) === '["/accounts/research"]' &&
@@ -2207,7 +2209,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const fable = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
   results.push({
     name: '/pools each serving table names its strategy in a caption titled with the Fable caveat',
-    ok: JSON.stringify(captions) === JSON.stringify([['Pace, subscription accounts first', fable], ['Round robin', fable], ['Priority, then random; subscription accounts first', fable]]),
+    ok: JSON.stringify(captions) === JSON.stringify([['Pace, subscription accounts first', fable], ['Round robin', fable], ['Priority, then random, with subscription accounts first', fable]]),
     missing: captions.flat().map(String),
   });
   const rows = (name) => [...(card(name)?.querySelectorAll('.serving tbody tr') ?? [])];
@@ -2367,7 +2369,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
     row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
-    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried; budgeted members are held back until a batch lands', '1h 0m ago'),
+    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried, and budgeted members are held back until a batch lands', '1h 0m ago'),
     row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h 0m ago'),
     row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h 0m ago'),
     row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
@@ -2480,23 +2482,107 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   m = await mount('/pools');
 }
 {
+  // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
+  const work = (await api.listPools()).find((p) => p.id === 'work');
+  await api.createPool({ ...work, members: [], name: 'bare' });
+  const page = await mount('/pools?edit=bare&group=keepalive');
+  await page.settle(300);
+  const card = [...page.container.querySelectorAll('.pool')].find((c) => c.id === 'bare');
+  const chips = [...(card?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => b.textContent?.trim());
+  const section = group([...page.container.querySelectorAll('dialog[open]')].pop(), 'Keepalive');
+  results.push({
+    name: '/pools a warming pool with no member draws no resolved line on its card or in its dialog',
+    ok: chips.includes('keepalive') && card?.querySelector('.pool__ceilings') === null && section !== undefined && section.querySelector('.keepalive-resolved') === null && (section.textContent ?? '').includes('No idle windows recorded yet'),
+    missing: [JSON.stringify(chips), String(card?.querySelector('.pool__ceilings')?.textContent), String(section?.querySelector('.keepalive-resolved')?.textContent), section ? 'a Keepalive group' : 'no Keepalive group'],
+  });
+  page.unmount();
+  await api.deletePool('bare');
+}
+{
+  // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
+  // no caches warm draws no line. The story's `work` holds one plan member on the hour, so it reads one figure each,
+  // while `all` mixes plan members with the API-key `overflow` on five minutes and reads both ends.
+  const cards = [...m.container.querySelectorAll('.pool')];
+  const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
+  const work = ceilingsOf('work');
+  results.push({
+    name: '/pools the pool card reads the three resolved ceilings',
+    ok: work?.textContent === 'idle 1h · parked 44h · horizon 44h' && work.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('jobs') === null,
+    missing: [work?.textContent ?? 'no line on the work card', work?.previousElementSibling?.textContent ?? '', String(ceilingsOf('jobs')?.textContent)],
+  });
+  const hint = (dlg) => group(dlg, 'Keepalive');
+  const linesOf = (dlg) => [...(hint(dlg)?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+  const cancel = async (dlg) => {
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+  };
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  {
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
+    const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
+    const breakEvens = [...(hint(dlg)?.querySelectorAll('.keepalive-resolved[title]') ?? [])].map((l) => l.getAttribute('title'));
+    const shareTitle = hint(dlg)?.querySelector('.keepalive-resolved > span[title]')?.getAttribute('title');
+    results.push({
+      name: '/pools the Keepalive group shows the break-even beside an unset ceiling and the share beside the idle window',
+      ok: JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) && breakEvens.length === 2 && breakEvens.every((h) => h === BREAK_EVEN_HINT) && shareTitle === SHARE_HINT,
+      missing: [...linesOf(dlg).map(String), ...breakEvens.map(String), String(shareTitle)],
+    });
+    // The router's share is the saved window's, so a typed window names the window the share belongs to, while the cap
+    // follows the field as typed, 0 reading as the break-even.
+    const idleField = hint(dlg)?.querySelector('input[type="number"]');
+    const setIdle = async (value) => {
+      if (idleField) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(idleField, value);
+      idleField?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await setIdle('200000');
+    const past = linesOf(dlg)[0];
+    await setIdle('0');
+    const zero = linesOf(dlg)[0];
+    await setIdle('3600');
+    results.push({
+      name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
+      ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
+      missing: [String(past), String(zero), String(linesOf(dlg)[0])],
+    });
+    await cancel(dlg);
+  }
+  // The story's `all` resolves to a range: the card and the dialog read both ends.
+  const allLine = ceilingsOf('all')?.textContent;
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  {
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools a pool whose combinations differ reads both ends on its card and in its dialog',
+      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h 0m', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
+      missing: [String(allLine), ...linesOf(dlg).map(String)],
+    });
+    await cancel(dlg);
+  }
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
   edit?.click();
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
-  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
+    name: '/pools dialog rail lists the five parents and the sixteen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -2518,7 +2604,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 15 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -2569,25 +2655,26 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: accountsLink?.getAttribute('target') === '_blank' && (accountsLink?.getAttribute('href') ?? '').endsWith('/accounts') && accountsLink?.querySelector('.sr-only')?.textContent?.trim() === '(opens in a new tab)',
       missing: [accountsLink?.outerHTML.slice(0, 160) ?? 'no Accounts page link'],
     });
-    expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page"]);
+    expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page"]);
     const overageLabels = [...(group(dlg, 'Overage and plan end')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/pools Overage and plan end holds Overage policy, Overage grace and Wind down', ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Wind down (min)"]', missing: overageLabels });
     results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
     const keepalive = group(dlg, 'Keepalive');
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
-    const cap = keepalive?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched')?.parentElement;
-    results.push({ name: '/pools the daily probe cost cap keeps to the left column', ok: cap?.classList.contains('cell--half') === true && keepalive?.querySelector('.cells')?.lastElementChild === cap, missing: [cap?.className ?? 'no cost cap block'] });
+    const halves = [...(keepalive?.querySelectorAll('.cells > .cell--half') ?? [])].map((c) => c.querySelector('button[role="switch"]')?.getAttribute('aria-label'));
+    results.push({ name: '/pools the two switched ceilings share the last row of the Keepalive group', ok: JSON.stringify(halves) === '["Max parked (s)","Scheduled horizon (s)"]' && keepalive?.querySelector('.cells')?.lastElementChild?.querySelector('button[aria-label="Scheduled horizon (s)"]') != null, missing: halves.map(String) });
     const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'legacy');
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
 
-    // Each switch gates its number, which is drawn whatever the switch reads; warming off gates the cost cap whole.
+    // Each switch gates its number, which is drawn whatever the switch reads, and warming off gates the Keepalive group whole.
     const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
     const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
     const switched = [
       ['Shed ahead of pace', 'Shed ahead of pace (%)'],
       ['Select below utilization', 'Select below utilization (%)'],
-      ['Daily probe cost cap ($)', 'Daily probe cost cap in dollars'],
+      ['Max parked (s)', 'Max parked (s)'],
+      ['Scheduled horizon (s)', 'Scheduled horizon (s)'],
     ];
     const read = () => switched.map(([s, n]) => `${sw(s)?.getAttribute('aria-checked')}/${num(n) ? String(num(n).disabled) : 'absent'}`);
     const follows = (states) => states.every((x) => x === 'true/false' || x === 'false/true');
@@ -2602,23 +2689,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await m.settle(80);
     }
     const warm = sw('Keep prompt caches warm');
-    const tuning = () => [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.disabled);
-    const tuningOn = tuning();
+    const labels = [...(keepalive?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    // The idle window is a plain number under its field label, the group's first number input.
+    const idle = () => keepalive?.querySelector('input[type="number"]');
+    const idleOn = idle()?.disabled;
     warm?.click();
     await m.settle(120);
-    const warmOff = [warm?.getAttribute('aria-checked'), sw('Daily probe cost cap ($)')?.disabled, num('Daily probe cost cap in dollars')?.disabled];
-    const tuningOff = tuning();
+    const warmOff = [warm?.getAttribute('aria-checked'), idle()?.disabled, sw('Max parked (s)')?.disabled, num('Max parked (s)')?.disabled, sw('Scheduled horizon (s)')?.disabled, num('Scheduled horizon (s)')?.disabled];
     warm?.click();
     await m.settle(120);
     results.push({
       name: '/pools each switch enables its number, which stays rendered while the switch is off',
-      ok: follows(before) && follows(flipped) && JSON.stringify(before) !== JSON.stringify(flipped) && JSON.stringify(read()) === JSON.stringify(before) && JSON.stringify(warmOff) === '["false",true,true]' && warm?.getAttribute('aria-checked') === 'true',
+      ok: follows(before) && follows(flipped) && JSON.stringify(before) !== JSON.stringify(flipped) && JSON.stringify(read()) === JSON.stringify(before) && JSON.stringify(warmOff) === '["false",true,true,true,true,true]' && warm?.getAttribute('aria-checked') === 'true',
       missing: [...before, ...flipped, ...warmOff.map(String)],
     });
     results.push({
-      name: '/pools the Probe tuning group lists its nine fields, enabled while warming is on and disabled while it is off',
-      ok: tuningOn.length === 9 && tuningOn.every((d) => d === false) && tuningOff.length === 9 && tuningOff.every((d) => d === true),
-      missing: [JSON.stringify(tuningOn), JSON.stringify(tuningOff)],
+      name: '/pools the Keepalive group lists its three fields and the return rate, the idle window enabled while warming is on',
+      ok: JSON.stringify(labels) === '["Keep prompt caches warm","Max idle (s)","Max parked (s)","Scheduled horizon (s)","Return rate by idle age"]' && idleOn === false,
+      missing: [...labels.map(String), String(idleOn)],
     });
   }
 
@@ -2759,12 +2847,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     const util = card('Utilization thresholds');
     results.push({
-      name: '/pools migrate on enables its percent field, empty until a margin is typed',
+      name: '/pools migrate on enables its percent field, proposing the default lead until a margin is typed',
       ok:
         migrateSwitch?.getAttribute('aria-checked') === 'true' &&
         migratePercent()?.disabled === false &&
-        migratePercent()?.value === '' &&
-        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.'),
+        migratePercent()?.value === SHED_DEFAULT_PERCENT &&
+        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round, and a sibling counts as cool under the line minus 5%.'),
       missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
     const percent = migratePercent();
@@ -2830,71 +2918,44 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
   expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is 10m, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under Pinning.']);
-  expect('/pools cache warming stops when probes stop paying', dlg?.textContent ?? '', [
-    'Stop when probes cost more than they save',
-    "Pauses a session's probes once they have cost more than the cache reads they saved; a real request that lands warm resumes them.",
-    'Grace probes after the net turns negative',
-  ]);
   {
-    const grace = () => dlg?.querySelector('input[aria-label="Grace probes after the net turns negative"]');
-    const netToggle = [...(dlg?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Stop when probes cost more than they save');
-    results.push({ name: '/pools net-negative stop is on with two grace probes', ok: netToggle?.getAttribute('aria-checked') === 'true' && grace()?.value === '2' && grace()?.disabled === false, missing: [netToggle?.getAttribute('aria-checked'), grace()?.value] });
-    netToggle?.click();
-    await m.settle(150);
-    results.push({ name: '/pools grace count is disabled while the stop is off, and its hint stays', ok: grace()?.disabled === true && (dlg?.textContent ?? '').includes('Probes a session still gets after its net turns negative'), missing: [String(grace()?.disabled)] });
-    netToggle?.click();
-    await m.settle(150);
-    expect('/pools grace help says the budget is granted again on every real request', dlg?.textContent ?? '', [
-      'Probes a session still gets after its net turns negative, granted again on every real request, so one expensive turn does not stop a session about to earn it back.',
+    const keepalive = group(dlg, 'Keepalive');
+    expect('/pools the Keepalive group explains its three fields and their off words', keepalive?.textContent ?? '', [
+      'Max idle (s)',
+      "The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.",
+      'Max parked (s)',
+      "How long a park on a background command or a subagent is probed. Off is the recipe's break-even.",
+      'Scheduled horizon (s)',
+      "A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even.",
     ]);
-  }
-  const tuningGroup = group(dlg, 'Probe tuning');
-  expect('/pools probe tuning fields', tuningGroup?.textContent ?? '', [
-    'Lead time, 5m cache (s)',
-    'Lead time, 1h cache (s)',
-    'Jitter, 5m cache (s)',
-    'Jitter, 1h cache (s)',
-    'Cold probe limit',
-    'Retry backoff base (s)',
-    'Retry backoff max (s)',
-    'Max idle seconds',
-    'Max idle ticks',
-    'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
-    'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
-    'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
-  ]);
-  results.push({
-    name: '/pools probe tuning drops the two concurrency caps',
-    ok: !(dlg?.textContent ?? '').includes('Max probes in flight') && !(dlg?.textContent ?? '').includes('Max probes per session per hour'),
-    missing: [(dlg?.textContent ?? '').includes('Max probes in flight') ? 'in flight still there' : '', (dlg?.textContent ?? '').includes('Max probes per session per hour') ? 'per session per hour still there' : ''].filter(Boolean),
-  });
-  expect('/pools probe tuning explains a cold probe and the idle limits', tuningGroup?.textContent ?? '', [
-    "Probes in a row that find the cache already gone, after which the session's probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the net down; a probe that moved the session does not count.",
-    'Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The Sessions page',
-  ]);
-  const tuningValues = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.value);
-  results.push({ name: '/pools probe tuning defaults', ok: JSON.stringify(tuningValues) === JSON.stringify(['60', '360', '5', '30', '2', '30', '300', '3600', '0']), missing: tuningValues });
-  results.push({ name: '/pools cold probe limit defaults to 2', ok: tuningValues[4] === '2', missing: [tuningValues[4] ?? 'absent'] });
-  {
-    const inputs = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])];
+    const rows = [...(keepalive?.querySelectorAll('.return-rate__row') ?? [])].map((r) => [...r.children].map((c) => c.getAttribute('role') === 'meter' ? `meter ${c.getAttribute('aria-valuenow')}` : c.textContent?.trim()).join(' | '));
+    results.push({
+      name: '/pools the return rate block lists ten buckets',
+      ok: rows.length === 10 && rows[0] === '0 to 5m | 24 of 96 | meter 25' && rows[4] === '1h to 2h | 7 of 22 | meter 31.8' && rows[9] === 'over 32h | 0 of 1 | meter 0' && (keepalive?.textContent ?? '').includes('Return rate by idle age'),
+      missing: rows,
+    });
+    const gone = ['Also warm subagent caches', 'Daily probe cost cap', 'Grace probes after the net turns negative', 'Probe tuning', 'Stop when probes cost more than they save'].filter((w) => (dlg?.textContent ?? '').includes(w));
+    results.push({ name: '/pools the dialog draws no subagent switch, cap, net stop, grace count or tuning group', ok: gone.length === 0, missing: gone });
+    const inputs = [...(keepalive?.querySelectorAll('input[type="number"]') ?? [])];
+    const values = inputs.map((i) => i.value);
     const ranges = inputs.map((i) => `${i.getAttribute('min')}-${i.getAttribute('max')}`);
-    results.push({ name: '/pools probe tuning inputs carry the policy ranges', ok: JSON.stringify(ranges) === JSON.stringify(['0-299', '0-3599', '0-299', '0-3599', '1-20', '1-3600', '1-604800', '0-31536000', '0-1000000']), missing: ranges });
+    results.push({ name: '/pools the keepalive numbers carry the defaults and the policy ranges', ok: JSON.stringify(values) === '["3600","3600","3600"]' && JSON.stringify(ranges) === '["0-31536000","60-604800","60-604800"]', missing: [...values, ...ranges] });
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    if (inputs[4]) setter.call(inputs[4], '0');
-    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const parked = keepalive?.querySelector('button[role="switch"][aria-label="Max parked (s)"]');
+    parked?.click();
     await m.settle(120);
-    const coldHeld = save()?.disabled === true && inputs[4]?.getAttribute('aria-invalid') === 'true';
-    if (inputs[4]) setter.call(inputs[4], '2');
-    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    if (inputs[6]) setter.call(inputs[6], '10');
-    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    if (inputs[1]) setter.call(inputs[1], '59');
+    inputs[1]?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const retryHeld = save()?.disabled === true;
-    if (inputs[6]) setter.call(inputs[6], '300');
-    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const parkedHeld = save()?.disabled === true && inputs[1]?.getAttribute('aria-invalid') === 'true';
+    parked?.click();
     await m.settle(120);
-    results.push({ name: '/pools a cold probe limit of 0 or a retry ceiling under the base holds the save', ok: coldHeld && retryHeld && save()?.disabled === false, missing: [String(coldHeld), String(retryHeld), String(save()?.disabled)] });
+    const offFreed = save()?.disabled === false;
+    if (inputs[1]) setter.call(inputs[1], '3600');
+    inputs[1]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({ name: '/pools a parked ceiling under a minute holds the save while its switch is on and frees it once off', ok: parkedHeld && offFreed && save()?.disabled === false, missing: [String(parkedHeld), String(offFreed), String(save()?.disabled)] });
   }
 
   {
@@ -3090,7 +3151,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
 
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
-  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Write cost', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents', 'Also warm subagent caches']);
+  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Write cost', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents']);
 
   {
     const ttl = group(dlg, 'Cache TTL');
@@ -3127,7 +3188,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     results.push({
       name: '/pools the caching section carries the marker toggle with the stored flag, and it flips',
-      ok: before === 'true' && after === 'false' && marker()?.getAttribute('aria-checked') === 'true' && markerHint === 'Adds a marker to a request that carries none; off leaves such a request as sent. Pin sessions counts an added marker.',
+      ok: before === 'true' && after === 'false' && marker()?.getAttribute('aria-checked') === 'true' && markerHint === 'Adds a marker to a request that carries none. Off leaves such a request as sent. Pin sessions counts an added marker.',
       missing: [String(before), String(after), markerHint ?? 'no hint'],
     });
   }
@@ -3161,8 +3222,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     expect('/pools the pin and placement hints say what each choice does', `${pinning?.textContent ?? ''} ${placement?.textContent ?? ''}`, [
       'Only when the request caches: a request with no cache marker, and none added by the cache TTL policy, lands by the strategy and takes no pin. A request bound to its account keeps its pin either way.',
       "Where a subagent's first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent's account. By strategy: wherever the strategy picks.",
-      'By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the strategy.',
-      "The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the strategy decides. Estimated from the request's bytes, not counted by the upstream.",
+      'By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below. By strategy leaves it to the strategy.',
+      "The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth. Below it the strategy decides. Estimated from the request's bytes, not counted by the upstream.",
     ]);
     const threshold = () => dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -3197,7 +3258,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const rows = [daily('Overflow workspace'), monthly('Overflow workspace')].flatMap(field);
     const subscription = [daily('primary'), monthly('primary')].flatMap(field);
     const hint =
-      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
+      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers). Set one, both, or neither.";
     const heads = [...(group(dlg, 'Members')?.querySelectorAll('.members-table thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({
       name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an API-key member's",
@@ -3217,7 +3278,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await type(daily('Overflow workspace'), '5');
     results.push({
       name: '/pools a budget of 0 holds the save and names the member',
-      ok: held[0] === true && held[1] === 'Overflow workspace: A budget is a dollar amount above 0; leave it empty for no budget.' && held[2] === 'true' && save()?.disabled === false,
+      ok: held[0] === true && held[1] === 'Overflow workspace: A budget is a dollar amount above 0. Leave it empty for no budget.' && held[2] === 'true' && save()?.disabled === false,
       missing: held.map(String),
     });
   }
@@ -3380,7 +3441,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === story.revision,
     missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(story.revision)],
   });
-  const sentence = 'the pool changed while it was being edited; reload and try again';
+  const sentence = 'the pool changed while it was being edited, so reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
   const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, shedChip()];
@@ -3454,7 +3515,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveReads = await readsOnCancel(holder);
   results.push({
     name: '/pools a key move from a stale read is refused as stale in the Move dialog, and Cancel reads the lists again',
-    ok: !!mover && moveAlert === 'the key changed while it was being edited; reload and try again' && stayed === 'all' && JSON.stringify(moveReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
+    ok: !!mover && moveAlert === 'the key changed while it was being edited, so reload and try again' && stayed === 'all' && JSON.stringify(moveReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
     missing: [mover ? '' : 'from-pool is not in all', moveAlert, String(stayed), ...moveReads.map(String)],
   });
 }
@@ -3527,6 +3588,30 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
   });
   {
+    // A new pool starts at the store's defaults, both placements by strategy, so nothing reads the threshold yet.
+    const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
+    const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+    results.push({
+      name: '/pools create dialog places subagents and sessions by strategy, with the prefix threshold disabled',
+      ok: JSON.stringify(placements) === '["by_strategy","by_strategy"]' && threshold?.disabled === true,
+      missing: [JSON.stringify(placements), threshold ? String(threshold.disabled) : 'no threshold input'],
+    });
+  }
+  {
+    const shedSwitch = dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]');
+    const shedPercent = () => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
+    shedSwitch?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools create dialog proposes the default lead the moment Shed ahead of pace turns on',
+      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && shedPercent()?.disabled === false && shedPercent()?.value === SHED_DEFAULT_PERCENT,
+      missing: [String(shedSwitch?.getAttribute('aria-checked')), String(shedPercent()?.disabled), JSON.stringify(shedPercent()?.value)],
+    });
+    // Off again, so the checks below read the form as the dialog opened it.
+    shedSwitch?.click();
+    await m.settle(120);
+  }
+  {
     const autoMode = group(dlg, 'Auto mode');
     const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
     results.push({
@@ -3538,7 +3623,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const status = () => dlg?.querySelector('.dialog__status');
   const goTo = () => [...(status()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   const unnamed = [status()?.textContent ?? '', JSON.stringify(goTo())];
-  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(nameInput, 'draft');
   nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -3621,20 +3706,39 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(states), section?.querySelector('select') ? 'a select is left' : '', hint ?? 'no hint'],
     });
   }
-  // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.
+  // A pool that took the store's defaults places both by strategy, so neither placement reads the threshold.
   const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
   const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
   results.push({
-    name: '/pools the threshold is enabled while subagents are placed by cohort and sessions by strategy',
-    ok: JSON.stringify(placements) === '["by_cohort","by_strategy"]' && threshold?.disabled === false,
+    name: '/pools the threshold is disabled while subagents and sessions are both placed by strategy',
+    ok: JSON.stringify(placements) === '["by_strategy","by_strategy"]' && threshold?.disabled === true,
     missing: [JSON.stringify(placements), threshold ? String(threshold.disabled) : 'no threshold input'],
   });
+  {
+    // Subagents by cohort read the threshold, so that choice alone enables it. The select goes back to the stored
+    // choice so the Cancel below closes an unchanged dialog.
+    const subagents = dlg?.querySelector('select[aria-label="Subagent placement"]');
+    const place = async (value) => {
+      if (!subagents) return;
+      subagents.value = value;
+      subagents.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(120);
+    };
+    await place('by_cohort');
+    const enabled = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]')?.disabled;
+    await place('by_strategy');
+    results.push({
+      name: '/pools the threshold enables once subagents are placed by cohort',
+      ok: enabled === false,
+      missing: [enabled === undefined ? 'no threshold input' : String(enabled)],
+    });
+  }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
 {
-  // An edit left in the tuning of a pool whose warming ends up off is neither sent nor allowed to hold the save:
-  // the mock refuses a cold probe limit of 0 the way the route does, so a save that sent it would stay open.
+  // An edit left in the Keepalive group of a pool whose warming ends up off is neither sent nor allowed to hold the
+  // save: the mock refuses an idle window past a year the way the route does, so a save that sent it would stay open.
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool jobs')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -3645,10 +3749,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   warm()?.click();
   await m.settle(120);
-  const cold = [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])][4];
+  const idle = group(dlg, 'Keepalive')?.querySelector('input[type="number"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  if (cold) setter.call(cold, '0');
-  cold?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  if (idle) setter.call(idle, '31536001');
+  idle?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const heldWhileOn = save()?.disabled === true;
   warm()?.click();
@@ -3661,7 +3765,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const open = [...m.container.querySelectorAll('dialog[open]')].pop();
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs');
   results.push({
-    name: '/pools tuning left in a block whose warming is off is not sent and holds nothing',
+    name: '/pools an idle window left in a block whose warming is off is not sent and holds nothing',
     // The dialog offers active and disabled alone, so the save turns the exhausted pool active, and the write clears
     // the spend that held its member: the sentence reads what the save left.
     ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool jobs') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Research workspace takes every fresh session.',
@@ -3759,7 +3863,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: held,
   });
   // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
-  const blank = dlg?.querySelector('input[placeholder="research"]');
+  const blank = dlg?.querySelector('input[placeholder="shared"]');
   if (blank) {
     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
     blank.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -3967,7 +4071,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String), String(typedSaved)],
   });
 
-  // A pool storing no margin opens with the field empty, holds the save until one is typed, and saves 20 % as 0.2.
+  // A pool storing no margin opens with the field at the proposed lead, holds the save once the field is cleared, and
+  // saves 20 % as 0.2.
   await api.updatePool('all', written);
   m.unmount();
   m = await mount('/pools');
@@ -3976,8 +4081,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
+  const proposed = percent(dlg)?.value;
+  setter.call(percent(dlg), '');
+  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
   const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
-    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
+    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round, and a sibling counts as cool under the line minus 5%.',
   );
   const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
   setter.call(percent(dlg), '20');
@@ -3985,9 +4094,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const fifth = await savedMigrate(dlg);
   results.push({
-    name: '/pools a margin of 20 % saves as 0.2 once typed into a field that opened empty',
-    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
-    missing: [hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
+    name: '/pools a cleared margin holds the save, and 20 % typed back saves as 0.2',
+    ok: proposed === SHED_DEFAULT_PERCENT && hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
+    missing: [String(proposed), hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
   await api.updatePool('all', written);
@@ -4120,7 +4229,7 @@ m.unmount();
   api.getSettings = getSettings;
   results.push({
     name: '/pools the preview says the cost model is loading while the settings read is held',
-    ok: loading === 'The cost model is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
+    ok: loading === 'The cost model is loading, and window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4412,7 +4521,7 @@ localStorage.removeItem('phoebis.expertView');
     missing: [...marks.map(String), ...described('identity'), ...described('keys')],
   });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const name = dlg?.querySelector('input[placeholder="research"]');
+  const name = dlg?.querySelector('input[placeholder="shared"]');
   if (name) {
     setter.call(name, 'first');
     name.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -4506,7 +4615,7 @@ localStorage.removeItem('phoebis.expertView');
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 15 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -4519,7 +4628,7 @@ localStorage.removeItem('phoebis.expertView');
   x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
-  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 11, missing: parents(x) });
   results.push({
     name: 'a chosen group the filter takes off gives way to the first shown group',
     ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
@@ -4551,10 +4660,9 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
-  const KEEPALIVE = ['Keep prompt caches warm', 'Also warm subagent caches', 'Stop when probes cost more than they save', 'Grace probes after the net turns negative', 'Daily probe cost cap ($)'];
-  const TUNING = ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
     Identity: [['Name', 'Status'], null],
@@ -4567,7 +4675,6 @@ localStorage.removeItem('phoebis.expertView');
     'Overage and plan end': [['Overage policy'], '2 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
-    'Probe tuning': [TUNING, null],
     'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
   };
   // With the mode on, the groups that hold an expert field read every one of them.
@@ -4596,8 +4703,8 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
-    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
+    name: '/pools with the mode off the rail and the body hold eleven groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 16,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
   const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
@@ -4622,11 +4729,11 @@ localStorage.removeItem('phoebis.expertView');
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 21 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 21 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
@@ -4874,7 +4981,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     name: '/keys a rotated key counts the sessions still on the previous secret',
     ok:
       retired?.textContent?.trim() === '1 session still on the previous secret' &&
-      (retired.getAttribute('title') ?? '').startsWith('Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched. Previous secret last used '),
+      (retired.getAttribute('title') ?? '').startsWith('Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched. Previous secret last used '),
     missing: [retired?.textContent?.trim() ?? 'absent', retired?.getAttribute('title') ?? 'no title'],
   });
 }
@@ -5156,7 +5263,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const labels = [...(models?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: "/keys the pool's rules show in gray under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in gray, after this key's own. Replace applies this key's rules alone." && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
     });
     results.push({
@@ -5230,7 +5337,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   edit?.click();
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret; a revoked key cannot.']);
+  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.']);
   {
     const expiry = editDlg?.querySelector('select[aria-label="Expiry"]');
     const toggle = editDlg?.querySelector('button[role="switch"][aria-label="Enabled"]');
@@ -5454,7 +5561,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === laptop.revision,
     missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(laptop.revision)],
   });
-  const sentence = 'the key changed while it was being edited; reload and try again';
+  const sentence = 'the key changed while it was being edited, so reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
   const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, labelled('laptop (written)')];
@@ -8791,7 +8898,12 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+{
+  const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
+  const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
+  results.push({ name: '/analytics cache warming draws no savings figure: no saved tile or column and no Savings chart', ok: left.length === 0 && !titles.includes('Savings'), missing: [...left, titles.includes('Savings') ? 'Savings chart' : ''].filter(Boolean) });
+}
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
@@ -9367,7 +9479,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
   results.push({
     name: '/analytics the placements card says how a hit is read',
-    ok: card('Placements by rung')?.querySelector('.card__subtitle')?.textContent === "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all",
+    ok: card('Placements by rung')?.querySelector('.card__subtitle')?.textContent === "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all",
     missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
   });
   await tab(m, 'Burn');
@@ -9427,7 +9539,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
     const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
-    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 7 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
+    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 9 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
@@ -9562,7 +9674,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The Account filter offers the accounts with traffic in range, which `legacy`, the first row, is not among.
     const picked = 'primary';
     const subtitle = () => accountTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
-    const ignored = 'Totals for the selected range and accounts; the key, pool, model, client and session filters and the probes toggle do not apply here';
+    const ignored = 'Totals for the selected range and accounts. The key, pool, model, client and session filters and the probes toggle do not apply here';
     await toggle('Account', picked);
     const narrowed = accountRows();
     const plain = subtitle();
@@ -9627,14 +9739,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     api.getAnalyticsBreakdown = getAnalyticsBreakdown;
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
     const wasteBars = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-    const labels = ['Entry expired', 'Evicted at the byte cap', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
-    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 7 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
+    const labels = ['Entry expired', 'Evicted at the byte cap', 'Horizon held the recipe', 'Idle limit ran out', 'Parked limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
+    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 9 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
     const wasteCounts = [...(weekCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 7 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 9 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
     {
       const coldRow = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Returned cold');
       const drawn = Number(coldRow?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? -1);
-      const mocked = weekGroups.reduce((n, g) => n + (g.savings?.wastedProbeReasons.cold_return ?? 0), 0);
+      const mocked = weekGroups.reduce((n, g) => n + g.wastedProbeReasons.cold_return, 0);
       results.push({ name: "/analytics wasted probes draws the cold return row with the mock's count", ok: coldRow !== undefined && weekGroups.length > 0 && drawn === mocked, missing: [`drawn ${drawn}`, `mock ${mocked}`, `groups ${weekGroups.length}`] });
     }
     const idleShare = Number([...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
@@ -9733,7 +9845,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
     results.push({
       name: '/analytics probes by outcome carries a migrated slice with its hint',
-      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net"),
+      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache."),
       missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
     });
     const probeLegend = [...(migrated?.parentElement?.querySelectorAll('li') ?? [])];
@@ -9744,7 +9856,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: '/analytics probes by outcome carries a held slice above zero after migrated, and the warming table a Held column before Skipped',
       ok:
         probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Migrated,Held,Skipped,Failed' &&
-        (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.' &&
+        (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.' &&
         columns.indexOf('Held') === columns.indexOf('Skipped') - 1 &&
         /^Held\s*[1-9]/.test(held?.textContent ?? ''),
       missing: [probeLegend.map((li) => li.textContent ?? '').join('|').slice(0, 160), held?.getAttribute('title') ?? 'no held slice', columns.join(',')],
@@ -9772,7 +9884,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Burn');
     results.push({ name: '/analytics a tab click writes its hash and mounts its section alone', ok: m.location().hash === '#burn' && m.location().pathname === '/analytics' && mounted() === 'burn', missing: [JSON.stringify(m.location()), mounted()] });
     const selects = ['.filters select.groupby-select', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
-    results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
+    results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
     await tab(m, 'Traffic');
     m.unmount();
     m = await mount('/analytics#burn');
@@ -10150,21 +10262,16 @@ m.unmount();
       title: t.getAttribute('title'),
       value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
     }));
-  const fed = tiles().filter((t) => t.label !== 'Sessions');
+  // Every tile reads the overview, the Sessions tile's count of its cap among them.
+  const fed = tiles();
   const retries = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
   const line = page.container.querySelector('.stat-grid + .sessions__notice');
-  // The Sessions tile reads the rows, which the overview does not feed, so its count and note stand.
-  const companions = [...page.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(page, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
-  const sessionsTile = tiles().find((t) => t.label === 'Sessions');
   results.push({
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
       fed.length === 6 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
-      sessionsTile?.value !== '-' &&
-      companions > 0 &&
-      sessionsTile?.note === `${companions} with a companion, 10 with a recipe` &&
       retries.length === 1 &&
       line !== null &&
       line.contains(retries[0]) &&
@@ -10206,12 +10313,12 @@ m.unmount();
   });
 }
 {
-  // A recipe that lapsed or was evicted leaves the route's list, so the mock holds none under either reason; the
-  // stub hands the page one held under `expired` for its label and hint to be read.
+  // A lapsed recipe keeps its row, read `ended` under `expired`. The stub makes the story's first recipe one, so its
+  // label and hint are read on a row the check knows.
   const { listKeepaliveRecipes } = api;
   api.listKeepaliveRecipes = async () => {
     const [first, ...rest] = await listKeepaliveRecipes();
-    return [{ ...first, reason: 'expired', state: 'held' }, ...rest];
+    return [{ ...first, cause: 'expired', state: 'ended' }, ...rest];
   };
   const page = await mount('/sessions');
   await page.settle();
@@ -10222,9 +10329,33 @@ m.unmount();
   page.unmount();
   api.listKeepaliveRecipes = listKeepaliveRecipes;
   results.push({
-    name: '/sessions a recipe held under expired reads entry expired with its hint',
-    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
+    name: '/sessions a recipe ended under expired reads entry expired with its hint',
+    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent. The next real request starts a new recipe.',
     missing: [hint ?? 'no entry expired badge'],
+  });
+}
+{
+  // A request refused before any account served it leaves an agent row with no account, which is no pin: neither "+N"
+  // badge of its session counts it, and its line reads none under Account.
+  const { listKeepaliveRecipes } = api;
+  api.listKeepaliveRecipes = async () => {
+    const [first, ...rest] = await listKeepaliveRecipes();
+    return [first, { ...first, accountId: null, agentId: 'zz01', cause: 'forced_tool', model: 'claude-haiku-4-5', nextProbeAt: null, state: 'not_retained' }, ...rest];
+  };
+  const page = await mount('/sessions');
+  await page.settle();
+  const row = page.container.querySelector('tbody tr.srow');
+  const pins = ['Model', 'Account'].flatMap((header) => [...(sessionCell(page, row, header)?.querySelectorAll('.badge') ?? [])].map((b) => b.getAttribute('title') ?? ''));
+  row?.click();
+  await page.settle(200);
+  const line = [...page.container.querySelectorAll('.agents__row')].find((l) => l.children[0]?.textContent?.trim() === 'zz01');
+  const account = line?.children[2]?.textContent?.trim() ?? null;
+  page.unmount();
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: '/sessions a row with no account raises no pinned-elsewhere badge and reads none under Account',
+    ok: line !== undefined && account === 'none' && pins.every((title) => !title.includes('zz01') && !title.includes('null')),
+    missing: [account ?? 'no zz01 line', ...pins],
   });
 }
 {
@@ -10329,12 +10460,12 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
   const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
-  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
   results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith("Every session within the session expiry, with the account each model is pinned to and each agent's cache-warming recipe.") && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
   // The page text keeps hidden words, so only a count of the head's paragraphs catches a leftover copy of the old one.
   const copies = [...m.container.querySelectorAll('.page-head p')].filter((p) => p.textContent?.includes('Every Claude Code session the router has seen'));
@@ -10347,8 +10478,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions a second click closes the paragraph', ok: how()?.getAttribute('aria-expanded') === 'false' && para()?.hidden === true, missing: [] });
 }
 {
-  const meters = m.container.querySelectorAll('.cost-caps .meter').length;
-  results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
   const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));
   const expired = tiles.find((t) => t.label === 'Expired between turns, 24h');
   {
@@ -10370,9 +10499,30 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     // Counted off the table, so a tile that counts anything but the rows whose companion reports or went silent fails.
     const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
-    results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with a companion,`), missing: [`${companions} rows`, note || 'no note'] });
+    results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
     // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
+  }
+  {
+    // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
+    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe.
+    const ov = await api.getKeepaliveOverview();
+    const strip = [...m.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
+    const read = (label) => strip.find(([l]) => l === label) ?? [];
+    const want = [
+      ['Sessions', `${ov.limits?.sessions.count} of 128`],
+      ['Agents', `${ov.limits?.agents.count} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
+      ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
+    ];
+    results.push({
+      name: '/sessions the strip reads the sessions, the agents and the retained bytes each as a count of its cap',
+      ok:
+        JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
+        ov.limits?.sessions.count > 0 &&
+        ov.limits?.agents.count > 0 &&
+        want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
+      missing: strip.map((t) => t.join(' | ')),
+    });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
@@ -10453,13 +10603,31 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
   }
   const summaries = rows().map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (armed|held|probing)/.test(x)), missing: summaries.slice(0, 3) });
+  results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (retained|held|paused|not retained|ended)/.test(x)), missing: summaries.slice(0, 3) });
 
   // Companion state: every row carries one of the three, and the silent ones say since when.
   const companions = rows().map((r) => cell(r, 'Companion')?.textContent?.trim() ?? '');
   const silent = companions.filter((c) => c.startsWith('silent'));
-  results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c === 'reporting') && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
+  results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c.startsWith('reporting')) && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
   results.push({ name: '/sessions silent companions say since when', ok: silent.every((c) => /^silent ?since .+ ago$/.test(c)), missing: silent });
+  {
+    // A reporting mod's cell carries the seconds since the person was last seen, under the badge whose hint names what
+    // the mod reports.
+    const reporting = rows().map((r) => cell(r, 'Companion')).filter((c) => c?.querySelector('.badge')?.textContent?.trim() === 'reporting');
+    const ages = reporting.map((c) => c.querySelector('.sub')?.textContent?.trim() ?? '');
+    const hint = reporting[0]?.querySelector('.badge')?.getAttribute('title') ?? '';
+    const none = rows().map((r) => cell(r, 'Companion')).find((c) => c?.textContent?.trim() === 'none');
+    results.push({
+      name: '/sessions a reporting mod reads the presence age under its badge, and each companion word its hint',
+      ok:
+        ages.length > 0 &&
+        ages.some((a) => /^presence \d+s ago$/.test(a)) &&
+        ages.every((a) => a === '' || /^presence \d+[smh]( \d+[smh])? ago$/.test(a)) &&
+        hint === "The keepalive mod reports this session's agents, their parks and the person's presence." &&
+        none?.querySelector('[title]')?.getAttribute('title') === 'No keepalive mod has registered this session. The router still pins it and still sees its requests.',
+      missing: [...new Set(ages), hint, none?.querySelector('[title]')?.getAttribute('title') ?? 'no none cell'],
+    });
+  }
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
@@ -10516,23 +10684,29 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const silentBadge = [...(silentRows[0]?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'silent');
     results.push({
       name: '/sessions silent badge says the retained prompts stay',
-      ok: (silentBadge?.getAttribute('title') ?? '').includes("The retained prompts stay and are probed under the pool's idle limits, counted from the last real request") && !(silentBadge?.getAttribute('title') ?? '').includes('lease'),
+      ok: (silentBadge?.getAttribute('title') ?? '') === 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
       missing: [silentBadge?.getAttribute('title') ?? 'absent'],
     });
-    const parkedRow = rows().find((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
+    const parkedRows = rows().filter((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
+    const probedParked = parkedRows.filter((r) => !(cell(r, 'Cache warming')?.textContent ?? '').includes('held'));
+    const parkedRow = parkedRows[0];
     results.push({
-      name: '/sessions parked sessions are probed like busy ones',
-      ok: parkedRow !== undefined && cell(parkedRow, 'Next probe')?.textContent?.trim() !== 'not scheduled' && !(cell(parkedRow, 'Cache warming')?.textContent ?? '').includes('held'),
-      missing: [cell(parkedRow, 'Cache warming')?.textContent?.trim() ?? 'absent', cell(parkedRow, 'Next probe')?.textContent?.trim() ?? 'absent'],
+      name: '/sessions a parked session inside its ceilings is probed like a busy one, and the one past its horizon is held',
+      ok: parkedRows.length === 2 && probedParked.length === 1 && cell(probedParked[0], 'Next probe')?.textContent?.trim() !== 'not scheduled',
+      missing: parkedRows.map((r) => `${cell(r, 'Cache warming')?.textContent?.trim()} ${cell(r, 'Next probe')?.textContent?.trim()}`),
     });
     const mixedRow = rows()[0];
     results.push({
-      name: '/sessions an agent awaiting cache evidence counts as armed in the row summary',
-      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 armed, 1 held'),
+      name: '/sessions an agent awaiting cache evidence counts as retained in the row summary',
+      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 retained, 1 paused'),
       missing: [cell(mixedRow, 'Cache warming')?.textContent?.trim() ?? 'absent'],
     });
     const parkedBadge = [...(parkedRow?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'parked');
-    results.push({ name: '/sessions parked badge says the idle limits do not apply', ok: (parkedBadge?.getAttribute('title') ?? '').includes('idle limits do not apply'), missing: [parkedBadge?.getAttribute('title') ?? 'absent'] });
+    results.push({
+      name: '/sessions the parked badge says the parked and horizon rules and the idle window apply',
+      ok: (parkedBadge?.getAttribute('title') ?? '') === 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
+      missing: [parkedBadge?.getAttribute('title') ?? 'absent'],
+    });
   }
 
   // A forked session's badge links to the row of the session it branched from.
@@ -10638,7 +10812,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
         (cell(gone, 'Key')?.querySelector('.sub')?.getAttribute('title') ?? '').includes('no longer exists') &&
         cell(gone, 'Agents')?.textContent?.trim() === '0' &&
         cell(gone, 'Cache warming')?.textContent?.trim() === 'no recipe' &&
-        (cell(gone, 'Cache warming')?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id; nothing is scheduled for it',
+        (cell(gone, 'Cache warming')?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id, so nothing is scheduled for it',
       missing: gone ? [...gone.children].map((c) => c.textContent?.trim() ?? '') : ['absent'],
     });
     {
@@ -10681,12 +10855,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   rows()[0]?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
-  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'Net', 'State', 'main']);
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
+  {
+    const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
+    const want = ['Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
+    results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
+  }
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
-      name: '/sessions an agent awaiting cache evidence is armed on the first stream event',
-      ok: mainAgent.includes('on first stream event') && mainAgent.includes('armed') && mainAgent.includes('awaiting cache evidence') && !mainAgent.includes('not scheduled'),
+      name: '/sessions an agent awaiting cache evidence is retained with its probe on the first stream event',
+      ok: mainAgent.includes('on first stream event') && mainAgent.includes('retained') && mainAgent.includes('awaiting cache evidence') && !mainAgent.includes('not scheduled'),
       missing: [mainAgent || 'absent'],
     });
   }
@@ -10708,73 +10887,108 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const open = m.container.querySelectorAll('.srow__detail').length;
   results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
-  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'cap reached', 'idle limit', 'net negative', 'paused: cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
+  expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
-  {
-    const netNegative = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'net negative');
-    results.push({
-      name: '/sessions net negative explains the grace probes',
-      ok: (netNegative?.getAttribute('title') ?? '').includes("The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again."),
-      missing: [netNegative?.getAttribute('title') ?? 'absent'],
-    });
-  }
+  results.push({ name: '/sessions no reason reads net negative', ok: !m.text().includes('net negative'), missing: [m.text().includes('net negative') ? 'still there' : ''] });
   {
     const chips = [...m.container.querySelectorAll('.agents__row .badge')].map((b) => b.textContent?.trim());
     results.push({ name: '/sessions no recipe chip reads waiting any more', ok: !chips.includes('waiting'), missing: chips.filter((c) => c === 'waiting') });
     const awaiting = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'awaiting cache evidence');
     results.push({
       name: '/sessions awaiting cache evidence says the timer arms from the first stream event',
-      ok: (awaiting?.getAttribute('title') ?? '').includes('the probe timer arms from that event and probes then run while the response is still streaming'),
+      ok: (awaiting?.getAttribute('title') ?? '').includes('The probe timer arms from that event and probes then run while the response is still streaming'),
       missing: [awaiting?.getAttribute('title') ?? 'absent'],
     });
     const badges = [...m.container.querySelectorAll('.badge')];
     const untitled = badges.filter((b) => !(b.getAttribute('title') ?? '').trim());
     results.push({ name: '/sessions every badge carries a hover hint', ok: badges.length > 20 && untitled.length === 0, missing: untitled.map((b) => b.textContent?.trim() ?? '') });
-    const stateBadge = badges.find((b) => b.textContent?.trim() === 'armed');
+    // The state badge's hover is the cause's sentence, which the line repeats in prose after the state's own sentence
+    // for a reader that never hovers.
+    const STATE_SENTENCE = {
+      ended: 'The recipe ended. The next real request starts a new one.',
+      held: 'The prompt is kept and no probe is sent while the cause holds.',
+      'not retained': 'The last request was not kept. The cause says why.',
+      paused: 'The engine paused this recipe until the next real request. The cause says why.',
+      retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",
+    };
+    const stated = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((l) => ({
+      cause: l.querySelector('.agents__state > .badge:nth-child(2)')?.getAttribute('title') ?? '',
+      hint: l.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? '',
+      sentence: l.querySelector('.agents__cause')?.textContent?.trim() ?? '',
+      state: l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? '',
+    }));
+    const wrong = stated.filter((x) => x.hint === '' || x.cause !== x.hint || x.sentence !== `${STATE_SENTENCE[x.state]} ${x.hint}`);
     results.push({
-      name: '/sessions armed badge covers both the scheduled and the pending case',
-      ok: (stateBadge?.getAttribute('title') ?? '') === 'The next probe is scheduled, or arms from the first stream event of the request in flight.',
-      missing: [stateBadge?.getAttribute('title') ?? 'absent'],
+      name: "/sessions every state badge carries its cause's sentence on hover and the line repeats it after the state's",
+      ok: stated.length > 10 && new Set(stated.map((x) => x.state)).size === 5 && wrong.length === 0,
+      missing: [...new Set(stated.map((x) => x.state))].concat(wrong.map((x) => `${x.state}: ${x.hint} | ${x.sentence}`)),
     });
     const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
     results.push({
       name: '/sessions idle limit reason says the retained prompt was discarded',
-      ok: idle !== undefined && (idle.getAttribute('title') ?? '').includes("The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded."),
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window, capped at the recipe's break-even, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
       missing: [idle?.getAttribute('title') ?? 'absent'],
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });
     expect('/sessions the idle limit explains the missing recipe', m.text(), ['the idle limit ran out ']);
   }
   {
-    const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'paused: cold probes');
+    // A parked session held while its wake is past the pool's horizon, and a subagent whose park ran past the parked
+    // ceiling.
+    const badge = (label) => [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === label);
+    const horizon = badge('wake too far');
+    const parked = badge('parked limit');
+    results.push({
+      name: "/sessions a parked agent's horizon hold and its parked limit render with their hints, both as warnings",
+      ok:
+        (horizon?.getAttribute('title') ?? '') === "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes." &&
+        horizon?.classList.contains('badge--warning') === true &&
+        (parked?.getAttribute('title') ?? '') === "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe." &&
+        parked?.classList.contains('badge--warning') === true,
+      missing: [horizon?.getAttribute('title') ?? 'no horizon badge', parked?.getAttribute('title') ?? 'no parked limit badge'],
+    });
+  }
+  {
+    const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'cold probes');
     results.push({ name: '/sessions cold probe reason names the limit', ok: (cold?.getAttribute('title') ?? '').includes("cold probe limit"), missing: [cold?.getAttribute('title')] });
   }
-  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool jobs keeps no caches warm', 'key ci opts out']);
   {
-    const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
-    // The story's probe replays a 20k-token Fable 5.1 prefix out of band, on a Sunday evening in Los Angeles; an
-    // agent that probed once is down one probe's share, and one held for overage up three.
-    const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
-    const probe = shareOf(costs, 'five_hour', anchorTier(costs), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, Date.UTC(2026, 8, 13, 20, 0));
-    results.push({
-      name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: probe !== null && nets.includes(`${fmtShare(-probe)} of the 5-hour window`) && nets.includes(`${fmtShare(3 * probe)} of the 5-hour window | -$0.01`) && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
-      missing: [...new Set(nets)],
+    // The parked main inside its ceilings and the one held past its horizon, each line's state word, cause and park.
+    const lines = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
+    const lineOf = (park) => lines.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
+    const read = (line) => ({
+      cause: line?.querySelector('.agents__state > .badge:nth-child(2)')?.textContent?.trim() ?? null,
+      hint: line?.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? null,
+      life: line?.querySelector('.agents__life')?.textContent?.trim() ?? null,
+      lifeHint: line?.querySelector('.agents__life .badge')?.getAttribute('title') ?? null,
+      sentence: line?.querySelector('.agents__cause')?.textContent?.trim() ?? null,
+      state: line?.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? null,
     });
-    // The cost model has no weight for the story's Opus 5 and Sonnet 5, so a probe on either settles in dollars on a
-    // subscription too.
-    const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
-      account: row.children[2]?.textContent?.trim(),
-      model: row.children[1]?.textContent?.trim(),
-      net: [...(row.querySelector('.agents__net')?.children ?? [])].map((part) => part.textContent?.trim()).join(' | '),
-    }));
-    const unlisted = agentRows.filter((r) => ['primary', 'nightly'].includes(r.account) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
+    const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
+    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({
-      name: '/sessions an agent on a subscription account whose model the cost model cannot price settles its probes in dollars',
-      ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
-      missing: unlisted.map((r) => `${r.account} ${r.model}: ${r.net}`),
+      name: '/sessions the agent line shows the state word with its cause and the park detail',
+      ok:
+        background.state === 'retained' &&
+        background.cause === 'scheduled' &&
+        background.hint === 'The next probe is scheduled before the cache entry expires.' &&
+        background.sentence === `The prompt is kept and its probe is scheduled or waiting for the request's first stream event. ${background.hint}` &&
+        background.lifeHint === PARKED &&
+        scheduled.state === 'held' &&
+        scheduled.cause === 'wake too far' &&
+        scheduled.sentence === `The prompt is kept and no probe is sent while the cause holds. ${scheduled.hint}` &&
+        (scheduled.hint ?? '').startsWith('The session is parked on a scheduled wakeup further away'),
+      missing: [JSON.stringify(background), JSON.stringify(scheduled)],
+    });
+    const counts = lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? '');
+    results.push({
+      name: "/sessions an agent line counts the day's probes and credits and names its last probe",
+      ok: counts.length > 0 && counts.every((c) => /^\d+ \/ \d+$/.test(c)) && counts.some((c) => c !== '0 / 0') && lines.some((l) => /ago$/.test(l.querySelector('.agents__probe')?.textContent?.trim() ?? '')),
+      missing: [...new Set(counts)],
     });
   }
+  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool jobs keeps no caches warm', 'key ci opts out']);
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
   collapseAll?.click();
@@ -10799,7 +11013,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
       name: '/analytics a session view reads its warming tiles and cache costs as unavailable',
-      ok: tiles.length === 4 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
+      ok: tiles.length === 2 && tiles.every((v) => v === '-') && costLegend.length === 2 && costLegend.every((v) => v === '-'),
       missing: [...tiles, ...costLegend],
     });
   }
@@ -11067,10 +11281,21 @@ m.unmount();
     const opus = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
     const fast = opus?.nextElementSibling;
     const opusFast = prices.find((p) => p.model === 'claude-opus-5-5')?.fast;
-    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
-    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    // A model can carry a fast row and a prompt row, so a sub-row's model is the nearest plain row above it.
+    const modelOf = (row) => {
+      let at = row;
+      while (at?.classList.contains('cost-ref__sub')) at = at.previousElementSibling;
+      return at;
+    };
+    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => modelOf(r)?.children[0]?.textContent?.trim());
+    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(modelOf(r)) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    const haiku = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const long = prices.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const prompt = haiku?.nextElementSibling;
+    const expectedSubs = familyOrder(prices.filter((p) => p.fast !== null || p.longContext !== null).map((p) => p.model))
+      .flatMap((model) => { const p = prices.find((x) => x.model === model); return [...(p.fast ? [model] : []), ...(p.longContext ? [model] : [])]; });
     results.push({
-      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells",
+      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
       ok:
         JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
         wrong.length === 0 &&
@@ -11078,11 +11303,15 @@ m.unmount();
         fast.children[0]?.textContent === 'fast mode' &&
         opusFast !== null &&
         JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
-        JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
+        long !== null &&
+        prompt?.classList.contains('cost-ref__sub') === true &&
+        prompt.children[0]?.textContent === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(cells(prompt)) === JSON.stringify(priced(long)) &&
+        JSON.stringify(subs) === JSON.stringify(expectedSubs) &&
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
-      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
+      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
   }
 
@@ -11222,13 +11451,12 @@ m.unmount();
   const fromPools = [
     ['Warm sessions', await opened(pools, near('Load shedding', 'A warm session rewrites its cache where it lands'))],
     ['Write cost', await opened(pools, near('Cache TTL', 'Plan writes apply while an account spends plan quota'))],
-    ['Daily probe cost cap', await opened(pools, near('Keepalive', 'Plan-funded probes do not count here.'))],
   ];
   pools.unmount();
   localStorage.removeItem('phoebis.expertView');
   results.push({
-    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost and probe cost cap hints on API prices",
-    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices', 'API prices']),
+    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost hint on API prices",
+    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices']),
     missing: fromPools.map((p) => p.join(': ')),
   });
   const dash = await mount('/');
@@ -11379,6 +11607,44 @@ m.unmount();
     });
   }
 
+  // On the test tables, the Haiku 5.5 row priced by prompt length: a prompt-length sub-row under the model, labeled
+  // from the row's threshold and priced at its cells over it.
+  {
+    const { getSettings } = api;
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const haiku = rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const prompt = haiku?.nextElementSibling;
+    const long = wired.apiPrices.models.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const drawn = {
+      cells: [...(prompt?.children ?? [])].slice(1).map((td) => td.textContent?.trim()),
+      hasSub: haiku?.classList.contains('has-sub') ?? false,
+      label: prompt?.classList.contains('cost-ref__sub') ? prompt.children[0]?.textContent : 'no sub-row',
+      stripe: prompt?.classList.contains('is-alt') === haiku?.classList.contains('is-alt'),
+    };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions API prices list a prompt-length row under a model priced by prompt length, labeled from its threshold and priced at its cells over it',
+      ok:
+        long !== null &&
+        drawn.hasSub &&
+        drawn.label === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(drawn.cells) === JSON.stringify([long.inputPerM, long.cacheReadPerM, long.cacheWrite5mPerM, long.cacheWrite1hPerM, long.outputPerM].map(usd)) &&
+        drawn.stripe,
+      missing: [JSON.stringify(drawn)],
+    });
+  }
+
   // The band on the test tables, Los Angeles weekdays 5 to 11, seen from UTC.
   {
     const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
@@ -11481,7 +11747,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
     missing: rows,
   });
   failed.unmount();
@@ -11577,17 +11843,16 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  // The mock stores 268435456 retained bytes, which is 256 MiB. Each cost file's row carries its table's date, read
-  // from the captured envelope through the page's own label.
+  // Each cost file's row carries its table's date, read from the captured envelope through the page's own label. The
+  // three keepalive limits read on the Sessions page beside their counts, so About carries none of them.
   const wired = decodeSettings(SETTINGS_WIRE);
   const priceRow = `API prices path=./api_prices.yaml, effective ${effectiveLabel(wired.apiPrices.effective)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${effectiveLabel(wired.subscriptionCosts.effective)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates, the three keepalive limits and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
-  const restart = 'Set in the configuration file; a change takes a restart.';
   results.push({
-    name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path line names its key in the configuration file and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
@@ -11609,7 +11874,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   });
 }
 
-// The downstream client configuration card: two snippets and one definition per variable.
+// The downstream client configuration card: one snippet and one definition per variable.
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
@@ -11618,13 +11883,13 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
-    name: '/settings optional snippet carries the owner id pair',
-    ok: (snippets[1] ?? '').includes('CC_KEEPALIVE_OWNER_ID=$(uuidgen)') && (snippets[1] ?? '').includes('ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"'),
-    missing: [snippets[1] ?? 'absent'],
+    name: '/settings carries one snippet and no owner wrapper, since the mod fences every session itself',
+    ok: snippets.length === 1 && !m.text().includes('X-Keepalive-Owner-Id') && !m.text().includes('Optional hardening'),
+    missing: snippets.slice(1),
   });
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.textContent?.includes('Downstream client configuration'));
   const copies = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim()).filter((t) => t === 'Copy' || t === 'Copy snippet');
-  results.push({ name: '/settings each snippet has its own copy button', ok: copies.length === 2, missing: copies });
+  results.push({ name: '/settings the snippet has its own copy button', ok: copies.length === 1, missing: copies });
   const terms = [...m.container.querySelectorAll('.envdl dt')].map((dt) => dt.textContent?.trim());
   const want = [
     'ANTHROPIC_BASE_URL',
@@ -11633,23 +11898,18 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
     'DISABLE_TELEMETRY=1',
     'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
-    'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
-    'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the cache-keepalive companion's reports go here.",
+    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
-    'an ANTHROPIC_API_KEY would switch those off.',
+    'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
-    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
     "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
     'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-    'Optional hardening.',
-    'They need a wrapper script, since the env block of Claude Code',
-    'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',
     'Worth setting for Fable 5.1 sessions in a pool with cache warming on',
     'Leave it unset without warming.',
   ]);
@@ -12041,10 +12301,10 @@ m.unmount();
     missing: [JSON.stringify(atThree), JSON.stringify(atSix)],
   });
 
-  // The sidebar's version read and the page's own read the same route at mount, both first reads, so neither runs
-  // quiet.
+  // The sidebar's version read and the Dashboard's cost read reach the same route at mount, both first reads, so
+  // neither runs quiet.
   outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
-  page = await mount('/quota', { now: CLOCK_ORIGIN });
+  page = await mount('/', { now: CLOCK_ORIGIN });
   const once = toasts(page);
   tick(6_000);
   await page.settle();
@@ -12052,7 +12312,7 @@ m.unmount();
   outage.restore();
   page.unmount();
   results.push({
-    name: "/quota a repeat of one route's failure does not queue twice",
+    name: "/ a repeat of one route's failure does not queue twice",
     ok: once.length === 1 && once[0].startsWith('/admin/settings failed') && after.length === 0,
     missing: [JSON.stringify(once), JSON.stringify(after)],
   });
@@ -12106,7 +12366,7 @@ m.unmount();
     globalThis.fetch = realFetch;
   }
   await page.settle(100);
-  const ended = page.text().includes('Your session ended; log in again.');
+  const ended = page.text().includes('Your session ended, so log in again.');
   await logIn(page);
   const afterExpiry = { keys: page.container.querySelector('.card--table') !== null, toasts: toasts(page) };
   page.unmount();

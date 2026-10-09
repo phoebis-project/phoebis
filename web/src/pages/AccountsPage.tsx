@@ -22,7 +22,7 @@ import { joinTrend } from '@/lib/trend';
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
-const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
+const END_HINT = "Prefilled from the plan's start and its monthly renewal. Correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -344,7 +344,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               {STATUS_LABEL[account.status]}
             </Badge>
             {account.credential.quarantined && (
-              <Badge tone="critical" title="the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it">
+              <Badge tone="critical" title="the last refresh's outcome is uncertain, so re-pair or wait for the next start to resolve it">
                 quarantined
               </Badge>
             )}
@@ -425,7 +425,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 'Disconnect account',
-                `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
+                `Deletes ${account.label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.`,
                 'Disconnect',
                 () => api.disconnectAccount(account.id),
                 'Disconnected',
@@ -506,7 +506,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   ]
                 : [
                     { label: 'Type', value: 'API key' },
-                    { label: 'Windows', value: 'None reported; billed per token' },
+                    { label: 'Windows', value: 'None reported, billed per token' },
                   ]
             }
           />
@@ -782,11 +782,11 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         />
       </div>
       <div className="form-row">
-        <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the account in every log and URL">
-          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'work'} className="mono" />
+        <Field label="Id" hint="Lowercase letters, digits, and dashes. It names the account in every log and URL">
+          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'home' : 'office'} className="mono" />
         </Field>
         <Field label="Label" hint="Short name used in pools and logs.">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'home' : 'Office workspace'} />
         </Field>
       </div>
       {kind === 'api_key' && (
@@ -941,7 +941,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
 
       {step === 1 && (
         <div className="stack">
-          <p className="secondary">Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address; keep that tab open for the next step.</p>
+          <p className="secondary">Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback address. Keep that tab open for the next step.</p>
           {session ? (
             <div className="secret">
               <code className="pairing__url">{session.authorizeUrl}</code>
@@ -969,7 +969,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
               Registered redirect: <code>{session.redirectUri}</code>
             </p>
           )}
-          <p className="muted">The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.</p>
+          <p className="muted">The page will not load, since nothing listens on that port. The URL in the address bar is complete, and the code alone works too.</p>
           <PairingExpiry remaining={remaining} expired={expired} ready={session !== null} />
         </div>
       )}

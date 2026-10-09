@@ -1,27 +1,26 @@
-//! The companion's two routes, on the proxy listener under the API key.
-//! The companion's transport change is the bearer header alone.
+//! The keepalive mod's one route, on the proxy listener under the API key: the mod's report in, its acknowledgment
+//! or its refusal code out.
 
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::post;
 use axum::Router;
 use phoebis_relay::{auth_error_response, key_refusal_response, new_request_id, presented_key};
 
 use crate::engine::Engine;
-use crate::events::{decode_query_event, EventError};
+use crate::events::{decode_json_event, err, EventError};
 
-pub const EVENTS_PATH: &str = "/v0/resource/plugins/cache-keepalive/events";
-pub const SNAPSHOT_PATH: &str = "/v0/resource/plugins/cache-keepalive/snapshot";
+pub const EVENTS_PATH: &str = "/v0/keepalive/events";
+pub const MAX_BODY_BYTES: usize = 16 << 10;
 
-pub fn companion_router(engine: Arc<Engine>) -> Router {
+pub fn keepalive_router(engine: Arc<Engine>) -> Router {
     Router::new()
-        .route(EVENTS_PATH, get(events))
-        .route(SNAPSHOT_PATH, get(snapshot))
+        .route(EVENTS_PATH, post(events))
         .with_state(engine)
 }
 
@@ -55,7 +54,15 @@ fn json(status: StatusCode, body: String) -> Response {
 
 fn event_error(error: EventError) -> Response {
     let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST);
-    json(status, format!(r#"{{"error":"{}"}}"#, error.code))
+    json(status, serde_json::to_string(&error).unwrap_or_default())
+}
+
+fn is_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"))
 }
 
 async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {
@@ -63,7 +70,14 @@ async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Re
         Ok(key) => key,
         Err(refused) => return refused,
     };
-    let event = match decode_query_event(request.uri().query().unwrap_or("")) {
+    if !is_json(request.headers()) {
+        return event_error(err("invalid_event", 400));
+    }
+    let body = match axum::body::to_bytes(request.into_body(), MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return event_error(err("event_too_large", 413)),
+    };
+    let event = match decode_json_event(&body) {
         Ok(event) => event,
         Err(error) => return event_error(error),
     };
@@ -74,15 +88,4 @@ async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Re
         ),
         Err(error) => event_error(error),
     }
-}
-
-async fn snapshot(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {
-    let (key_id, key_generation) = match authenticate(&engine, &request) {
-        Ok(key) => key,
-        Err(refused) => return refused,
-    };
-    json(
-        StatusCode::OK,
-        serde_json::to_string(&engine.snapshot(&key_id, key_generation)).unwrap_or_default(),
-    )
 }

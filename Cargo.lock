@@ -1606,7 +1606,6 @@ dependencies = [
  "bytes",
  "fake-upstream",
  "http-body-util",
- "jiff",
  "phoebis-bus",
  "phoebis-cch",
  "phoebis-keepalive",
@@ -1621,14 +1620,12 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]

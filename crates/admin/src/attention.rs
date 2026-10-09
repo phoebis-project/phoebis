@@ -17,7 +17,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let mut held: Vec<_> = match state.attention.conditions((state.clock)()) {
         Ok(conditions) => conditions.into_iter().filter(|c| c.holds).collect(),
         Err(error) => {
-            tracing::warn!(%error, "the attention read failed; the route answers 500");
+            tracing::warn!(%error, "the attention read failed, so the route answers 500");
             return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");
         }
     };

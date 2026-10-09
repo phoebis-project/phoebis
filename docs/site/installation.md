@@ -201,8 +201,8 @@ prints, in order:
 8. `ledger at {config.stats.ledger_path}`
 9. `retention {n days|forever}, rollups {n days|forever}`
 10. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
-11. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
-    registry is not there yet, or `registry at {config.storage.path} has no key canary yet; a sealed row opens under
+11. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
+    registry is not there yet, or `registry at {config.storage.path} has no key canary yet. A sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
 12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 
@@ -290,7 +290,7 @@ and owner, where the secret went, and the next command, `phoebis check-config --
 
 `init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
 already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
-(`{path} exists and a new key cannot open it; keep the key that sealed it, or name an empty --data-dir`), when input
+(`{path} exists and a new key cannot open it, so keep the key that sealed it, or name an empty --data-dir`), when input
 ends before a question is answered, and when `--owner` runs off root or names no user. A directory or a file it cannot
 write exits 1 too, after removing what the run wrote, which the line names. A usage error, such as `--proxy-cert`
 without `--proxy-key` or an address that does not parse, exits 2.
@@ -348,16 +348,16 @@ Inside go `router.sqlite`, `ledger.sqlite` and `manifest.json`, each at `0600`. 
 `storage.encryption_key_file`, which `backup` never reads; a key file that does not exist earns a warning and the backup
 proceeds. `backup` loads the file the way `check-config` does, without the admin secret, and takes no lock and opens no
 socket. Stderr carries one `wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path,
-and last `the key file {path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays
-empty unless `--json` prints the manifest there.
+and last `the key file {path} is not in this backup. Keep it apart, since the registry copy is sealed under it`;
+stdout stays empty unless `--json` prints the manifest there.
 
 `backup` exits 1 with one `Error:` line and nothing written when the file does not load, when `--to` names a file or a
 directory that is not empty (`{path} is not an empty directory`), when it names a directory that group or other can
 write or that another user owns (`{dir}: group or other can write it, or another user owns it. Nothing was written.`),
-or when either database does not exist (`a backup carries both databases; {path} does not exist`). A copy that fails, a
-database another connection holds locked for ten seconds among them, removes every file and directory the run created
-and exits 1 with `backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written, and 2
-for a usage error.
+or when either database does not exist (`a backup carries both databases, but {path} does not exist`). A copy that
+fails, a database another connection holds locked for ten seconds among them, removes every file and directory the run
+created and exits 1 with `backup failed: {reason}. Nothing was written to {dir}`. It exits 0 once the manifest is
+written, and 2 for a usage error.
 
 ## Environment variables
 
@@ -391,7 +391,7 @@ admin:
   # Without tls the listener serves plain HTTP on the address named, loopback or not.
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
-  # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
+  # Process-wide limits only. Whether a pool's sessions are probed, and for how long, are pool settings in
   # the registry. The largest retained recipe follows proxy.max_request_bytes, the relay's request body bound.
   max_agents: 1024
   max_retained_bytes: 268435456
@@ -507,7 +507,7 @@ between {min} and {max}, not {value}`.
 | `max_sessions` | `128` | 1 to 4096 |
 
 `max_sessions` counts live sessions only: an ended session frees its slot at once, though its tombstone stays until
-the session expiry sweeps it. The companion's lease is 90 seconds and four probes run at once; neither is a key.
+the session expiry sweeps it. The mod's lease is 90 seconds and four probes run at once. Neither is a key.
 
 ### proxy
 
@@ -693,7 +693,9 @@ Defaults whole.
 Refused with:
 
 - `api_prices_path`: `loading the price table from {path}` with the rule under it, `pricing table: {rule}`, for a
-  malformed file or a repeated key, and with the read error under it for a file that is there and cannot be read
+  malformed file, a repeated key, a cell that is not a finite non-negative number or a `long_context.over` that is
+  not a whole number of tokens above zero, and with the read error under it for a file that is there and cannot be
+  read
 - `body_capture_max_hours`: `stats.body_capture_max_hours must be between 1 and 168, not {value}`
 - `ledger_path`: `stats.ledger_path {path} must name a database file inside a directory`; and
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
@@ -733,9 +735,9 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Defaults whole. `cache_ttl_seconds` is how long a cached usage snapshot answers a manual refresh before the endpoint is
-read again; the poll reads every five minutes whatever the cache holds. `refresh_concurrency` is how many accounts'
-usage and profile fetches may run at once.
+Defaults whole. `cache_ttl_seconds` is how long the usage service keeps a reading as its cached snapshot. The poll and
+the refresh read the endpoint whatever the cache holds, under the account's hold, and answer the reading they made.
+`refresh_concurrency` is how many accounts' usage and profile fetches may run at once.
 
 | Key | Default | Accepts |
 | --- | --- | --- |

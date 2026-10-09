@@ -185,11 +185,11 @@ fn main() -> anyhow::Result<()> {
                 })?;
             match canary {
                 phoebis_store::CanaryRead::NoRegistry => println!(
-                    "registry at {} does not exist yet; the first start creates it",
+                    "registry at {} does not exist yet, and the first start creates it",
                     registry.display()
                 ),
                 phoebis_store::CanaryRead::SealedRowMatches => println!(
-                    "registry at {} has no key canary yet; a sealed row opens under the key, and the next \
+                    "registry at {} has no key canary yet. A sealed row opens under the key, and the next \
                      start seals one",
                     registry.display()
                 ),
@@ -312,13 +312,13 @@ fn main() -> anyhow::Result<()> {
                         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
                             Ok(signal) => signal,
                             Err(error) => {
-                                tracing::error!(%error, "no SIGTERM handler; a service manager's stop will not drain");
+                                tracing::error!(%error, "no SIGTERM handler, so a service manager's stop will not drain");
                                 match ctrl_c.await {
                                     Ok(()) => return,
                                     Err(error) => {
                                         tracing::error!(
                                             %error,
-                                            "no interrupt handler; stop this process by other means"
+                                            "no interrupt handler, so stop this process by other means"
                                         );
                                         return std::future::pending::<()>().await;
                                     }
@@ -330,7 +330,7 @@ fn main() -> anyhow::Result<()> {
                             if let Err(error) = result {
                                 // A handler that could not be installed is not a request to stop, so the process
                                 // keeps serving and says why no interrupt will reach it.
-                                tracing::error!(%error, "no interrupt handler; stop this process by other means");
+                                tracing::error!(%error, "no interrupt handler, so stop this process by other means");
                                 std::future::pending::<()>().await;
                             }
                         }
@@ -502,7 +502,7 @@ fn table_line(source: &str, effective: &str, path: Option<&Path>, counts: String
             format!("{} (file, effective {effective}, {counts})", path.display())
         }
         (_, Some(path)) => format!(
-            "built in (effective {effective}, {counts}); {} not found",
+            "built in (effective {effective}, {counts}), since {} was not found",
             path.display()
         ),
         (_, None) => format!("built in (effective {effective}, {counts})"),

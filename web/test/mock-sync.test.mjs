@@ -116,7 +116,7 @@ const CLOSED = {
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   attention: { '[].kind': d.ATTENTION_KIND_VALUES, '[].link.page': [...d.ATTENTION_PAGE_VALUES, undefined], '[].subject.type': d.ATTENTION_SUBJECT_VALUES },
-  keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
+  keepalive_recipes: { '[].agentState': d.AGENT_STATE_VALUES, '[].cause': d.RECIPE_CAUSE_VALUES, '[].parkKind': [...d.PARK_KIND_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   pools: {
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
     '[].members[].spends[].period': d.BUDGET_PERIOD_VALUES,
@@ -132,7 +132,7 @@ const CLOSED = {
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
     '.requests[].requestClass': REQUEST_CLASS_VALUES,
   },
-  sessions: { '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
+  sessions: { '[].keepalive.cause': [...d.RECIPE_CAUSE_VALUES, null], '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
 };
 
 /** Every value `path` names in `value`, beside the concrete path it sits at; `[]` fans out over a list's rows. */
@@ -166,23 +166,20 @@ test('the mock refuses the affinity and the keepalive values the route refuses',
   const all = (await api.listPools()).find((p) => p.id === 'all');
   const refused = async (input, message) => assert.rejects(api.updatePool('all', input), (e) => e.status === 400 && e.message === message);
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false } }, 'affinity_ttl_seconds is 0 or at least 60');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, coldProbeLimit: 0 } }, 'keepalive.cold_probe_limit must be between 1 and 20, not 0');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, leadSeconds5m: 300 } }, 'keepalive.lead_seconds_5m must be between 0 and 299, not 300');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, retryMaxSeconds: 10, retrySeconds: 30 } }, 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds');
-  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, costCapUsdPerDay: 0 } }, 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, maxIdleSeconds: 31_536_001 } }, 'keepalive.max_idle_seconds must be between 0 and 31536000, not 31536001');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, maxParkedSeconds: 59 } }, 'keepalive.max_parked_seconds must be between 60 and 604800, not 59');
+  await refused({ ...poolInputOf(all), keepalive: { ...all.keepalive, scheduledHorizonSeconds: 604_801 } }, 'keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 604801');
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
   assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
   const saved = await api.updatePool('all', { ...poolInputOf(all), selectBelowUtilization: 0.4, keepalive: { ...all.keepalive, enabled: false } });
   assert.deepEqual([saved.selectBelowUtilization, saved.keepalive.enabled], [0.4, false]);
 });
 
-test('a retry ceiling out of its range answers the range text, which the route checks before the ceiling-under-base rule', async () => {
+test('a null ceiling is the break-even, which the mock admits as the route does', async () => {
   const api = await admin();
   const all = (await api.listPools()).find((p) => p.id === 'all');
-  await assert.rejects(
-    api.updatePool('all', { ...poolInputOf(all), keepalive: { ...all.keepalive, retryMaxSeconds: 0, retrySeconds: 30 } }),
-    (e) => e.status === 400 && e.message === 'keepalive.retry_max_seconds must be between 1 and 604800, not 0',
-  );
+  const saved = await api.updatePool('all', { ...poolInputOf(all), keepalive: { ...all.keepalive, maxParkedSeconds: 7_200, scheduledHorizonSeconds: null } });
+  assert.deepEqual([saved.keepalive.maxParkedSeconds, saved.keepalive.scheduledHorizonSeconds], [7_200, null]);
 });
 
 test('the mock stores a key edit\'s enabled flag and expiry and folds them into the status', async () => {

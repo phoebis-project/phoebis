@@ -210,7 +210,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
     // Off since the provider stopped funding it, as the last clean poll read it.
-    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
+    extraUsage: { disabledReason: 'Payment method declined on 02 Sep. Overage paused by the provider', enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
     fastLane: null,
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
@@ -249,7 +249,7 @@ export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
-  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
+  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'legacy') {
     return {
@@ -265,7 +265,7 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   if (a.id === 'secondary') {
     const nextAttemptAt = ahead(4 * MINUTE);
     // The hold sentence as the router writes it, its instant cut to whole seconds.
-    const lastError = `the usage endpoint rate-limited the account; next attempt at ${nextAttemptAt.slice(0, 10)} ${nextAttemptAt.slice(11, 19)} UTC`;
+    const lastError = `the usage endpoint rate-limited the account, and the next attempt is at ${nextAttemptAt.slice(0, 10)} ${nextAttemptAt.slice(11, 19)} UTC`;
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,

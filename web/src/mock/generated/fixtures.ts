@@ -897,13 +897,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
@@ -1250,13 +1247,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
@@ -1616,13 +1610,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": {
             "five_hour": 0.0000705,
             "seven_day": 0.00001175
@@ -1981,13 +1972,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
@@ -2344,13 +2332,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
@@ -2700,13 +2685,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "ok": 0,
             "skipped": 0
           },
-          "savings": {
-            "gross_usd": 0,
-            "probe_cost_usd": 0,
-            "wasted_probes": 0,
-            "wasted_probe_usd": 0,
-            "wasted_probe_reasons": {}
-          },
+          "probe_cost_usd": 0,
+          "wasted_probes": 0,
+          "wasted_probe_usd": 0,
+          "wasted_probe_reasons": {},
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
@@ -3877,13 +3859,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
@@ -4230,13 +4209,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
@@ -4590,13 +4566,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
@@ -5053,13 +5026,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": {
                 "five_hour": 0.00003525,
                 "seven_day": 0.000005875
@@ -5425,13 +5395,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": {
                 "five_hour": 0.00003525,
                 "seven_day": 0.000005875
@@ -5790,13 +5757,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "ok": 0,
                 "skipped": 0
               },
-              "savings": {
-                "gross_usd": 0,
-                "probe_cost_usd": 0,
-                "wasted_probes": 0,
-                "wasted_probe_usd": 0,
-                "wasted_probe_reasons": {}
-              },
+              "probe_cost_usd": 0,
+              "wasted_probes": 0,
+              "wasted_probe_usd": 0,
+              "wasted_probe_reasons": {},
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
@@ -5864,144 +5828,6 @@ export const FIXTURES: Record<string, Fixture> = {
       "probes": [
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.cold_probe_limit",
-          "value": 1,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.cold_probe_limit",
-          "value": 0,
-          "status": 400,
-          "error": "keepalive.cold_probe_limit must be between 1 and 20, not 0"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.cold_probe_limit",
-          "value": 20,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.cold_probe_limit",
-          "value": 21,
-          "status": 400,
-          "error": "keepalive.cold_probe_limit must be between 1 and 20, not 21"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_1h",
-          "value": 0,
-          "status": 200,
-          "with": {
-            "keepalive.lead_seconds_1h": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_1h",
-          "value": 3599,
-          "status": 200,
-          "with": {
-            "keepalive.lead_seconds_1h": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_1h",
-          "value": 3600,
-          "status": 400,
-          "with": {
-            "keepalive.lead_seconds_1h": 0
-          },
-          "error": "keepalive.jitter_seconds_1h must be between 0 and 3599, not 3600"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_5m",
-          "value": 0,
-          "status": 200,
-          "with": {
-            "keepalive.lead_seconds_5m": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_5m",
-          "value": 299,
-          "status": 200,
-          "with": {
-            "keepalive.lead_seconds_5m": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.jitter_seconds_5m",
-          "value": 300,
-          "status": 400,
-          "with": {
-            "keepalive.lead_seconds_5m": 0
-          },
-          "error": "keepalive.jitter_seconds_5m must be between 0 and 299, not 300"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_1h",
-          "value": 0,
-          "status": 200,
-          "with": {
-            "keepalive.jitter_seconds_1h": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_1h",
-          "value": 3599,
-          "status": 200,
-          "with": {
-            "keepalive.jitter_seconds_1h": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_1h",
-          "value": 3600,
-          "status": 400,
-          "with": {
-            "keepalive.jitter_seconds_1h": 0
-          },
-          "error": "keepalive.lead_seconds_1h must be between 0 and 3599, not 3600"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_5m",
-          "value": 0,
-          "status": 200,
-          "with": {
-            "keepalive.jitter_seconds_5m": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_5m",
-          "value": 299,
-          "status": 200,
-          "with": {
-            "keepalive.jitter_seconds_5m": 0
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_5m",
-          "value": 300,
-          "status": 400,
-          "with": {
-            "keepalive.jitter_seconds_5m": 0
-          },
-          "error": "keepalive.lead_seconds_5m must be between 0 and 299, not 300"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
           "field": "keepalive.max_idle_seconds",
           "value": 0,
           "status": 200
@@ -6021,137 +5847,55 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.max_idle_ticks",
-          "value": 0,
+          "field": "keepalive.max_parked_seconds",
+          "value": 60,
           "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.max_idle_ticks",
-          "value": 1000000,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.max_idle_ticks",
-          "value": 1000001,
+          "field": "keepalive.max_parked_seconds",
+          "value": 59,
           "status": 400,
-          "error": "keepalive.max_idle_ticks must be between 0 and 1000000, not 1000001"
+          "error": "keepalive.max_parked_seconds must be between 60 and 604800, not 59"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.net_negative_grace_probes",
-          "value": 0,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.net_negative_grace_probes",
-          "value": 100,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.net_negative_grace_probes",
-          "value": 101,
-          "status": 400,
-          "error": "keepalive.net_negative_grace_probes must be between 0 and 100, not 101"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_max_seconds",
-          "value": 1,
-          "status": 200,
-          "with": {
-            "keepalive.retry_seconds": 1
-          }
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_max_seconds",
-          "value": 0,
-          "status": 400,
-          "with": {
-            "keepalive.retry_seconds": 1
-          },
-          "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 0"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_max_seconds",
+          "field": "keepalive.max_parked_seconds",
           "value": 604800,
-          "status": 200,
-          "with": {
-            "keepalive.retry_seconds": 1
-          }
+          "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_max_seconds",
+          "field": "keepalive.max_parked_seconds",
           "value": 604801,
           "status": 400,
-          "with": {
-            "keepalive.retry_seconds": 1
-          },
-          "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 604801"
+          "error": "keepalive.max_parked_seconds must be between 60 and 604800, not 604801"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_seconds",
-          "value": 1,
-          "status": 200,
-          "with": {
-            "keepalive.retry_max_seconds": 604800
-          }
+          "field": "keepalive.scheduled_horizon_seconds",
+          "value": 60,
+          "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_seconds",
-          "value": 0,
+          "field": "keepalive.scheduled_horizon_seconds",
+          "value": 59,
           "status": 400,
-          "with": {
-            "keepalive.retry_max_seconds": 604800
-          },
-          "error": "keepalive.retry_seconds must be between 1 and 3600, not 0"
+          "error": "keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 59"
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_seconds",
-          "value": 3600,
-          "status": 200,
-          "with": {
-            "keepalive.retry_max_seconds": 604800
-          }
+          "field": "keepalive.scheduled_horizon_seconds",
+          "value": 604800,
+          "status": 200
         },
         {
           "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.retry_seconds",
-          "value": 3601,
+          "field": "keepalive.scheduled_horizon_seconds",
+          "value": 604801,
           "status": 400,
-          "with": {
-            "keepalive.retry_max_seconds": 604800
-          },
-          "error": "keepalive.retry_seconds must be between 1 and 3600, not 3601"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_1h",
-          "value": 1800,
-          "status": 400,
-          "with": {
-            "keepalive.jitter_seconds_1h": 1800
-          },
-          "error": "keepalive.lead_seconds_1h plus keepalive.jitter_seconds_1h must stay under the cache TTL they apply to"
-        },
-        {
-          "route": "PATCH /admin/pools/{id}",
-          "field": "keepalive.lead_seconds_5m",
-          "value": 150,
-          "status": 400,
-          "with": {
-            "keepalive.jitter_seconds_5m": 150
-          },
-          "error": "keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to"
+          "error": "keepalive.scheduled_horizon_seconds must be between 60 and 604800, not 604801"
         },
         {
           "route": "PATCH /admin/pools/{id}",
@@ -6462,7 +6206,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -6586,7 +6330,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -6707,7 +6451,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -6828,7 +6572,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7074,7 +6818,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7318,7 +7062,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "seq": 1,
         "at": 1000000,
         "key_id": "desktop",
-        "key_generation": 1791517496736,
+        "key_generation": 1791545605668,
         "pool_id": "main",
         "routing_session_id": "s-static",
         "agent_id": "main",
@@ -7346,7 +7090,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 66
+        "registry_revision": 38
       },
       "pin": {
         "found": "none",
@@ -7374,7 +7118,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "affinity_mode": "always",
         "session_placement": "by_warm_prefix",
         "min_shared_prefix_tokens": 20000,
-        "subagent_placement": "by_cohort",
+        "subagent_placement": "by_strategy",
         "select_below_utilization": null,
         "shed_ahead_of_pace": null,
         "migrate_when_spent": true,
@@ -7388,7 +7132,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "retry_in_place_seconds": 60,
         "pace_floor": 0.05,
         "migrate_band": 0.05,
-        "pool_updated_at": 1791517496981
+        "pool_updated_at": 1791545605879
       },
       "candidates": [
         {
@@ -7733,20 +7477,107 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/keepalive/overview",
     "body": {
       "agents": {
-        "busy": 1,
-        "idle": 0,
+        "busy": 0,
+        "idle": 1,
         "parked": 0
       },
       "bus_gaps": 0,
-      "cost_today": [
+      "expired_between_turns_24h": 0,
+      "limits": {
+        "agents": {
+          "count": 1,
+          "max": 1024
+        },
+        "retained_bytes": {
+          "count": 116,
+          "max": 268435456
+        },
+        "sessions": {
+          "count": 1,
+          "max": 128
+        }
+      },
+      "pools": [
         {
-          "cap_usd": 4,
+          "credited_24h": 0,
+          "idle_returns": [
+            {
+              "from_seconds": 0,
+              "reached": 1,
+              "returned": 0,
+              "to_seconds": 300
+            },
+            {
+              "from_seconds": 300,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 900
+            },
+            {
+              "from_seconds": 900,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 1800
+            },
+            {
+              "from_seconds": 1800,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 3600
+            },
+            {
+              "from_seconds": 3600,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 7200
+            },
+            {
+              "from_seconds": 7200,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 14400
+            },
+            {
+              "from_seconds": 14400,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 28800
+            },
+            {
+              "from_seconds": 28800,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 57600
+            },
+            {
+              "from_seconds": 57600,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 115200
+            },
+            {
+              "from_seconds": 115200,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": null
+            }
+          ],
           "pool_id": "main",
-          "usd": 0
+          "probes_24h": 0,
+          "wasted_24h": 0,
+          "wasted_reasons_24h": {
+            "cold_return": 0,
+            "evicted": 0,
+            "expired": 0,
+            "horizon": 0,
+            "idle_limit": 0,
+            "parked_limit": 0,
+            "released": 0,
+            "replaced": 0,
+            "session_ended": 0
+          }
         }
       ],
-      "expired_between_turns_24h": 0,
-      "net_saved_7d_usd": 0,
       "probes_24h": {
         "failed": 0,
         "held": 0,
@@ -7763,18 +7594,23 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "account_id": "direct",
           "agent_id": "main",
+          "agent_state": "busy",
+          "cause": "scheduled",
+          "credited_today": 0,
+          "deadline": null,
           "key_id": "desktop",
           "last_guard": "rearm",
+          "last_probe_at": null,
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "net_five_hour_share": 0,
-          "net_usd": 0,
-          "next_probe_at": 1237342,
+          "next_probe_at": 1239443,
+          "park_kind": null,
           "pool_id": "main",
-          "reason": null,
+          "probes_today": 0,
           "session_id": "s1",
-          "state": "armed",
-          "ttl_seconds": 300
+          "state": "retained",
+          "ttl_seconds": 300,
+          "wake_at": null
         }
       ]
     }
@@ -7802,10 +7638,10 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "RXhSa1oi",
-      "created_at": 1791517496736,
-      "updated_at": 1791517496736,
-      "revision": 6189564007840,
+      "prefix": "NZHOgUDl",
+      "created_at": 1791545605668,
+      "updated_at": 1791545605668,
+      "revision": 6189592116772,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -7870,10 +7706,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "RXhSa1oi",
-          "created_at": 1791517496736,
-          "updated_at": 1791517496736,
-          "revision": 6189564007840,
+          "prefix": "NZHOgUDl",
+          "created_at": 1791545605668,
+          "updated_at": 1791545605668,
+          "revision": 6189592116772,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
@@ -7941,9 +7777,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "Cw2ZvG2l9RW8el0sQbpj5-TSZj8Dhzo9ks0XONRZhRA",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A56166%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=ix5Nw6hwrtwxL55G4s5c0-RmMe-xjX5zu1BrO7SXtZk&code_challenge_method=S256&state=BrntDEqhuKMTh32bCfj2U7G1OK5cTxPEBKcsh49fOSQ",
-      "redirect_uri": "http://localhost:56166/callback",
+      "id": "uvQ2iZyJa4I4iqmmul_9-DQkZlp2v6tJ8udcd2qpwfo",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A62622%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=6iHgKtC2GWLauyt9bgaewFuEt8VNS6NktNEmDcPzdWE&code_challenge_method=S256&state=-0GaVq0waZ0wmKSk3mbnWAE_95poHHTSjdwcNCB99gg",
+      "redirect_uri": "http://localhost:62622/callback",
       "expires_at": 1600000
     }
   },
@@ -8146,7 +7982,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "affinity_ttl_seconds": 600,
           "overage_policy": "prefer_plan",
           "affinity_mode": "always",
-          "subagent_placement": "by_cohort",
+          "subagent_placement": "by_strategy",
           "session_placement": "by_strategy",
           "min_shared_prefix_tokens": 20000,
           "shed_ahead_of_pace": null,
@@ -8171,21 +8007,32 @@ export const FIXTURES: Record<string, Fixture> = {
             "spent": 1
           },
           "keepalive": {
-            "cold_probe_limit": 2,
             "enabled": true,
-            "jitter_seconds_1h": 30,
-            "jitter_seconds_5m": 5,
-            "lead_seconds_1h": 360,
-            "lead_seconds_5m": 60,
             "max_idle_seconds": 3600,
-            "max_idle_ticks": 0,
-            "net_negative_grace_probes": 2,
-            "probe_cap_window_share_per_day": null,
-            "probe_cost_cap_usd_per_day": 4,
-            "retry_max_seconds": 300,
-            "retry_seconds": 30,
-            "stop_when_net_negative": true,
-            "warm_subagents": true
+            "max_parked_seconds": null,
+            "scheduled_horizon_seconds": null
+          },
+          "keepalive_resolved": {
+            "break_even_seconds": {
+              "min": 2760,
+              "max": 255960
+            },
+            "horizon_seconds": {
+              "min": 2760,
+              "max": 255960
+            },
+            "idle_seconds": {
+              "min": 2760,
+              "max": 3600
+            },
+            "idle_share": {
+              "min": 0.013888888888888886,
+              "max": 0.92
+            },
+            "parked_seconds": {
+              "min": 2760,
+              "max": 255960
+            }
           },
           "cache_ttl": {
             "enabled": false,
@@ -8204,9 +8051,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791517496732,
-          "updated_at": 1791517496732,
-          "revision": 6189564007836,
+          "created_at": 1791545605664,
+          "updated_at": 1791545605664,
+          "revision": 6189592116768,
           "members": [
             {
               "account_id": "business",
@@ -8245,7 +8092,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "RXhSa1oi",
+              "prefix": "NZHOgUDl",
               "enabled": true
             }
           ],
@@ -8513,6 +8360,21 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_read": 0.2,
               "output": 10
             },
+            "claude-haiku-5-5": {
+              "input": 0.1,
+              "cache_write_5m": 0.125,
+              "cache_write_1h": 0.2,
+              "cache_read": 0.01,
+              "output": 0.5,
+              "long_context": {
+                "over": 100000,
+                "input": 0.5,
+                "cache_write_5m": 0.625,
+                "cache_write_1h": 1,
+                "cache_read": 0.05,
+                "output": 2.5
+              }
+            },
             "claude-haiku-4-5": {
               "input": 1,
               "cache_write_5m": 1.25,
@@ -8524,10 +8386,10 @@ export const FIXTURES: Record<string, Fixture> = {
         }
       },
       "subscription_costs": {
-        "effective": "2026-10-05",
+        "effective": "2026-10-08",
         "source": "shipped",
         "content": {
-          "effective": "2026-10-05",
+          "effective": "2026-10-08",
           "unit": {
             "defined_by": {
               "band": "out_of_band",
@@ -8571,6 +8433,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-fable-5-1": 10,
             "claude-opus-5-5": 2.2,
             "claude-sonnet-5-5": 1.5,
+            "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
           "model_windows": {
@@ -8605,7 +8468,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791517496736,
+        "key_generation": 1791545605668,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -8910,7 +8773,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -9034,7 +8897,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -9155,7 +9018,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -9276,7 +9139,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -9522,7 +9385,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -10944,7 +10807,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1791517496732,
+            "down_since": 1791545605664,
             "holds_lost": true
           }
         },
@@ -11039,7 +10902,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "06vGdpP0-vkmiIqfGGfDPJ0B5bZfIft9B50DxNtbIxs"
+      "session_id": "5ROMRhtesmo3ULxpfT0ruddUSuHprcD-uEXtnOnP3jg"
     }
   },
   "sessions": {
@@ -11048,7 +10911,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -11071,18 +10934,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -11105,18 +10968,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -11138,19 +11001,19 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
+            "cause": "scheduled",
             "last_guard": "rearm",
-            "net_five_hour_share": 0,
-            "net_usd": 0,
-            "next_probe_at": 1237342,
+            "next_probe_at": 1239443,
             "state": "busy"
           },
+          "presence_age_seconds": null,
           "historical": false,
           "forked_from": "s0",
           "fork_depth": 2
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791517496736,
+          "key_generation": 1791545605668,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -11173,12 +11036,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
@@ -11207,12 +11070,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
-            "net_five_hour_share": null,
-            "net_usd": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         }
@@ -11233,7 +11096,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_read_per_m": 0.25,
           "output_per_m": 50,
           "reads_per_write_5m": 50,
-          "fast": null
+          "fast": null,
+          "long_context": null
         },
         {
           "model": "claude-fable-5",
@@ -11243,7 +11107,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_read_per_m": 1,
           "output_per_m": 50,
           "reads_per_write_5m": 12.5,
-          "fast": null
+          "fast": null,
+          "long_context": null
         },
         {
           "model": "claude-opus-5-5",
@@ -11259,7 +11124,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_1h_per_m": 16,
             "cache_read_per_m": 0.4,
             "output_per_m": 40
-          }
+          },
+          "long_context": null
         },
         {
           "model": "claude-opus-5",
@@ -11275,7 +11141,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_1h_per_m": 20,
             "cache_read_per_m": 1,
             "output_per_m": 50
-          }
+          },
+          "long_context": null
         },
         {
           "model": "claude-opus-4-8",
@@ -11291,7 +11158,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_1h_per_m": 20,
             "cache_read_per_m": 1,
             "output_per_m": 50
-          }
+          },
+          "long_context": null
         },
         {
           "model": "claude-sonnet-5-5",
@@ -11301,7 +11169,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_read_per_m": 0.1,
           "output_per_m": 10,
           "reads_per_write_5m": 25,
-          "fast": null
+          "fast": null,
+          "long_context": null
         },
         {
           "model": "claude-sonnet-5",
@@ -11311,7 +11180,26 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_read_per_m": 0.2,
           "output_per_m": 10,
           "reads_per_write_5m": 12.5,
-          "fast": null
+          "fast": null,
+          "long_context": null
+        },
+        {
+          "model": "claude-haiku-5-5",
+          "input_per_m": 0.1,
+          "cache_write_5m_per_m": 0.125,
+          "cache_write_1h_per_m": 0.2,
+          "cache_read_per_m": 0.01,
+          "output_per_m": 0.5,
+          "reads_per_write_5m": 12.5,
+          "fast": null,
+          "long_context": {
+            "over": 100000,
+            "input_per_m": 0.5,
+            "cache_write_5m_per_m": 0.625,
+            "cache_write_1h_per_m": 1,
+            "cache_read_per_m": 0.05,
+            "output_per_m": 2.5
+          }
         },
         {
           "model": "claude-haiku-4-5",
@@ -11321,7 +11209,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_read_per_m": 0.1,
           "output_per_m": 5,
           "reads_per_write_5m": 12.5,
-          "fast": null
+          "fast": null,
+          "long_context": null
         }
       ]
     }
@@ -11412,6 +11301,21 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_read": 0.2,
               "output": 10
             },
+            "claude-haiku-5-5": {
+              "input": 0.1,
+              "cache_write_5m": 0.125,
+              "cache_write_1h": 0.2,
+              "cache_read": 0.01,
+              "output": 0.5,
+              "long_context": {
+                "over": 100000,
+                "input": 0.5,
+                "cache_write_5m": 0.625,
+                "cache_write_1h": 1,
+                "cache_read": 0.05,
+                "output": 2.5
+              }
+            },
             "claude-haiku-4-5": {
               "input": 1,
               "cache_write_5m": 1.25,
@@ -11444,10 +11348,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "subscription_costs_path": null
       },
       "subscription_costs": {
-        "effective": "2026-10-05",
+        "effective": "2026-10-08",
         "source": "shipped",
         "content": {
-          "effective": "2026-10-05",
+          "effective": "2026-10-08",
           "unit": {
             "defined_by": {
               "band": "out_of_band",
@@ -11491,6 +11395,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-fable-5-1": 10,
             "claude-opus-5-5": 2.2,
             "claude-sonnet-5-5": 1.5,
+            "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
           "model_windows": {
@@ -11580,7 +11485,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "subscription_costs": {
           "path": null,
           "source": "shipped",
-          "effective": "2026-10-05"
+          "effective": "2026-10-08"
         }
       },
       "gaps": [],
@@ -11629,6 +11534,21 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_write_1h": 6,
               "cache_read": 0.3,
               "output": 15
+            },
+            "claude-haiku-5-5": {
+              "input": 1,
+              "cache_write_5m": 1.25,
+              "cache_write_1h": 2,
+              "cache_read": 0.1,
+              "output": 5,
+              "long_context": {
+                "over": 1000,
+                "input": 5,
+                "cache_write_5m": 6.25,
+                "cache_write_1h": 10,
+                "cache_read": 0.5,
+                "output": 25
+              }
             },
             "claude-haiku-4-5": {
               "input": 1,

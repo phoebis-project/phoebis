@@ -44,17 +44,21 @@ export function readChartInk(): ChartInk {
   };
 }
 
-/** Color follows the entity: each account keeps its slot regardless of which accounts are on screen. */
-export const ACCOUNT_SLOT: Record<string, number> = {
-  business: 0,
-  mail: 1,
-  personal: 2,
-  console: 3,
-  evals: 4,
-  team: 6,
-};
+/** The series slots an account can take: every entry of SERIES_VARS but the muted ninth. */
+const ACCOUNT_SLOTS = SERIES_VARS.length - 1;
 
-export const accountColor = (ink: ChartInk, accountId: string) => ink.series[ACCOUNT_SLOT[accountId] ?? 7];
+/**
+ * Color follows the entity: an account's slot is its index in the registry's order (every account sorted by id, as
+ * `GET /admin/accounts` answers) modulo the eight series colors, so one account keeps one color across the
+ * Dashboard, the Quota view and the Analytics whatever each view filters. An id outside the list answers `null`.
+ */
+export function accountSlots(ids: readonly string[]): (id: string) => number | null {
+  const slots = new Map([...ids].sort().map((id, index) => [id, index % ACCOUNT_SLOTS] as const));
+  return (id) => slots.get(id) ?? null;
+}
+
+/** The slot's series ink, or the muted ink for an account the registry no longer lists. */
+export const accountColor = (ink: ChartInk, slot: number | null) => (slot === null ? ink.muted : ink.series[slot]);
 
 /** Ordered by how an outcome degrades rather than alphabetically, like the token and probe stacks below. */
 export const OUTCOME_SERIES = [
@@ -74,21 +78,15 @@ export const TOKEN_SERIES = [
   { key: 'plainOutput', label: 'Output', slot: 6 },
 ] as const;
 
+export const MIGRATED_PROBE_HINT =
+  "The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache.";
+export const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.';
+
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
 export const PROBE_SERIES: { hint?: string; key: 'failed' | 'held' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
   { key: 'ok', label: 'OK', slot: 0 },
-  {
-    key: 'migrated',
-    label: 'Migrated',
-    slot: 2,
-    hint: "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.",
-  },
-  {
-    key: 'held',
-    label: 'Held',
-    slot: 8,
-    hint: 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.',
-  },
+  { key: 'migrated', label: 'Migrated', slot: 2, hint: MIGRATED_PROBE_HINT },
+  { key: 'held', label: 'Held', slot: 8, hint: HELD_PROBE_HINT },
   { key: 'skipped', label: 'Skipped', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },
 ];

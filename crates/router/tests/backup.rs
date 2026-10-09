@@ -345,7 +345,7 @@ fn a_ledger_that_does_not_exist_is_refused_by_name_and_nothing_is_written() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         stderr.contains(&format!(
-            "a backup carries both databases; {} does not exist",
+            "a backup carries both databases, but {} does not exist",
             absent.display()
         )),
         "{}",
@@ -463,7 +463,7 @@ fn a_wide_empty_destination_and_a_missing_key_file_warn_and_the_backup_proceeds(
             target.display()
         ),
         format!(
-            "warning: the key file {} does not exist; the registry copy cannot be opened without the key that \
+            "warning: the key file {} does not exist, and the registry copy cannot be opened without the key that \
              sealed it",
             data.key_file.display()
         ),

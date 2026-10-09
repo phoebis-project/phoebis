@@ -320,7 +320,7 @@ const poolSave = (name) => ({
   bodyCaptureHours: 0,
   cacheDiagnostics: false,
   cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
-  keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
+  keepalive: { enabled: false, maxIdleSeconds: 3_600, maxParkedSeconds: null, scheduledHorizonSeconds: null },
   affinityMode: 'when_cached',
   members: [{ accountId: 'business', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }, { accountId: 'direct', budgetDailyUsd: 12.5, budgetMonthlyUsd: 50, priority: 1 }],
   minSharedPrefixTokens: 30_000,

@@ -33,19 +33,21 @@ export function missReasonOrder(groups: readonly { cacheMissReasons: Record<Cach
 /** The `*_changed` reasons are the diagnosed divergences, each naming the part of the prompt the prefix broke at. */
 export const isDivergence = (reason: CacheMissReason) => reason.endsWith('_changed');
 
-export const WASTED_PROBE_REASONS: WastedProbeReason[] = ['cold_return', 'evicted', 'expired', 'idle_limit', 'released', 'replaced', 'session_ended'];
+export const WASTED_PROBE_REASONS: WastedProbeReason[] = ['cold_return', 'evicted', 'expired', 'horizon', 'idle_limit', 'parked_limit', 'released', 'replaced', 'session_ended'];
 
 export const WASTED_PROBE_LABEL: Record<WastedProbeReason, string> = {
   cold_return: 'Returned cold',
   evicted: 'Evicted at the byte cap',
   expired: 'Entry expired',
+  horizon: 'Horizon held the recipe',
   idle_limit: 'Idle limit ran out',
+  parked_limit: 'Parked limit ran out',
   released: 'Released by an operator',
   replaced: 'Replaced by a new registration',
   session_ended: 'Session ended',
 };
 
-export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => ({ cold_return: 0, evicted: 0, expired: 0, idle_limit: 0, released: 0, replaced: 0, session_ended: 0 });
+export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => ({ cold_return: 0, evicted: 0, expired: 0, horizon: 0, idle_limit: 0, parked_limit: 0, released: 0, replaced: 0, session_ended: 0 });
 
 /**
  * Seeds the known reasons at zero; a sum adds any other name it meets beside them. The map has no prototype, so

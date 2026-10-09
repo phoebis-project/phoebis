@@ -32,7 +32,7 @@ const lineFor = (a: TrailAttempt) =>
 /** The trail's lines, one per attempt, the text the count's title and description carry. */
 export const trailLines = (attempts: TrailAttempt[]): string => attempts.map(lineFor).join('\n');
 
-/** One badge per attempt in the order they were tried, so a failover reads as "mail 429, business 200". */
+/** One badge per attempt in the order they were tried, so a failover reads as "a 429, b 200". */
 export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
   const title = trailLines(attempts);
   const described = useDescription(title);

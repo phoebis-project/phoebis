@@ -60,12 +60,12 @@ Every field, in the order the request body takes them:
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60`; see below |
 | `affinity_mode` | `always` | `always` or `when_cached`; see below |
-| `subagent_placement` | `by_cohort` | `by_cohort`, `by_strategy`, or `with_main`; see Selection |
+| `subagent_placement` | `by_strategy` | `by_cohort`, `by_strategy`, or `with_main`. See Selection. |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`; see Selection |
 | `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
-| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`; the lead over pace that sheds |
+| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20%. See Moves. |
 | `shed_share` | `0.5` | 0 to 1 |
 | `burn_window_seconds` | `600` | at least 60 |
 | `source_dwell_seconds` | `900` | at least 60 |
@@ -76,7 +76,7 @@ Every field, in the order the request body takes them:
 | `pace_floor` | `0.05` | 0 to 1; see Selection |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
-| `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
+| `keepalive` | disabled | a policy object of four fields, on the [Keepalive page](keepalive.md#the-four-fields) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |
@@ -234,7 +234,9 @@ A conversation is identified by its session header: the session id the client se
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
 most five milliseconds, for that answer's report to reach the map. A new session id whose messages continue another
 conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
-the two part.
+the two part, when that depth is 2 or deeper: a shared first message is a template, not a conversation. An auxiliary
+request (the client's quota probe among them) never names a fork and leaves no content entry, so no later request
+matches it.
 
 ## Model rules
 
@@ -316,7 +318,7 @@ A pin is held per agent of a conversation, where a conversation is the session i
 lasts `affinity_ttl_seconds` from its last use: while it is live and its account is still eligible, the request returns
 to that account, and stickiness wins over priority even across a later priority change. A pool with affinity off
 (`affinity_ttl_seconds` at `0`) keeps no pins at all. A keepalive probe holds while `affinity_ttl_seconds` is shorter
-than its recipe's due time, the cache TTL less the lead (see [Keepalive](keepalive.md#recipe-states)).
+than its recipe's due time, the cache TTL less the lead (see [Keepalive](keepalive.md#the-five-states)).
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
@@ -470,12 +472,15 @@ cache and leaves the pin as it was. A `count_tokens` request creates no cache en
 the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
-1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
-renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
-while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a
-subscription account in overage, so leaving overage switches the reading without a reset and a session that moves
-between tiers reads the right share on both. A keepalive probe's usage never counts. A burn the model cannot price, for
-a model it has no weight for or a tier it has no capacity for, reads as none.
+1-hour cache writes, output) for the pin's one model, in three copies: one plain and one weighed by the peak band at
+each renewal for its standard answers, and a third for its fast answers, held in memory and priced at the fast cells
+where the model has them, which a restart reads as none until the pin's next fast renewal. Nothing is priced until it
+is read: the round prices the banded copy as a share of the account's 5-hour window while a subscription account runs
+on its plan, and the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
+([pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
+overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
+share on both. A keepalive probe's usage never counts. A burn the model cannot price, for a model it has no weight for
+or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,

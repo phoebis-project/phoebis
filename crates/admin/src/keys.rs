@@ -26,7 +26,7 @@ use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
-const STALE_EDIT: &str = "the key changed while it was being edited; reload and try again";
+const STALE_EDIT: &str = "the key changed while it was being edited, so reload and try again";
 
 #[derive(serde::Deserialize, Default)]
 struct KeyInput {
@@ -158,7 +158,7 @@ async fn totals(
     match read {
         Ok(totals) => totals,
         Err(error) => {
-            tracing::warn!(%error, "the key view could not read the ledger; usage and lifetime totals are empty");
+            tracing::warn!(%error, "the key view could not read the ledger, so usage and lifetime totals are empty");
             Default::default()
         }
     }
@@ -176,7 +176,7 @@ async fn recent_activity(state: &AdminState, now: i64) -> Vec<phoebis_ledger::Se
     {
         Ok(activity) => activity,
         Err(error) => {
-            tracing::warn!(%error, "the key view could not read session activity; retired-secret counts are empty");
+            tracing::warn!(%error, "the key view could not read session activity, so retired-secret counts are empty");
             Vec::new()
         }
     }
