@@ -7,7 +7,7 @@ import { AGENT_TYPES } from '@/lib/client';
 import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { aheadOf } from '@/lib/presets';
+import { aheadOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
