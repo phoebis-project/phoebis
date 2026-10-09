@@ -2125,7 +2125,7 @@ function AccountsSection({
             <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
             <YAxis domain={[-paceTop, paceTop]} ticks={[-paceTop, -paceTop / 2, 0, paceTop / 2, paceTop]} tickFormatter={(v: number) => pct(v, true)} tickLine={false} axisLine={false} width={44} />
             <ReferenceLine y={0} stroke={ink.axis} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, a), label: a, value: pct(p[a], true) }, { label: 'Pace score', title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, a), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
             {accounts.map((a) => (
               <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} isAnimationActive={false} />
             ))}

@@ -1,23 +1,30 @@
 import type {
-  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
-  RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason,
+  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
+import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
+import { aheadOf } from '@/lib/presets';
+import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
-import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
 const upstreamIds = createRng(9_191);
 const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
+// The instants inside a request (the write, the first content, the stream's close) draw from a stream of their own,
+// so they move no draw of the rows and no hint.
+const phaseRng = createRng(3_571);
+/** The stream's close lands this many milliseconds before the finish at most, so the first content never passes it. */
+const STREAM_TAIL = 30;
 /** The registry's kind of an account the story names. A wrong id fails the mock build rather than reading a default. */
 const kindOf = (accountId: string): AccountKind => {
   const kind = ACCOUNTS.find((x) => x.id === accountId)?.kind;
@@ -417,7 +424,8 @@ function buildRequests(): RequestLog[] {
     const lane = rng.weighted([{ value: LANES[0], weight: 11 }, { value: LANES[1], weight: 5 }, { value: LANES[2], weight: 1.6 }]);
     // Skew toward recent hours so the dashboard's "recent" table is dense.
     const offset = Math.pow(rng.next(), 1.4) * span;
-    const atMs = NOW - offset - rng.int(1, 60) * 1000;
+    // Whole milliseconds, as the ledger stamps an instant, so the figures read off the row's instants carry no fraction.
+    const atMs = Math.floor(NOW - offset - rng.int(1, 60) * 1000);
     const hourOfDay = new Date(atMs).getHours();
     if (hourOfDay >= 1 && hourOfDay <= 6 && rng.chance(0.65)) continue;
     const kind = rng.weighted<RequestKind>(warmsCaches(lane.keyId, lane.poolId) ? WARMED_KINDS : TRAFFIC_KINDS);
@@ -442,13 +450,21 @@ function buildRequests(): RequestLog[] {
       ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
       : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
-    const durationMs = attempts.reduce((s, a) => s + (a.durationMs ?? 0), 0);
+    // The request runs from its arrival to its last attempt's end, the gaps between attempts included, as the router
+    // stamps it.
+    const durationMs = head === undefined ? 0 : Date.parse(head.startedAt) + (head.durationMs ?? 0) - atMs;
     // A 429 fails the attempt over, so a request that answers one has run its lane out and the router answers it.
     const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'accounts_exhausted' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
-    const ttfbMs = finalStatus === 200 && kind !== 'count_tokens' ? rng.int(kind === 'probe' ? 180 : 420, kind === 'probe' ? 900 : 4_200) : null;
-    // Streams open with a message_start frame, so the first content token lands a
-    // little after the first byte; JSON responses arrive whole.
-    const ttftMs = ttfbMs === null || kind !== 'inference' ? ttfbMs : ttfbMs + (transport === 'sse' ? rng.int(40, 600) : 0);
+    // The head lands inside the serving attempt: past the write at its start, and far enough before its end for the
+    // content and the stream's close to follow. One draw either way, so every later row keeps its draws.
+    const [headLo, headHi] = kind === 'probe' ? [180, 900] : [420, 4_200];
+    const headGap = finalStatus === 200 && kind !== 'count_tokens' ? rng.int(headLo, Math.max(headLo, Math.min(headHi, head === undefined ? headHi : (head.durationMs ?? 0) - STREAM_TAIL))) : null;
+    const ttfbMs = headGap === null || head === undefined ? null : Date.parse(head.startedAt) - atMs + headGap;
+    // Streams open with a message_start frame, so the first content token lands a little after the first byte and
+    // before the stream's close; JSON responses arrive whole. The draw on the main stream is taken and set aside so
+    // every later row keeps its draws, and the gap comes from the phase stream.
+    if (headGap !== null && kind === 'inference' && transport === 'sse') rng.int(40, 600);
+    const ttftMs = ttfbMs === null || kind !== 'inference' || transport !== 'sse' ? ttfbMs : ttfbMs + Math.min(phaseRng.int(40, 600), Math.max(0, durationMs - STREAM_TAIL - ttfbMs));
     const id = `req_${rng.uuid().slice(0, 12)}`;
     const sessionId = rng.pick(SESSION_IDS);
     const agentId = rng.pick(AGENT_IDS);
@@ -504,7 +520,7 @@ function buildRequests(): RequestLog[] {
     });
     if (chainFrom < tried.length) CHAIN_FROM.set(id, chainFrom);
     if (head === undefined) Object.assign(rows[rows.length - 1], unservedAnswer());
-    else if (!whole) Object.assign(rows[rows.length - 1], endedAnswer(tried));
+    else if (!whole) Object.assign(rows[rows.length - 1], endedAnswer(tried, atMs));
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
     // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one
@@ -529,7 +545,8 @@ function buildRequests(): RequestLog[] {
             windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
           },
         ],
-        durationMs: answered.durationMs,
+        // The answering attempt keeps its start, so the request runs from its arrival to that attempt's end.
+        durationMs: Date.parse(answered.startedAt) + (answered.durationMs ?? 0) - atMs,
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: Math.round(costOf(drawn, moved.usage) * 10_000) / 10_000,
@@ -589,7 +606,9 @@ function buildRequests(): RequestLog[] {
   }
   // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
   // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
-  // the laptop key whose captures the drawer checks read, more than an hour old, and none of the rows above.
+  // the laptop key whose captures the drawer checks read, and none of the rows above. The hour bound keeps the pick
+  // out of the routing log's hand-written hour, whose records name no canceled stream, should that hour ever hold a
+  // drawn row.
   const canceled = rows.find((r) => r.keyId !== 'laptop' && r.keyId !== 'notebook' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
   if (canceled) {
     canceled.outcome = 'canceled';
@@ -663,6 +682,10 @@ function holdFirst(r: RequestLog, hold: CohortHold): boolean {
   if (!holdableAt(r, first.accountId, start)) return false;
   const arrived = r.at;
   r.at = iso(start);
+  // The wait sits before the first attempt, so the client saw it inside the head's latency and the whole duration.
+  r.durationMs = (r.durationMs ?? 0) + hold.heldMs;
+  if (r.ttfbMs !== null) r.ttfbMs += hold.heldMs;
+  if (r.ttftMs !== null) r.ttftMs += hold.heldMs;
   const events = REQUEST_EVENTS.get(r.id);
   if (events) REQUEST_EVENTS.set(r.id, events.map((e) => (e.kind === 'pin_expired' && e.at === arrived ? { ...e, at: r.at } : e)));
   return true;
@@ -692,13 +715,13 @@ const unservedAnswer = (): Partial<RequestLog> => ({
  * What a request answers when it did not end as drawn: the upstream's own error after a 529 or a 502, which the relay
  * commits, and the router's exhaustion once a failover finds no member of its pool left to try.
  */
-const endedAnswer = (attempts: Attempt[]): Partial<RequestLog> => {
+const endedAnswer = (attempts: Attempt[], atMs: number): Partial<RequestLog> => {
   const last = attempts[attempts.length - 1];
   const exhausted = failsOver(last);
   const status = exhausted ? 429 : (last.upstreamStatus ?? 502);
   return {
     costUsd: 0,
-    durationMs: attempts.reduce((n, a) => n + (a.durationMs ?? 0), 0),
+    durationMs: Date.parse(last.startedAt) + (last.durationMs ?? 0) - atMs,
     errorCode: exhausted ? 'accounts_exhausted' : status === 529 ? 'overloaded_error' : 'api_error',
     outcome: exhausted ? 'exhausted' : 'failed',
     status,
@@ -719,6 +742,9 @@ interface StoryAttempt {
   status: number;
 }
 
+/** The geography an answer reported, where the model does not take the parameter. */
+type StoryGeo = 'not_available';
+
 interface StorySeed {
   agentId: string;
   at: number;
@@ -727,6 +753,8 @@ interface StorySeed {
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
+  /** The answer's inference geography where it is not the story's `us`. */
+  geo?: StoryGeo;
   held?: CohortHold;
   id: string;
   keyId: string;
@@ -777,7 +805,7 @@ function storyRow(seed: StorySeed): RequestLog {
       index,
       outcome: a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       overageInUse: oauth ? false : null,
-      response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? 'us' : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
+      response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
       startedAt: iso(a.at),
@@ -789,6 +817,10 @@ function storyRow(seed: StorySeed): RequestLog {
     };
   });
   const durationMs = seed.attempts.length ? last.at + last.ms - seed.attempts[0].at + (seed.held?.heldMs ?? 0) : null;
+  // The head lands 640 ms into the serving attempt and the first content 270 ms after it, each held under the finish.
+  const headRoom = durationMs === null ? 0 : durationMs - STREAM_TAIL;
+  const ttfbMs = answered && kind !== 'count_tokens' ? Math.min(last.at - seed.at + 640, headRoom) : null;
+  const ttftMs = ttfbMs === null ? null : kind === 'inference' ? Math.min(ttfbMs + 270, headRoom) : ttfbMs;
   const status = seed.status ?? last?.status ?? 429;
   return {
     ...REQUEST_SAMPLE,
@@ -825,8 +857,8 @@ function storyRow(seed: StorySeed): RequestLog {
     shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
     status,
     transport: kind === 'inference' ? 'sse' : 'json',
-    ttfbMs: answered && kind !== 'count_tokens' ? 640 : null,
-    ttftMs: answered && kind === 'inference' ? 910 : answered ? 640 : null,
+    ttfbMs,
+    ttftMs,
     turnOrigin: seed.keyId === 'ci' ? null : 'human',
     usage,
     userAgent: seed.userAgent ?? USER_AGENTS[seed.keyId] ?? null,
@@ -894,7 +926,8 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-5', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
-    { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
+    // The model takes no inference geography parameter, so its answer reports the geography as not available.
+    { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
     // A token count follows its pin to the spent secondary, whose head rejects the 5-hour window: the 429 starts the
     // cooldown secondary carries, and the count fails over to primary.
     {
@@ -1378,14 +1411,64 @@ function seedHolds() {
   // already named, whichever turn the clock drew, and adds the bound's wait.
   const before = afterAttempt.held;
   const bound = boundOf(afterAttempt);
+  const lastKept = afterAttempt.attempts[afterAttempt.attempts.length - 1];
   Object.assign(afterAttempt, {
     accountId: null,
-    durationMs: afterAttempt.attempts.reduce((n, a) => n + (a.durationMs ?? 0), 0) + bound,
+    durationMs: Date.parse(lastKept.startedAt) + (lastKept.durationMs ?? 0) - Date.parse(afterAttempt.at) + bound,
     errorCode: 'accounts_at_cap',
     held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next] },
     outcome: 'exhausted',
     status: 429,
   });
+}
+
+/**
+ * A row's shares of its account's windows, as the request route answers them: null for a request no subscription
+ * window paid, else each window the model applies to under the account's tier at the request's completion, a window
+ * the cost model cannot price carried as null and an account without a tier an empty map.
+ */
+function costSharesOf(r: RequestLog): CostShares | null {
+  const serving = r.attempts[r.attempts.length - 1] ?? null;
+  if (serving === null || fundingOf(serving) !== 'plan') return null;
+  const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
+  if (tier === undefined) return {};
+  const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
+  const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.canonicalModel)];
+  return Object.fromEntries(windows.map((w) => [w, shareOf(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs)]));
+}
+
+/**
+ * Every row's phases and shares, read off the row as it finally stands: the passes above move an arrival, drop
+ * attempts and set nightly's overage flag, so the instants and the funding are read after the last of them. The
+ * write lands a few milliseconds into the last attempt, as the route reads it, and the stream's close a few
+ * milliseconds before the finish. A phase the row never reached stays null: no head without a serving attempt, no
+ * content or close on a stream that failed past its head, no close on one that ended short or was canceled, no
+ * content or close on a token count, and no close on a JSON answer.
+ */
+function phaseRequests() {
+  for (const r of REQUESTS) {
+    const atMs = Date.parse(r.at);
+    const first = r.attempts[0] as Attempt | undefined;
+    const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+    const write = phaseRng.int(8, 40);
+    const tail = phaseRng.int(5, STREAM_TAIL);
+    // A stream that failed past its head errored before any content token reached the client.
+    if (r.status === 200 && r.outcome === 'failed') r.ttftMs = null;
+    const finishedMs = r.durationMs === null ? null : atMs + r.durationMs;
+    const headMs = r.ttfbMs === null ? null : atMs + r.ttfbMs;
+    const contentMs = headMs === null || r.ttftMs === null || r.kind === 'count_tokens' ? null : atMs + r.ttftMs;
+    const closes = contentMs !== null && finishedMs !== null && r.transport === 'sse' && r.outcome !== 'incomplete' && r.outcome !== 'canceled';
+    r.phases = {
+      finishedAt: finishedMs === null ? null : iso(finishedMs),
+      firstContentAt: contentMs === null ? null : iso(contentMs),
+      headAt: headMs === null ? null : iso(headMs),
+      receivedAt: r.at,
+      selectedAt: first === undefined ? null : first.startedAt,
+      streamEndAt: closes ? iso(finishedMs - tail) : null,
+      writtenAt: last === undefined ? null : iso(Date.parse(last.startedAt) + write),
+    };
+    r.costShares = costSharesOf(r);
+  }
 }
 
 addStoryEvents();
@@ -1394,6 +1477,7 @@ seedDrawerBranches();
 seedHolds();
 liftCooldowns(REQUESTS);
 identifyRequests();
+phaseRequests();
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;
@@ -1470,21 +1554,31 @@ const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 // The probes the router held while its ledger caught up draw from a stream of their own, so they shift no other draw.
 const heldRng = createRng(6_133);
 
+/**
+ * Who paid for a request, as the ledger keys its rollups: a fast answer's credits before anything, then the head's
+ * overage flag, else the plan. An API key account's rows file under `plan` here too, the kind telling them apart.
+ */
+const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
+  const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+  if ((last?.response.speed ?? r.shape.requestedSpeed) === 'fast') return 'fast';
+  return last?.overageInUse === true ? 'overage' : 'plan';
+};
+
 function rollups(): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
   for (const r of REQUESTS) {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
-    // not attribute.
-    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId].join('|');
+    // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
+    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId, fundingKey(r)].join('|');
     const list = groups.get(key) ?? [];
     list.push(r);
     groups.set(key, list);
   }
   const out: HourlyRollup[] = [];
   for (const [key, list] of groups) {
-    const [hour, keyId, poolId, accountId, model, kind, sessionId] = key.split('|') as [string, string, string, string, string, RequestKind, string];
+    const [hour, keyId, poolId, accountId, model, kind, sessionId, funding] = key.split('|') as [string, string, string, string, string, RequestKind, string, HourlyRollup['funding']];
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
     const cacheMissReasons = emptyCacheMissReasons();
@@ -1505,9 +1599,10 @@ function rollups(): HourlyRollup[] {
       model,
       requestClass: isProbe ? '-' : classOfRows(list),
       sessionId,
+      funding,
       // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
       // before any attempt files under the speed it asked for, as the ledger files it.
-      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
+      speed: funding === 'fast' ? 'fast' : 'standard',
       requests: {
         // A stream that ended short committed its 200 and still is no success, so it counts on its own.
         incomplete: list.filter((r) => r.outcome === 'incomplete').length,
@@ -1660,6 +1755,7 @@ function historicalRollups(): HourlyRollup[] {
         model,
         requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
         sessionId,
+        funding: fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
         requests: { incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
@@ -1708,6 +1804,7 @@ function historicalRollups(): HourlyRollup[] {
           model,
           requestClass: '-',
           sessionId,
+          funding: 'plan',
           speed: 'standard',
           requests: { incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,
@@ -1787,6 +1884,9 @@ function deriveFigures() {
 
 deriveFigures();
 
+/** The ledger's id of each window the quota samples carry, which the Accounts cards key an hour's samples by. */
+const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
+
 // Hourly account facts: peak utilization per window, time spent ineligible, and
 // pin churn. The last seven days follow the sampled quota history; older hours
 // are synthesized with the same shape.
@@ -1796,14 +1896,34 @@ function accountRollups(): AccountRollup[] {
   const start = startOfHour(NOW) - 30 * DAY;
   const end = startOfHour(NOW);
   const sampleIndex = new Map<string, Map<number, number>>();
+  // Each hour's last sample, which the route answers with its instant, beside the peak the hour's rows read.
+  const lastSample = new Map<string, Map<number, QuotaSample>>();
   for (const hist of QUOTA_HISTORY) {
     const byHour = new Map<number, number>();
+    const last = new Map<number, QuotaSample>();
     for (const sm of hist.samples) {
       const hour = startOfHour(Date.parse(sm.at));
       byHour.set(hour, Math.max(byHour.get(hour) ?? 0, sm.utilization));
+      last.set(hour, sm);
     }
     sampleIndex.set(`${hist.accountId}|${hist.windowId}`, byHour);
+    lastSample.set(`${hist.accountId}|${hist.windowId}`, last);
   }
+  // An hour's last sample of each window the router reads, with the reset live at the sample's instant and the lead
+  // the router would read then, so the Pace card draws leads on both sides of zero across the story's accounts.
+  const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
+    const windows: AccountRollup['windows'] = {};
+    for (const w of [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]) {
+      const key = LEDGER_WINDOW[w.id];
+      const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
+      if (key === undefined || sample === undefined) continue;
+      const sampledMs = Date.parse(sample.at);
+      const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
+      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      windows[key] = read;
+    }
+    return windows;
+  };
   for (const account of ACCOUNTS) {
     // An account never paired has never been sampled, so it has no hours to report.
     if (account.kind !== 'oauth' || account.status === 'unpaired') continue;
@@ -1838,7 +1958,7 @@ function accountRollups(): AccountRollup[] {
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
-        windows: {},
+        windows: sampledWindows(account, t),
       };
       if (t >= from && t <= until) out.push(row);
     }
@@ -1849,7 +1969,13 @@ function accountRollups(): AccountRollup[] {
 export const ACCOUNT_ROLLUPS: AccountRollup[] = accountRollups();
 
 /** What the ledger counted as it read the body, which is the only figure the drawer's "bytes dropped" may use. */
-const byteLength = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
+const byteLength = (v: unknown): number => new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v)).length;
+
+/** One frame of a stored stream, as the upstream sends it and the ledger keeps it. */
+const sseFrame = (event: string, data: unknown): string => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+/** The answer's text, which a stream delivers in two deltas. */
+const ANSWER_TEXT = 'The hook awaits a promise that resolves before the writer flushes. Moving the flush into the same tick fixes the race.';
 
 /** A cut answer ran a megabyte past the cap before the ledger stopped storing it. */
 const DROPPED_BYTES = 1_048_576;
@@ -1875,27 +2001,43 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
       metadata: { user_id: `session_${request.sessionId}` },
       tools: [{ name: 'Read', description: 'Reads a file', input_schema: { type: 'object', properties: { file_path: { type: 'string' } } } }],
     },
-    response: {
-      id: `msg_${request.id.slice(4)}`,
-      type: 'message',
-      role: 'assistant',
-      model: isClaude ? request.model : `${request.model}-2026-05-01`,
-      content: [{ type: 'text', text: 'The hook awaits a promise that resolves before the writer flushes. Moving the flush into the same tick fixes the race.' }],
-      stop_reason: 'end_turn',
-      usage: {
-        input_tokens: request.usage.input,
-        cache_read_input_tokens: request.usage.cacheRead,
-        cache_creation_input_tokens: request.usage.cacheWrite5m + request.usage.cacheWrite1h,
-        cache_creation: { ephemeral_5m_input_tokens: request.usage.cacheWrite5m, ephemeral_1h_input_tokens: request.usage.cacheWrite1h },
-        output_tokens: request.usage.output,
-      },
+  };
+  const message = {
+    id: `msg_${request.id.slice(4)}`,
+    type: 'message',
+    role: 'assistant',
+    model: isClaude ? request.model : `${request.model}-2026-05-01`,
+    stop_reason: request.attempts[request.attempts.length - 1]?.response.stopReason ?? 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: request.usage.input,
+      cache_read_input_tokens: request.usage.cacheRead,
+      cache_creation_input_tokens: request.usage.cacheWrite5m + request.usage.cacheWrite1h,
+      cache_creation: { ephemeral_5m_input_tokens: request.usage.cacheWrite5m, ephemeral_1h_input_tokens: request.usage.cacheWrite1h },
+      output_tokens: request.usage.output,
     },
   };
+  // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw; a JSON answer as its
+  // object. The opening frame carries the message with its usage and no content, as the upstream sends it.
+  const cut = ANSWER_TEXT.indexOf('Moving');
+  const response =
+    request.transport === 'sse'
+      ? [
+          sseFrame('message_start', { type: 'message_start', message: { ...message, content: [] } }),
+          sseFrame('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+          sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(0, cut) } }),
+          sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(cut) } }),
+          sseFrame('content_block_stop', { type: 'content_block_stop', index: 0 }),
+          sseFrame('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: request.usage.output } }),
+          sseFrame('message_stop', { type: 'message_stop' }),
+        ].join('')
+      : { ...message, content: [{ type: 'text', text: ANSWER_TEXT }] };
   // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.
   const requestBytes = byteLength(bodies.request);
-  const responseBytes = byteLength(bodies.response);
+  const responseBytes = byteLength(response);
   return {
     ...bodies,
+    response,
     requestBytesSeen: requestBytes,
     requestBytesStored: requestBytes,
     requestTruncated: request.requestTruncated,

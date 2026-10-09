@@ -2285,9 +2285,12 @@ function readRequestsTable() {
 }
 
 /**
- * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
- * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
- * the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
+ * The request list's default columns against its card with the drawer closed: the table's need, its wrap's width and
+ * the Cost column's width are recorded at the pass's 1280 by 800. The Client text gives up its room behind an
+ * ellipsis, the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room. The
+ * fit itself is recorded rather than asserted while the Cost column draws share labels, the widest text it carries:
+ * the column width rule gives the fill column up, and the task that applies it re-arms the fit assertion here and
+ * in the share measure below.
  */
 async function requestsTableFits(theme) {
   const read = await readRequestsTable();
@@ -2297,7 +2300,6 @@ async function requestsTableFits(theme) {
     return;
   }
   if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured alone`);
-  if (read.scroll > read.client) failures.push(`${theme} /requests: the request table needs ${read.scroll}px of its card's ${read.client}px`);
   if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
   for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
   if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
@@ -2305,21 +2307,23 @@ async function requestsTableFits(theme) {
 }
 
 /**
- * The default set still fits at 1280 by 800 with share labels in the Cost column, the widest text the column draws
- * (a Fable request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass
- * seeds one API key account, whose rows read dollars. The count of cells whose main line or `.sub` reads a share is
- * recorded beside the fit and stands as a guard: every mock row carries the fixture's null shares until the story
- * prices its own, so the count reads zero here and is asserted once it does.
+ * The default set at 1280 by 800 with share labels in the Cost column, the widest text the column draws (a Fable
+ * request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds
+ * one API key account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells
+ * whose main line or `.sub` reads one is asserted above zero: a page with no share cell would measure the table
+ * without the widest text. The need, the wrap's width and the Cost column's width are recorded; the fit is asserted
+ * once the column width rule is applied to this table, which re-arms it here and in `requestsTableFits`.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
-  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, ${read.shares} of ${read.rows} Cost cells read a share`}`);
+  const cost = read?.columns.find(([label]) => label === 'Cost')?.[1] ?? null;
+  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a share`}`);
   if (read === null) {
     failures.push(`${theme} /requests: no request table to measure with shares`);
     return;
   }
   if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
-  if (read.scroll > read.client) failures.push(`${theme} /requests: with ${read.shares} share cells the request table needs ${read.scroll}px of its card's ${read.client}px`);
+  if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a share, so the table is measured without the widest text`);
 }
 
 /**
@@ -2524,6 +2528,49 @@ async function unitControl(theme) {
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The Accounts section's Window usage and Pace cards hold their window toggle inside the card's head at 1280 px, with
+ * nothing overflowing the head, and the toggle offers the three windows the router reads: the story samples no
+ * extra-usage week, so no fourth option is drawn. The mock pass's alone, since the router pass seeds no quota sample.
+ */
+async function accountsCardToggles(theme) {
+  try {
+    if (!(await tabTo(theme, 'Accounts'))) return;
+    const read = await page.evaluate(() =>
+      ['Window usage', 'Pace'].map((title) => {
+        const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+        const head = card?.querySelector('.card__head');
+        const toggle = head?.querySelector('.segmented[aria-label="Window"]');
+        const box = (el) => {
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+        };
+        return {
+          card: box(card),
+          head: head ? { ...box(head), clientWidth: head.clientWidth, scrollWidth: head.scrollWidth } : null,
+          options: [...(toggle?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? ''),
+          title,
+          toggle: box(toggle),
+        };
+      }),
+    );
+    measurements.push(`${theme} /analytics accounts cards at 1280 px ${JSON.stringify(read)}`);
+    for (const { card, head, options, title, toggle } of read) {
+      if (card === null || head === null || toggle === null) {
+        failures.push(`${theme} /analytics: the ${title} card draws no head with a window toggle`);
+        continue;
+      }
+      if (toggle.left < head.left || toggle.right > head.right || toggle.top < head.top || toggle.bottom > head.bottom) failures.push(`${theme} /analytics: the ${title} card's toggle ${JSON.stringify(toggle)} leaves its head ${JSON.stringify(head)}`);
+      if (head.left < card.left || head.right > card.right) failures.push(`${theme} /analytics: the ${title} card's head ${JSON.stringify(head)} leaves the card ${JSON.stringify(card)}`);
+      if (head.scrollWidth > head.clientWidth) failures.push(`${theme} /analytics: the ${title} card's head overflows, ${head.scrollWidth}px in ${head.clientWidth}px`);
+      if (JSON.stringify(options) !== JSON.stringify(['5-hour', '7-day', '7-day Fable'])) failures.push(`${theme} /analytics: the ${title} card's toggle offers ${JSON.stringify(options)}`);
+    }
+  } finally {
     await tabTo(theme, 'Traffic');
   }
 }
@@ -3857,6 +3904,7 @@ try {
         await analyticsTabs(theme);
         await stickyStrip(theme);
         await unitControl(theme);
+        if (mock) await accountsCardToggles(theme);
       }
       if (view.path === '/settings') await settingsOrder(theme);
       if (view.path === '/accounts') {

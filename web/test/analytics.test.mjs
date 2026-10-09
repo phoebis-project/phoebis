@@ -253,7 +253,7 @@ test("a bucket's share is null when any row is unpriced, in either order", () =>
 test("the mock's burn fold prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
   // Wednesday 2026-09-16 at 10:00 UTC, before the peak band opens in Los Angeles; primary is the story's Max 20x.
   const hour = Date.parse('2026-09-16T10:00:00Z');
-  const row = (model, uncachedInput) => ({ accountId: 'primary', costUsd: 0, hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const row = (model, uncachedInput) => ({ accountId: 'primary', costUsd: 0, funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   const priced = row('claude-opus-5-5', 1_000_000);

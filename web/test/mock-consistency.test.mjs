@@ -48,7 +48,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -352,6 +352,110 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
+  });
+
+  test(`every plan-funded row of a weighted model carries non-null shares and no API key, overage or fast row carries one, at ${at}`, async () => {
+    const s = await story;
+    const costs = s.settings.subscriptionCosts;
+    let priced = 0;
+    for (const r of s.requests) {
+      const serving = r.attempts[r.attempts.length - 1] ?? null;
+      const funding = s.lib.fundingOf(serving);
+      if (funding !== 'plan') {
+        assert.equal(r.costShares, null, `${r.id} is ${funding}-funded and carries ${JSON.stringify(r.costShares)}`);
+        continue;
+      }
+      assert.ok(r.costShares !== null && typeof r.costShares === 'object', `${r.id} is plan-funded and carries no share map`);
+      const values = Object.values(r.costShares);
+      // A window the model has no weight on reads null, as the route answers an applicable window it cannot price.
+      if (s.lib.isWeighted(costs, r.canonicalModel)) {
+        assert.ok(values.length > 0 && values.every((v) => typeof v === 'number'), `${r.id} on ${r.canonicalModel} reads ${JSON.stringify(r.costShares)}`);
+        priced += 1;
+      } else assert.ok(values.length > 0 && values.every((v) => v === null), `${r.id} on the unweighted ${r.canonicalModel} reads ${JSON.stringify(r.costShares)}`);
+    }
+    assert.ok(priced > 0, 'the story prices a share');
+  });
+
+  test(`every row's phases are in order and agree with its ttfbMs and durationMs, at ${at}`, async () => {
+    const s = await story;
+    const LATER = ['selectedAt', 'writtenAt', 'headAt', 'firstContentAt', 'streamEndAt', 'finishedAt'];
+    for (const r of s.requests) {
+      const p = r.phases;
+      assert.equal(p.receivedAt, r.at, `${r.id} is received when it arrives`);
+      const received = Date.parse(p.receivedAt);
+      let prior = received;
+      for (const key of LATER) {
+        if (p[key] === null) continue;
+        const at = Date.parse(p[key]);
+        assert.ok(at >= prior, `${r.id}: ${key} at ${p[key]} lands before the phase before it, ${iso(prior)}`);
+        prior = at;
+      }
+      assert.equal(p.selectedAt, r.attempts[0]?.startedAt ?? null, `${r.id} is selected when its first attempt starts`);
+      assert.equal(p.headAt === null ? null : Date.parse(p.headAt) - received, r.ttfbMs, `${r.id}'s head against its ttfbMs`);
+      assert.equal(p.finishedAt === null ? null : Date.parse(p.finishedAt) - received, r.durationMs, `${r.id}'s finish against its durationMs`);
+    }
+  });
+
+  test(`the breakdown's account shares equal the sum of its rows' shares, at ${at}`, async () => {
+    const s = await story;
+    const costs = s.settings.subscriptionCosts;
+    const range = { from: iso(s.now - DAY), to: iso(s.now) };
+    const groups = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' });
+    const day = s.allRollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
+    const kinds = new Map(s.accounts.map((a) => [a.id, a.kind]));
+    const tiers = new Map(s.accounts.map((a) => [a.id, a.subscription?.rateLimitTier]));
+    const usageOf = (r) => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
+    const windowsOf = (r) => ['five_hour', 'seven_day', ...s.lib.modelWeeks(costs, r.model)];
+    // The rows' shares summed as the route sums them: a window read null by any row reads null for the group.
+    const summed = (rows, tier, usage) => {
+      const out = {};
+      for (const r of rows) {
+        if (tokensOf(r) === 0) continue;
+        for (const w of windowsOf(r)) {
+          const share = s.lib.shareOf(costs, w, tier, r.model, usage(r), Date.parse(r.hour));
+          out[w] = share === null || out[w] === null ? null : (out[w] ?? 0) + share;
+        }
+      }
+      return out;
+    };
+    const close = (got, want, where) => {
+      if (want === null) assert.equal(got, null, `${where} reads ${got} where the rows price nothing`);
+      else assert.ok(typeof got === 'number' && Math.abs(got - want) < 1e-9, `${where} reads ${got} against the rows' ${want}`);
+    };
+    let compared = 0;
+    for (const g of groups) {
+      const tier = tiers.get(g.key);
+      if (kinds.get(g.key) !== 'oauth' || tier === undefined) {
+        assert.deepEqual([g.costShares, g.cacheShares, g.probeShares, g.planRequests, g.planOutputTokens], [null, null, null, null, null], `${g.key} prices a share`);
+        continue;
+      }
+      const plan = day.filter((r) => r.accountId === g.key && r.funding === 'plan');
+      const counted = plan.filter((r) => r.kind !== 'probe');
+      const probes = plan.filter((r) => r.kind === 'probe');
+      const cost = summed(counted, tier, usageOf);
+      assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).sort(), `${g.key}'s windows`);
+      for (const [w, want] of Object.entries(cost)) close(g.costShares[w], want, `${g.key}'s ${w}`);
+      const read = summed(counted, tier, (r) => ({ ...usageOf(r), cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }));
+      const write = summed(counted, tier, (r) => ({ ...usageOf(r), cacheRead: 0, input: 0, output: 0 }));
+      // An unpriced window is absent from the cache and probe maps, as the route answers them.
+      assert.deepEqual(Object.keys(g.cacheShares ?? {}).sort(), Object.keys(read).filter((w) => read[w] !== null && write[w] !== null).sort(), `${g.key}'s cache windows`);
+      for (const [w, entry] of Object.entries(g.cacheShares ?? {})) {
+        close(entry.read, read[w], `${g.key}'s ${w} cache read`);
+        close(entry.write, write[w], `${g.key}'s ${w} cache write`);
+      }
+      const probe = summed(probes, tier, usageOf);
+      const probeUsd = sum(probes, (r) => r.savings.probeCostUsd);
+      const ratio = probeUsd > 0 ? sum(probes, (r) => r.wastedProbeUsd) / probeUsd : null;
+      assert.deepEqual(Object.keys(g.probeShares ?? {}).sort(), Object.keys(probe).filter((w) => probe[w] !== null).sort(), `${g.key}'s probe windows`);
+      for (const [w, entry] of Object.entries(g.probeShares ?? {})) {
+        close(entry.cost, probe[w], `${g.key}'s ${w} probe cost`);
+        close(entry.wasted, ratio === null ? null : probe[w] * ratio, `${g.key}'s ${w} wasted probe share`);
+      }
+      assert.equal(g.planRequests, sum(counted, requestsOf), `${g.key}'s plan requests`);
+      assert.equal(g.planOutputTokens, sum(counted, (r) => r.tokens.output), `${g.key}'s plan output tokens`);
+      compared += 1;
+    }
+    assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
   });
 }
 

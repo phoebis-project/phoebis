@@ -4,7 +4,7 @@ import type {
 } from '@/api/types';
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
-import { shareOf, tierCapacity } from '@/lib/costs';
+import { modelWeeks, shareOf, tierCapacity } from '@/lib/costs';
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
@@ -39,6 +39,11 @@ export interface HourlyRollup {
   expiredBetweenTurns: number;
   /** Attempts that moved to another member before the request succeeded. */
   failovers: number;
+  /**
+   * Who paid for the hour's requests, as the ledger keys its rollups: a fast answer's credits, the head's overage, or
+   * the plan. An API key account's rows file under `plan` here too, the account's kind telling them apart.
+   */
+  funding: 'fast' | 'overage' | 'plan';
   histograms: LatencyHistograms;
   hour: string;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
@@ -109,9 +114,23 @@ const METRICS: (keyof LatencyHistograms)[] = ['durationMs', 'outputTps', 'ttfbMs
 const PERCENTILES = { p50: 0.5, p90: 0.9, p95: 0.95, p99: 0.99 };
 const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, PERCENTILES.p50), p90: percentileFromHistogram(h, PERCENTILES.p90), p95: percentileFromHistogram(h, PERCENTILES.p95), p99: percentileFromHistogram(h, PERCENTILES.p99) });
 
+const KIND_OF = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
+const TIER_OF = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
+
+/**
+ * Whether a row falls on the side the funding filter keeps, as the route reads it: `plan` is a plan-funded row of an
+ * account that is not an API key (one the registry lacks included), `billed` its complement.
+ */
+function passesFunding(r: HourlyRollup, funding: AnalyticsQuery['funding']): boolean {
+  if (funding === undefined) return true;
+  const plan = r.funding === 'plan' && KIND_OF.get(r.accountId) !== 'api_key';
+  return funding === 'plan' ? plan : !plan;
+}
+
 function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: number): boolean {
   const hour = Date.parse(r.hour);
   if (hour < fromMs || hour > toMs) return false;
+  if (!passesFunding(r, q.funding)) return false;
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
   if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
   if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
@@ -122,14 +141,75 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
   return true;
 }
 
+/** One window's running share and whether a row could not be priced on it, which drops it from the answer. */
+interface WindowSum {
+  sum: number;
+  unpriced: boolean;
+}
+
+/** The five share members of a group, folded from its plan-funded rows or all null. */
+type GroupShares = Pick<AnalyticsGroup, 'cacheShares' | 'costShares' | 'planOutputTokens' | 'planRequests' | 'probeShares'>;
+
+const NO_SHARES: GroupShares = { cacheShares: null, costShares: null, planOutputTokens: null, planRequests: null, probeShares: null };
+
+/**
+ * A subscription account's shares of its windows over its plan-funded rows, summed as the route sums a group: the
+ * cost and cache shares over the rows the Include probes rule admits, the probe share over the probe rows apart, and
+ * the wasted share the probe share times the group's wasted-probe dollars over its probe-cost dollars, the
+ * plan-funded probe rows alone on both sides. A window any row prices null is carried null in the cost shares and
+ * left out of the cache and probe shares, as the route answers them, and a row with no token prices nothing.
+ */
+function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier: string): GroupShares {
+  const cost = new Map<string, WindowSum>();
+  const read = new Map<string, WindowSum>();
+  const write = new Map<string, WindowSum>();
+  const probe = new Map<string, WindowSum>();
+  const add = (into: Map<string, WindowSum>, window: string, share: number | null) => {
+    const s = into.get(window) ?? { sum: 0, unpriced: false };
+    if (share === null) s.unpriced = true;
+    else s.sum += share;
+    into.set(window, s);
+  };
+  const tokens = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
+  const plan = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'plan');
+  const countedPlan = plan(counted);
+  for (const r of countedPlan) {
+    if (tokens(r) === 0) continue;
+    const s = sharesOf(r, tier);
+    for (const [window, share] of Object.entries(s.cost)) add(cost, window, share);
+    for (const [window, share] of Object.entries(s.read)) add(read, window, share);
+    for (const [window, share] of Object.entries(s.write)) add(write, window, share);
+  }
+  let probeUsd = 0;
+  let wastedUsd = 0;
+  for (const r of plan(probeRows)) {
+    probeUsd += r.savings.probeCostUsd;
+    wastedUsd += r.wastedProbeUsd;
+    if (tokens(r) === 0) continue;
+    for (const [window, share] of Object.entries(sharesOf(r, tier).cost)) add(probe, window, share);
+  }
+  const ratio = probeUsd > 0 ? wastedUsd / probeUsd : null;
+  const priced = (map: Map<string, WindowSum>) => [...map.entries()].filter(([, s]) => !s.unpriced);
+  return {
+    cacheShares: Object.fromEntries(priced(read).flatMap(([window, r]) => { const w = write.get(window); return w === undefined || w.unpriced ? [] : [[window, { read: r.sum, write: w.sum }]]; })),
+    costShares: Object.fromEntries([...cost.entries()].map(([window, s]) => [window, s.unpriced ? null : s.sum])),
+    planOutputTokens: countedPlan.reduce((n, r) => n + r.tokens.output, 0),
+    planRequests: countedPlan.reduce((n, r) => n + r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error, 0),
+    probeShares: Object.fromEntries(priced(probe).map(([window, s]) => [window, { cost: s.sum, wasted: ratio === null ? null : s.sum * ratio }])),
+  };
+}
+
 /**
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
- * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read.
+ * count as requests, and the probe rows alone, which the probe counts and the probe half of the savings read. The
+ * shares are the account grouping's, for a subscription account with a tier, and null under every other grouping.
  */
-function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean): AnalyticsGroup {
+function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean, groupBy: AnalyticsGroupBy): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const sum = (list: HourlyRollup[], read: (r: HourlyRollup) => number) => list.reduce((n, r) => n + read(r), 0);
+  const tier = TIER_OF.get(key);
+  const shares = groupBy === 'account' && KIND_OF.get(key) === 'oauth' && tier !== undefined ? sharesOfGroup(counted, probeRows, tier) : NO_SHARES;
 
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
@@ -159,10 +239,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     cacheHits: sum(counted, (r) => r.cacheHits),
     cacheMisses: sum(counted, (r) => r.cacheMisses),
     cacheMissReasons,
-    // The story's rollups carry dollars alone, so the mock prices no share.
-    cacheShares: null,
+    cacheShares: shares.cacheShares,
     cost: { cacheRead: sum(counted, (r) => r.cost.cacheRead), cacheWrite: sum(counted, (r) => r.cost.cacheWrite), input: sum(counted, (r) => r.cost.input), output: sum(counted, (r) => r.cost.output) },
-    costShares: null,
+    costShares: shares.costShares,
     costUsd: sum(counted, (r) => r.costUsd),
     errors,
     // The fixture ledger records neither an exhausted pool nor a rejected request.
@@ -176,10 +255,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     key,
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
-    planOutputTokens: null,
-    planRequests: null,
+    planOutputTokens: shares.planOutputTokens,
+    planRequests: shares.planRequests,
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
-    probeShares: null,
+    probeShares: shares.probeShares,
     rateLimited,
     rejected: 0,
     requests,
@@ -215,7 +294,7 @@ export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGrou
   const of = q.groupBy === 'user_agent' && named.length ? (r: HourlyRollup) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
-  return [...buckets.entries()].map(([key, list]) => groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  return [...buckets.entries()].map(([key, list]) => groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy)).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
@@ -253,16 +332,16 @@ function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
   return { bucketMs, starts };
 }
 
-type Window = 'five_hour' | 'seven_day';
-
 /**
- * A subscription row's share of each of its account's windows through the cost model, completing at the row's hour;
- * null for a tier or a model the model does not price.
+ * A subscription row's shares of each window its model applies to (the two shared windows and its model weeks)
+ * through the cost model, completing at the row's hour: the whole usage's, the cache read's alone and the cache
+ * writes' alone, each null for a tier or a model the model does not price.
  */
-function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, number | null> {
+function sharesOf(r: HourlyRollup, tier: string): Record<'cost' | 'read' | 'write', Record<string, number | null>> {
   const usage = { cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output };
-  const one = (window: Window) => (tier === undefined ? null : shareOf(TABLES, window, tier, r.model, usage, Date.parse(r.hour)));
-  return { five_hour: one('five_hour'), seven_day: one('seven_day') };
+  const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.model)];
+  const over = (u: typeof usage) => Object.fromEntries(windows.map((window) => [window, shareOf(TABLES, window, tier, r.model, u, Date.parse(r.hour))]));
+  return { cost: over(usage), read: over({ ...usage, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }), write: over({ ...usage, cacheRead: 0, input: 0, output: 0 }) };
 }
 
 /** A bucket's sums, each window's shares kept per row so one unpriced row nulls the window, as the route reads it. */
@@ -292,9 +371,10 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
-    // A fast answer spends usage credits in dollars on either kind and draws no plan window: on a tier the cost model
-    // sizes it reads as a zero share, so the account is still a priced one.
-    const fast = r.speed === 'fast';
+    // A fast answer spends usage credits and an overage row the account's overage, each in dollars on either kind
+    // and off every plan window: on a tier the cost model sizes they read as a zero share, so the account is still a
+    // priced one.
+    const billed = r.funding !== 'plan';
     const group = groupOf(r);
     const byAt = sums.get(group) ?? new Map();
     sums.set(group, byAt);
@@ -304,20 +384,20 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.cached += r.tokens.cacheRead;
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
-    s.usd += oauth && !fast ? 0 : r.costUsd;
+    s.usd += oauth && !billed ? 0 : r.costUsd;
     // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has
     // no weight for never nulls a priced bucket.
     if (!oauth || tokens === 0) continue;
-    if (fast) {
-      // The zero rests on the tier alone, as the route reads a fast row, and never nulls a bucket.
-      const tier = tiers.get(r.accountId);
+    const tier = tiers.get(r.accountId);
+    if (billed) {
+      // The zero rests on the tier alone, as the route reads a dollar-billed row, and never nulls a bucket.
       if (tier !== undefined && tierCapacity(TABLES, tier, 'five_hour') !== null) s.fiveHour.push(0);
       if (tier !== undefined && tierCapacity(TABLES, tier, 'seven_day') !== null) s.sevenDay.push(0);
       continue;
     }
-    const shares = sharesOf(r, tiers.get(r.accountId));
-    s.fiveHour.push(shares.five_hour);
-    s.sevenDay.push(shares.seven_day);
+    const cost = tier === undefined ? { five_hour: null, seven_day: null } : sharesOf(r, tier).cost;
+    s.fiveHour.push(cost.five_hour);
+    s.sevenDay.push(cost.seven_day);
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();

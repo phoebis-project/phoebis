@@ -67,8 +67,9 @@ const SYNC = {
   replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },
   request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
-  // them through raw), the same class of value OPAQUE covers for `.detail`.
-  request_bodies: { decode: (b) => d.decodeBodies(b), mock: async (api) => { const page = await api.listRequests(); return api.getCapturedBodies(page.requests.find((r) => r.capturedBodies).id); }, opaque: (path) => path === '.request' || path === '.response' },
+  // them through raw), the same class of value OPAQUE covers for `.detail`, and a stream's capture is the text of
+  // its events.
+  request_bodies: { decode: (b) => d.decodeBodies(b), mock: async (api) => { const page = await api.listRequests(); return api.getCapturedBodies(page.requests.find((r) => r.capturedBodies).id); }, opaque: (path) => (path === '.request' || path === '.response' ? ['object', 'null', 'string'] : false) },
   requests: { decode: (b) => d.decodeRequestPage(b), mock: (api) => api.listRequests() },
   routing_log: { decode: (b) => byType(d.decodeRoutingLogPage(b)), mock: async (api) => byType(await api.listRoutingLog()) },
   session: { expect: (b) => Object.fromEntries(Object.keys(b).map((k) => [camel(k), 'any'])), mock: async (api) => { await api.login('admin'); return api.getSession(); } },

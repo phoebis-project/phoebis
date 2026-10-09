@@ -46,3 +46,18 @@ test('a per-row pass-through path holds only to object-or-null, richer or not, t
   assert.deepEqual(same(want, { body: { a: 1, b: 2, c: 3 } }, '', 0, passthrough), []);
   assert.deepEqual(same(want, { body: 'raw text' }, '', 0, passthrough), ['.body: string where an object or null is expected']);
 });
+
+test('a pass-through hook that names its kinds admits them, so a stored stream reads as text where a JSON answer reads as an object', () => {
+  const passthrough = (path) => (path === '.body' ? ['object', 'null', 'string'] : false);
+  const want = shapeOf({ body: { a: 1 } });
+  assert.deepEqual(same(want, { body: 'event: message_start' }, '', 0, passthrough), []);
+  assert.deepEqual(same(want, { body: null }, '', 0, passthrough), []);
+  assert.deepEqual(same(want, { body: 7 }, '', 0, passthrough), ['.body: number where an object, null or a string is expected']);
+});
+
+test('a window-keyed map takes any window, a share map a null entry, and an object entry is held to the first entry of the fixture', () => {
+  const want = shapeOf({ cacheShares: { five_hour: { read: 1, write: 2 } }, costShares: { five_hour: 1 }, windows: {} });
+  const got = { cacheShares: { five_hour: { read: 1, write: 2 }, seven_day_fable: { read: 3, write: 4 } }, costShares: { five_hour: 1, seven_day: null, seven_day_fable: 2 }, windows: { five_hour: { lead: 0.1 } } };
+  assert.deepEqual(same(want, got), []);
+  assert.deepEqual(same(want, { ...got, cacheShares: { seven_day: { read: 1 } }, costShares: { five_hour: 'one' } }), ['.cacheShares.seven_day.write: only in the decoded fixture', '.costShares.five_hour: string against number']);
+});

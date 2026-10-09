@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -5973,13 +5973,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     });
   }
   // The Cost cell reads a row's native unit: dollars over the funding word for an answer an API key account served,
-  // and the dollar equivalent over "equivalent" for a subscription request whose shares the mock does not price.
+  // and the dollar equivalent over "equivalent" for a subscription request the cost model prices no share for (the
+  // story's Sonnet 5 turns, a model it has no weight for).
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
-  const unpricedRow = requests.find((r) => {
-    const a = servedBy(r);
-    return a !== null && a.accountKind === 'oauth' && a.response.speed !== 'fast' && a.overageInUse !== true && r.costShares === null;
-  });
+  const unpricedRow = requests.find((r) => costUnitOf(r).kind === 'unpriced');
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
   results.push({ name: 'fixture: a request an API key account served, a subscription request the mock prices no share for, and one no account served', ok: apiKeyRow !== undefined && unpricedRow !== undefined && unservedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id), String(unservedRow?.id)] });
@@ -5999,6 +5997,31 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const unserved = await costCellOf(unservedRow.id);
     results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
   }
+  // A subscription request the story prices reads its shares: the model week's or the 7-day share over the 5-hour
+  // one, every share and the dollar equivalent on the title. An overage row of nightly and a fast row read dollars.
+  const sharedRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'shares' && u.shares.length >= 2; });
+  const overageRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
+  const fastRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'fast'; });
+  results.push({ name: 'fixture: a subscription request priced on two windows, an overage request of nightly and a fast request', ok: sharedRow !== undefined && overageRow !== undefined && fastRow !== undefined, missing: [String(sharedRow?.id), String(overageRow?.id), String(fastRow?.id)] });
+  // Read while the list shows, since the drawer check below compares its chips against this cell's title.
+  const sharedCell = sharedRow ? await costCellOf(sharedRow.id) : null;
+  if (sharedRow) {
+    const shared = sharedCell;
+    results.push({
+      name: '/requests a subscription row\'s Cost cell reads a share with "of", its sub line the 5-hour share and its title the dollar equivalent',
+      ok: /^\d[\d.]*% of 7-day( Fable)?$/.test(shared.main) && /^\d[\d.]*% of 5-hour$/.test(shared.sub ?? '') && /, \$[\d,.]+ equivalent$/.test(shared.title ?? '') && (shared.title ?? '').includes(shared.main) && (shared.title ?? '').includes(shared.sub ?? ''),
+      missing: [sharedRow.id, JSON.stringify(shared)],
+    });
+  }
+  if (overageRow && fastRow) {
+    const overage = await costCellOf(overageRow.id);
+    const fast = await costCellOf(fastRow.id);
+    results.push({
+      name: '/requests an overage row of nightly and a fast row read dollars over overage and fast mode',
+      ok: overage.main.startsWith('$') && overage.sub === 'overage' && overage.title === 'Billed in dollars: overage' && fast.main.startsWith('$') && fast.sub === 'fast mode' && fast.title === 'Billed in dollars: fast mode',
+      missing: [overageRow.id, JSON.stringify(overage), fastRow.id, JSON.stringify(fast)],
+    });
+  }
   setter.call(heldSearch, '');
   heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(700);
@@ -6013,6 +6036,34 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const costRow = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost');
     const figure = costRow?.querySelector('td:last-child b') ?? null;
     results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
+  }
+  if (sharedRow && sharedCell) {
+    // The chips read the shares in the cell's title order, and the equivalent follows them muted.
+    const cell = sharedCell;
+    await m.navigate(`/requests/${sharedRow.id}`);
+    await m.settle(300);
+    const costRow = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost');
+    const value = costRow?.querySelector('td:last-child') ?? null;
+    const chips = [...(value?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? '');
+    const equivalent = value?.querySelector('.muted')?.textContent?.trim() ?? null;
+    const titled = (cell.title ?? '').split(', ');
+    results.push({
+      name: "/requests the drawer's cost row of a subscription row reads the share chips in order with the equivalent after them",
+      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.lastElementChild?.classList.contains('muted') === true,
+      missing: [sharedRow.id, JSON.stringify(chips), String(equivalent), cell.title ?? 'no title'],
+    });
+  }
+  {
+    // A model that takes no inference geography parameter answers it as not available, which the chip spells out.
+    const unavailable = requests.find((r) => servedBy(r)?.response.inferenceGeo === 'not_available');
+    const name = "/requests the drawer's geography chip reads not available where the model takes no geography";
+    if (!unavailable) results.push({ name, ok: false, missing: ['fixture'] });
+    else {
+      await m.navigate(`/requests/${unavailable.id}`);
+      await m.settle(300);
+      const chip = drawerChips(drawerRowOf(m, 'Answer')).find((c) => c.label === 'geography');
+      results.push({ name, ok: chip !== undefined && chip.value === 'not available' && (chip.title ?? '').includes('Not available means the model does not take the inference geography parameter'), missing: [unavailable.id, JSON.stringify(chip ?? null)] });
+    }
   }
   await m.navigate('/requests');
   await m.settle(300);
@@ -6219,6 +6270,22 @@ await m.navigate(`/requests/${laptopRow.id}`);
     ok: JSON.stringify(items.map((it) => it.label)) === JSON.stringify(PHASE_LABELS) && items[0]?.num === '+0 ms' && offsets && segments === held.length - 1,
     missing: [JSON.stringify(items), `${segments} segments for ${held.length} instants`],
   });
+  // A stream that failed past its head never delivered content or closed, so those two phases read not measured
+  // while the head and the finish keep their offsets. The checks after this one read the laptop row again.
+  const failedStream = requests.find((r) => r.transport === 'sse' && r.status === 200 && r.outcome === 'failed');
+  const name = "/requests the Phases legend reads not measured on the failed stream's first content and stream end";
+  if (!failedStream) results.push({ name, ok: false, missing: ['fixture'] });
+  else {
+    await m.navigate(`/requests/${failedStream.id}`);
+    await m.settle(300);
+    const read = [...m.container.querySelectorAll('.drawer .waterfall__legend li')].map((li) => ({ label: li.children[1]?.textContent?.trim() ?? '', muted: li.querySelector('.muted')?.textContent?.trim() ?? null, num: li.querySelector('.num')?.textContent?.trim() ?? null }));
+    const of = (label) => read.find((it) => it.label === label);
+    const measured = ['Received', 'Selected', 'Written', 'Head', 'Finished'].every((label) => of(label)?.muted === null && /^\+\d+(\.\d+)? (ms|s)$/.test(of(label)?.num ?? ''));
+    const unmeasured = ['First content', 'Stream end'].every((label) => of(label)?.num === null && of(label)?.muted === 'not measured');
+    results.push({ name, ok: read.length === 7 && measured && unmeasured && failedStream.phases.firstContentAt === null && failedStream.phases.streamEndAt === null, missing: [failedStream.id, JSON.stringify(read)] });
+    await m.navigate(`/requests/${laptopRow.id}`);
+    await m.settle(300);
+  }
 }
 {
   // The bar's labels are the Tokens chart's and the table's rows spell their own, so the map pairs each legend
@@ -6310,6 +6377,26 @@ await m.navigate(`/requests/${laptopRow.id}`);
     ok: small.every((b) => b.text.includes('\n  "') && !b.pretty),
     missing: small.map((b) => `${b.label}: ${b.text.slice(0, 40)}${b.pretty ? ' with Pretty-print' : ''}`),
   });
+  {
+    // The laptop row streamed, and its stored capture is the text of its events: each `event:` line over its data,
+    // indented, the frames the upstream sends in order.
+    const EVENTS = ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'];
+    const block = blockOf(m, 'Response');
+    const text = shown(block);
+    const events = [...(block?.querySelector('.body-block__pre')?.querySelectorAll('.tok-event') ?? [])].map((s) => s.textContent);
+    // Each frame is found past the one before it, so the two deltas are two frames rather than one found twice.
+    let from = 0;
+    const ordered = EVENTS.every((e) => {
+      const at = text.indexOf(`event: ${e}\n{\n  "type": "${e}"`, from);
+      from = at + 1;
+      return at >= 0;
+    });
+    results.push({
+      name: "/requests a streamed story row's Response block draws its events over indented data",
+      ok: laptopRow.transport === 'sse' && events.length === EVENTS.length && ordered && text.includes('"ephemeral_5m_input_tokens"'),
+      missing: [laptopRow.id, `${events.length} event spans: ${events.join(', ')}`, JSON.stringify(text.slice(0, 80))],
+    });
+  }
 
   const largeCheck = '/requests a body over 256 KiB renders unindented with a Pretty-print action';
   const other = requests.find((r) => r.capturedBodies && r.id !== laptopRow.id);
@@ -6349,6 +6436,9 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 
   // The frozen clock lets one tick fire the page's 15-second clock, which redraws the drawer around the same answer.
+  // The request is a JSON object, serialized once; the response is the text of a stream, split into its frames
+  // once. The split is counted on the line split the frame reader runs over the stored text, since the reader itself
+  // is a binding inside the bundle.
   const firstCheck = '/requests the first draw serializes each captured body once';
   const tickCheck = '/requests a clock tick does not serialize the bodies again';
   const original = api.getCapturedBodies;
@@ -6359,12 +6449,17 @@ await m.navigate(`/requests/${laptopRow.id}`);
     return answer;
   };
   const stringify = JSON.stringify;
+  const split = String.prototype.split;
   const serialized = { request: 0, response: 0 };
   JSON.stringify = function (value, ...rest) {
     const answer = answered.at(-1);
     if (answer && value === answer.request) serialized.request += 1;
-    if (answer && value === answer.response) serialized.response += 1;
     return stringify.call(this, value, ...rest);
+  };
+  String.prototype.split = function (...rest) {
+    const answer = answered.at(-1);
+    if (answer && typeof answer.response === 'string' && this === answer.response) serialized.response += 1;
+    return split.apply(this, rest);
   };
   let frozen;
   let first = { ...serialized };
@@ -6378,20 +6473,21 @@ await m.navigate(`/requests/${laptopRow.id}`);
     await frozen.settle();
   } finally {
     JSON.stringify = stringify;
+    String.prototype.split = split;
     api.getCapturedBodies = original;
   }
   const bodies = answered.at(-1);
   const drawn = frozen.container.querySelectorAll('.drawer .body-block__pre').length;
-  results.push({ name: firstCheck, ok: bodies !== undefined && drawn === 2 && first.request === 1 && first.response === 1, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `request ${first.request}, response ${first.response} serializations on the first draw`] });
+  results.push({ name: firstCheck, ok: bodies !== undefined && typeof bodies.response === 'string' && drawn === 2 && first.request === 1 && first.response === 1, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `request ${first.request} serializations, response ${first.response} frame splits on the first draw`] });
   const after = serialized.request + serialized.response;
   results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && after === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${after} serializations after the tick`] });
   frozen.unmount();
 }
 // A streamed capture draws as its events over indented data and both blocks carry token spans, "Open wide" opens
 // the block in a dialog with the same text, Escape with the dialog open leaves the drawer, a plain string draws
-// unquoted, and a large stream stays its stored text until Pretty-print splits it. The mock's captures are JSON
-// objects, so each stubbed answer lands on a captured row the drawer is not showing: a navigation to the shown path
-// reads no bodies, and the block keyed on the request keeps its Pretty-print state.
+// unquoted, and a large stream stays its stored text until Pretty-print splits it. Each stubbed answer lands on a
+// captured row the drawer is not showing: a navigation to the shown path reads no bodies, and the block keyed on the
+// request keeps its Pretty-print state.
 {
   const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
   const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
@@ -8703,7 +8799,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const toggleOf = (t) => [...(card(t)?.querySelectorAll('.segmented[aria-label="Window"] button') ?? [])];
   const labels = (t) => toggleOf(t).map((b) => b.textContent?.trim() ?? '');
   const pressed = (t) => toggleOf(t).find((b) => b.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? '';
-  // The mock's rows hold no sample yet, so the toggle offers the three windows the router reads and no fourth.
+  // No row of the story samples the extra-usage week, so the toggle offers the three windows the router reads and no
+  // fourth.
   const three = '["5-hour","7-day","7-day Fable"]';
   results.push({
     name: '/analytics the Accounts section draws the Window usage and Pace cards with a window toggle',
@@ -8817,6 +8914,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: /^\$[\d,.]+ in range, all requests$/.test(metas.all) && /^\$[\d,.]+ in range, billed$/.test(metas.usd) && metas.share === 'shares per account' && /^\$[\d,.]+ in range, equivalent$/.test(metas.equivalent),
       missing: Object.entries(metas).map(([k, v]) => `${k}: ${v}`),
     });
+    // The two dollar positions partition the rows by who paid, so their figures add up to the whole within a cent.
+    const usdOf = (line) => Number(/^\$([\d,.]+)/.exec(line)?.[1].replace(/,/g, '') ?? NaN);
+    const [wholeUsd, billedUsd, equivalentUsd] = [usdOf(metas.all), usdOf(metas.usd), usdOf(metas.equivalent)];
+    results.push({
+      name: '/analytics Billed dollars drops the plan rows and Dollar equivalent the billed ones',
+      ok: billedUsd > 0 && equivalentUsd > 0 && billedUsd < wholeUsd && equivalentUsd < wholeUsd && Math.abs(billedUsd + equivalentUsd - wholeUsd) < 0.015,
+      missing: [`all ${wholeUsd}`, `billed ${billedUsd}`, `equivalent ${equivalentUsd}`],
+    });
     await tab(m, 'Traffic');
 
     // jsdom lays nothing out, so a fresh page's chart containers read a browser's size and the charts draw.
@@ -8829,28 +8934,61 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const legendIn = (t) => [...(cardIn(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
     const tableIn = (t) => [...shares.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(t));
     const areasIn = (t) => cardIn(t)?.querySelectorAll('.recharts-area').length ?? 0;
+    const isShare = (c) => /^\d[\d.]*%$/.test(c);
+    const isCount = (c) => /^\d[\d,]*$/.test(c);
     const dollarAreas = areasIn('Cost by key');
     await chooseUnit(shares, 'share');
     await groupPage(shares, 'account');
     const accountCard = cardIn('Cost by account');
-    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account'), note: accountCard?.textContent?.includes(SHARE_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
+    const lineChart = { areas: areasIn('Cost by account'), legend: legendIn('Cost by account').map(([label]) => label), note: accountCard?.textContent?.includes(SHARE_NOTE) ?? false, wrapper: accountCard?.querySelector('.recharts-wrapper') !== null };
+    // The legend names the subscription accounts whose groups carry a share map, each by its 7-day line and, where
+    // a bucket priced its model week, the week's dashed line, and no API key account: read off the route's own
+    // answers for the page's day.
+    const day = { from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date().toISOString() };
+    const weekOf = (g) => Object.entries(g.costShares ?? {}).find(([k]) => k !== 'five_hour' && k !== 'seven_day')?.[1] ?? null;
+    const points = await api.getAnalyticsSeries(day);
+    const sharing = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort();
+    const expectedLegend = sharing.flatMap((a) => [`${a} (7-day)`, ...(points.some((p) => p.groups.some((g) => g.key === a && weekOf(g) !== null)) ? [`${a} (7-day Fable)`] : [])]);
+    const apiKeys = (await api.listAccounts()).filter((a) => a.kind === 'api_key').map((a) => a.id);
+    // The chart's tooltip names each account's 5-hour share beside the two lines: the hover walks the chart until a
+    // bucket with a priced 5-hour share answers.
+    const tipOf = async (card, x) => {
+      card?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+      await shares.settle(200);
+      return [...(card?.querySelectorAll('.chart-tip .chart-tip__row') ?? [])].map((row) => [row.querySelector('.chart-tip__label')?.textContent?.trim() ?? '', row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '']);
+    };
+    let tip = [];
+    for (let x = 40; x <= 580 && !tip.some(([label, value]) => label.endsWith('(5-hour)') && isShare(value)); x += 60) tip = await tipOf(cardIn('Cost by account'), x);
+    const tipNamed = tip.some(([label, value]) => label.endsWith('(5-hour)') && isShare(value)) && sharing.every((a) => tip.some(([label]) => label === `${a} (5-hour)`));
     const table = tableIn('Cost by account');
     const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
-    const cells = [...(table?.querySelectorAll('tbody td.num') ?? [])].map((td) => td.textContent?.trim() ?? '');
+    const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
+    const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
+    const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
+    // nightly's morning ran Fable on the plan, so its row prices three windows; primary served the story's Sonnet 5
+    // turns, which the cost model has no weight for, so its two shared windows read unpriced beside its Fable week;
+    // secondary serves Sonnet 5 alone and reads unpriced; studio's one row ran a laptop-lane model with no Fable week.
+    const tableRead = {
+      nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
+      primary: reads(cellsOf('primary'), ['count', 'dash', 'dash', 'share', 'dash', 'dash']),
+      secondary: reads(cellsOf('secondary'), ['count', 'dash', 'dash', 'dash', 'dash', 'dash']),
+      studio: reads(cellsOf('studio'), ['count', 'share', 'share', 'dash', 'share', 'share']),
+      rest: rowsOf.filter(([label]) => !['nightly', 'primary', 'secondary', 'studio'].includes(label)).every(([, cells]) => cells.every((c) => c === '-')),
+    };
     const tiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     await groupPage(shares, 'model');
     const modelCard = cardIn('Cost by model');
     const noted = { note: modelCard?.textContent?.includes(SHARE_NOTE) ?? false, tableNote: tableIn('Cost by model') === undefined && [...shares.container.querySelectorAll('#cost .card')].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by model' && c !== modelCard && c.textContent?.includes(SHARE_NOTE)), wrapper: modelCard?.querySelector('.recharts-wrapper') !== null };
     const modelTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     results.push({
-      name: '/analytics under Window shares the Cost chart draws a line chart with the account grouping and the note under the model grouping',
-      ok: dollarAreas > 0 && lineChart.areas === 0 && lineChart.wrapper && !lineChart.note && lineChart.legend.length === 0 && noted.note && !noted.wrapper && noted.tableNote,
-      missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `model ${JSON.stringify(noted)}`],
+      name: '/analytics under Window shares the Cost chart draws a line per subscription account with the account grouping and the note under the model grouping',
+      ok: dollarAreas > 0 && lineChart.areas === 0 && lineChart.wrapper && !lineChart.note && expectedLegend.length > 0 && JSON.stringify(lineChart.legend) === JSON.stringify(expectedLegend) && !lineChart.legend.some((l) => apiKeys.some((id) => l.startsWith(`${id} `))) && noted.note && !noted.wrapper && noted.tableNote,
+      missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `expected legend ${JSON.stringify(expectedLegend)}`, `model ${JSON.stringify(noted)}`],
     });
     results.push({
-      name: '/analytics under Window shares the share table reads Plan requests, 5-hour, 7-day, 7-day Fable, Per request and Per 1k output and its cells read a dash until a share is priced',
-      ok: JSON.stringify(heads) === JSON.stringify(['Account', 'Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']) && cells.length >= 6 && cells.every((c) => c === '-'),
-      missing: [heads.join(','), `${cells.length} cells: ${[...new Set(cells)].join(',')}`],
+      name: "/analytics under Window shares with the account grouping the share table reads nightly's three windows, primary's Fable week beside its two unpriced windows, secondary's dashes and studio's two windows, and the chart's tooltip names the 5-hour share",
+      ok: JSON.stringify(heads) === JSON.stringify(['Account', 'Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']) && Object.values(tableRead).every(Boolean) && tipNamed,
+      missing: [heads.join(','), JSON.stringify(rowsOf), JSON.stringify(tableRead), `tooltip ${JSON.stringify(tip)}`],
     });
     results.push({
       name: '/analytics under Window shares the Cost tiles read per account below under the account grouping with none named and a dash under another grouping',
@@ -8875,12 +9013,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: cacheSelect?.value === 'share' && warmingSelect?.value === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
       missing: [`cache select ${cacheSelect?.value}`, `warming select ${warmingSelect?.value}`, `cache note ${cacheNoted}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted blurb ${wasted}`],
     });
-    // One account named: the cache card draws its legend and the Probe cost tile its probe count, each a dash until the
-    // mock prices a share.
+    // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
+    // shares, the Probe cost tile its 7-day probe share over the other windows and the probe count, and the Cost
+    // tiles its 7-day share over the other windows, its share per plan-funded request and per 1k output tokens.
     const accountFilter = [...shares.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
     accountFilter?.querySelector('.mselect__trigger')?.click();
     await shares.settle(150);
-    [...(accountFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'primary')?.click();
+    [...(accountFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'nightly')?.click();
     await shares.settle(900);
     const probeNamed = probeTile();
     await tab(shares, 'Cache');
@@ -8888,14 +9027,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const namedLegend = legendIn('Write cost vs read cost');
     await tab(shares, 'Cost');
     const namedTiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
+    const sevenDay = (v) => /^\d[\d.]*% of 7-day$/.test(v ?? '');
+    const others = (v) => /^\d[\d.]*% of 5-hour, \d[\d.]*% of 7-day Fable$/.test(v ?? '');
     results.push({
-      name: '/analytics under Window shares with one account named the cache cost card and the Probe cost tile read dashes until the mock prices a share',
+      name: '/analytics under Window shares with one account named the cost tiles, the cache cost card and the Probe cost tile read shares with the window named',
       ok:
-        JSON.stringify(namedLegend) === JSON.stringify([['Write share', '-'], ['Read share', '-']]) &&
+        namedLegend.length === 2 && namedLegend[0][0] === 'Write share' && sevenDay(namedLegend[0][1]) && namedLegend[1][0] === 'Read share' && sevenDay(namedLegend[1][1]) &&
         !(namedCard?.textContent?.includes(SHARE_NOTE) ?? true) &&
-        probeNamed[0] === '-' &&
-        /^\d[\d,]* probes$/.test(probeNamed[1] ?? '') &&
-        JSON.stringify(namedTiles.slice(0, 3)) === JSON.stringify([['Window share', '-', ''], ['Per request', '-', 'of the 7-day window per plan-funded request'], ['Per 1k output', '-', 'of the 7-day window per 1k plan-funded output tokens']]),
+        sevenDay(probeNamed[0]) &&
+        /^\d[\d.]*% of 5-hour, \d[\d.]*% of 7-day Fable, \d[\d,]* probes$/.test(probeNamed[1] ?? '') &&
+        namedTiles.length >= 3 && namedTiles[0][0] === 'Window share' && sevenDay(namedTiles[0][1]) && others(namedTiles[0][2]) &&
+        JSON.stringify(namedTiles.slice(1, 3).map(([label, value, note]) => [label, isShare(value ?? ''), note])) === JSON.stringify([['Per request', true, 'of the 7-day window per plan-funded request'], ['Per 1k output', true, 'of the 7-day window per 1k plan-funded output tokens']]),
       missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
     });
     shares.unmount();
@@ -8919,6 +9061,34 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       dotted.unmount();
       delete api.getAnalyticsSeries;
+    }
+    {
+      // The Pace card draws a line per sampled account from the leads the samples carry, which the story's sawtooth
+      // puts on both sides of zero: a window's reading runs ahead of its pace early in the window and behind it late.
+      // The axis and the tooltip sign the figures, so a hover across the chart meets both signs.
+      const sampled = await api.listAccountRollups(day.from, day.to);
+      const leads = sampled.flatMap((r) => Object.values(r.windows).map((s) => s.lead)).filter((l) => l !== null);
+      const accounts = [...new Set(sampled.map((r) => r.accountId))];
+      const paced = await mount('/analytics#accounts');
+      const pace = () => [...paced.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pace');
+      const curves = pace()?.querySelectorAll('.recharts-line-curve').length ?? 0;
+      const ticks = [...(pace()?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
+      const signs = new Set();
+      for (let x = 40; x <= 580 && signs.size < 2; x += 60) {
+        pace()?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+        await paced.settle(200);
+        for (const row of pace()?.querySelectorAll('.chart-tip .chart-tip__row') ?? []) {
+          const value = row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '';
+          if (/^\+\d+%$/.test(value)) signs.add('+');
+          if (/^-\d+%$/.test(value)) signs.add('-');
+        }
+      }
+      results.push({
+        name: '/analytics the Pace card draws leads on both sides of zero',
+        ok: leads.some((l) => l > 0) && leads.some((l) => l < 0) && accounts.length > 1 && curves === accounts.length && ticks.some((t) => t.startsWith('+')) && ticks.some((t) => t.startsWith('-')) && signs.size === 2,
+        missing: [`${leads.filter((l) => l > 0).length} leads ahead, ${leads.filter((l) => l < 0).length} behind`, `${curves} curves for ${accounts.length} accounts`, `ticks ${ticks.join(' ')}`, `tooltip signs ${[...signs].join('')}`],
+      });
+      paced.unmount();
     }
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     {
