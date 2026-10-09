@@ -343,7 +343,8 @@ same slots in the same order, so a card with more to say moves no rule against i
 rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and the poll reading. Every window share on
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
-A window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
+A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
+window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
 reading. Each live window's meter carries a pace mark at the share of the window still to come, so a remaining share
 that reaches past the mark is behind pace and one short of it ahead, and the meter's title names the lead: 12% ahead of
 pace, 5% behind pace, or on pace. The Extra usage line reads the month's spend against its limit, in the serious tone

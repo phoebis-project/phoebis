@@ -242,7 +242,7 @@ function decodePoll(v: unknown): QuotaPoll | null {
 export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   const u = rec(v);
   const error = strOrNull(u.error);
-  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
+  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), heldUntil: isoOrNull(u.held_until), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
 export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];

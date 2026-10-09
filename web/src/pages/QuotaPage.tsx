@@ -7,7 +7,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, extraUsageState, isExpired, isSubscription, meterTone, paceWords, planChip, pollReading, remainingOf, remainingTimeShare, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
@@ -202,7 +202,10 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
       <div className="qcard__body">
         {failed ? (
           <div className="qcard__error" role="alert">
-            <p>{snapshot?.error}</p>
+            <p>
+              {snapshot?.error}
+              {snapshot?.heldUntil && <>, next attempt {fmtMinute(snapshot.heldUntil)}</>}
+            </p>
             <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
               Retry
             </Pill>

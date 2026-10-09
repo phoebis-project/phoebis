@@ -224,6 +224,8 @@ export interface QuotaSnapshot {
   accountId: string;
   error: string | null;
   fetchedAt: string | null;
+  /** The instant a held answer's next attempt may run, ISO. Null outside a hold. */
+  heldUntil: string | null;
   poll: QuotaPoll | null;
   status: QuotaFetchStatus;
 }

@@ -1472,6 +1472,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         json!({
             "error": answer.as_ref().map_or(Some(unread), |s| s.error.as_deref()),
             "fetched_at": answer.as_ref().map(|s| s.fetched_at),
+            "held_until": held_until(poll.as_ref()),
             "poll": poll.as_ref().map(poll_json),
         })
     });
@@ -1631,12 +1632,19 @@ fn poll_json(status: &PollStatus) -> Value {
     })
 }
 
+/// The hold's deadline as the console prints it: the poll's next attempt while the account waits out a 429, null
+/// otherwise. Read off the poll status, where the service keeps the hold, so the usage GET and the account list agree.
+fn held_until(poll: Option<&PollStatus>) -> Option<i64> {
+    poll.and_then(|p| p.next_attempt_at)
+}
+
 /// `snapshot` is the answer, or the error that stands in for it when there is none.
 fn usage_json(
     id: &str,
     snapshot: Result<&UsageSnapshot, &str>,
     poll: Option<&PollStatus>,
 ) -> Value {
+    let held_until = held_until(poll);
     let poll = poll.map(poll_json);
     let snapshot = match snapshot {
         Ok(snapshot) => snapshot,
@@ -1648,6 +1656,7 @@ fn usage_json(
                 "extra_usage": null,
                 "fable_window": null,
                 "fetched_at": null,
+                "held_until": held_until,
                 "identity_generation": 0,
                 "poll": poll,
                 "raw_keys": [],
@@ -1675,6 +1684,7 @@ fn usage_json(
         })),
         "fable_window": snapshot.fable_window.as_ref().map(&window),
         "fetched_at": snapshot.fetched_at,
+        "held_until": held_until,
         "identity_generation": snapshot.identity_generation,
         "poll": poll,
         "raw_keys": snapshot.raw_keys,

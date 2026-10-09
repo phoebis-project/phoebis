@@ -1217,6 +1217,26 @@ m.unmount();
   held.unmount();
 }
 
+// The router answers a held account's deadline as the snapshot's own member, so a card with no windows prints the
+// next attempt beside its error, to the minute in the viewer's zone.
+{
+  const heldUntil = new Date(Date.now() + 4 * 60_000).toISOString();
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'secondary' ? { ...a, fableWindow: null, usage: { ...a.usage, error: 'usage request rate-limited', heldUntil, status: 'error' }, windows: [] } : a));
+  const held = await mount('/quota');
+  const card = [...held.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'secondary');
+  const text = card?.querySelector('.qcard__error p')?.textContent ?? '';
+  // The run is UTC under the default 24-hour format, so the printed hour and minute are the instant's own.
+  const minute = heldUntil.slice(11, 16);
+  results.push({
+    name: "/quota a held card prints the next attempt beside the hold in the viewer's zone",
+    ok: new RegExp(`^usage request rate-limited, next attempt [A-Z][a-z]{2} \\d{2}, \\d{4}, ${minute}( [AP]M)?$`).test(text),
+    missing: [text || 'no error block on secondary', `expected the minute ${minute}`],
+  });
+  api.listAccounts = listAccounts;
+  held.unmount();
+}
+
 // A failed read draws the error state where the cards are, instead of leaving placeholders up for ever.
 {
   failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable');

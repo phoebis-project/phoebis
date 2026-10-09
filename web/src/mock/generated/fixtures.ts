@@ -117,6 +117,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "usage": {
         "error": null,
         "fetched_at": 1000000,
+        "held_until": null,
         "poll": {
           "backoff_since": null,
           "last_attempt_at": 1000000,
@@ -233,6 +234,7 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "fable_window": null,
       "fetched_at": 1000000,
+      "held_until": null,
       "identity_generation": 1,
       "poll": {
         "backoff_since": null,
@@ -376,6 +378,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "usage": {
             "error": null,
             "fetched_at": 1000000,
+            "held_until": null,
             "poll": {
               "backoff_since": null,
               "last_attempt_at": 1000000,

@@ -1047,12 +1047,17 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": NOW + 10_000,
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
-            "last_error": "the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:50 UTC",
+            "last_error": "the usage endpoint rate-limited the account",
             "last_outcome": "rate_limited",
             "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
         }),
         "the first 429 holds the account for the ladder's first step, two minutes"
+    );
+    assert_eq!(
+        refused["held_until"],
+        NOW + 10_000 + 120_000,
+        "the hold's deadline is the poll's next attempt, answered as a member of its own"
     );
     let held = json(get(&h.app, path, Some(&cookie)).await).await;
     assert!(
@@ -1062,6 +1067,10 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
     assert_eq!(held["windows"], first["windows"]);
     assert_eq!(held["fetched_at"], NOW, "the windows are the clean read's");
     assert_eq!(held["poll"], refused["poll"]);
+    assert_eq!(
+        held["held_until"], refused["held_until"],
+        "the GET inside the hold carries the deadline beside the windows"
+    );
 
     h.clock_cell.store(NOW + 40_000, Ordering::SeqCst);
     let again = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
@@ -1170,6 +1179,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     let no_credential = serde_json::json!({
         "error": "no credential is stored for this account; pair it to load quota",
         "fetched_at": null,
+        "held_until": null,
         "poll": null,
     });
     assert_eq!(
@@ -1203,7 +1213,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     let usage = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
     assert_eq!(
         business,
-        serde_json::json!({ "error": usage["error"], "fetched_at": usage["fetched_at"], "poll": usage["poll"] }),
+        serde_json::json!({ "error": usage["error"], "fetched_at": usage["fetched_at"], "held_until": usage["held_until"], "poll": usage["poll"] }),
     );
     assert_eq!(row("spare"), no_credential);
     assert!(
@@ -1219,6 +1229,78 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
         asked(),
         polled,
         "the list reads the poll's standing, never the endpoint"
+    );
+}
+
+#[tokio::test]
+async fn an_account_held_by_a_429_lists_its_hold_deadline() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    // A zero TTL, so the refresh below reaches the endpoint and takes its 429.
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let usage_of = |listed: &serde_json::Value| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "business")
+            .unwrap()["usage"]
+            .clone()
+    };
+    // The clean read comes first: a 429 over windows keeps them, and the list drops the error while they stand, so
+    // the deadline is the one thing the hold adds to the block.
+    h.usage.poll("business").await.unwrap();
+    let clean = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert!(clean["error"].is_null(), "{clean}");
+    assert!(
+        clean["held_until"].is_null(),
+        "no hold, no deadline: {clean}"
+    );
+
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 10_000, Ordering::SeqCst);
+    let refused = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/usage/refresh",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused["poll"]["last_outcome"], "rate_limited", "{refused}");
+    let held = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert_eq!(
+        held["held_until"],
+        NOW + 10_000 + 120_000,
+        "the list carries the hold's deadline, the poll's next attempt: {held}"
+    );
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+    assert!(
+        held["error"].is_null(),
+        "the windows stand, so the block reads no error beside the deadline: {held}"
+    );
+
+    h.clock_cell.store(NOW + 10_000 + 120_000, Ordering::SeqCst);
+    let past = usage_of(&json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await);
+    assert!(
+        past["held_until"].is_null(),
+        "past the hold the deadline leaves the block: {past}"
+    );
+    assert_eq!(
+        past["poll"]["next_attempt_at"],
+        serde_json::Value::Null,
+        "{past}"
     );
 }
 

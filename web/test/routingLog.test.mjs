@@ -155,7 +155,7 @@ const EVENTS = [
   ['window reset', event('window_reset', { next_reset: ms(19, 0), observed: 'sample', reset_at: at, utilization_before: 0.92, window: 'five_hour' }), '5h reset', ['was 92%']],
   ['router started', event('router_started', { pins_loaded: 10, version: '0.1.0' }, { accountId: null }), 'restart', ['pins 10']],
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
-  ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account; next attempt at 2026-09-16 13:53:00 UTC' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
+  ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
   ['poll backoff ended', event('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: at }), 'clean poll', ['lasted 25 min']],
   ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'jobs' }), 'daily budget', ['spent $20.40 of $20.00']],
   ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'jobs' }), 'monthly budget', ['spent $18.20']],
