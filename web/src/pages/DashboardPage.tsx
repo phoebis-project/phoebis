@@ -4,7 +4,7 @@ import { api } from '@/api';
 import type { Account, KeepaliveState, RequestLog, Session, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
-import { accountColor } from '@/components/charts/theme';
+import { accountColor, accountSlots } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -69,7 +69,7 @@ export function DashboardPage() {
       )}
       {overview.data !== null && (
         <p className="muted dash__asof" title={fmtAbsolute(overview.fetchedAt)}>
-          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}; showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
+          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}. Showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
         </p>
       )}
 
@@ -139,6 +139,7 @@ function StatTile({ label, value, note, spark, color }: { color: string; label: 
 
 function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; windowId: '5h' | '7d' }) {
   const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, now) : null), [accounts, costs, windowId, now]);
+  const slotOf = useMemo(() => accountSlots((accounts ?? []).map((a) => a.id)), [accounts]);
   return (
     <Card title={title} subtitle={subtitle}>
       {failure ? (
@@ -154,13 +155,13 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failur
           <LeftOut accounts={figures.leftOut} />
         </>
       ) : (
-        <WeighedRing figures={figures} />
+        <WeighedRing figures={figures} slotOf={slotOf} />
       )}
     </Card>
   );
 }
 
-function WeighedRing({ figures }: { figures: RingFigures }) {
+function WeighedRing({ figures, slotOf }: { figures: RingFigures; slotOf: (id: string) => number | null }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
   const { anchor, capacity, left, leftOut, rows } = figures;
@@ -169,7 +170,7 @@ function WeighedRing({ figures }: { figures: RingFigures }) {
   return (
     <div className="remaining">
       <Donut
-        slices={rows.map((r) => ({ id: r.id, label: r.label, value: share(r), color: accountColor(ink, r.id), title: titleOf(r) }))}
+        slices={rows.map((r) => ({ id: r.id, label: r.label, value: share(r), color: accountColor(ink, slotOf(r.id)), title: titleOf(r) }))}
         total={capacity}
         centerLabel="of capacity left"
         centerValue={fmtPct(left / capacity)}
@@ -178,7 +179,7 @@ function WeighedRing({ figures }: { figures: RingFigures }) {
       <ul className="remaining__list">
         {rows.map((r) => (
           <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={titleOf(r)}>
-            <span className="legend__swatch" style={{ background: accountColor(ink, r.id) }} />
+            <span className="legend__swatch" style={{ background: accountColor(ink, slotOf(r.id)) }} />
             <Link to={`/accounts/${r.id}`}>{r.label}</Link>
             <span className="num">{fmtPct(r.remaining)}</span>
           </li>

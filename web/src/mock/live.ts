@@ -21,7 +21,7 @@ const MAX_IN_FLIGHT = 8;
 const PREVIEW_SOURCE =
   'The hook awaits a promise that resolves before the writer flushes, so the last line is lost whenever the process exits early. ' +
   'Moving the flush into the same tick removes the race. I will add a regression test that spawns the hook with a short buffer and asserts the trailing newline. ' +
-  'The retry path also swallowed the exit code; it now propagates it so CI fails loudly instead of passing on a partial write. ' +
+  'The retry path also swallowed the exit code. It now propagates it so CI fails loudly instead of passing on a partial write. ' +
   'Running the suite now to confirm nothing else depended on the old ordering.';
 const PREVIEW_WORDS = PREVIEW_SOURCE.split(' ');
 

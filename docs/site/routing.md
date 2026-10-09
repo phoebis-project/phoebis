@@ -60,12 +60,12 @@ Every field, in the order the request body takes them:
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60`; see below |
 | `affinity_mode` | `always` | `always` or `when_cached`; see below |
-| `subagent_placement` | `by_cohort` | `by_cohort`, `by_strategy`, or `with_main`; see Selection |
+| `subagent_placement` | `by_strategy` | `by_cohort`, `by_strategy`, or `with_main`. See Selection. |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`; see Selection |
 | `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
-| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`; the lead over pace that sheds |
+| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20%. See Moves. |
 | `shed_share` | `0.5` | 0 to 1 |
 | `burn_window_seconds` | `600` | at least 60 |
 | `source_dwell_seconds` | `900` | at least 60 |
@@ -234,7 +234,9 @@ A conversation is identified by its session header: the session id the client se
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
 most five milliseconds, for that answer's report to reach the map. A new session id whose messages continue another
 conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
-the two part.
+the two part, when that depth is 2 or deeper: a shared first message is a template, not a conversation. An auxiliary
+request (the client's quota probe among them) never names a fork and leaves no content entry, so no later request
+matches it.
 
 ## Model rules
 

@@ -291,7 +291,7 @@ export function ObservePage() {
         {paused !== null && !historical && (
           <div className="observe__banner" role="status">
             <IconPause size={14} />
-            <span>Paused. Updates keep accumulating; Resume catches up.</span>
+            <span>Paused. Updates keep accumulating, and Resume catches up.</span>
           </div>
         )}
         {!connected && view.tick !== null && (

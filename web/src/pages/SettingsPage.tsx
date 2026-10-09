@@ -124,11 +124,11 @@ export function SettingsPage() {
                 { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, effective ${effectiveLabel(s.apiPrices.effective)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
                 { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, effective ${effectiveLabel(s.subscriptionCosts.effective)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
-                { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names; it reaches every route.' },
+                { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />
             <p className="muted" style={{ marginTop: 10 }}>
-              The values the configuration file sets are on the installation page; <code>phoebis check-config</code> prints this router&apos;s.
+              The values the configuration file sets are on the installation page, and <code>phoebis check-config</code> prints this router&apos;s.
             </p>
           </>
         ) : settings.error ? (

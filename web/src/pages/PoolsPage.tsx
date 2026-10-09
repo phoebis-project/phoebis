@@ -26,7 +26,7 @@ import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fm
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
-import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
+import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
@@ -106,7 +106,7 @@ const orderedAccountIds = (accounts: Account[], members: Record<string, number>)
       return a.label.localeCompare(b.label);
     })
     .map((a) => a.id);
-const AFFINITY_HINT = 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
+const AFFINITY_HINT = 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.';
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
 const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', conservative: 'Conservative', custom: 'Custom', fast: 'Fast' };
@@ -146,7 +146,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
@@ -156,7 +156,7 @@ const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   ),
   round_robin: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, each in turn; a restart starts the round again.
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, each in turn. A restart starts the round again.
     </>
   ),
 };
@@ -516,7 +516,7 @@ function PoolCard({
   const grouped = kindOrdered(pool);
   const sentence = poolStatusSentence(pool, accounts, sessions, now);
   const features = FEATURES.filter((f) => f.on(pool));
-  const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ';' : ','} subscription accounts first` : ''}`;
+  const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
@@ -856,7 +856,10 @@ interface PoolForm {
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
-  /** The lead over pace in percent; null while the field is empty, which a switched-on save refuses. */
+  /**
+   * The lead over pace in percent: the proposed default for a new pool or a stored null, or null once the operator
+   * clears the field, which a switched-on save refuses.
+   */
   shedAhead: number | null;
   shedAheadOn: boolean;
   sheddingCustom: boolean;
@@ -866,6 +869,9 @@ interface PoolForm {
 }
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
+
+// Two decimals, as formFrom keeps a stored lead, so the proposed 0.2 reads as 20 and never as a float's tail.
+const SHED_AHEAD_DEFAULT_PERCENT = Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100;
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
@@ -894,7 +900,7 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
-  shedAhead: null,
+  shedAhead: SHED_AHEAD_DEFAULT_PERCENT,
   shedAheadOn: false,
   sheddingCustom: false,
   status: 'active',
@@ -947,7 +953,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   selectBelowOn: pool.selectBelowUtilization !== null,
   sessionPlacement: pool.sessionPlacement,
   // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  shedAhead: pool.shedAheadOfPace === null ? null : Math.round(pool.shedAheadOfPace * 10_000) / 100,
+  shedAhead: pool.shedAheadOfPace === null ? SHED_AHEAD_DEFAULT_PERCENT : Math.round(pool.shedAheadOfPace * 10_000) / 100,
   shedAheadOn: pool.shedAheadOfPace !== null,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
@@ -1263,7 +1269,7 @@ export function PoolDialog({
             </>
           }
         >
-          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" aria-invalid={invalid('Name')} />
+          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="shared" className="mono" aria-invalid={invalid('Name')} />
         </Field>
         <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">
           <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>
@@ -1280,7 +1286,7 @@ export function PoolDialog({
           <PageLink to="/accounts">Accounts page</PageLink>.
         </p>
         <p className="field__hint">
-          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
+          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers). Set one, both, or neither.
         </p>
         {accountsFailed !== null ? (
           <ErrorState
@@ -1486,7 +1492,7 @@ export function PoolDialog({
             </div>
           )}
           <p className="field__hint">
-            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the <PageLink to="/keys">Keys page</PageLink>.
+            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the <PageLink to="/keys">Keys page</PageLink>.
           </p>
         </div>
       </>
@@ -1500,7 +1506,7 @@ export function PoolDialog({
           plain
           hint={
             <>
-              Top to bottom, first match wins; a model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules; the{' '}
+              Top to bottom, first match wins. A model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules, and the{' '}
               <PageLink to="/models">Models page</PageLink> shows the list a key ends up with.
             </>
           }
@@ -1518,7 +1524,7 @@ export function PoolDialog({
             beside
             hint={
               <>
-                Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
+                Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows. A key can override this. The Client page of the documentation explains what the client does in each state.
               </>
             }
           >
@@ -1543,7 +1549,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >
@@ -1574,7 +1580,7 @@ export function PoolDialog({
             label="Session placement"
             hint={
               <>
-                By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
+                By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below. By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
               </>
             }
           >
@@ -1589,7 +1595,7 @@ export function PoolDialog({
             label="Minimum shared prefix, tokens"
             hint={
               <>
-                The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
+                The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth. Below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
               </>
             }
           >
@@ -1671,7 +1677,7 @@ export function PoolDialog({
             input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
             hint={
               <>
-                A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool under the line minus 5%.
+                A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>, and a sibling counts as cool under the line minus 5%.
               </>
             }
           />
@@ -1713,7 +1719,7 @@ export function PoolDialog({
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member ahead of its pace by the <GroupLink id="utilization">shedding margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
+          A member ahead of its pace by the <GroupLink id="utilization">shedding margin</GroupLink> runs a round that marks some of its sessions, and each moves to a cooler sibling at its next request.
         </p>
         <div className="cells">
           <Expert>
@@ -1810,7 +1816,7 @@ export function PoolDialog({
             <Field
               label={ENGINE_FIELD_LABELS.inFlightCap}
               className="cell--half"
-              hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room; with every member full, a request waits up to Retry in place for a slot."
+              hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room. With every member full, a request waits up to Retry in place for a slot."
             >
               <Input
                 type="number"
@@ -1917,7 +1923,7 @@ export function PoolDialog({
             beside
             hint={
               <>
-                Adds a marker to a request that carries none; off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
+                Adds a marker to a request that carries none. Off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
               </>
             }
           >

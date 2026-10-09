@@ -131,7 +131,7 @@ test('a pool input holds every engine bound', () => {
 test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
   assert.deepEqual(
     [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens],
-    ['always', 'by_cohort', 'by_strategy', 20_000],
+    ['always', 'by_strategy', 'by_strategy', 20_000],
   );
   const spellings = {
     affinityMode: [['always', 'when_cached'], 'sometimes'],
@@ -148,7 +148,7 @@ test('a pool input carries the store defaults for the pin and placement fields, 
 
 test('a member budget is a dollar amount above 0 or none, a daily and a monthly side by side', () => {
   for (const v of ['', '  ', '0.01', '12.5', '50', '1e3']) assert.equal(d.budgetRefusal(v), null, `${JSON.stringify(v)} is taken`);
-  for (const v of ['0', '-1', 'x', 'Infinity', '12,50']) assert.equal(d.budgetRefusal(v), 'A budget is a dollar amount above 0; leave it empty for no budget.', `${JSON.stringify(v)} is refused`);
+  for (const v of ['0', '-1', 'x', 'Infinity', '12,50']) assert.equal(d.budgetRefusal(v), 'A budget is a dollar amount above 0. Leave it empty for no budget.', `${JSON.stringify(v)} is refused`);
   const [first] = input.members;
   const withBudget = (budget) => d.validatePoolInput({ ...input, members: [{ ...first, ...budget }] }, accounts);
   assert.equal(withBudget({ budgetDailyUsd: 12.5, budgetMonthlyUsd: null }), true);
@@ -292,8 +292,8 @@ test('a pool refusal names the group its control sits in', () => {
     [{ members: [] }, refused('members', 'members', 'the pool needs a member.')],
     [{ members: [...input.members, { accountId: 'ghost', priority: 0 }] }, refused('member:ghost', 'members', 'ghost is not an account the console lists.')],
     [{ members: [{ accountId: first.accountId, priority: 1.5 }] }, refused('priority:business', 'members', 'Priority is a whole number of 0 or more.')],
-    [{ members: [{ ...first, budgetDailyUsd: 0 }] }, refused('budget_daily:business', 'members', 'A budget is a dollar amount above 0; leave it empty for no budget.')],
-    [{ members: [{ ...first, budgetMonthlyUsd: -1 }] }, refused('budget_monthly:business', 'members', 'A budget is a dollar amount above 0; leave it empty for no budget.')],
+    [{ members: [{ ...first, budgetDailyUsd: 0 }] }, refused('budget_daily:business', 'members', 'A budget is a dollar amount above 0. Leave it empty for no budget.')],
+    [{ members: [{ ...first, budgetMonthlyUsd: -1 }] }, refused('budget_monthly:business', 'members', 'A budget is a dollar amount above 0. Leave it empty for no budget.')],
     [{ modelRules: rules('a***') }, refused('Model rules', 'models', 'model_rules[0]: pattern holds three stars in a row')],
     [{ subagentPlacement: 'alone' }, refused('Subagent placement', 'placement', 'Subagent placement is one of its listed choices.')],
     [{ sessionPlacement: 'by_luck' }, refused('Session placement', 'placement', 'Session placement is one of its listed choices.')],

@@ -229,7 +229,7 @@ fn the_summary_names_the_routing_keys() {
     // below, so its line here is held to its shape.
     let prices = phoebis_ledger::PriceTable::shipped();
     let api_prices = format!(
-        "api prices: built in (effective {}, {} models); ./api_prices.yaml not found",
+        "api prices: built in (effective {}, {} models), since ./api_prices.yaml was not found",
         prices.effective,
         prices.models.len()
     );
@@ -251,7 +251,9 @@ fn the_summary_names_the_routing_keys() {
     let shaped = lines
         .get(9)
         .and_then(|line| line.strip_prefix("subscription costs: built in (effective "))
-        .and_then(|rest| rest.strip_suffix(" tiers); ./subscription_costs.yaml not found"))
+        .and_then(|rest| {
+            rest.strip_suffix(" tiers), since ./subscription_costs.yaml was not found")
+        })
         .and_then(|rest| rest.split_once(", "))
         .and_then(|(effective, counts)| Some((effective, counts.split_once(" models, ")?)))
         .is_some_and(|(effective, (models, tiers))| {
@@ -627,7 +629,7 @@ fn every_shipped_deploy_config_passes_check_config() {
         assert!(out.status.success(), "{name}: {}", printed(&out));
         assert!(
             String::from_utf8_lossy(&out.stdout).contains(&format!(
-                "registry at {} does not exist yet; the first start creates it",
+                "registry at {} does not exist yet, and the first start creates it",
                 registry.display()
             )),
             "{name}: {}",
@@ -657,7 +659,7 @@ fn a_registry_from_before_the_canary_passes_under_its_key_and_names_the_sealing_
     assert!(out.status.success(), "{}", printed(&out));
     assert!(
         String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "registry at {} has no key canary yet; a sealed row opens under the key, and the next start \
+            "registry at {} has no key canary yet. A sealed row opens under the key, and the next start \
              seals one",
             registry.display()
         )),
@@ -868,7 +870,7 @@ fn an_absent_registry_prints_that_the_first_start_creates_it() {
     assert!(out.status.success(), "{}", printed(&out));
     assert!(
         String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "registry at {} does not exist yet; the first start creates it",
+            "registry at {} does not exist yet, and the first start creates it",
             dir.path().join("router.sqlite").display()
         )),
         "{}",

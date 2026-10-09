@@ -5,7 +5,7 @@ import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
-import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, type ChartInk } from '@/components/charts/theme';
+import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -51,7 +51,7 @@ const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key
 /** The log has no session filter, so a session view pages through it; both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
-const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session; cache warming figures are unavailable per session';
+const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
@@ -298,6 +298,10 @@ export function AnalyticsPage() {
     const readAt = clock.now();
     return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
   }, [fromIso, toIso, burnGroup, tab, generation]);
+  // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
+  // differs from the Dashboard's, and one account keeps one color across the views.
+  const registry = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
   // The plan chart's line category reads each account's stored tier against the cost model's capacity rows.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
@@ -375,12 +379,12 @@ export function AnalyticsPage() {
   const unfiltered = otherFilters || filters.accountId.length > 0;
 
   const groupSlot = useMemo(() => {
-    // Slots follow the range's whole key list so a filter never repaints the survivors; a dimension with no
-    // option list of its own falls back to the keys the breakdown answered.
+    // Slots follow the range's whole key list so a filter never repaints the survivors, and an account's slot is the
+    // registry's. A dimension with no option list of its own falls back to the keys the breakdown answered.
     const listed = groupBy === 'account' ? options.accountId : groupBy === 'key' ? options.keyId : groupBy === 'model' ? options.model : groupBy === 'pool' ? options.poolId : [];
     const keys = listed.length ? listed.map((o) => o.value) : groups.map((g) => g.key);
-    return (key: string) => (groupBy === 'account' ? accountColor(ink, key) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
-  }, [options, groups, groupBy, ink]);
+    return (key: string) => (groupBy === 'account' ? accountColor(ink, slotOf(key)) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
+  }, [options, groups, groupBy, ink, slotOf]);
 
   const axis = timeAxis(bucketMs, ink);
   // A failed read shows its error alone: a skeleton beside it would say a load is still running, and an empty
@@ -416,7 +420,7 @@ export function AnalyticsPage() {
             <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
             <span className="muted">to</span>
             <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
-            {span.invalid && <span className="pairing__expired">End must be after start; showing the last 24h.</span>}
+            {span.invalid && <span className="pairing__expired">End must be after start. Showing the last 24h.</span>}
           </span>
         )}
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
@@ -449,7 +453,7 @@ export function AnalyticsPage() {
               }}
               placeholder={'User agent groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
               aria-label="User agent groups"
-              title="Each pattern names a group; every other user agent groups under other"
+              title="Each pattern names a group, and every other user agent groups under other"
               className="mono filters__groups"
               rows={2}
             />
@@ -576,7 +580,7 @@ export function AnalyticsPage() {
                 </option>
               ))}
             </Select>
-            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
+            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone. The plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
           </div>
           {/* Only the account grouping sizes its lines by tier, so another one neither waits on nor fails with the settings read. */}
           <BurnCharts
@@ -588,6 +592,7 @@ export function AnalyticsPage() {
             rangeEndMs={burn.data?.endMs}
             readAt={burn.data?.readAt}
             sized={sized}
+            slotOf={slotOf}
           />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
@@ -807,6 +812,7 @@ export function AnalyticsPage() {
             loading={accountRollups.data === null || accountRollups.stale}
             otherFilters={otherFilters}
             rollups={accountRollups.stale ? null : accountRollups.data}
+            slotOf={slotOf}
             span={span}
             axis={axis}
           />
@@ -1103,7 +1109,7 @@ function LatencyRow({ axis, metric, series, totals, loading }: { axis: TimeAxis;
     <div className="metric-pair">
       <ChartCard
         title={metric.label}
-        subtitle="p50, p90, p95, and p99 per bucket; p99 emphasized"
+        subtitle="p50, p90, p95, and p99 per bucket, with p99 emphasized"
         loading={loading}
         legend={PERCENTILES.map((p) => ({ color: ink.ramp[p.rampIndex], label: p.label, shape: 'line', title: PERCENTILE_HINT, value: fmt(overall[p.key]) }))}
       >
@@ -1263,7 +1269,7 @@ function CostByGroup({ axis, points, groupBy, groupSlot, loading }: { axis: Time
   );
 }
 
-const UNFILTERED_NOTE = '; the filters above do not apply here';
+const UNFILTERED_NOTE = '. The filters above do not apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
  * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their day ticks print
@@ -1347,7 +1353,7 @@ function RewritesCard({ answer, axis, error, loading, unfiltered }: { answer: { 
 
 const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
-const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
+const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
 const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
@@ -1386,6 +1392,7 @@ function BurnCharts({
   rangeEndMs,
   readAt,
   sized,
+  slotOf,
 }: {
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
   costs: SubscriptionCosts | null;
@@ -1395,6 +1402,7 @@ function BurnCharts({
   rangeEndMs: number | undefined;
   readAt: number | undefined;
   sized: ReadonlySet<string> | null;
+  slotOf: (id: string) => number | null;
 }) {
   const ink = useChartInk();
   const { lines, rows } = useMemo(
@@ -1402,7 +1410,7 @@ function BurnCharts({
     [answer, groupBy, rangeEndMs, readAt, sized],
   );
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
-  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
+  const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, slotOf(l.key)) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
@@ -1440,7 +1448,7 @@ function BurnCharts({
     <div className="grid-2">
       <ChartCard
         title="Tokens per minute"
-        subtitle={`Uncached input and cache reads per minute, stacked by ${label}; the fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
+        subtitle={`Uncached input and cache reads per minute, stacked by ${label}. The fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
         error={error}
         loading={loading}
         empty={empty}
@@ -1570,7 +1578,7 @@ function BurnCharts({
   );
 }
 
-const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all";
+const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all";
 const PLACEMENT_UNFILTERED_NOTE = '. The account, model and pattern filters above do not apply here';
 
 /** Placements by rung over the range, narrowed by the key and pool filters, the two the route reads here. */
@@ -1614,7 +1622,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   );
 }
 
-const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
+const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend. The range and the filters above do not apply here";
 
 /** Spend against each member's budget; a member at its budget is skipped until its period ends. */
 function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {
@@ -1703,6 +1711,7 @@ function AccountsSection({
   loading,
   otherFilters,
   rollups: all,
+  slotOf,
   span,
 }: {
   accountIds: string[];
@@ -1712,6 +1721,7 @@ function AccountsSection({
   loading: boolean;
   otherFilters: boolean;
   rollups: AccountRollup[] | null;
+  slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
 }) {
   const ink = useChartInk();
@@ -1755,20 +1765,20 @@ function AccountsSection({
   }, [rollups, accounts, span, bucketMs]);
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
+      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}>
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, a), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: p[a] === null || p[a] === undefined ? '-' : `${(p[a] as number).toFixed(0)}%` })))} />
           {accounts.map((a) => (
-            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, a)} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+            <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
       <BreakdownTable
         title="Accounts in range"
-        subtitle={`Totals for the selected range and accounts${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
+        subtitle={`Totals for the selected range and accounts${otherFilters ? '. The key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
         loading={loading}
         groupLabel="Account"

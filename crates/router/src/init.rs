@@ -127,20 +127,20 @@ pub struct Plan {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
-    #[error("{path} already exists; init never overwrites a configuration")]
+    #[error("{path} already exists, and init never overwrites a configuration")]
     ConfigExists { path: PathBuf },
     #[error(
-        "{path} exists and a new key cannot open it; keep the key that sealed it, or name an empty --data-dir"
+        "{path} exists and a new key cannot open it, so keep the key that sealed it, or name an empty --data-dir"
     )]
     DatabaseExists { path: PathBuf },
-    #[error("{path} already exists; init never overwrites an environment file")]
+    #[error("{path} already exists, and init never overwrites an environment file")]
     EnvExists { path: PathBuf },
     #[error("input ended before {asked} was answered")]
     InputEnded { asked: &'static str },
     #[error("{what}: {error}")]
     Io { what: String, error: std::io::Error },
     #[error(
-        "{path} already exists; init never replaces a key, since every stored credential is sealed under it"
+        "{path} already exists, and init never replaces a key, since every stored credential is sealed under it"
     )]
     KeyExists { path: PathBuf },
     #[error("--owner names no user: {user}")]
@@ -148,7 +148,7 @@ pub enum InitError {
     #[error("--owner needs root")]
     OwnerNeedsRoot,
     /// A step after the first write failed, and what the run had written is removed again, newest first.
-    #[error("{error}; {}", undone(.removed, .kept))]
+    #[error("{error}, and {}", undone(.removed, .kept))]
     Undone {
         error: Box<InitError>,
         removed: Vec<PathBuf>,
@@ -168,7 +168,7 @@ fn undone(removed: &[PathBuf], kept: &[PathBuf]) -> String {
     };
     let mut text = format!("removed what this run wrote: {}", list(removed));
     if !kept.is_empty() {
-        text.push_str(&format!("; could not remove {}", list(kept)));
+        text.push_str(&format!(", but could not remove {}", list(kept)));
     }
     text
 }
@@ -235,7 +235,7 @@ fn ask_tls(
         prompt(
             output,
             &format!(
-                "{} on {listen} leaves loopback; tls: files, or none for plain HTTP [none]: ",
+                "{} on {listen} leaves loopback. tls: files, or none for plain HTTP [none]: ",
                 side.name
             ),
         )?;
@@ -844,7 +844,7 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
     if plan.container {
         // The key path inside the file is the container's, so a check on the host cannot read it.
         text.push_str(
-            "remaining: own storage.key by uid 65532 at mode 0400; copy deploy/compose.yaml with the image tag set",
+            "remaining: own storage.key by uid 65532 at mode 0400, and copy deploy/compose.yaml with the image tag set",
         );
         text.push('\n');
         text.push_str("next: docker compose run --rm phoebis check-config\n");
@@ -1205,7 +1205,7 @@ mod tests {
         for side in ["proxy on 0.0.0.0:8317", "admin on 0.0.0.0:8081"] {
             assert!(
                 output.contains(&format!(
-                    "{side} leaves loopback; tls: files, or none for plain HTTP [none]: "
+                    "{side} leaves loopback. tls: files, or none for plain HTTP [none]: "
                 )),
                 "{output}"
             );

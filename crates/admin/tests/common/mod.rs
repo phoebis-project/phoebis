@@ -228,6 +228,7 @@ pub async fn admin_app_paired() -> (Router, FakeUpstream) {
 pub struct Polled {
     pub app: Router,
     pub clock_cell: Arc<AtomicI64>,
+    pub db: Arc<LedgerDb>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
@@ -235,7 +236,7 @@ pub struct Polled {
 }
 
 /// No scheduler runs here, so the test reads the endpoint through `usage.poll` where a running router's
-/// schedule would; a TTL of zero lets every manual refresh past the backoff reach the endpoint.
+/// schedule would, and a manual refresh reads it through the poll's path whatever TTL the test gives the cache.
 pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
     let parts = build_app(
         Some(fixture_identity()),
@@ -250,6 +251,7 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
     Polled {
         app: parts.app,
         clock_cell: parts.clock_cell,
+        db: parts.db,
         router: parts.router,
         store: parts.store,
         up: parts.up,

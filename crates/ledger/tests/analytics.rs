@@ -3175,6 +3175,63 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
 }
 
 #[test]
+fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main_request() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str,
+                 session: &str,
+                 received_at: i64,
+                 class: &str,
+                 forked_from: Option<&str>,
+                 fork_depth: Option<u32>| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at,
+            finished_at: Some(received_at + 500),
+            key_id: Some("k1".into()),
+            key_generation: 0,
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 0,
+            forked_from: forked_from.map(String::from),
+            fork_depth,
+            request_class: Some(class.into()),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("r0", "s2", 500, "auxiliary", None, None);
+    plant("r1", "s2", 1_000, "main", Some("s1"), Some(3));
+    plant("r2", "s2", 2_000, "main", None, None);
+    let rows = db
+        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].forked_from.as_deref(), rows[0].fork_depth),
+        (Some("s1"), Some(3)),
+        "the fork facts come from the first request that is not auxiliary, the probe ahead of it skipped"
+    );
+
+    // A marker an auxiliary row recorded before the rule stays in that row and never names the session a fork.
+    plant("r3", "s3", 500, "auxiliary", Some("s1"), Some(1));
+    plant("r4", "s3", 1_000, "main", None, None);
+    let rows = db
+        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s3".into())]))
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].forked_from.as_deref(), rows[0].fork_depth),
+        (None, None),
+        "an auxiliary row's marker is not the session's"
+    );
+}
+
+#[test]
 fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_identity(

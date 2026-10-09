@@ -27,7 +27,7 @@ const toneOf = (status: number | null): BadgeTone => (status === null ? 'neutral
 const lineFor = (a: TrailAttempt) =>
   [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status yet' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');
 
-/** One badge per attempt in the order they were tried, so a failover reads as "mail 429, business 200". */
+/** One badge per attempt in the order they were tried, so a failover reads as "a 429, b 200". */
 export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
   const title = attempts.map(lineFor).join('\n');
   const described = useDescription(title);

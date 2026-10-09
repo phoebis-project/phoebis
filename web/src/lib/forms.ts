@@ -53,7 +53,7 @@ const ratio = (v: number | null, min: number) => v === null || (v >= min && v <=
 export function budgetRefusal(value: string): string | null {
   if (value.trim() === '') return null;
   const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? null : 'A budget is a dollar amount above 0; leave it empty for no budget.';
+  return Number.isFinite(n) && n > 0 ? null : 'A budget is a dollar amount above 0. Leave it empty for no budget.';
 }
 
 /** Why the pool routes would refuse the prefix threshold field as it stands, or null. */

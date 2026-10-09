@@ -54,8 +54,8 @@ const STATE_HINT: Record<RecipeState, string> = {
   retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",
 };
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
-const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledger keeps its sessions until they expire';
-const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
+const HISTORICAL_HINT = 'A holder of this key id that no longer exists. The ledger keeps its sessions until they expire';
+const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id, so nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
 const KIND_HINT: Record<Account['kind'], string> = {
   api_key: 'API-key account: billed per token, no quota windows',
@@ -243,7 +243,7 @@ export function SessionsPage() {
           </p>
           <p id={howId} className="page-head__meta" hidden={!howOpen}>
             Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one
-            account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
+            account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its
             cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
           </p>
         </div>
@@ -302,7 +302,7 @@ export function SessionsPage() {
         padded={false}
         className="card--table"
         title="Sessions"
-        subtitle="One row per session; open a row for the cache-warming recipe each agent carries"
+        subtitle="One row per session. Open a row for the cache-warming recipe each agent carries"
         actions={
           rows && rows.length > 0 ? (
             <>
@@ -698,7 +698,7 @@ function ForkBadge({ base, depth, from, onFollow }: { base: string | null; depth
     <a
       className="badge badge--accent srow__fork"
       href={`#${base}`}
-      title={`Branched from session ${from}${at}; follow to its row`}
+      title={`Branched from session ${from}${at}. Follow to its row`}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();

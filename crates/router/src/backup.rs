@@ -57,9 +57,9 @@ const REGISTRY_COPY: &str = "router.sqlite";
 pub enum RunError {
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("backup failed: {reason}; nothing was written to {dir}")]
+    #[error("backup failed: {reason}. Nothing was written to {dir}")]
     Failed { dir: PathBuf, reason: String },
-    #[error("a backup carries both databases; {path} does not exist")]
+    #[error("a backup carries both databases, but {path} does not exist")]
     MissingSource { path: PathBuf },
     #[error("{path} is not an empty directory")]
     NotEmpty { path: PathBuf },
@@ -118,7 +118,7 @@ pub fn run(
     if matches!(key_file.try_exists(), Ok(false)) {
         let _ = writeln!(
             report,
-            "warning: the key file {} does not exist; the registry copy cannot be opened without the key that sealed \
+            "warning: the key file {} does not exist, and the registry copy cannot be opened without the key that sealed \
              it",
             key_file.display()
         );
@@ -147,7 +147,7 @@ pub fn run(
             }
             let _ = writeln!(
                 report,
-                "the key file {} is not in this backup; keep it apart, the registry copy is sealed under it",
+                "the key file {} is not in this backup. Keep it apart, since the registry copy is sealed under it",
                 key_file.display()
             );
             Ok((manifest, dir))

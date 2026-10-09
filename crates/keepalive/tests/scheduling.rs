@@ -1043,8 +1043,8 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
         ..RigSpec::default()
     })
     .await;
-    // This test is about the per-agent gate, not the cohort placement default: both agents observe the same
-    // fixture body, so a shared static boundary would otherwise land them on one account.
+    // This test is about the per-agent gate, so it pins the placement it depends on: both agents observe the same
+    // fixture body, and cohort placement would land them on one account through the shared static boundary.
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity.subagent_placement = phoebis_store::SubagentPlacement::ByStrategy;
     r.h.store

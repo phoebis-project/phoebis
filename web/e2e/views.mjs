@@ -676,6 +676,56 @@ async function poolChips(theme) {
   }
 }
 
+/**
+ * The first pool card's traffic tooltip under the pointer: three rows, each a key cell, a value and a label in that
+ * order, the key cells on one left edge at the swatch's 12 px, the value cells on one left edge after them, and every
+ * label right of its row's value. A row without a color draws an empty key cell, so its value starts where the colored
+ * rows' values do rather than in the swatch column with the label over its overflow. Each row is a grid of its own, so
+ * a value column is as wide as its row's value and the labels' left edges follow it.
+ */
+async function poolTooltipColumns(theme) {
+  const say = (what) => failures.push(`${theme} /pools tooltip: ${what}`);
+  const chart = page.locator('.pool .pool__chart .recharts-wrapper').first();
+  const tip = page.locator('.pool .pool__chart .chart-tip').first();
+  try {
+    await chart.hover();
+    await tip.waitFor({ state: 'visible', timeout: 5_000 });
+  } catch (error) {
+    say(`the traffic chart drew no tooltip under the pointer (${error instanceof Error ? error.message : String(error)})`);
+    await page.mouse.move(0, 0);
+    return;
+  }
+  await settle();
+  const read = await tip.evaluate((el) => {
+    const edge = (n) => +n.toFixed(2);
+    return [...el.querySelectorAll('.chart-tip__row')].map((row) => {
+      const box = (name) => row.querySelector(`.${name}`)?.getBoundingClientRect() ?? null;
+      const key = box('chart-tip__key');
+      const value = box('chart-tip__value');
+      const label = box('chart-tip__label');
+      return {
+        cells: [...row.children].map((c) => c.className),
+        key: key ? [edge(key.left), edge(key.width)] : null,
+        label: label ? edge(label.left) : null,
+        text: `${row.querySelector('.chart-tip__value')?.textContent ?? ''} ${row.querySelector('.chart-tip__label')?.textContent ?? ''}`.trim(),
+        value: value ? [edge(value.left), edge(value.right)] : null,
+      };
+    });
+  });
+  await page.mouse.move(0, 0);
+  await settle();
+  measurements.push(`${theme} /pools tooltip ${JSON.stringify(read)}`);
+  if (read.length !== 3) {
+    say(`the traffic tooltip draws ${read.length} rows, not three`);
+    return;
+  }
+  const order = JSON.stringify(['chart-tip__key', 'chart-tip__value num', 'chart-tip__label']);
+  if (!read.every((row) => JSON.stringify(row.cells) === order)) say(`the rows' cells read ${JSON.stringify(read.map((row) => row.cells))}, not key, value and label on every row`);
+  if (new Set(read.map((row) => row.key?.[0] ?? null)).size !== 1 || read.some((row) => row.key?.[1] !== 12)) say(`the key cells read ${JSON.stringify(read.map((row) => row.key))}, not one 12 px column`);
+  if (new Set(read.map((row) => row.value?.[0] ?? null)).size !== 1) say(`the value cells start at ${read.map((row) => row.value?.[0] ?? null).join(', ')} px, not on one left edge`);
+  if (read.some((row) => row.value === null || row.label === null || row.label < row.value[1])) say(`a label starts inside its row's value: ${JSON.stringify(read.map((row) => [row.value, row.label]))}`);
+}
+
 /** A rail entry of the open dialog by its exact label; a hint link can hold a rail label inside its own words. */
 const railEntry = (dialog, name) => dialog.locator('.dialog-rail').getByRole('button', { exact: true, name });
 
@@ -1326,7 +1376,7 @@ async function poolDialogWalk(theme, mode) {
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
     // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
-    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="research"]').fill('');
+    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="shared"]').fill('');
     await settle();
     const dots = await dialog.evaluate((el) =>
       [...el.querySelectorAll('.dialog-rail__parent[data-parent="Pool"], .dialog-rail__group[data-group="identity"]')].map((entry) => {
@@ -3645,6 +3695,7 @@ try {
       if (view.path === '/pools') {
         await expertRow(theme);
         await poolChips(theme);
+        await poolTooltipColumns(theme);
         await poolCachingControls(theme);
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);

@@ -4998,7 +4998,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "seq": 1,
         "at": 1000000,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791516487193,
         "pool_id": "main",
         "routing_session_id": "s-static",
         "agent_id": "main",
@@ -5054,7 +5054,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "affinity_mode": "always",
         "session_placement": "by_warm_prefix",
         "min_shared_prefix_tokens": 20000,
-        "subagent_placement": "by_cohort",
+        "subagent_placement": "by_strategy",
         "select_below_utilization": null,
         "shed_ahead_of_pace": null,
         "migrate_when_spent": true,
@@ -5068,7 +5068,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "retry_in_place_seconds": 60,
         "pace_floor": 0.05,
         "migrate_band": 0.05,
-        "pool_updated_at": 1791413157444
+        "pool_updated_at": 1791516487411
       },
       "candidates": [
         {
@@ -6613,7 +6613,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "affinity_ttl_seconds": 600,
           "overage_policy": "prefer_plan",
           "affinity_mode": "always",
-          "subagent_placement": "by_cohort",
+          "subagent_placement": "by_strategy",
           "session_placement": "by_strategy",
           "min_shared_prefix_tokens": 20000,
           "shed_ahead_of_pace": null,
@@ -6682,9 +6682,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791490205870,
-          "updated_at": 1791490205870,
-          "revision": 6189536716974,
+          "created_at": 1791516487189,
+          "updated_at": 1791516487189,
+          "revision": 6189562998293,
           "members": [
             {
               "account_id": "business",
@@ -6723,7 +6723,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "Ho2F-k6I",
+              "prefix": "syHcPKQm",
               "enabled": true
             }
           ],

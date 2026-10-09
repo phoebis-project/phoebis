@@ -3,7 +3,7 @@ use phoebis_store::{
     Affinity, AffinityChain, ApiKeyRow, CanaryRead, Failover, Identity, MemberWrite,
     MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, Overlap, PinBurn, PoolRow,
     RulesMode, Secret, Shedding, StateCause, StorageKey, Store, StoreError, Strategy,
-    SubscriptionRow,
+    SubagentPlacement, SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -686,6 +686,56 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
     );
 
     let key = migrated.api_key("k").unwrap().unwrap();
+}
+
+#[test]
+fn a_pool_inserted_without_a_placement_reads_by_strategy() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                affinity: Affinity::default(),
+                ..PoolRow::for_tests("built")
+            },
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .pool("built")
+            .unwrap()
+            .unwrap()
+            .affinity
+            .subagent_placement,
+        SubagentPlacement::ByStrategy,
+        "the row builder's default"
+    );
+    drop(store);
+    // Every store insert names the column, so only a raw row reads the column's own default.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, cache_diagnostics, created_at, updated_at) VALUES ('raw', 'raw', 1, 'priority', 'prefer_plan', '{}', '{}', 0, 1, 1);",
+    )
+    .unwrap();
+    drop(conn);
+    let reopened = Store::open(&path, &key).unwrap();
+    let raw = reopened.pool("raw").unwrap().unwrap();
+    assert_eq!(
+        raw.affinity.subagent_placement,
+        SubagentPlacement::ByStrategy,
+        "the column's default"
+    );
+    assert_eq!(
+        raw.affinity.subagent_placement,
+        Affinity::default().subagent_placement,
+        "the column's default and the row builder's agree"
+    );
 }
 
 /// A version-38 pool's `cache_ttl_json` as the app wrote it then, the `keepalive` key in both sets: a seed that
