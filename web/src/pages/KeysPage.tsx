@@ -24,7 +24,11 @@ const sortKeys = (value: unknown): unknown =>
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
+/** The capture line whole, its inherited mark included, for the title of a line the fill column cuts. */
+const captureLine = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null) => `${captureLabel(effectiveCaptureHours(key, pool))}${key.bodyCaptureHours === null ? ' inherited' : ''}`;
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
+/** The Models summary of a key without rules of its own. */
+const NO_RULES: Record<ModelRulesMode, string> = { extend: 'Pool rules', replace: 'No rules' };
 const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Extend pool rules', value: 'extend' },
   { label: 'Replace pool rules', value: 'replace' },
@@ -254,7 +258,8 @@ export function KeysPage() {
                       <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                         <td className="col-fill" title={k.name}>
                           <b>{k.name}</b>
-                          <span className="sub">
+                          {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
+                          <span className="sub" title={captureLine(k, poolById.get(k.poolId) ?? null)}>
                             {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
                             {k.bodyCaptureHours === null && (
                               <span className="muted" title={CAPTURE_INHERIT_HINT}>
@@ -263,21 +268,21 @@ export function KeysPage() {
                               </span>
                             )}
                           </span>
-                          {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
+                          {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
                         </td>
                         <td className="mono col-fit">{k.prefix}…</td>
                         <td className="mono col-fit">{k.poolId}</td>
-                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted">{k.modelRulesMode === 'replace' ? 'No rules' : 'Pool rules'}</span>}</td>
+                        <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{k.modelRules.length === 1 ? '1 rule' : `${k.modelRules.length} rules`}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
                         <td className="right num col-fit">
                           {fmtCompact(k.usage7d.tokens)} tok
                           <span className="sub">{fmtUsd(k.usage7d.cost)}</span>
                         </td>
                         <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
                         <td className="col-fill">
-                          <Badge tone={STATUS_TONE[k.status]} dot>
-                            {k.status}
+                          <Badge tone={STATUS_TONE[k.status]} dot title={k.status}>
+                            <span className="key-row__badge-label">{k.status}</span>
                           </Badge>
-                          {k.lastUsedAt && <span className="sub">used {fmtRelative(k.lastUsedAt, now)}</span>}
+                          {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
                           {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
                           {k.sessionsOnRetiredSecret > 0 && (
                             <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>

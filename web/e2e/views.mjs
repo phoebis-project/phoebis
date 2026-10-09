@@ -1297,6 +1297,34 @@ async function poolDialogWalk(theme, mode) {
       else if (box.input < width - box.padding - 1) sayIn('Members', `the column ${i + 2} input is ${box.input} px wide, under the column's ${width} px less its ${box.padding} px of padding`);
     });
   };
+  // Each select of the model rules table against its widest option, whose text is measured in a span that takes the
+  // select's font: a select clips a long option inside its own box, which its scrollWidth does not report.
+  const ruleSelects = async () => {
+    const read = await dialog.evaluate((el) => {
+      const selects = [...el.querySelectorAll('[data-rule-set="plan"] table select')];
+      if (selects.length === 0) return null;
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position: absolute; visibility: hidden; white-space: nowrap';
+      document.body.append(probe);
+      const hundredths = (n) => Math.round(n * 100) / 100;
+      const widths = selects.map((select) => {
+        const s = getComputedStyle(select);
+        for (const p of ['fontFamily', 'fontSize', 'fontStyle', 'fontWeight', 'letterSpacing']) probe.style[p] = s[p];
+        const widest = Math.max(
+          ...[...select.options].map((o) => {
+            probe.textContent = o.text;
+            return probe.getBoundingClientRect().width;
+          }),
+        );
+        return { label: select.getAttribute('aria-label'), room: hundredths(select.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)), widest: hundredths(widest) };
+      });
+      probe.remove();
+      return widths;
+    });
+    measurements.push(`${theme} /pools ${mode} dialog model rules selects ${JSON.stringify(read)}`);
+    if (read === null) return sayIn('Cache TTL', 'the model rules table draws no select to measure');
+    for (const s of read) if (s.room < s.widest - 1) sayIn('Cache TTL', `${s.label} holds ${s.room}px inside its padding for its widest option's ${s.widest}px`);
+  };
   // A hidden group lays out at 0 px, so each table is measured while its group shows. The router's seed carries no
   // model override, so the model rules table is drawn in the mock pass alone.
   const tables = async (group) => {
@@ -1306,8 +1334,10 @@ async function poolDialogWalk(theme, mode) {
     }
     if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
     if (group === 'Cache TTL' && expert) {
-      if (mock) await tableColumns(theme, `pools ${mode} dialog`, 'dialog[open] [data-rule-set="plan"] table', ['Model']);
-      else measurements.push(`${theme} /pools ${mode} dialog model rules table: not drawn against the seed, which carries no model override`);
+      if (mock) {
+        await tableColumns(theme, `pools ${mode} dialog`, 'dialog[open] [data-rule-set="plan"] table', ['Model']);
+        await ruleSelects();
+      } else measurements.push(`${theme} /pools ${mode} dialog model rules table: not drawn against the seed, which carries no model override`);
     }
   };
   for (const group of labels) {
@@ -1503,6 +1533,37 @@ async function poolKeyMenus(theme) {
   if (mock && !(counts.some((n) => n > 1) && counts.includes(1))) say(`the story's pools hold ${JSON.stringify(counts)} keys, not one pool with several and one with a single key`);
   await page.evaluate((y) => window.scrollTo(0, y), scrolled);
   await atRest();
+}
+
+/**
+ * The badge of the Keys table's fill cells, the Status pill: a badge is an atomic box the cell's ellipsis cannot
+ * reach, so each one ends inside its cell's content box and cuts its own label with the ellipsis instead. Whether a
+ * label is cut is recorded rather than asserted, since the fills' room differs between the mock's story and the
+ * router's seed.
+ */
+async function keyBadges(theme) {
+  const say = (what) => failures.push(`${theme} /keys badges: ${what}`);
+  const read = await page.evaluate(() =>
+    [...document.querySelectorAll('.card--table tbody tr.key-row td.col-fill .badge')].map((badge) => {
+      const cell = badge.closest('td');
+      const label = badge.querySelector('.key-row__badge-label');
+      const hundredths = (n) => Math.round(n * 100) / 100;
+      return {
+        cut: label ? label.scrollWidth > label.clientWidth : null,
+        edge: hundredths(cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight)),
+        ellipsis: label ? getComputedStyle(label).textOverflow === 'ellipsis' : null,
+        right: hundredths(badge.getBoundingClientRect().right),
+        text: badge.textContent?.trim() ?? '',
+      };
+    }),
+  );
+  measurements.push(`${theme} /keys badges ${JSON.stringify(read)}`);
+  if (read.length === 0) return say('no badge in a fill cell to measure');
+  for (const b of read) {
+    if (b.right > b.edge + 1) say(`the ${b.text} badge ends at ${b.right}px, past its cell's content edge at ${b.edge}px`);
+    if (b.cut === null) say(`the ${b.text} badge wraps no label for the ellipsis to cut`);
+    else if (b.cut && !b.ellipsis) say(`the ${b.text} badge cuts its label without an ellipsis`);
+  }
 }
 
 /**
@@ -3988,6 +4049,7 @@ try {
       }
       if (view.path === '/keys') {
         await tableColumns(theme, 'keys', '.card--table table', ['Name', 'Models', 'Status']);
+        await keyBadges(theme);
         await keysPoolSelect(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);

@@ -22,8 +22,9 @@ dashboard with the expert view off, both with the log open and the link active),
 select-below threshold, the load groups, the pool card's serving table and tiles, the serving table's columns (Account
 the fill), the pool dialog's members table (Account the fill, each Priority and budget input at least its column's 96,
 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its group shows, and in the mock
-pass's expert view its model rules table (Model the fill), which the router's seed draws no override for, the settings
-cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), the
+pass's expert view its model rules table (Model the fill, each select holding its widest option's text inside its
+padding), which the router's seed draws no override for, the settings cards' order, the listener hint's gaps and size
+and About's lines (their order, one type and one gap), the
 cooling-down block's columns (Reason the fill), the Delete account button, the account lines, the Quota cards' poll
 lines (short of the Refresh pill and inside the card, the backoff line in the
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the timeline's chips on
@@ -37,8 +38,9 @@ the fast lane, the request drawer, which opens once the request list's shot is t
 which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by
 800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on the first rung
 placement the log lists), the subscription end editor, the catalog popup and its columns (Model and Name the fills),
-the Keys table's columns (Name, Models and Status the fills), the key dialog's Access selects, the Pool select
-against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
+the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its
+cell and cutting its own label with the ellipsis), the key dialog's Access selects, the Pool select against the Status
+select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
 closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the
 lead, Cost reference one line at the head's top right), the cost reference, the session table's fit and its columns
 (each fit column as wide as its content, the Session column the fill), the session id's width, the session row menu, the

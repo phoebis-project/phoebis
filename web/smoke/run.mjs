@@ -5311,6 +5311,27 @@ m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 columnsMarked('/keys every header cell is fit or fill, and Name, Models and Status are the fill columns', m.container.querySelector('.card--table table'), ['Name', 'Models', 'Status']);
 {
+  // A fill column cuts its lines with an ellipsis, so each line under a name, the Models summary of a key without
+  // rules and the Status badge open their title with their own text, and a badge's label sits in a span of its own
+  // for the ellipsis to reach.
+  const rows = [...m.container.querySelectorAll('.card--table tbody tr.key-row')];
+  const opens = (el) => {
+    const text = el.textContent?.trim() ?? '';
+    return text !== '' && (el.getAttribute('title') ?? '').startsWith(text);
+  };
+  const lines = rows.flatMap((row) => [...row.querySelectorAll('td.col-fill .sub')].filter((s) => s.querySelector('.badge') === null));
+  const summaries = rows.map((row) => row.children[3]?.querySelector('.muted')).filter(Boolean);
+  const badges = rows.flatMap((row) => [...row.querySelectorAll('td.col-fill .badge')]);
+  const wrapped = (b) => [...b.children].some((c) => c.classList.contains('key-row__badge-label') && c.textContent?.trim() === b.textContent?.trim());
+  const untitled = [...lines, ...summaries, ...badges].filter((el) => !opens(el)).map((el) => `${el.textContent?.trim()}: ${el.getAttribute('title') ?? 'no title'}`);
+  const bare = badges.filter((b) => !wrapped(b)).map((b) => `${b.textContent?.trim()} unwrapped`);
+  results.push({
+    name: '/keys every line a fill cell cuts opens its title with its own text, and each badge wraps its label',
+    ok: lines.length > rows.length && summaries.length > 0 && badges.length === rows.length && untitled.length === 0 && bare.length === 0,
+    missing: [`${lines.length} lines, ${summaries.length} summaries and ${badges.length} badges over ${rows.length} rows`, ...untitled.slice(0, 6), ...bare],
+  });
+}
+{
   // jsdom draws no styles and lays nothing out, so the menu reads the viewport's room below and keeps the list in flow.
   const last = [...m.container.querySelectorAll('.card--table tbody tr')].pop();
   last?.querySelector('.menu__trigger')?.click();

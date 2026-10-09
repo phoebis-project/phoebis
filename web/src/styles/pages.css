@@ -1311,6 +1311,22 @@
   scroll-margin-top: 68px;
 }
 
+/* A badge is an atomic box the cell's ellipsis cannot reach, so in a fill cell it narrows with the cell and cuts its
+   own label instead, the dot kept whole. */
+.key-row .badge {
+  max-width: 100%;
+}
+
+.key-row .badge__dot {
+  flex: none;
+}
+
+.key-row__badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .pool__head {
   display: flex;
   flex-direction: column;
