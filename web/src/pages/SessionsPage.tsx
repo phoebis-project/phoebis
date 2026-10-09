@@ -712,12 +712,15 @@ function ForkBadge({
   rowAccountId,
 }: {
   base: string | null;
-  /** The listed base's account while its pin is live, its label as the Accounts page names it; null off an unlisted base or one whose pin is gone. */
+  /**
+   * The listed base's account while its pin is live, its label as the Accounts page names it. Null off an unlisted
+   * base or one whose pin is gone.
+   */
   baseAccount: { id: string; label: string } | null;
   depth: number | null;
   from: string;
   onFollow: (id: string) => void;
-  /** The row's own account while its pin is live; null off a row whose pin is gone. */
+  /** The row's own account while its pin is live, and null off a row whose pin is gone. */
   rowAccountId: string | null;
 }) {
   const at = depth === null ? '' : ` at depth ${depth}`;
