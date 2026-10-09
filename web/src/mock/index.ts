@@ -1,8 +1,8 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
@@ -14,7 +14,6 @@ import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
-import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
@@ -23,7 +22,7 @@ import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
-// Fixed, like the live feed's draw: a pass over the mock reads the same secrets every run.
+// Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
 
 // A short delay keeps loading states honest without making the mock feel slow.
@@ -235,19 +234,6 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   expiredBetweenTurns24h: 0,
   netSaved7dUsd: 0,
   probes24h: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
-};
-
-type WireMetric = { quality: string; series: number[]; value: number | null };
-/** The feed's metrics that need a finished request to read anything, which an idle router answers as null. */
-const NEEDS_FINISHED = new Set(['error_rate', 'ttfb_p50', 'ttfb_p95', 'ttfb_p99']);
-/**
- * A feed tick as a router with no traffic measures it. The simulator's ticks read its own requests, which an empty
- * store would never have run.
- */
-const idleTick = (tick: unknown) => {
-  const t = tick as { metrics: Record<string, WireMetric> };
-  const metrics = Object.fromEntries(Object.entries(t.metrics).map(([key, m]) => [key, { ...m, series: m.series.map(() => 0), value: NEEDS_FINISHED.has(key) ? null : 0 }]));
-  return { ...t, metrics };
 };
 
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
@@ -892,21 +878,6 @@ export class MockApi implements Api {
       state,
     });
     return latency({ ...PAIRING_SAMPLE, authorizeUrl: `https://claude.ai/oauth/authorize?${params.toString()}`, expiresAt: ahead(10 * MINUTE), id, redirectUri: PAIRING_REDIRECT_URI, state }, 200);
-  }
-
-  subscribeLive(handler: (event: LiveEvent) => void) {
-    // An empty store runs no request, so its feed is the snapshot without rows and the idle ticks after it.
-    const empty = emptyStore();
-    // Through the decoders the socket's frames take, so every page reads the feed the way the served console does.
-    return liveFeed().subscribe((frame) => {
-      if (frame.kind === 'snapshot') {
-        const snapshot = empty ? { ...frame.snapshot, in_flight: [], recent: [], tick: idleTick(frame.snapshot.tick) } : frame.snapshot;
-        return handler({ kind: 'snapshot', snapshot: decodeLiveSnapshot(snapshot) });
-      }
-      if (empty && frame.delta.type !== 'tick') return;
-      const delta = decodeLiveDelta(empty ? { ...frame.delta, tick: idleTick(frame.delta.tick) } : frame.delta);
-      if (delta) handler({ delta, kind: 'delta' });
-    });
   }
 
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */

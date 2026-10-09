@@ -1,7 +1,7 @@
 # Browser pass
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
-through the login screen, then for each theme visits the dashboard, observe, quota, accounts (which lands on the first
+through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first
 account through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics
 (on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its
 Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts
@@ -25,7 +25,7 @@ account lines, the Quota cards' poll lines (short of the Refresh pill and inside
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the timeline's chips on
 the Quota windows section, the Quota cards' one height (the head's and the foot's rules at one offset on every card),
 the remaining cards, the error state, the lines under the quota rings, the recent requests' model cells and their
-table's fit, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted
+table's fit, the cost-cap rows, the wasted-probe rows, the burn cards, the plan legend's model unlisted
 entry, the placement and budget tables, the request table's fit, the request pages' widths, walked on a load of their
 own once every view's shot is taken, the speed filter, the traffic cards (each Analytics check
 opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,

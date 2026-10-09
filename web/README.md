@@ -57,10 +57,9 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - Light, dark, and system themes, switchable from the top bar and stored in `localStorage`.
 - Body capture is a pool setting in hours, which every key in the pool inherits unless it sets an override of its own
   or turns capture off for itself; the keys table shows the effective value and marks the inherited ones.
-- Views for the dashboard, observe (a simulated live feed of in-flight and recent requests), quota, accounts, pools,
-  keys, request logs, analytics, sessions, and settings. What the router holds is an account everywhere: the code, the
-  API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party that
-  answered a request.
+- Views for the dashboard, quota, accounts, pools, keys, request logs, analytics, sessions, and settings. What the
+  router holds is an account everywhere: the code, the API, the fixtures, the copy and the `/accounts` route;
+  "upstream" names the provider's host and the party that answered a request.
 - The sessions view is one table of every session the router has seen within the session expiry, whether or not a
   cache-keepalive companion registered for it. Each row carries its companion state (reporting, silent since a time,
   or none), its ledgered request count and last request, and when it drops off the list. The Model and Account cells
@@ -73,9 +72,9 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
   is probed under the pool's idle limits; once those run out the recipe is held for the idle limit and the row reads
   "no recipe". Sessions whose pool keeps no caches warm, whose key opts out, or whose idle limit ran out read "no
   recipe" and say which of the three it was.
-- Each session row carries an overflow menu that jumps to analytics or observe pre-filtered to that session, through
-  a `session` query parameter both pages read and show as a removable chip, and releases the session's pin. Sessions
-  with no ledgered requests offer the jumps disabled.
+- Each session row carries an overflow menu that jumps to analytics pre-filtered to that session, through a `session`
+  query parameter the page reads and shows as a removable chip, and releases the session's pin. Sessions with no
+  ledgered requests offer the jump disabled.
 - A "Cost reference" link on the sessions page and in the pool dialog's cache-warming section opens the shipped price
   table, including how many cache reads one cache write costs on each model. Its footnote also says when a 5-minute
   entry kept warm by probes beats a 1-hour entry, and which client-side TTL that implies.
@@ -84,11 +83,8 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
   reasons down for the selected range and group-by, and both that section and the sessions tiles count the requests
   that diagnosed no divergence yet read nothing, which is a prefix that expired between turns. Beside the reasons the
   same section counts wasted probes, the ones no real request ever followed, split by why the recipe stopped.
-- Observe carries a time-range control: a density strip of requests per minute over the last 30 minutes with a
-  two-handle range slider over it. While the end handle sits at now the table stays live; earlier than that it shows
-  the ring filtered to the span.
-- The attempts column in the request log is a count of the attempts with the trail of badges on hover, and in observe
-  a trail of badges, one per attempt, reading "account status" in the order the router tried them.
+- The attempts column in the request log is a count of the attempts with the trail of badges on hover, one badge per
+  attempt reading "account status" in the order the router tried them.
 - Long forms open as a sectioned dialog: a rail of groups beside one group's body, one group shown at a time. The pool
   and key dialogs use it; small dialogs keep the plain `Dialog`.
 - A key always belongs to a pool: the key dialog preselects one and locks it when opened from a pool, and the pool
@@ -98,5 +94,3 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - The analytics view carries a sticky filter bar and, under it, a sticky tab strip that shows one section at a time.
   The URL hash names the chosen section (`/analytics#cache-warming`), and an address with no hash, or one naming no
   section, opens on Traffic. The filter bar's height is measured, so the strip docks against it.
-- The live feed behind the observe view is `subscribeLive` on the `Api` interface; the mock emits a snapshot and then
-  timed deltas from `src/mock/live.ts`.

@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
-    TRANSFER_ENCODING, UPGRADE, X_CONTENT_TYPE_OPTIONS,
+    TRANSFER_ENCODING, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
@@ -36,8 +36,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
-    requests, sessions, settings, tls, AdminState, LoginError,
+    accounts, analytics, attention, dashboard, keepalive, keys, models, pools, pricing, requests,
+    sessions, settings, tls, AdminState, LoginError,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -93,8 +93,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
             "/admin/ledger/parked/replay",
             post(crate::ledger::replay_parked),
         )
-        .route("/admin/live", get(live::upgrade))
-        .route("/admin/live/snapshot", get(live::past))
         .route("/admin/models/state", get(models::state))
         .route("/admin/oauth/sessions", post(pairing_start))
         .route(
@@ -260,26 +258,21 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     let path = request.uri().path().to_string();
     let mutation = is_mutation(&method);
 
-    let websocket = request
-        .headers()
-        .get(UPGRADE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     // A bearer is the operator's own hand: a browser cannot attach `Authorization` to a cross-site request without a
     // preflight the admin API never answers, so the Origin check is the cookie's and not the bearer's. The login
     // route stays the cookie's door and ignores a bearer on it.
     let bearer = (!(method == Method::POST && path == LOGIN_PATH))
         .then(|| presented_bearer(request.headers()))
         .flatten();
-    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. A presented `Origin`
-    // must name the request's own `Host`, since another authority is another page on this host driving the console,
-    // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. Where this
-    // listener terminates TLS, or a front says the browser's leg does, the `Origin` must be `https://` too: a page
-    // on this host over plain HTTP could otherwise drive a bodiless write with a cookie some browsers send across
-    // schemes. A front that terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name
-    // the front; a forged header on a plain listener only costs the forger the `http://` origin it would need. The
-    // login is checked too: a forced login is the one mutation an unauthenticated caller can reach.
-    if bearer.is_none() && (mutation || websocket) {
+    // A browser attaches `Origin` to every cross-site write. A presented `Origin` must name the request's own `Host`,
+    // since another authority is another page on this host driving the console, while a request with no `Origin`
+    // (curl, a subcommand, the health probe) is the operator's own hand. Where this listener terminates TLS, or a
+    // front says the browser's leg does, the `Origin` must be `https://` too: a page on this host over plain HTTP
+    // could otherwise drive a bodiless write with a cookie some browsers send across schemes. A front that
+    // terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name the front; a forged
+    // header on a plain listener only costs the forger the `http://` origin it would need. The login is checked
+    // too: a forced login is the one mutation an unauthenticated caller can reach.
+    if bearer.is_none() && mutation {
         if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
             let host = request
                 .headers()
@@ -1038,7 +1031,6 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
         },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
-        "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),
         "pricing": {
             "api_prices": {

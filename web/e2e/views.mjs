@@ -88,7 +88,6 @@ if (inside) {
 
 const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
-  { path: '/observe', title: 'Observe', wait: '.mchip', slug: 'observe' },
   // The router's seed holds no subscription account, so its Quota view draws no card and the wait is on the section.
   { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', slug: 'quota' },
   // The page shows one section at a time, so the timeline's shot is a view of its own, and the mock pass's alone,
@@ -114,7 +113,7 @@ const VIEWS = [
 const CLOCK_STEP_MS = 100;
 /** Room for a view to load: the session check, the view's reads, and whatever those start in turn. */
 const LOAD_MS = 2_000;
-/** The fixed stretch every view runs for before its shot, so the live feed's ticks land alike in every run. */
+/** The fixed stretch every view runs for before its shot, so the mock's timers land alike in every run. */
 const SHOT_MS = 1_500;
 
 const failures = [];
@@ -181,7 +180,7 @@ const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globa
 
 /**
  * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency,
- * the live feed's ticks, the relative labels) happens here, in fixed steps. A step jumps to its end and fires
+ * the relative labels) happens here, in fixed steps. A step jumps to its end and fires
  * what fell due on the way there, so a timer the page starts in reply counts from the step's end however late
  * the reply lands; every run takes the same steps and draws every view at the same instants.
  */
@@ -2015,91 +2014,6 @@ async function costCapRows(theme) {
 }
 
 /**
- * The live feed under `connect-src 'self'`: the table keeps its placeholder until a snapshot arrives over the
- * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead. The page
- * draws what the feed sent on its next animation frame, which the paused clock fires only inside a step, so the wait
- * steps the clock until the table or the empty state is drawn. With the detail pane closed, the table's columns end
- * inside its card, and the eight metric tiles above it stand in two full rows of four. With a row's pane open the strip
- * has the main column's width alone, so it draws two columns; open or closed, every tile's value stays on one line
- * inside its tile. The pane closes again before the view's shot.
- */
-async function liveFeed(theme) {
-  const say = (what) => failures.push(`${theme} /observe: ${what}`);
-  const tops = await page.evaluate(() => [...document.querySelectorAll('.mchip')].map((c) => Math.round(c.getBoundingClientRect().top)));
-  const rows = [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
-  measurements.push(`${theme} /observe metric tiles per row ${JSON.stringify(rows)}`);
-  if (tops.length !== 8 || JSON.stringify(rows) !== '[4,4]') say(`the ${tops.length} metric tiles stand in rows of ${JSON.stringify(rows)}, not two rows of four`);
-  // A value's line boxes all cross one horizontal band when it sits on one line; the quality tag is set smaller on the
-  // same baseline, so its box overlaps the figure's.
-  const strip = () =>
-    page.evaluate(() => {
-      const chips = [...document.querySelectorAll('.mchip')];
-      const cut = chips.flatMap((chip) => {
-        const value = chip.querySelector('.mchip__value');
-        if (!value) return [];
-        const range = document.createRange();
-        range.selectNodeContents(value);
-        const boxes = [...range.getClientRects()].filter((r) => r.width > 0);
-        const tile = chip.getBoundingClientRect();
-        const style = getComputedStyle(chip);
-        const left = tile.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
-        const right = tile.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
-        const leaves = boxes.some((b) => b.left < left - 0.5 || b.right > right + 0.5);
-        const wraps = boxes.length > 0 && Math.max(...boxes.map((b) => b.top)) >= Math.min(...boxes.map((b) => b.bottom));
-        return leaves || wraps ? [`${chip.querySelector('.mchip__label')?.textContent} "${value.textContent}"${wraps ? ' wraps' : ''}${leaves ? ' leaves its tile' : ''}`] : [];
-      });
-      return { columns: new Set(chips.map((c) => Math.round(c.getBoundingClientRect().left))).size, cut, width: Math.round(document.querySelector('.metric-strip')?.getBoundingClientRect().width ?? 0) };
-    });
-  const drawn = () => page.evaluate(() => document.querySelector('.card--table .live-table, .card--table .empty') !== null);
-  const deadline = Date.now() + 15_000;
-  while (!(await drawn()) && Date.now() < deadline) await advance(CLOCK_STEP_MS);
-  if (!(await drawn())) {
-    say('no snapshot arrived, so the live feed never connected');
-    return;
-  }
-  // Read once the feed has drawn, so the tiles hold values rather than their placeholders.
-  const closedStrip = await strip();
-  measurements.push(`${theme} /observe metric strip with the pane closed ${JSON.stringify(closedStrip)}`);
-  if (closedStrip.columns !== 4) say(`with the pane closed the metric strip draws ${closedStrip.columns} columns, not four`);
-  for (const c of closedStrip.cut) say(`with the pane closed the metric tile ${c}`);
-  const banner = await page.evaluate(() => [...document.querySelectorAll('.observe__banner')].map((b) => b.textContent ?? '').join(' | '));
-  if (banner.includes('Reconnecting')) say(`the feed is reconnecting (${banner})`);
-  const table = await page.evaluate(() => {
-    const live = document.querySelector('.card--table .live-table');
-    const wrap = live?.closest('.table-wrap');
-    if (!live || !wrap) return null;
-    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
-    live.style.width = 'min-content';
-    const least = Math.ceil(live.getBoundingClientRect().width);
-    live.style.width = '';
-    const columns = [...live.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
-    return { client: wrap.clientWidth, columns, least, rows: live.querySelectorAll('tbody tr').length, scroll: live.scrollWidth };
-  });
-  measurements.push(`${theme} /observe live table ${table === null ? 'not drawn' : `${table.scroll} of ${table.client}px, at least ${table.least}px (slack ${table.client - table.least}px), ${table.rows} rows, columns ${JSON.stringify(table.columns)}`}`);
-  // The router's seed may hold no request inside the window; the mock's story always runs some.
-  if (table === null) {
-    if (mock) say('the story runs requests, yet no live table is drawn');
-    return;
-  }
-  if (table.scroll > table.client) say(`the live table needs ${table.scroll}px of its card's ${table.client}px`);
-  if (table.rows === 0) return;
-  await page.locator('.card--table .live-table tbody tr').first().click();
-  await settle();
-  if ((await page.locator('.observe__detail').count()) === 0) {
-    say('a click on the first row opened no detail pane');
-    return;
-  }
-  const openStrip = await strip();
-  measurements.push(`${theme} /observe metric strip with the pane open ${JSON.stringify(openStrip)}`);
-  if (openStrip.columns !== 2) say(`with the pane open the metric strip draws ${openStrip.columns} columns in ${openStrip.width}px, not two`);
-  for (const c of openStrip.cut) say(`with the pane open the metric tile ${c}`);
-  await page.getByRole('button', { name: 'Close detail' }).click();
-  await settle();
-  if ((await page.locator('.observe__detail').count()) !== 0) say('Close detail left the pane open');
-  await atRest();
-}
-
-/**
  * Picks an Analytics tab by its exact accessible name, since a text match on Cache also meets Cache warming and
  * Playwright's strict mode refuses the click. The page's timers stand still and a mock read lands on one, so the
  * clock moves after the click; the tab counts as open once its section holds no placeholder. Answers whether it did.
@@ -3623,7 +3537,7 @@ async function sessionsTableFits(theme) {
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
  * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its center, and the four entries draw a list 160 px wide and 141 px tall.
+ * item takes a pointer at its center, and the three entries draw a list 160 px wide and 109 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3663,7 +3577,7 @@ async function sessionRowMenu(theme) {
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
-  if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
+  if (read.list.width !== 160 || read.list.height !== 109) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 109px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
@@ -3868,7 +3782,6 @@ try {
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
-      if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {
         await sessionsLead(theme);
         await costCapRows(theme);

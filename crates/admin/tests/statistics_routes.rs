@@ -1,13 +1,10 @@
-//! Pricing, settings, system, quota, traffic, sessions, and the live routes.
+//! Pricing, settings, system, quota, traffic, and sessions.
 mod common;
 use std::time::Duration;
 
-use common::{delete, get, json, login, post, wait_json};
+use common::{get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
-use futures::StreamExt;
-use phoebis_bus::{
-    Delivery, Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk,
-};
+use phoebis_bus::Delivery;
 use phoebis_ledger::{
     AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
@@ -300,19 +297,11 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         "nothing refused by a router that kept up: {dropped:?}"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
-    assert!(
-        system["bus"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|b| b["subscriber"] == "ledger" && b["dropped"].as_u64() == Some(0))
-            && system["bus"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|b| b["subscriber"] == "live")
-    );
-    assert_eq!(system["live"]["clients"].as_u64(), Some(0));
+    assert!(system["bus"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|b| b["subscriber"] == "ledger" && b["dropped"].as_u64() == Some(0)));
     assert_eq!(system["storage_ok"], true);
     assert_eq!(
         (&system["ready"], &system["dead"]),
@@ -1120,245 +1109,6 @@ async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_rout
     let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
     assert_eq!(listed.status(), 200);
     assert_eq!(json(listed).await, serde_json::json!({"sessions": []}));
-}
-
-#[tokio::test]
-async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
-    let parts = common::admin_parts_full().await;
-    let addr = common::serve(parts.app.clone()).await;
-    let admin = login(&parts.app, "admin-secret").await;
-    let connect = |cookie: Option<String>| {
-        let mut request =
-            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-                format!("ws://{addr}/admin/live"),
-            )
-            .unwrap();
-        if let Some(cookie) = cookie {
-            request
-                .headers_mut()
-                .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
-        }
-        tokio_tungstenite::connect_async(request)
-    };
-    assert!(connect(None).await.is_err(), "no session, no upgrade");
-    // Over a real socket the client sets `Host` to the served address: an authenticated handshake whose origin
-    // names another authority is refused by the gate, and one naming the served address is admitted.
-    let served = common::admin_parts_full().await;
-    let served_addr = common::serve(served.app.clone()).await;
-    let served_cookie = common::login(&served.app, "admin-secret").await;
-    let mut foreign =
-        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
-            "ws://{served_addr}/admin/live"
-        ))
-        .unwrap();
-    foreign.headers_mut().insert(
-        "cookie",
-        format!("phoebis_admin={served_cookie}").parse().unwrap(),
-    );
-    foreign
-        .headers_mut()
-        .insert("origin", "https://evil.example".parse().unwrap());
-    let refused = tokio_tungstenite::connect_async(foreign).await;
-    assert!(
-        matches!(refused, Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status() == 403),
-        "a foreign origin is refused before the upgrade: {refused:?}"
-    );
-    let mut same = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-        format!("ws://{served_addr}/admin/live"),
-    )
-    .unwrap();
-    same.headers_mut().insert(
-        "cookie",
-        format!("phoebis_admin={served_cookie}").parse().unwrap(),
-    );
-    same.headers_mut()
-        .insert("origin", format!("http://{served_addr}").parse().unwrap());
-    let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
-    assert_eq!(
-        common::next_text(&mut same_ws).await["kind"],
-        "snapshot",
-        "an origin naming the request's own host is admitted"
-    );
-    let _ = same_ws.close(None).await;
-    let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();
-    assert_eq!(common::next_text(&mut admin_ws).await["kind"], "snapshot");
-    // Straight onto the bus: a capturing request and one text chunk.
-    parts.bus.publish(Event::RequestObserved(RequestObserved {
-        request_id: "live-1".into(),
-        origin: Origin::Client,
-        kind: Kind::Inference,
-        key_id: Some("desktop".into()),
-        key_generation: 0,
-        pool_id: Some("main".into()),
-        session_id: Some("s1".into()),
-        agent_id: Some("main".into()),
-        parent_agent_id: None,
-        owner_id: None,
-        model: "claude-sonnet-5".into(),
-        canonical_model: "claude-sonnet-5".into(),
-        wire_model: "claude-sonnet-5".into(),
-        stream: true,
-        headers: vec![],
-        body: bytes::Bytes::from_static(b"{}"),
-        body_capture_hours: 24,
-        shape: RequestShape::default(),
-        static_hash: None,
-        boundaries: Vec::new(),
-        client: phoebis_bus::ClientFacts::default(),
-        auto_mode: None,
-        fork: phoebis_bus::Fork::default(),
-        presented_retired: false,
-        rotation_at: None,
-        received_at: common::NOW,
-    }));
-    parts.bus.publish(Event::ResponseChunk(ResponseChunk { request_id: "live-1".into(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"secret prompt text\"}}\n\n"), phase: Some(Phase::FirstContentDelta) }));
-    let admin_seen = common::deltas_until(&mut admin_ws, "preview").await;
-    assert!(admin_seen
-        .iter()
-        .any(|d| d["type"] == "preview" && d["chunk"] == "secret prompt text"));
-    let past = json(
-        get(
-            &parts.app,
-            &format!(
-                "/admin/live/snapshot?from={}&to={}",
-                common::NOW - 1,
-                common::NOW + 1
-            ),
-            Some(&admin),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(past["entries"][0]["id"], "live-1");
-    assert!(
-        past["entries"][0]["preview"].is_null(),
-        "a past read carries no preview"
-    );
-    let by_instant = json(
-        get(
-            &parts.app,
-            &format!("/admin/live/snapshot?at={}", common::NOW + 1),
-            Some(&admin),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        by_instant["entries"], past["entries"],
-        "at= is the 30-minute strip ending at that instant"
-    );
-    assert_eq!(
-        get(
-            &parts.app,
-            &format!("/admin/live/snapshot?at={}&to={}", common::NOW, common::NOW),
-            Some(&admin)
-        )
-        .await
-        .status(),
-        400
-    );
-    assert_eq!(
-        get(
-            &parts.app,
-            &format!("/admin/live/snapshot?at={}", i64::MIN),
-            Some(&admin)
-        )
-        .await
-        .status(),
-        200,
-        "the window an instant at the bound asks for is clamped, not wrapped"
-    );
-    assert_eq!(
-        get(&parts.app, "/admin/live", Some(&admin)).await.status(),
-        400,
-        "a plain GET is not an upgrade"
-    );
-    let _ = admin_ws.close(None).await;
-}
-
-#[tokio::test]
-async fn the_live_socket_closes_when_its_session_ends() {
-    let parts = common::admin_parts_full().await;
-    let addr = common::serve(parts.app.clone()).await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let mut request =
-        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
-            "ws://{addr}/admin/live"
-        ))
-        .unwrap();
-    request
-        .headers_mut()
-        .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
-    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    assert_eq!(common::next_text(&mut ws).await["kind"], "snapshot");
-    assert_eq!(
-        delete(&parts.app, "/admin/session", Some(&cookie))
-            .await
-            .status(),
-        204
-    );
-    let closed = tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
-            match ws.next().await {
-                Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame,
-                Some(Ok(_)) => continue,
-                other => panic!("the socket ended without a close frame: {other:?}"),
-            }
-        }
-    })
-    .await
-    .expect("the writer's tick notices the ended session within five seconds");
-    let frame = closed.expect("a close frame with a reason");
-    assert_eq!(u16::from(frame.code), 1008);
-    assert_eq!(frame.reason, "session ended");
-}
-
-#[tokio::test]
-async fn the_sixty_fifth_live_socket_is_refused_until_one_closes() {
-    let parts = common::admin_parts_full().await;
-    let addr = common::serve(parts.app.clone()).await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let connect = || {
-        let cookie = cookie.clone();
-        async move {
-            let mut request =
-                tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-                    format!("ws://{addr}/admin/live"),
-                )
-                .unwrap();
-            request
-                .headers_mut()
-                .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
-            tokio_tungstenite::connect_async(request).await
-        }
-    };
-    let mut sockets = Vec::new();
-    for _ in 0..phoebis_live::MAX_SOCKETS {
-        let (mut ws, _) = connect().await.unwrap();
-        assert_eq!(common::next_text(&mut ws).await["kind"], "snapshot");
-        sockets.push(ws);
-    }
-    match connect().await {
-        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
-            assert_eq!(response.status(), 503);
-            let body = response.body().clone().unwrap_or_default();
-            assert!(String::from_utf8_lossy(&body).contains("live feed at capacity"));
-        }
-        other => panic!("the 65th upgrade is refused before the handshake: {other:?}"),
-    }
-    let _ = sockets.pop().unwrap().close(None).await;
-    // The slot frees once the server notices the close, which is not synchronous with sending it.
-    let (mut admitted, _) = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(pair) = connect().await {
-                return pair;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("a slot frees once a socket closes");
-    assert_eq!(common::next_text(&mut admitted).await["kind"], "snapshot");
 }
 
 #[tokio::test]

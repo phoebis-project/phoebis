@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -118,11 +118,6 @@ const drawerChips = (row) =>
   }));
 /** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
 const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
-/** A live row's cell under the header that reads `header` in the mount's live table, so a check names its column. */
-const liveCell = (m, tr, header) => {
-  const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
-  return i < 0 ? undefined : tr.children[i];
-};
 /**
  * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
  */
@@ -144,8 +139,6 @@ async function showColumn(m, label) {
   button()?.click();
   await m.settle(100);
 }
-/** The state each live status dot's class stands for, as its title names it. */
-const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 /**
  * A link into the routing log read as its path and its query values, so a check compares the filters and the range
  * whatever order the address writes them in.
@@ -503,162 +496,6 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const primary = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'primary');
   const cooldownLine = [...(primary?.querySelectorAll('.account-mini__foot .muted') ?? [])].map((e) => e.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
-}
-m.unmount();
-
-m = await mount('/observe');
-{
-  const t = m.text();
-  expect('/observe metric strip', t, ['Requests per second', 'Active streams', 'Error rate', 'TTFB p50', 'TTFB p95', 'TTFB p99', 'Output tokens per second', 'Estimated cost per minute', 'measured', 'derived', 'estimated']);
-  const inflight = m.container.querySelectorAll('.live-table .ldot--inflight').length;
-  results.push({ name: '/observe has in-flight rows', ok: inflight >= 1, missing: [String(inflight)] });
-  {
-    // The whole header row, in order: the detail pane names a request's kind and transport, so neither is a column.
-    const heads = [...m.container.querySelectorAll('.live-table thead th')].map((th) => th.textContent?.trim() ?? '');
-    const columns = ['Time', 'Status', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Account', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed'];
-    const absent = ['Pause', 'In-flight only', ' to ', 'Live'].filter((n) => !t.includes(n));
-    results.push({ name: '/observe table columns', ok: JSON.stringify(heads) === JSON.stringify(columns) && absent.length === 0, missing: [JSON.stringify(heads), ...absent] });
-  }
-  {
-    // The dot is drawn hidden from a screen reader beside the Status badge, so its title is for a pointer alone; each
-    // one names the state its color stands for.
-    const dots = [...m.container.querySelectorAll('.live-table .ldot')];
-    const wrong = dots.filter((d) => {
-      const state = [...d.classList].find((c) => c in DOT_TITLES);
-      return state === undefined || d.getAttribute('title') !== DOT_TITLES[state];
-    });
-    results.push({ name: '/observe every status dot names its state in a title', ok: dots.length > 0 && wrong.length === 0, missing: dots.length === 0 ? ['no dot'] : wrong.slice(0, 4).map((d) => `${d.className}: ${d.getAttribute('title')}`) });
-  }
-  const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
-  results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
-  {
-    const note = m.container.querySelector('.metric-strip__note')?.textContent ?? '';
-    const sentences = ['Measured: read directly from the router over the last minute.', 'Derived: computed from other measured values over the last minute.', 'Estimated: priced at the effective list from token counts, not billed.'];
-    const at = sentences.map((s) => note.indexOf(s));
-    results.push({ name: "/observe the strip's footnote explains the three quality words", ok: at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), missing: [note || 'no footnote'] });
-  }
-  const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
-  results.push({ name: '/observe range axis labels every 5 minutes', ok: tickLabels.length >= 6 && tickLabels.every((l) => /^\d{2}:\d{2}$/.test(l)), missing: tickLabels.slice(0, 8) });
-  const minorTicks = m.container.querySelectorAll('.range__tick:not(.is-major)').length;
-  results.push({ name: '/observe range axis has minute ticks between the labels', ok: minorTicks >= 20, missing: [String(minorTicks)] });
-  const nowMark = m.container.querySelector('.range__now');
-  results.push({ name: '/observe range has a live now marker', ok: nowMark !== null && !nowMark.classList.contains('is-anchored') && /^now \d{2}:\d{2}$/.test(nowMark.textContent ?? ''), missing: [nowMark?.textContent ?? 'absent'] });
-  const densityBars = [...m.container.querySelectorAll('.range__bar')];
-  results.push({ name: '/observe range strip draws a bar per clock minute', ok: densityBars.length === 31 && densityBars.every((b) => b.style.left !== '' && b.style.width !== ''), missing: [String(densityBars.length)] });
-  results.push({ name: '/observe drops the session dropdown only when a chip holds one', ok: [...m.container.querySelectorAll('.mselect__trigger')].some((t) => t.textContent?.includes('Session')), missing: [] });
-  const firstRow = m.container.querySelector('.live-table tbody tr');
-  firstRow?.click();
-  await m.settle(300);
-  expect('/observe detail pane', m.text(), ['Phases', 'Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished', 'Attempts', 'Usage', 'Cache write, 5m', 'Cache write, 1h']);
-  // The feed carries output only while a request runs, and a running 200 may not have reached its first content
-  // token yet, so every running laptop stream past its head is tried until one draws its preview; the story
-  // keeps one streaming at any instant this check runs.
-  const running = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop' && tr.dataset.kind === 'inference' && liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--inflight') !== null);
-  let previewShown = false;
-  for (const tr of running) {
-    tr.click();
-    await m.settle(300);
-    // The pane keeps the row clicked before this one, so the preview is read right after this row's click.
-    if (m.container.querySelector('.observe__detail .preview') !== null) {
-      previewShown = true;
-      break;
-    }
-  }
-  results.push({ name: '/observe an admin sees the preview of a running request', ok: previewShown, missing: [running.length ? 'no preview' : 'no running laptop stream'] });
-  const finishedStream = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop' && tr.dataset.kind === 'inference' && liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
-  finishedStream?.click();
-  await m.settle(300);
-  results.push({ name: '/observe a finished stream keeps no preview, as the feed drops it', ok: finishedStream !== undefined && m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [finishedStream ? 'a preview is still drawn' : 'no finished laptop stream'] });
-  const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
-  plainRow?.click();
-  await m.settle(300);
-  results.push({ name: '/observe a request the feed sent no output for says so', ok: m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
-  const failedAfterHead = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
-  results.push({ name: '/observe a finished 200 with an error code draws the failure dot', ok: failedAfterHead !== undefined, missing: ['no 200 row with ldot--bad'] });
-  failedAfterHead?.click();
-  await m.settle(300);
-  const detailText = m.container.querySelector('.observe__detail')?.textContent ?? '';
-  results.push({ name: '/observe the detail pane names the error of a stream that failed after its head', ok: failedAfterHead !== undefined && detailText.includes('Erroroverloaded_error'), missing: [detailText.slice(0, 160)] });
-  const badFinished = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
-  let cutDetail = '';
-  for (const tr of badFinished) {
-    tr.click();
-    await m.settle(300);
-    cutDetail = m.container.querySelector('.observe__detail')?.textContent ?? '';
-    if (cutDetail.includes('Errorstream_incomplete')) break;
-  }
-  results.push({ name: '/observe a finished 200 that ended before its end draws the failure dot', ok: cutDetail.includes('Errorstream_incomplete'), missing: [`${badFinished.length} 200 rows with ldot--bad`, cutDetail.slice(0, 160)] });
-  const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
-  streamsBtn?.click();
-  await m.settle(300);
-  const tiles = m.container.querySelectorAll('.stile').length;
-  results.push({ name: '/observe Streams toggle renders tiles', ok: tiles >= 1, missing: [String(tiles)] });
-  expect('/observe streams', m.text(), ['Fullscreen', 'tok/s']);
-  const pauseBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Pause');
-  pauseBtn?.click();
-  await m.settle(200);
-  results.push({ name: '/observe pause toggles to Resume', ok: m.text().includes('Resume') && m.text().includes('Paused.'), missing: [] });
-  const tableBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Table');
-  tableBtn?.click();
-  await m.settle(250);
-  const trail = m.container.querySelector('.live-table .trail');
-  results.push({ name: '/observe attempts cell is a trail of badges', ok: (trail?.querySelectorAll('.trail__step').length ?? 0) >= 1, missing: [String(trail?.querySelectorAll('.trail__step').length)] });
-  const handles = [...m.container.querySelectorAll('.range__handle')];
-  results.push({ name: '/observe range has a start and an end handle', ok: handles.map((h) => h.getAttribute('aria-label')).join(',') === 'Range start,Range end', missing: handles.map((h) => h.getAttribute('aria-label')) });
-  results.push({ name: '/observe handles step by 30 s', ok: handles.every((h) => h.getAttribute('step') === '30'), missing: handles.map((h) => h.getAttribute('step')) });
-  if (handles.length === 2) {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    setter.call(handles[0], '300');
-    handles[0].dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(150);
-    results.push({ name: '/observe start handle alone keeps the feed live', ok: !m.text().includes('Historical: deltas not replayed'), missing: [] });
-    setter.call(handles[1], '900');
-    handles[1].dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(200);
-    expect('/observe end handle before now turns historical', m.text(), ['Historical: deltas not replayed', ' to ', 'Live']);
-    const tinted = m.container.querySelectorAll('.range__bar.is-in').length;
-    results.push({ name: '/observe selected span tints its minutes', ok: tinted > 0 && tinted < 30, missing: [String(tinted)] });
-    const label = m.container.querySelector('.range__foot .num')?.textContent ?? '';
-    results.push({ name: '/observe label reads start to end plus duration', ok: /^\d{2}:\d{2}:\d{2} to \d{2}:\d{2}:\d{2}, (\d+m( \d+s)?|\d+s)$/.test(label.trim()), missing: [label] });
-    {
-      // The ring holds finished rows only, so a row still running at the end of a past span is a projection whose
-      // usage the ring cannot reconstruct. Few rows run at any one instant, so the end handle walks the ring until
-      // a span ends on one.
-      let running;
-      for (let end = 330; end < 1800 && running === undefined; end += 30) {
-        setter.call(handles[1], String(end));
-        handles[1].dispatchEvent(new window.Event('input', { bubbles: true }));
-        await m.settle(60);
-        running = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.querySelector('.ldot--inflight') !== null);
-      }
-      running?.click();
-      await m.settle(200);
-      const pane = m.container.querySelector('.observe__detail')?.textContent ?? '';
-      results.push({
-        name: '/observe a request running at the end of a past span reads its usage as not reconstructed',
-        ok: running !== undefined && pane.includes('Usage (not reconstructed for this instant)') && !pane.includes('Usage so far') && liveCell(m, running, 'Tokens so far')?.textContent?.trim() === '-' && liveCell(m, running, 'tok/s')?.textContent?.trim() === '-',
-        missing: running === undefined ? ['no row runs at the end of any span'] : [pane.slice(0, 240), liveCell(m, running, 'Tokens so far')?.textContent ?? '', liveCell(m, running, 'tok/s')?.textContent ?? ''],
-      });
-    }
-    const liveBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Live');
-    liveBtn?.click();
-    await m.settle(200);
-    results.push({ name: '/observe Live snaps the end handle back to now', ok: !m.text().includes('Historical: deltas not replayed'), missing: [] });
-  } else {
-    results.push({ name: '/observe range handles found', ok: false, missing: [String(handles.length)] });
-  }
-  // An earlier check left the feed paused, which holds the banner back on purpose.
-  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Resume')?.click();
-  await m.settle(300);
-  // The banner waits on the tick's age, so this one has to spend the wall-clock seconds.
-  stallLive(true);
-  await m.settle(6_000);
-  const stalledBanner = m.text().includes('Reconnecting to the live feed');
-  const keptRows = m.container.querySelectorAll('.live-table tbody tr').length;
-  stallLive(false);
-  await m.settle(2_000);
-  results.push({ name: '/observe a feed that stops ticking raises the reconnecting banner', ok: stalledBanner && keptRows > 0, missing: [stalledBanner ? `rows ${keptRows}` : 'no banner'] });
-  results.push({ name: '/observe the reconnecting banner clears on the next tick', ok: !m.text().includes('Reconnecting to the live feed'), missing: [] });
 }
 m.unmount();
 
@@ -1170,7 +1007,7 @@ m = await mount('/accounts');
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
 {
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
+  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
 expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
@@ -10353,9 +10190,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
   }
 
-  // A session with no ledgered requests cannot open either view.
-  // Only the first nine sessions also appear in the live feed, so the observe jump needs one of those.
-  const busyRow = () => rows().find((r, i) => i < 9 && Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
+  // A session with no ledgered requests cannot open the analytics view.
+  const busyRow = () => rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
   const barren = rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) === 0);
   const openMenu = async (row) => {
     row?.querySelector('.menu__trigger')?.click();
@@ -10366,13 +10202,13 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same four entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|View in routing log|Release',
+      name: '/sessions the overflow menu carries the same three entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
-    // The routing log reads the session's decisions, which need no ledgered request, so only the two jumps
-    // into the ledger's views wait on one.
-    const jumps = items.filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
+    // The routing log reads the session's decisions, which need no ledgered request, so only the jump into
+    // the ledger's view waits on one.
+    const jumps = items.filter((b) => b.textContent?.trim() === 'View in analytics');
     const log = items.find((b) => b.textContent?.trim() === 'View in routing log');
     const session = sessionCell(m, barren, 'Session')?.getAttribute('title') ?? '';
     const enabled = log !== undefined && !log.disabled;
@@ -10380,9 +10216,9 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await m.settle(300);
     const landed = m.location();
     results.push({
-      name: "/sessions disables the analytics and observe jumps without ledgered requests and opens the routing log on the row's session",
+      name: "/sessions disables the analytics jump without ledgered requests and opens the routing log on the row's session",
       ok:
-        jumps.length === 2 &&
+        jumps.length === 1 &&
         jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')) &&
         enabled &&
         session !== '' &&
@@ -10394,8 +10230,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await m.settle(300);
   }
   {
-    const jumps = (await openMenu(busyRow())).filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
-    results.push({ name: '/sessions enables both jumps with ledgered requests', ok: jumps.length === 2 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
+    const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim() === 'View in analytics');
+    results.push({ name: '/sessions enables the jump with ledgered requests', ok: jumps.length === 1 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
     await openMenu(busyRow());
   }
   {
@@ -10449,7 +10285,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await openMenu(gone);
     results.push({
       name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
+      ok: liveItems.includes('Release') && goneItems.length === 2 && !goneItems.includes('Release'),
       missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();
@@ -10628,20 +10464,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     chip?.querySelector('button')?.click();
     await m.settle(400);
     results.push({ name: '/analytics session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
-  }
-
-  await m.navigate('/sessions');
-  (await jump('View in observe'))?.click();
-  await m.settle(900);
-  results.push({ name: '/sessions View in observe pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Requests per second'), missing: chipText() });
-  {
-    const chip = m.container.querySelector('.chip--removable');
-    results.push({ name: '/observe session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });
-    const sessions = [...m.container.querySelectorAll('.live-table tbody tr')].map((tr) => liveCell(m, tr, 'Session')?.getAttribute('title'));
-    results.push({ name: '/observe feed holds only the filtered session', ok: sessions.length > 0 && sessions.every((v) => v === sessionId), missing: [...new Set(sessions)].map(String) });
-    chip?.querySelector('button')?.click();
-    await m.settle(400);
-    results.push({ name: '/observe session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
   }
 
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
@@ -11300,7 +11122,6 @@ m.unmount();
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
-    ['/observe', (c, t) => t.includes('Nothing matches'), 'Nothing matches'],
     ['/quota', (c, t) => t.includes('0 accounts') && c.querySelector('.qcard') === null, '0 accounts, no account card'],
     ['/accounts', (c, t) => t.includes('The router holds no account yet'), 'The router holds no account yet'],
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).join(' ') === '0 0 0 0 $0.00', 'no pool card, tiles 0 0 0 0 $0.00'],
@@ -12149,7 +11970,7 @@ m.unmount();
     await page.settle(300);
   };
   const cells = [];
-  for (const [path, open] of [['/observe'], ['/requests'], ['/sessions', expandAll]]) {
+  for (const [path, open] of [['/requests'], ['/sessions', expandAll]]) {
     await page.navigate(path);
     await open?.();
     const described = [...page.container.querySelectorAll('[aria-describedby]')].filter((el) => cellOf(el) !== null);
@@ -12173,14 +11994,14 @@ m.unmount();
     const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
     counts.push({ onPage: own.length, seen: badges.length, where });
   };
-  for (const path of ['/', '/accounts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
+  for (const path of ['/', '/accounts', '/analytics', '/keys', '/models', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
     if (path === '/sessions') await expandAll();
     sweep(path);
   }
   // A navigation that drew nothing would pass the sweep empty, so every page that draws titled badges of its own in the
   // story has to show one.
-  const thin = counts.filter((c) => ['/', '/accounts', '/keys', '/observe', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
+  const thin = counts.filter((c) => ['/', '/accounts', '/keys', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
   await page.navigate('/keys');
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);
@@ -12213,100 +12034,6 @@ m.unmount();
     missing: [why(trail), node ? JSON.stringify(node.textContent) : 'no node', JSON.stringify(trail?.textContent ?? '')],
   });
   lone.unmount();
-}
-
-{
-  // Three Observe checks that spend real time on a mount of their own, late in the run like the checks around them, so
-  // the time they take moves none of the story's relative times the checks above read.
-  const live = await mount('/observe');
-  const keyOf = (tr) => liveCell(live, tr, 'Key')?.textContent ?? '';
-  const drawn = () => [...live.container.querySelectorAll('.live-table tbody tr')].map((tr) => `${liveCell(live, tr, 'Time')?.textContent} ${keyOf(tr)}`);
-  const button = (label) => [...live.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
-
-  // The page draws the feed on an animation frame, so an event that lands just before Pause leaves a frame queued. The
-  // page's frames go through the global the bundle reads, which this check holds in a queue of its own, numbered apart
-  // from jsdom's handles; a frame asked of jsdom before the swap runs during the settle.
-  const realFrame = globalThis.requestAnimationFrame;
-  const realCancel = globalThis.cancelAnimationFrame;
-  const held = [];
-  let nextHeld = 1_000_000;
-  globalThis.requestAnimationFrame = (cb) => {
-    const id = nextHeld;
-    nextHeld += 1;
-    held.push({ cb, id });
-    return id;
-  };
-  globalThis.cancelAnimationFrame = (id) => {
-    const at = held.findIndex((h) => h.id === id);
-    if (at >= 0) held.splice(at, 1);
-    else realCancel(id);
-  };
-  let frozen = [];
-  let shownPaused = true;
-  let afterClick = [];
-  let shownResumed = false;
-  const started = (request) => emitLive({ delta: { cursor: Number.MAX_SAFE_INTEGER, request, type: 'started' }, kind: 'delta' });
-  const base = { accountId: null, agentId: 'main', attempts: [], costUsd: 0, errorCode: null, kind: 'inference', model: 'claude-sonnet-5', outputTps: null, poolId: null, preview: null, sessionId: null, transport: 'sse', usage: null, userAgent: null };
-  try {
-    await live.settle(100);
-    // One synchronous turn from the event to the click: an await between them would let a frame draw the row first.
-    started({ ...base, id: 'smoke-pause-gap', keyId: 'pause-gap', phases: { receivedAt: new Date().toISOString() }, state: 'in_flight', status: null });
-    button('Pause')?.click();
-    afterClick = drawn();
-    for (const h of held.splice(0)) h.cb(performance.now());
-    await live.settle(150);
-    frozen = drawn();
-    shownPaused = frozen.some((r) => r.endsWith(' pause-gap'));
-  } finally {
-    // A frame asked for after the held ones ran still belongs to the page, so jsdom runs it.
-    for (const h of held.splice(0)) realFrame(h.cb);
-    globalThis.requestAnimationFrame = realFrame;
-    globalThis.cancelAnimationFrame = realCancel;
-  }
-  button('Resume')?.click();
-  // React commits a click's update in a microtask, ahead of any frame or timer, so this read sees what Resume drew at
-  // once and nothing a later frame would have drawn.
-  await Promise.resolve();
-  const resumedAtOnce = drawn().some((r) => r.endsWith(' pause-gap'));
-  await live.settle(150);
-  shownResumed = drawn().some((r) => r.endsWith(' pause-gap'));
-  results.push({
-    name: '/observe a pause between a queued event and its frame keeps the view frozen',
-    ok: afterClick.length > 0 && JSON.stringify(frozen) === JSON.stringify(afterClick) && !shownPaused && resumedAtOnce && shownResumed,
-    missing: [`${afterClick.length} rows after the click, ${frozen.length} after the held frames`, shownPaused ? 'the row drew while paused' : '', resumedAtOnce ? '' : 'Resume waited for a frame to draw the row', shownResumed ? '' : 'Resume did not draw the row'].filter(Boolean),
-  });
-
-  // jsdom runs no activation for a key press on a button, so the keyboard path is a focus and then the button's click.
-  const opener = live.container.querySelector('.live-table tbody tr .live-row__open');
-  // The visible text is the time alone, so the name says what the button does.
-  const named = opener !== null && opener.getAttribute('aria-label') === `Open request at ${opener.textContent}`;
-  opener?.focus();
-  opener?.click();
-  await live.settle(150);
-  const close = live.container.querySelector('.observe__detail [aria-label="Close detail"]');
-  const onClose = close !== null && document.activeElement === close;
-  close?.click();
-  await live.settle(150);
-  const returned = opener !== null && opener.isConnected && document.activeElement === opener;
-  results.push({
-    name: '/observe a row opens its pane from the keyboard and focus returns on close',
-    ok: named && onClose && returned && live.container.querySelector('.observe__detail') === null,
-    missing: [opener ? '' : 'no row button', named ? '' : `the button is named ${JSON.stringify(opener?.getAttribute('aria-label') ?? null)}`, close ? '' : 'no pane', onClose ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after opening`, returned ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after closing`].filter(Boolean),
-  });
-
-  // The story draws no rate-limited row while these checks read, so a finished 429 joins the feed on a key of its own
-  // and every state a dot stands for is drawn at least once.
-  const now = new Date().toISOString();
-  started({ ...base, errorCode: 'rate_limit_error', id: 'smoke-rate-limited', keyId: 'rate-limited', phases: { finishedAt: now, receivedAt: now }, state: 'finished', status: 429 });
-  await live.settle(150);
-  const dots = [...live.container.querySelectorAll('.live-table .ldot')];
-  const states = Object.entries(DOT_TITLES).map(([cls, title]) => ({ cls, dots: dots.filter((d) => d.classList.contains(cls)), title }));
-  results.push({
-    name: '/observe each of the four dot states is drawn with the title that names it',
-    ok: states.every((s) => s.dots.length > 0 && s.dots.every((d) => d.getAttribute('title') === s.title)),
-    missing: states.flatMap((s) => (s.dots.length === 0 ? [`no ${s.cls}`] : s.dots.filter((d) => d.getAttribute('title') !== s.title).slice(0, 2).map((d) => `${s.cls}: ${d.getAttribute('title')}`))),
-  });
-  live.unmount();
 }
 
 {

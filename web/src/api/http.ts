@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -258,68 +258,6 @@ export class HttpApi implements Api {
     return { key: d.decodeKey(r), secret: String(r.secret) };
   };
   startPairing = async (accountId: string) => d.decodePairingSession(await call('POST', '/admin/oauth/sessions', { account_id: accountId, login: 'claude_ai' }));
-  subscribeLive = (handler: (event: LiveEvent) => void): (() => void) => {
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    let socket: WebSocket | null = null;
-    let closed = false;
-    let retry = 1_000;
-    let warned = false;
-    const open = () => {
-      if (closed) return;
-      socket = new WebSocket(`${scheme}://${location.host}/admin/live`);
-      socket.onmessage = (m) => {
-        let event: LiveEvent | null;
-        // A frame the decoder cannot read is the server's to explain; the subscription lives on, since the next
-        // frame may be fine.
-        try {
-          const v = JSON.parse(String(m.data)) as { kind: string; snapshot?: unknown; delta?: unknown };
-          if (v.kind === 'snapshot') {
-            event = { kind: 'snapshot', snapshot: d.decodeLiveSnapshot(v.snapshot) };
-          } else {
-            const delta = d.decodeLiveDelta(v.delta);
-            event = delta ? { delta, kind: 'delta' } : null;
-          }
-        } catch (e) {
-          if (!warned) console.warn('skipped a live frame the console could not read', e);
-          warned = true;
-          return;
-        }
-        if (event?.kind === 'snapshot') retry = 1_000;
-        if (event) handler(event);
-      };
-      // A dropped socket (the feed disconnects a slow client) reconnects to a fresh snapshot with a growing wait.
-      socket.onclose = () => {
-        if (!closed) {
-          setTimeout(() => void reopen(), retry);
-          retry = Math.min(retry * 2, 30_000);
-        }
-      };
-    };
-    /**
-     * A refused upgrade never passes through `call`, so an expired session would reconnect for ever behind a
-     * page that never learns it has to log in again: the session is read before each retry, and only a
-     * router that answers "no session" stops the feed. A probe that fails to answer at all is treated as the
-     * outage it probably is, and the retry goes ahead.
-     */
-    const reopen = async () => {
-      if (closed) return;
-      const session = await this.getSession().then(
-        (s) => s,
-        () => 'unknown' as const,
-      );
-      if (closed) return;
-      if (session === null) {
-        hooks.onUnauthorized();
-        return;
-      }
-      open();
-    };
-    open();
-    return () => {
-      closed = true;
-      socket?.close();
-    };
-  };
   updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
     d.decodeAccount(
       await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), false, DIALOG_WRITE),

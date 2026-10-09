@@ -8,7 +8,6 @@ use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
 use fake_upstream::{FakeUpstream, Respond, Rule};
-use futures::StreamExt;
 use http_body_util::BodyExt;
 use phoebis_admin::{
     router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
@@ -19,7 +18,6 @@ use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
-use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -37,7 +35,6 @@ use phoebis_transport::{
     pool::Pool,
     trust_extra_ca, Plane,
 };
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,9 +57,6 @@ const USAGE_TTL: Duration = Duration::from_secs(60);
 /// The bound the relay harness gives discovery too, so a fake that never answers cannot hang the suite.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long a socket read may wait before the test fails rather than hangs.
-const WS_DEADLINE: Duration = Duration::from_secs(10);
-
 /// Everything `app_with` builds. A test reaching past the HTTP surface takes what it needs rather than
 /// every helper growing another tuple slot.
 struct Parts {
@@ -74,7 +68,6 @@ struct Parts {
     db: Arc<LedgerDb>,
     keepalive: Arc<Engine>,
     ledger: Ledger,
-    live: LiveFeed,
     manager: Arc<CredentialManager>,
     pairing: Arc<PairingSessions>,
     pricing: Arc<Pricing>,
@@ -102,7 +95,6 @@ pub struct Full {
     pub db: Arc<LedgerDb>,
     pub keepalive: Arc<Engine>,
     pub ledger: Ledger,
-    pub live: LiveFeed,
     pub pricing: Arc<Pricing>,
     /// The relay backing the harness's own keepalive engine, exposed so a test can drive a real request
     /// through the proxy listener's own authenticate-and-touch path rather than reaching around it.
@@ -141,7 +133,6 @@ fn full_from(parts: Parts) -> Full {
         db: parts.db,
         keepalive: parts.keepalive,
         ledger: parts.ledger,
-        live: parts.live,
         pricing: parts.pricing,
         relay: parts.relay,
         resolver: parts.resolver,
@@ -474,76 +465,6 @@ pub async fn login(app: &Router, secret: &str) -> String {
     cookie_of(&response)
 }
 
-pub type Client =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-/// The whole app behind a loopback listener, for the tests that need a real handshake rather than a
-/// `oneshot` call.
-pub async fn serve(app: Router) -> SocketAddr {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    addr
-}
-
-/// The next text message on the socket, as JSON.
-pub async fn next_text(ws: &mut Client) -> serde_json::Value {
-    let deadline = tokio::time::Instant::now() + WS_DEADLINE;
-    loop {
-        let message = tokio::time::timeout_at(deadline, ws.next())
-            .await
-            .expect("a message arrives before the deadline")
-            .expect("the socket is still open")
-            .expect("the message is not an error");
-        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
-            return serde_json::from_str(&text).unwrap();
-        }
-    }
-}
-
-/// Reads until a delta of `kind` arrives, returning every delta read on the way, all under one deadline.
-pub async fn deltas_until(ws: &mut Client, kind: &str) -> Vec<serde_json::Value> {
-    let deadline = tokio::time::Instant::now() + WS_DEADLINE;
-    let mut seen = Vec::new();
-    loop {
-        let message = tokio::time::timeout_at(deadline, ws.next())
-            .await
-            .unwrap_or_else(|_| panic!("no {kind} delta arrived; saw {seen:?}"))
-            .expect("the socket is still open")
-            .expect("the message is not an error");
-        let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
-            continue;
-        };
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let Some(delta) = value.get("delta") else {
-            continue;
-        };
-        let done = delta["type"] == kind;
-        seen.push(delta.clone());
-        if done {
-            return seen;
-        }
-    }
-}
-
-/// Every delta that arrives within `window`. A test asserting something is never sent has to wait out a
-/// window rather than read until it sees it.
-pub async fn deltas_for(ws: &mut Client, window: Duration) -> Vec<serde_json::Value> {
-    let deadline = tokio::time::Instant::now() + window;
-    let mut seen = Vec::new();
-    while let Ok(Some(Ok(message))) = tokio::time::timeout_at(deadline, ws.next()).await {
-        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-            if let Some(delta) = value.get("delta") {
-                seen.push(delta.clone());
-            }
-        }
-    }
-    seen
-}
-
 async fn send(
     app: &Router,
     method: &str,
@@ -839,7 +760,6 @@ async fn build_app(
         metrics.clone(),
         LedgerConfig::default(),
     );
-    let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
     // The admin harness had no relay before this task; keepalive needs one to probe through, even though
     // nothing here drives its scheduler.
     let limits = Limits {
@@ -939,7 +859,6 @@ async fn build_app(
         session_expiry: Duration::from_secs(86_400),
         bus: bus.clone(),
         ledger: ledger.clone(),
-        live: live.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables,
@@ -962,7 +881,6 @@ async fn build_app(
         db,
         keepalive,
         ledger,
-        live,
         manager,
         pairing,
         pricing,

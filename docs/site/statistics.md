@@ -27,7 +27,7 @@ A `ledger_gap` event names one of these reasons:
 | `capture_budget` | Past the 64 MiB capture budget; the largest capture, oldest among equals, gave up its bodies. |
 | `chunk_dropped` | The completion counted more published chunks than arrived; the tail was dropped at the bus. |
 | `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
-| `expired` | The completion never reached the ledger within the in-flight window; the live table shows it lost. |
+| `expired` | The completion never reached the ledger within the in-flight window. |
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 | `poison` | A record failed alone after its batch's retries; a priced one is parked (`parked_priced`). |
 
@@ -292,17 +292,6 @@ routing state writer's channel, and 1 while writes past its bound wait in memory
 again, and `phoebis_ledger_parked_priced_total` counts the priced records parked since start
 ([the ledger writer](#the-ledger-writer)).
 
-## The live feed
-
-`GET /admin/live` upgrades to a WebSocket that reports requests while they run; `GET /admin/live/snapshot?at=`
-(or `?from=` and `?to=`) answers the same shape for a past window, 30 minutes by default. Both need an admin
-session, like every other admin route. After the upgrade the socket sends one `{"kind": "snapshot", ...}`
-message and then a `{"kind": "delta", ...}` message for every change. The feed keeps 30 minutes or 2,048
-finished requests, whichever bound is reached first; a request or response preview inside a message is at most
-4 KiB; and a client that falls 1,024 messages behind the broadcast is disconnected rather than left to grow an
-unbounded backlog. A past snapshot carries no preview. The socket closes `1008 session ended` once its session ends,
-and at most 64 sockets are served at once, a further one refused `503 live feed at capacity` until one closes.
-
 ## The console's views
 
 ### Dashboard
@@ -321,17 +310,6 @@ since counts as a full allowance. An account whose tier the model does not size,
 window, is named under the ring instead, with the reason. The 5-hour ring's subtitle opens the cost reference on its
 Tiers and peak band tab. The page ends with the most recent requests and a sessions card that leads with the router's
 live pins and the accounts they sit on.
-
-### Observe
-
-The metric strip reports eight measures: requests per second, active streams, the error rate, TTFB at p50, p95,
-and p99, output tokens per second, and the estimated cost per minute. Below it, a live table lists requests as
-they run, with filters, a pause control, and a range control for switching to a past window; selecting a request
-opens a detail pane with its error code and phase waterfall, and a Streams grid shows every stream still open. A stream
-that fails after its 200 head keeps that status, so a finished request with an error code never reads as a success.
-
-![The Observe view: the metric strip and the live table](assets/observe-light.png#only-light)
-![The Observe view: the metric strip and the live table](assets/observe-dark.png#only-dark)
 
 ### Quota
 

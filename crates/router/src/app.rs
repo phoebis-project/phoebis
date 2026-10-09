@@ -13,7 +13,6 @@ use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
-use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK,
@@ -239,7 +238,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router: router_task.clone(),
         store: store.clone(),
     });
-    let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),
@@ -375,7 +373,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
         bus: bus.clone(),
         ledger: ledger.clone(),
-        live: live.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables,
@@ -549,7 +546,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
-        true,
         admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
@@ -571,7 +567,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
         },
-        false,
         None,
     ));
 
@@ -648,19 +643,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     sweeper.abort();
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
     drop(keepalive);
-    // The listeners are done; a relayed body runs on its own task and a live socket on its own. A cut
-    // connection drops its body channel's receiver, so the body task ends at its next send and publishes its
-    // completion, which the ledger and the memory below are still alive to take. A body task blocked on an
-    // upstream read waits for the relay's idle timeout, and the margin is what a shutdown gives it.
+    // The listeners are done; a relayed body runs on its own task. A cut connection drops its body channel's
+    // receiver, so the body task ends at its next send and publishes its completion, which the ledger and the
+    // memory below are still alive to take. A body task blocked on an upstream read waits for the relay's idle
+    // timeout, and the margin is what a shutdown gives it.
     let margin = DRAIN_TIMEOUT + Duration::from_secs(5);
-    if tokio::time::timeout(margin, async {
-        live.shutdown().await;
-        relay.drain_bodies().await;
-    })
-    .await
-    .is_err()
+    if tokio::time::timeout(margin, relay.drain_bodies())
+        .await
+        .is_err()
     {
-        tracing::warn!("body tasks or live sockets were still running past the drain margin");
+        tracing::warn!("body tasks were still running past the drain margin");
     }
     // The periodic flusher is aborted and joined, and a flush it had in flight runs to its end on the
     // blocking pool under the memory's flush lock, so the last flush queues behind it and an older batch

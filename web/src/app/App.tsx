@@ -6,7 +6,6 @@ import { reloadOnChunkFailure } from '@/lib/chunks';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
 import { ModelsPage } from '@/pages/ModelsPage';
-import { ObservePage } from '@/pages/ObservePage';
 import { QuotaPage } from '@/pages/QuotaPage';
 import { RequestsPage } from '@/pages/RequestsPage';
 import { RoutingLogPage } from '@/pages/RoutingLogPage';
@@ -39,7 +38,6 @@ export const routes = [
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },
       { path: 'keys', element: <KeysPage /> },
       { path: 'models', element: <ModelsPage /> },
-      { path: 'observe', element: <ObservePage /> },
       { path: 'pools', element: lazily(<PoolsPage />) },
       { path: 'quota', element: <QuotaPage /> },
       { path: 'requests', element: <RequestsPage /> },

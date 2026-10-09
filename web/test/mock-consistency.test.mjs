@@ -37,10 +37,6 @@ async function storyAt(at) {
   const [accounts, pools, keys, sessions, attention, overview] = await Promise.all([api.listAccounts(), api.listPools(), api.listKeys(), api.listSessions(), api.getAttention(), api.getOverview()]);
   const { requests } = await api.listRequests({ limit: 100_000 });
   const events = (await Promise.all(requests.map((r) => api.getRequest(r.id)))).flatMap((detail) => detail?.events ?? []);
-  let live = null;
-  api.subscribeLive((e) => {
-    if (e.kind === 'snapshot') live = e.snapshot;
-  })();
   const now = Date.parse(at);
   // The day the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total, and a
   // pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven days
@@ -52,7 +48,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -113,13 +109,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       for (const id of item.detail.accounts ?? []) named(accountLabel, id, `the ${item.kind} item`);
       if (typeof item.detail.pool === 'string') named(poolName, item.detail.pool, `the ${item.kind} item`);
       if (typeof item.detail.key === 'string') named(keyName, item.detail.key, `the ${item.kind} item`);
-    }
-    assert.ok(s.live, 'the live feed answers a snapshot');
-    for (const r of [...s.live.inFlight, ...s.live.recent]) {
-      if (r.accountId !== null) named(accountLabel, r.accountId, 'a live row');
-      if (r.keyId !== null) named(keyName, r.keyId, 'a live row');
-      if (r.poolId !== null) named(poolName, r.poolId, 'a live row');
-      for (const a of r.attempts) if (a.accountId !== null) named(accountLabel, a.accountId, 'a live attempt');
     }
     const month = { from: iso(s.now - 30 * DAY), to: iso(s.now) };
     const desktop = s.keys.find((k) => k.id === 'desktop');

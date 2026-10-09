@@ -50,8 +50,8 @@ const sessionSpec: {
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
-  // Seen by the router but with nothing in the ledger, so the per-row jumps to
-  // analytics and observe have no traffic to land on.
+  // Seen by the router but with nothing in the ledger, so the per-row jump to
+  // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
 ];
 

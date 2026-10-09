@@ -1,4 +1,4 @@
-import { decodeAccount, decodeAccountRollups, decodeAnalyticsGroup, decodeAttention, decodeDashboard, decodeKeepaliveOverview, decodeKey, decodeLiveRequest, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
+import { decodeAccount, decodeAccountRollups, decodeAnalyticsGroup, decodeAttention, decodeDashboard, decodeKeepaliveOverview, decodeKey, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
 import { FIXTURES } from './generated/fixtures';
 
 /** The fixture's body, or the named member of it, as the decoder takes it. */
@@ -11,7 +11,6 @@ export const ANALYTICS_GROUP_SAMPLE = decodeAnalyticsGroup(first('analytics_brea
 export const ATTENTION_ITEM_SAMPLE = decodeAttention(first('attention', 'items'));
 export const KEEPALIVE_OVERVIEW_SAMPLE = decodeKeepaliveOverview(body('keepalive_overview'));
 export const KEY_SAMPLE = decodeKey(first('keys', 'keys'));
-export const LIVE_REQUEST_SAMPLE = decodeLiveRequest(((body('live_messages').deltas as { delta: { request: unknown } }[])[0]).delta.request);
 export const OVERVIEW_SAMPLE = decodeDashboard(body('dashboard'));
 export const PAIRING_SAMPLE = decodePairingSession(body('pairing_started'));
 export const POOL_SAMPLE = decodePool(first('pools', 'pools'));

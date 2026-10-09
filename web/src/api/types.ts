@@ -1290,7 +1290,7 @@ export interface Session {
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
-  /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
+  /** Ledgered requests on this session; 0 means analytics has nothing to show. */
   requests: number;
   sessionId: string;
   /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
@@ -1430,94 +1430,3 @@ export interface Overview {
   tokensCached24h: number;
   topErrorCode: string | null;
 }
-
-/* Live traffic feed */
-
-export type LiveState = 'finished' | 'in_flight';
-export type MetricQuality = 'derived' | 'estimated' | 'measured';
-
-/** Timestamps land as each phase is observed; an absent field means "not yet", never zero. */
-export interface LivePhases {
-  finishedAt?: string;
-  firstContentAt?: string;
-  headAt?: string;
-  receivedAt: string;
-  selectedAt?: string;
-  streamEndAt?: string;
-  writtenAt?: string;
-}
-
-export interface LiveAttempt {
-  accountId: string;
-  cooldownSet: { reason: string; until: string } | null;
-  index: number;
-  outcome: AttemptOutcome | 'in_flight';
-  startedAt: string;
-  upstreamStatus: number | null;
-  windows: AttemptWindow[];
-}
-
-export interface LiveRequest {
-  accountId: string | null;
-  agentId: string;
-  attempts: LiveAttempt[];
-  costUsd: number;
-  errorCode: string | null;
-  id: string;
-  keyId: string | null;
-  kind: RequestKind;
-  model: string;
-  outputTps: number | null;
-  phases: LivePhases;
-  poolId: string | null;
-  /** Output text so far; only keys that capture bodies carry it. */
-  preview: string | null;
-  sessionId: string | null;
-  state: LiveState;
-  status: number | null;
-  transport: Transport;
-  /** Null only on a historical projection, which cannot say how much of the final usage existed at its instant. */
-  usage: Usage | null;
-  /** The client that sent the request, as it named itself; `null` when it named nothing. */
-  userAgent: string | null;
-}
-
-export interface LiveMetric {
-  quality: MetricQuality;
-  /** One value per second for the last minute, oldest first; null for a second with nothing to measure. */
-  series: (number | null)[];
-  value: number | null;
-}
-
-export interface LiveTick {
-  at: string;
-  metrics: {
-    activeStreams: LiveMetric;
-    costPerMinute: LiveMetric;
-    errorRate: LiveMetric;
-    outputTps: LiveMetric;
-    requestsPerSecond: LiveMetric;
-    ttfbP50: LiveMetric;
-    ttfbP95: LiveMetric;
-    ttfbP99: LiveMetric;
-  };
-}
-
-export interface LiveSnapshot {
-  cursor: number;
-  inFlight: LiveRequest[];
-  /** Finished requests from the last 30 minutes, newest first. */
-  recent: LiveRequest[];
-  tick: LiveTick;
-}
-
-export type LiveDelta =
-  | { at: string; cursor: number; id: string; type: 'selected'; accountId: string; attempt: LiveAttempt; failed?: LiveAttempt }
-  | { at: string; cursor: number; id: string; type: 'head'; attempt: LiveAttempt; status: number }
-  | { at: string; cursor: number; id: string; type: 'progress'; outputTps: number | null; usage: Usage }
-  | { cursor: number; id: string; type: 'preview'; chunk: string }
-  | { at: string; cursor: number; id: string; type: 'finished'; attempts: LiveAttempt[]; costUsd: number; errorCode: string | null; phases: LivePhases; status: number | null; usage: Usage }
-  | { cursor: number; request: LiveRequest; type: 'started' }
-  | { cursor: number; tick: LiveTick; type: 'tick' };
-
-export type LiveEvent = { kind: 'delta'; delta: LiveDelta } | { kind: 'snapshot'; snapshot: LiveSnapshot };

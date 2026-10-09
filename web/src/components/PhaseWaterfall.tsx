@@ -15,10 +15,9 @@ export const PHASES: { key: keyof RequestPhases; label: string }[] = [
 
 /**
  * The segmented bar from Received to the last measured phase, colored from the chart ramp, and the legend of offsets;
- * a phase with no instant reads "not measured" ("not yet" while `inFlight`) and draws no segment. The bar runs to
- * `endMs` where the caller keeps a clock of its own, else to the last instant the phases hold.
+ * a phase with no instant reads "not measured" and draws no segment.
  */
-export function PhaseWaterfall({ phases, endMs, inFlight = false }: { endMs?: number; inFlight?: boolean; phases: RequestPhases }) {
+export function PhaseWaterfall({ phases }: { phases: RequestPhases }) {
   const ink = useChartInk();
   const startMs = Date.parse(phases.receivedAt);
   const points = PHASES.map((p) => {
@@ -26,7 +25,7 @@ export function PhaseWaterfall({ phases, endMs, inFlight = false }: { endMs?: nu
     return { ...p, at: at === null ? null : Date.parse(at) };
   });
   const last = [...points].reverse().find((p) => p.at !== null)?.at ?? startMs;
-  const total = Math.max(1, (endMs ?? last) - startMs);
+  const total = Math.max(1, last - startMs);
   // A segment spans from the previous measured phase to this one; a phase with
   // no timestamp draws nothing rather than a zero-width sliver.
   const segments: { color: string; label: string; width: number }[] = [];
@@ -49,7 +48,7 @@ export function PhaseWaterfall({ phases, endMs, inFlight = false }: { endMs?: nu
           <li key={p.key}>
             <span className="waterfall__key" style={{ background: i === 0 ? ink.ink3 : p.at === null ? 'transparent' : i - 1 < ink.ramp.length ? ink.ramp[i - 1] : ink.muted, border: p.at === null ? `1px dashed ${ink.axis}` : undefined }} />
             <span>{p.label}</span>
-            {p.at === null ? <span className="muted">{inFlight ? 'not yet' : 'not measured'}</span> : <span className="num">+{fmtMs(p.at - startMs)}</span>}
+            {p.at === null ? <span className="muted">not measured</span> : <span className="num">+{fmtMs(p.at - startMs)}</span>}
           </li>
         ))}
       </ul>

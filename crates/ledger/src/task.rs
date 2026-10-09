@@ -450,8 +450,8 @@ async fn assemble(
             _ = expire.tick() => {
                 let now = clock();
                 for id in assembler.expire(now).ids {
-                    // The live table ends the same request as `lost`; the ledger names it so the system page's
-                    // gap list has a row for it rather than a count with nothing behind it.
+                    // The ledger names it so the system page's gap list has a row for it rather than a count
+                    // with nothing behind it.
                     ledger.stats.dropped.fetch_add(1, Ordering::Relaxed);
                     ledger.metrics.observe_drop("requests");
                     ledger.record(crate::assemble::gap(&id, "expired", now));

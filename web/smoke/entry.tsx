@@ -4,7 +4,6 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-d
 import { api } from '@/api';
 import { decodeSettings, effectiveLabel, planLabel } from '@/api/decode';
 import { ApiError, call, reportFailure, SessionNotKept } from '@/api/http';
-import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
@@ -46,34 +45,6 @@ installClock(fake);
  * throws, so a check that forgot `mount(path, { now })` fails at once instead of racing real time.
  */
 export const tick = (ms: number) => fake.tick(ms);
-
-/**
- * Drops the feed's ticks so a check can watch the page notice the silence. Only the ticks: the deltas keep
- * flowing, so the store a later check reads is the one it would have been without the stall.
- */
-let stalled = false;
-export const stallLive = (on: boolean) => {
-  stalled = on;
-};
-const subscribeLive = api.subscribeLive.bind(api);
-let liveHandler: ((event: LiveEvent) => void) | null = null;
-api.subscribeLive = (handler: (event: LiveEvent) => void) => {
-  liveHandler = handler;
-  const off = subscribeLive((e) => {
-    if (stalled && e.kind === 'delta' && e.delta.type === 'tick') return;
-    handler(e);
-  });
-  return () => {
-    off();
-    if (liveHandler === handler) liveHandler = null;
-  };
-};
-
-/** Delivers one event to the live handler the mounted page subscribed, in the caller's turn, as the feed would. */
-export const emitLive = (event: LiveEvent) => {
-  if (liveHandler === null) throw new Error('no page is subscribed to the live feed');
-  liveHandler(event);
-};
 
 /**
  * Fails one mock call the way the transport fails a real one: the rejection reaches the page's `useAsync`,

@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
+use common::{get, json, login, patch, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Event, Kind, Origin, Phase, RequestComplete, RequestObserved,
-    RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
+    AccountSelected, Event, Kind, Origin, RequestComplete, RequestObserved, RequestShape,
+    ResponseFacts, Usage,
 };
 use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
@@ -1070,7 +1070,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
-        ("live_past", "/admin/live/snapshot"),
         ("models_state", "/admin/models/state"),
         ("pool_traffic", "/admin/pools/main/traffic?range=24h"),
         ("pools", "/admin/pools"),
@@ -1136,120 +1135,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .await,
         )
         .await,
-    );
-    // The live feed: the snapshot, then every delta of one streamed request.
-    let addr = serve(app.clone()).await;
-    let request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-        format!("ws://{addr}/admin/live"),
-    )
-    .map(|mut r| {
-        r.headers_mut()
-            .insert("cookie", format!("phoebis_admin={cookie}").parse().unwrap());
-        r
-    })
-    .unwrap();
-    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-    let snapshot = next_text(&mut ws).await;
-    parts.bus.publish(Event::RequestObserved(RequestObserved {
-        request_id: "live-1".into(),
-        origin: Origin::Client,
-        kind: Kind::Inference,
-        key_id: Some("desktop".into()),
-        key_generation,
-        pool_id: Some("main".into()),
-        session_id: Some("s1".into()),
-        agent_id: Some("main".into()),
-        parent_agent_id: None,
-        owner_id: None,
-        model: "claude-sonnet-5".into(),
-        canonical_model: "claude-sonnet-5".into(),
-        wire_model: "claude-sonnet-5".into(),
-        stream: true,
-        headers: vec![],
-        body: bytes::Bytes::from_static(b"{}"),
-        body_capture_hours: 24,
-        shape: RequestShape::default(),
-        static_hash: None,
-        boundaries: Vec::new(),
-        client: phoebis_bus::ClientFacts::default(),
-        auto_mode: None,
-        fork: phoebis_bus::Fork::default(),
-        presented_retired: false,
-        rotation_at: None,
-        received_at: now,
-    }));
-    parts.bus.publish(Event::AccountSelected(AccountSelected {
-        request_id: "live-1".into(),
-        attempt: 1,
-        account_id: "business".into(),
-        account_kind: "oauth".into(),
-        pin_epoch: Some(1),
-        started_at: now + 5,
-        cache_ttl_ms: None,
-        selection: None,
-    }));
-    parts.bus.publish(Event::ResponseHead(ResponseHead {
-        request_id: "live-1".into(),
-        attempt: 1,
-        status: 200,
-        headers: vec![],
-        first_event: None,
-        outcome: AttemptOutcome::Succeeded,
-        cooldown: None,
-        written_at: now + 10,
-        observed_at: now + 100,
-    }));
-    // Two chunks, because the feed answers a usage-bearing phase with a progress delta and a parseable
-    // content delta with a preview; one chunk carrying both would draw them in the other order.
-    parts.bus.publish(Event::ResponseChunk(ResponseChunk {
-        request_id: "live-1".into(),
-        attempt: 1,
-        index: 0,
-        body: bytes::Bytes::from_static(
-            b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
-        ),
-        phase: Some(Phase::MessageStart {
-            usage: Usage {
-                input_tokens: Some(10),
-                ..Default::default()
-            },
-        }),
-    }));
-    parts.bus.publish(Event::ResponseChunk(ResponseChunk { request_id: "live-1".into(), attempt: 1, index: 1, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n"), phase: Some(Phase::FirstContentDelta) }));
-    parts.bus.publish(Event::RequestComplete(RequestComplete {
-        request_id: "live-1".into(),
-        attempt: 1,
-        account_id: Some("business".into()),
-        outcome: phoebis_bus::Outcome::Succeeded,
-        status: 200,
-        usage: Some(Usage {
-            input_tokens: Some(10),
-            output_tokens: Some(2),
-            ..Default::default()
-        }),
-        response: ResponseFacts::default(),
-        ttfb_ms: Some(95),
-        ttfc_ms: Some(120),
-        error_code: None,
-        client_drift: None,
-        client_version: Some("2.1.269".into()),
-        response_bytes: Some(5),
-        response_chunks: None,
-        held: None,
-        message_id: Some("msg_live-1_1".into()),
-        finished_at: now + 900,
-    }));
-    let deltas = deltas_until(&mut ws, "finished").await;
-    // The socket wraps every delta the way the client reads it, which `deltas_until` unwraps for its callers.
-    let deltas: Vec<Value> = deltas
-        .into_iter()
-        .map(|delta| j!({ "kind": "delta", "delta": delta }))
-        .collect();
-    hold(
-        &planted,
-        "live_messages",
-        "GET /admin/live",
-        j!({ "snapshot": snapshot, "deltas": deltas }),
     );
 
     // The routing log's hour, seeded after every other capture so its stories leave those files as they were.

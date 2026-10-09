@@ -55,7 +55,7 @@ dead ([how](docs/site/installation.md#run-the-container)).
 | [Pairing an account](docs/site/pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
-| [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, gauges. |
+| [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, gauges. |
 | [Operations](docs/site/operations.md) | Backup, restore, storage key, upgrades, re-pinning, publishing, releasing. |
 | [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
 

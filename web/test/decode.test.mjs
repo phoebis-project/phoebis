@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
-import { same, shapeOf } from './shape.mjs';
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 const isIso = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s)) && s.endsWith('Z');
@@ -681,8 +680,6 @@ test('an attempt window with a reset and no utilization reads as not reported, n
   const windows = [{ id: '5h', resets_at: 1_000, utilization: null }, { id: '7d', resets_at: 2_000, utilization: 0.5 }];
   const [row] = d.decodeRequestPage({ next_cursor: null, requests: [{ attempts: [{ index: 1, windows }] }] }).requests;
   assert.deepEqual(row.attempts[0].windows.map((w) => [w.id, w.utilization]), [['5h', null], ['7d', 0.5]]);
-  const live = d.decodeLiveRequest({ attempts: [{ index: 1, windows }] });
-  assert.deepEqual(live.attempts[0].windows.map((w) => w.utilization), [null, 0.5], 'the live feed reads its windows through the same decoder');
 });
 
 test('an account hour with no utilization sample carries no peak rather than a zero one', () => {
@@ -1508,84 +1505,6 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.deepEqual(catalog.models[0], { id: 'claude-sonnet-4-5', displayName: '', createdAt: '', effortLevels: ['low', 'medium', 'high'], maxInputTokens: null, maxTokens: null }, 'and without the numbers');
   assert.equal(catalog.error, null);
   assert.ok(isIso(catalog.fetchedAt));
-});
-
-test('the live snapshot and every delta decode with ISO times and null-safe fields', () => {
-  const { snapshot, deltas } = fixture('live_messages');
-  const snap = d.decodeLiveSnapshot(snapshot.snapshot);
-  assert.ok(isIso(snap.tick.at) && Array.isArray(snap.tick.metrics.ttfbP50.series));
-  const types = deltas.map((m) => d.decodeLiveDelta(m.delta)?.type);
-  assert.deepEqual(types.filter((t) => t !== 'tick'), ['started', 'selected', 'head', 'progress', 'preview', 'finished']);
-  const started = d.decodeLiveDelta(deltas[0].delta);
-  assert.equal(started.request.attempts.length, 0);
-  assert.ok(isIso(started.request.phases.receivedAt) && started.request.phases.headAt === undefined);
-  const finished = d.decodeLiveDelta(deltas.find((m) => m.delta.type === 'finished').delta);
-  assert.equal(finished.status, 200);
-  assert.ok(isIso(finished.phases.finishedAt) && isIso(finished.phases.firstContentAt));
-  assert.deepEqual(finished.attempts.map((a) => [a.index, a.outcome]), [[0, 'succeeded']], 'the request ends with the attempts the feed settled, so a row leaves in flight behind');
-  const failed = d.decodeLiveDelta({ ...deltas.find((m) => m.delta.type === 'finished').delta, attempts: [{ account_id: 'business', cooldown_set: null, index: 1, outcome: 'transport_error', started_at: 1000005, upstream_status: null, windows: [] }] });
-  assert.deepEqual(failed.attempts.map((a) => a.outcome), ['transport_error']);
-  assert.equal(d.decodeLiveDelta({ type: 'nope', cursor: 1 }), null);
-});
-
-test('a live request carries the client that sent it', () => {
-  const started = fixture('live_messages').deltas.find((m) => m.delta?.type === 'started').delta.request;
-  assert.equal(d.decodeLiveRequest({ ...started, user_agent: 'claude-cli/2.1.269 (external, cli)' }).userAgent, 'claude-cli/2.1.269 (external, cli)');
-  assert.equal(d.decodeLiveRequest({ ...started, user_agent: null }).userAgent, null);
-});
-
-test('the mock feed speaks the router\'s wire and the mock hands the handler what the decoders read from it', async () => {
-  const { snapshot, deltas } = fixture('live_messages');
-  // The fixture's frames fix the keys a frame carries. A phase is left out until it is observed and a window
-  // until a head reports it, so those are held to the router's own names rather than to the fixture's one row.
-  const PHASES = ['finished_at', 'first_content_at', 'head_at', 'received_at', 'selected_at', 'stream_end_at', 'written_at'];
-  const want = { tick: { cursor: 'number', tick: shapeOf(snapshot.snapshot.tick), type: 'string' } };
-  for (const m of deltas) want[m.delta.type] = shapeOf(m.delta);
-  const request = want.started.request;
-  // The selection's attempt has no answer yet, so its nullable members ask for their key alone.
-  const attempt = want.selected.attempt;
-  const findings = (shape, frame) => same(shape, frame, '', 0, (path) => path.endsWith('.phases'));
-
-  const frames = [];
-  const events = [];
-  const stopWire = d.liveFeed().subscribe((frame) => frames.push(frame));
-  const stop = new d.MockApi().subscribeLive((event) => events.push(event));
-  await new Promise((resolve) => setTimeout(resolve, 2_500));
-  stop();
-  stopWire();
-
-  const [first, ...rest] = frames;
-  assert.equal(first.kind, 'snapshot');
-  assert.deepEqual(findings(shapeOf(snapshot.snapshot), first.snapshot), []);
-  const rows = [...first.snapshot.in_flight, ...first.snapshot.recent, ...rest.flatMap((f) => (f.delta.type === 'started' ? [f.delta.request] : []))];
-  assert.ok(first.snapshot.in_flight.length > 0 && first.snapshot.recent.length > 0, 'the story has rows to carry');
-  for (const row of rows) assert.deepEqual(findings(request, row), [], row.id);
-  assert.ok(rest.some((f) => f.delta.type === 'tick'), 'a tick lands inside the wait');
-  for (const f of rest) {
-    assert.equal(f.kind, 'delta');
-    // The router leaves `failed` out of a selection that replaced nothing, so the fixture's one row has none.
-    const { failed, ...delta } = f.delta;
-    assert.deepEqual(findings(want[delta.type], delta), [], delta.type);
-    if (failed) assert.deepEqual(findings(attempt, failed), []);
-  }
-  for (const phases of [...rows.map((r) => r.phases), ...rest.flatMap((f) => (f.delta.phases ? [f.delta.phases] : []))]) {
-    assert.deepEqual(Object.keys(phases).filter((k) => !PHASES.includes(k)), []);
-    assert.ok(Object.values(phases).every(Number.isInteger), 'phase times are Unix milliseconds');
-  }
-  const attempts = [...rows.flatMap((r) => r.attempts), ...rest.flatMap((f) => [f.delta.attempt, f.delta.failed, ...(f.delta.attempts ?? [])].filter(Boolean))];
-  assert.ok(attempts.length > 0 && attempts.every((a) => a.index >= 1), 'attempts count from one on the wire');
-  for (const a of attempts) {
-    assert.deepEqual(findings(attempt, a), []);
-    assert.ok(a.cooldown_set === null || Number.isInteger(a.cooldown_set.until));
-    for (const w of a.windows) assert.deepEqual([Object.keys(w).sort(), d.WINDOW_ID_VALUES.includes(w.id)], [['id', 'resets_at', 'utilization'], true], JSON.stringify(w));
-  }
-  assert.deepEqual(JSON.parse(JSON.stringify(frames)), frames, 'every frame is what a socket can carry');
-
-  // The second subscriber's snapshot draws its own tick; its rows are the first one's, and every delta after it too.
-  assert.deepEqual({ ...events[0].snapshot, tick: null }, { ...d.decodeLiveSnapshot(first.snapshot), tick: null });
-  assert.deepEqual(events.slice(1).map((e) => e.delta), rest.map((f) => d.decodeLiveDelta(f.delta)));
-  const finished = [...events[0].snapshot.inFlight, ...events[0].snapshot.recent].filter((r) => r.state === 'finished');
-  assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
 test('a session decodes its burn unit and both net balances, and a pin the cost model cannot price reads no burn', () => {

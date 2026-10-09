@@ -11,7 +11,6 @@ mod dashboard;
 mod keepalive;
 mod keys;
 mod ledger;
-mod live;
 mod models;
 mod pools;
 mod pricing;
@@ -32,7 +31,6 @@ use std::time::Duration;
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, KeepaliveLimits};
 use phoebis_ledger::{Ledger, Metrics, Pricing};
-use phoebis_live::LiveFeed;
 use phoebis_oauth::{
     Clock, CredentialManager, PairingSessions, PendingIdentity, ProfileResponse, UsageService,
 };
@@ -80,7 +78,6 @@ pub struct AdminState {
     pub session_expiry: Duration,
     pub bus: Bus,
     pub ledger: Ledger,
-    pub live: LiveFeed,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     /// The subscription cost model in force, the one copy the router's burn rates and the keepalive read too, so the

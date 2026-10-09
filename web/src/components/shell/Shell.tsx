@@ -5,14 +5,13 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconActivity, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
 type NavItem = { icon: ReactNode; label: string; to: string };
 
 const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: <IconGrid size={16} /> },
-  { to: '/observe', label: 'Observe', icon: <IconActivity size={16} /> },
   { to: '/quota', label: 'Quota', icon: <IconGauge size={16} /> },
   { to: '/accounts', label: 'Accounts', icon: <IconUser size={16} /> },
   { to: '/pools', label: 'Pools', icon: <IconLayers size={16} /> },
@@ -33,7 +32,6 @@ export const PAGE_TITLES: Record<string, string> = {
   '/analytics': 'Analytics',
   '/keys': 'Keys',
   '/models': 'Models',
-  '/observe': 'Observe',
   '/pools': 'Pools',
   '/quota': 'Quota',
   '/requests': 'Requests',

@@ -64,7 +64,7 @@ const COMPANION_HINT: Record<CompanionState, string> = {
 const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
 const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.';
-const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
+const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics.';
 const NET_HINT =
   "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
 
@@ -434,7 +434,7 @@ function SessionRows({
   // ledgered request stands in for it and the expiry counts from there.
   const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
   const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
-  // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
+  // Analytics reads the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
   const trafficSession = session.sessionId;
   return (
@@ -465,7 +465,6 @@ function SessionRows({
             label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
-              { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),

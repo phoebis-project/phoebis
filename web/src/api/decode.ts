@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
@@ -846,35 +846,6 @@ export function decodeSettings(v: unknown): Settings {
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
     usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
-}
-
-const liveAttempt = (v: unknown): LiveAttempt => { const a = rec(v); return { accountId: str(a.account_id), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, index: num(a.index) - 1, outcome: str(a.outcome) === 'in_flight' ? 'in_flight' : outcomeOf(a.outcome), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) }; };
-const livePhases = (v: unknown) => { const p = rec(v); const at = (k: string) => isoOrNull(p[k]) ?? undefined; return { finishedAt: at('finished_at'), firstContentAt: at('first_content_at'), headAt: at('head_at'), receivedAt: isoOr(p.received_at, epoch), selectedAt: at('selected_at'), streamEndAt: at('stream_end_at'), writtenAt: at('written_at') }; };
-export function decodeLiveRequest(v: unknown): LiveRequest {
-  const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id, 'main'), attempts: list(r.attempts).map(liveAttempt), costUsd: num(r.cost_usd), errorCode: strOrNull(r.error_code), id: str(r.id), keyId: strOrNull(r.key_id), kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model), outputTps: numOrNull(r.output_tps), phases: livePhases(r.phases), poolId: strOrNull(r.pool_id), preview: strOrNull(r.preview), sessionId: strOrNull(r.session_id), state: str(r.state) === 'in_flight' ? 'in_flight' : 'finished', status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent) };
-}
-export const LIVE_METRIC_QUALITY_VALUES = ['derived', 'estimated', 'measured'] as const;
-const liveMetric = (v: unknown): LiveMetric => ({ quality: LIVE_METRIC_QUALITY_VALUES.find((q) => q === str(rec(v).quality)) ?? 'measured', series: list(rec(v).series).map(numOrNull), value: numOrNull(rec(v).value) });
-export function decodeLiveTick(v: unknown): LiveTick {
-  const m = rec(rec(v).metrics);
-  return { at: isoOr(rec(v).at, epoch), metrics: { activeStreams: liveMetric(m.active_streams), costPerMinute: liveMetric(m.cost_per_minute), errorRate: liveMetric(m.error_rate), outputTps: liveMetric(m.output_tps), requestsPerSecond: liveMetric(m.requests_per_second), ttfbP50: liveMetric(m.ttfb_p50), ttfbP95: liveMetric(m.ttfb_p95), ttfbP99: liveMetric(m.ttfb_p99) } };
-}
-export const decodeLiveSnapshot = (v: unknown): LiveSnapshot => ({ cursor: num(rec(v).cursor), inFlight: list(rec(v).in_flight).map(decodeLiveRequest), recent: list(rec(v).recent).map(decodeLiveRequest), tick: decodeLiveTick(rec(v).tick) });
-export function decodeLiveDelta(v: unknown): LiveDelta | null {
-  const d = rec(v);
-  const cursor = num(d.cursor);
-  const id = str(d.id);
-  switch (str(d.type)) {
-    case 'started': return { cursor, request: decodeLiveRequest(d.request), type: 'started' };
-    case 'selected': return { accountId: str(d.account_id), at: isoOr(d.at, epoch), attempt: liveAttempt(d.attempt), cursor, failed: d.failed ? liveAttempt(d.failed) : undefined, id, type: 'selected' };
-    case 'head': return { at: isoOr(d.at, epoch), attempt: liveAttempt(d.attempt), cursor, id, status: num(d.status), type: 'head' };
-    case 'progress': return { at: isoOr(d.at, epoch), cursor, id, outputTps: numOrNull(d.output_tps), type: 'progress', usage: usageOf(d.usage) };
-    case 'preview': return { chunk: str(d.chunk), cursor, id, type: 'preview' };
-    case 'finished': return { at: isoOr(d.at, epoch), attempts: list(d.attempts).map(liveAttempt), costUsd: num(d.cost_usd), cursor, errorCode: strOrNull(d.error_code), id, phases: livePhases(d.phases), status: numOrNull(d.status), type: 'finished', usage: usageOf(d.usage) };
-    case 'tick': return { cursor, tick: decodeLiveTick(d.tick), type: 'tick' };
-    default: return null;
-  }
 }
 
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));

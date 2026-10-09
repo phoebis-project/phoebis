@@ -475,12 +475,12 @@ is the trail.
 The `tls` key is optional on every address. Without it the listener serves plain HTTP and issues the cookie without
 `Secure`, which costs nothing behind an SSH tunnel and sends the admin secret at login and the session cookie on every
 call in the clear on a network address; a front's `X-Forwarded-Proto: https`, below, is the one exception. A certificate
-pair terminates TLS on the listener on any address and the cookie carries `Secure`. Every mutation and every WebSocket
-upgrade that carries an `Origin` must name the request's own `Host` with it, and with the `https://` scheme where the
-listener terminates TLS; a request with no `Origin` is admitted. A front that terminates TLS forwards to a loopback
-listener over plain HTTP and passes `Host` through unchanged beside `X-Forwarded-Proto: https`; the cookie is then
-issued with `Secure`, and the Origin check sees the front's hostname in both headers and requires the `https://` scheme
-in `Origin`, as it does on a listener that terminates TLS itself.
+pair terminates TLS on the listener on any address and the cookie carries `Secure`. Every mutation that carries an
+`Origin` must name the request's own `Host` with it, and with the `https://` scheme where the listener terminates TLS;
+a request with no `Origin` is admitted. A front that terminates TLS forwards to a loopback listener over plain HTTP and
+passes `Host` through unchanged beside `X-Forwarded-Proto: https`; the cookie is then issued with `Secure`, and the
+Origin check sees the front's hostname in both headers and requires the `https://` scheme in `Origin`, as it does on a
+listener that terminates TLS itself.
 
 Refused with:
 
@@ -814,12 +814,11 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
-| Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
-| User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |
+| User agent | 256 bytes kept on a request row; a longer value is cut. |
 
 A connection past a listener's cap waits in the kernel's backlog until one closes.

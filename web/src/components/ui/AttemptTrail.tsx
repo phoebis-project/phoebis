@@ -6,19 +6,18 @@ import { floatAt } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { useDescription } from './primitives';
 
-/** The shape shared by a ledger attempt and a live one; the live one has no status until its head lands. */
+/** The shape of a ledger attempt as the trail draws it. */
 export interface TrailAttempt {
   accountId: string;
   cooldownSet: { reason: string; until: string } | null;
   index: number;
-  outcome: AttemptOutcome | 'in_flight';
+  outcome: AttemptOutcome;
   upstreamStatus: number | null;
 }
 
-const OUTCOME_LABEL: Record<AttemptOutcome | 'in_flight', string> = {
+const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
   auth_failed: 'auth failed',
   canceled: 'canceled',
-  in_flight: 'in flight',
   rate_limited: 'rate limited',
   succeeded: 'succeeded',
   transport_error: 'transport error',
@@ -28,7 +27,7 @@ const OUTCOME_LABEL: Record<AttemptOutcome | 'in_flight', string> = {
 const toneOf = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
 
 const lineFor = (a: TrailAttempt) =>
-  [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status yet' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');
+  [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');
 
 /** The trail's lines, one per attempt, the text the count's title and description carry. */
 export const trailLines = (attempts: TrailAttempt[]): string => attempts.map(lineFor).join('\n');

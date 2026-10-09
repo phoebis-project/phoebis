@@ -6,7 +6,6 @@ members = [
     "crates/cch",
     "crates/keepalive",
     "crates/ledger",
-    "crates/live",
     "crates/oauth",
     "crates/profile",
     "crates/relay",
@@ -28,7 +27,7 @@ version = "0.1.0"
 [workspace.dependencies]
 aes-gcm = "0.11.1"
 anyhow = "1"
-axum = { version = "0.8.9", features = ["ws"] }
+axum = "0.8.9"
 base64 = "0.22"
 boring = "5.2.0"
 brotli = "9.0.0"
@@ -62,7 +61,6 @@ thiserror = "2"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-boring = "5.2.0"
 tokio-stream = "0.1"
-tokio-tungstenite = "0.29"
 tokio-util = { version = "0.7", features = ["rt"] }
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1.44"

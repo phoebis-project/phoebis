@@ -14,7 +14,6 @@ phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
 phoebis-keepalive = { path = "../keepalive" }
 phoebis-ledger = { path = "../ledger" }
-phoebis-live = { path = "../live" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
 phoebis-relay = { path = "../relay" }
@@ -40,6 +39,5 @@ phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] 
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-tokio-tungstenite = { workspace = true }
 tower = { workspace = true }
 tracing-subscriber = { workspace = true }

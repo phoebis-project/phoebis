@@ -94,49 +94,6 @@ async fn the_cookie_carries_secure_under_tls_or_a_fronts_https_and_not_otherwise
     );
 }
 
-/// A WebSocket handshake carries a cookie and no body, so a forged page could open the live feed with nothing
-/// but the browser's own credentials; the origin check covers the upgrade exactly as it covers a write.
-#[tokio::test]
-async fn a_websocket_upgrade_whose_origin_names_another_authority_is_refused() {
-    use common::{json, login};
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    let forged = handshake(&app, &cookie, "http://elsewhere").await;
-    assert_eq!(forged.status(), 403);
-    assert_eq!(json(forged).await["error"], "origin is not allowed");
-
-    // Past the gate the route itself answers: an in-process call carries no connection to hand over, so the
-    // upgrade extractor refuses it, and that refusal is the proof the origin check admitted the request.
-    let allowed = handshake(&app, &cookie, "http://phoebis.lan:8081").await;
-    assert_eq!(allowed.status(), 400);
-    assert_eq!(
-        json(allowed).await["error"],
-        "this route upgrades to a WebSocket"
-    );
-}
-
-/// The head a browser on `http://phoebis.lan:8081` sends to open `/admin/live`, with the `Origin` under test.
-async fn handshake(
-    app: &axum::Router,
-    cookie: &str,
-    origin: &str,
-) -> axum::http::Response<axum::body::Body> {
-    use tower::ServiceExt;
-    let request = axum::http::Request::builder()
-        .method("GET")
-        .uri("/admin/live")
-        .header("host", "phoebis.lan:8081")
-        .header("cookie", format!("phoebis_admin={cookie}"))
-        .header("origin", origin)
-        .header("connection", "Upgrade")
-        .header("upgrade", "websocket")
-        .header("sec-websocket-version", "13")
-        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    app.clone().oneshot(request).await.unwrap()
-}
-
 fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> String {
     response
         .headers()
@@ -228,15 +185,6 @@ async fn an_origin_must_be_https_when_the_admin_listener_terminates_tls() {
         secure.status(),
         403,
         "the listener's own https origin is admitted"
-    );
-    let upgrade = handshake(&tls, &cookie, "http://phoebis.lan:8081").await;
-    assert_eq!(upgrade.status(), 403);
-    assert_eq!(json(upgrade).await["error"], "origin is not allowed");
-    let upgrade = handshake(&tls, &cookie, "https://phoebis.lan:8081").await;
-    assert_eq!(upgrade.status(), 400);
-    assert_eq!(
-        json(upgrade).await["error"],
-        "this route upgrades to a WebSocket"
     );
 }
 
@@ -573,41 +521,6 @@ async fn a_bearer_on_the_login_route_is_ignored() {
         let wrong = with_bearer(&app, "POST", "/admin/session", "nope", None, login).await;
         assert_eq!(wrong.status(), 204, "attempt {attempt}");
         assert!(wrong.headers().contains_key("set-cookie"));
-    }
-}
-
-#[tokio::test]
-async fn a_bearer_cannot_hold_the_live_socket() {
-    use futures::StreamExt;
-    let (app, _up) = common::admin_app().await;
-    let addr = common::serve(app).await;
-    let mut request =
-        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
-            "ws://{addr}/admin/live"
-        ))
-        .unwrap();
-    request
-        .headers_mut()
-        .insert("authorization", "Bearer admin-secret".parse().unwrap());
-    match tokio_tungstenite::connect_async(request).await {
-        Err(tokio_tungstenite::tungstenite::Error::Http(refused)) => {
-            assert!(refused.status().is_client_error(), "{refused:?}");
-        }
-        Err(other) => panic!("the upgrade failed below HTTP: {other:?}"),
-        Ok((mut ws, _)) => {
-            // Open, the socket ends at the feed's first liveness check, before the snapshot leaves.
-            let first = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
-                .await
-                .expect("the socket ends without waiting on the client");
-            assert!(
-                matches!(
-                    first,
-                    None | Some(Err(_))
-                        | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
-                ),
-                "a bearer was served the feed: {first:?}"
-            );
-        }
     }
 }
 

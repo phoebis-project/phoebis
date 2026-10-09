@@ -17,7 +17,6 @@ import type {
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
-  LiveEvent,
   MemberBudget,
   ModelRule,
   ModelRulesMode,
@@ -211,8 +210,6 @@ export interface Api {
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;
   startPairing(accountId: string): Promise<PairingSession>;
-  /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
-  subscribeLive(handler: (event: LiveEvent) => void): () => void;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */

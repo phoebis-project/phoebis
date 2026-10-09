@@ -15,7 +15,7 @@ embedded console, and a metrics endpoint in Prometheus text format.
 | [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
-| [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and the gauges. |
+| [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, and the gauges. |
 | [Operations](operations.md) | Backup, restore, the storage key, upgrades, re-pinning a client build, publishing. |
 | [Changelog](changelog.md) | What changed for an operator, by date. |
 
@@ -61,7 +61,6 @@ The sidebar shows the views in this order:
 | View | Describes |
 | --- | --- |
 | Dashboard | The attention line, 24-hour tiles, pooled capacity left weighed by tier, recent requests and sessions. |
-| Observe | The live feed (see [Statistics](statistics.md)). |
 | Quota | Each account's usage windows and reset timing (see [Statistics](statistics.md)). |
 | Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |

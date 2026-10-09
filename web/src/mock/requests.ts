@@ -558,15 +558,15 @@ function buildRequests(): RequestLog[] {
   const holderLast = holderRows.find((r) => r.kind !== 'probe');
   if (holderLast) Object.assign(holderLast, { sessionId: SESSION_IDS[0] });
   // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
-  // carries the error, which is the row Observe and the drawer must not draw as a success.
+  // carries the error, which is the row the Requests table and the drawer must not draw as a success.
   const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
   if (failedAfterHead) {
     failedAfterHead.errorCode = 'overloaded_error';
     failedAfterHead.outcome = 'failed';
     failedAfterHead.attempts = failedAfterHead.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
   }
-  // The newest desktop stream after that one ended before its `message_stop`: the row Observe draws as a failure
-  // and the drawer names.
+  // The newest desktop stream after that one ended before its `message_stop`: the row the Requests table draws as a
+  // failure and the drawer names.
   const incompleteStream = rows.find((r) => r !== failedAfterHead && r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
   if (incompleteStream) {
     incompleteStream.errorCode = 'stream_incomplete';
@@ -589,7 +589,7 @@ function buildRequests(): RequestLog[] {
   }
   // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
   // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
-  // the laptop key whose captures the drawer checks read, past Observe's 30-minute ring, and none of the rows above.
+  // the laptop key whose captures the drawer checks read, more than an hour old, and none of the rows above.
   const canceled = rows.find((r) => r.keyId !== 'laptop' && r.keyId !== 'notebook' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
   if (canceled) {
     canceled.outcome = 'canceled';

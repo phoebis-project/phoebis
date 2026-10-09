@@ -143,18 +143,8 @@ impl Sessions {
         Some(session.id.clone())
     }
 
-    /// Whether the session named by `session_id` still stands, without renewing it: a live socket asks this on
-    /// every message it sends, and a socket is not the activity the idle deadline measures.
-    pub fn is_live(&self, session_id: &str, now: i64) -> bool {
-        let state = self.state.lock().expect(LOCK_POISONED);
-        state
-            .sessions
-            .values()
-            .any(|s| s.id == session_id && !self.ended(s, now))
-    }
-
-    /// Drops every session past its idle or absolute deadline, so the map `is_live` scans holds live sessions
-    /// rather than every one a browser never presented again. Answers how many it dropped.
+    /// Drops every session past its idle or absolute deadline, so the map holds live sessions rather than every
+    /// one a browser never presented again. Answers how many it dropped.
     pub fn sweep(&self, now: i64) -> usize {
         let mut state = self.state.lock().expect(LOCK_POISONED);
         let before = state.sessions.len();
@@ -283,7 +273,7 @@ mod tests {
         let sessions = Sessions::new(Duration::from_secs(900), Duration::from_secs(43_200));
         let _idle = sessions.login("admin-secret", &secrets(), 0).unwrap();
         let busy = sessions.login("admin-secret", &secrets(), 0).unwrap();
-        let busy_id = sessions.authenticate(&busy, 600_000).unwrap();
+        sessions.authenticate(&busy, 600_000).unwrap();
         assert_eq!(
             sessions.sweep(900_000),
             0,
@@ -295,7 +285,6 @@ mod tests {
             "the idle one leaves without ever being presented again"
         );
         assert_eq!(sessions.state.lock().unwrap().sessions.len(), 1);
-        assert!(sessions.is_live(&busy_id, 900_001));
         let mut at = 600_000;
         while at + 600_000 < 43_200_000 {
             at += 600_000;
