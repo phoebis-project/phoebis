@@ -3038,8 +3038,8 @@
   white-space: nowrap;
 }
 
-/* The Session cell is monospace for the id; the fork badge reads as the other badges do. It sits on the line under the
-   id and wraps its words when the column is narrower than they are, so a cut id never clips it or its link. */
+/* The Session cell is monospace for the id, and the fork badge reads as the other badges do. It sits on the line under
+   the id and wraps its words when the column is narrower than they are, so a cut id never clips it or its link. */
 .sessions-table .srow__fork {
   max-width: 100%;
   margin-top: 2px;
