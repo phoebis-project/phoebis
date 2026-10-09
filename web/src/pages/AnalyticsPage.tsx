@@ -976,9 +976,9 @@ function BreakdownTable({
         <table className="table">
           <thead>
             <tr>
-              <th>{groupLabel}</th>
+              <th className="col-fill">{groupLabel}</th>
               {columns.map((c, i) => (
-                <th key={i} className="right">
+                <th key={i} className="right col-fit">
                   {c}
                 </th>
               ))}
@@ -987,9 +987,11 @@ function BreakdownTable({
           <tbody>
             {rows.map((r) => (
               <tr key={r.key}>
-                <td className="mono">{r.label}</td>
+                <td className="mono col-fill" title={r.label}>
+                  {r.label}
+                </td>
                 {r.cells.map((c, i) => (
-                  <td key={i} className="right num">
+                  <td key={i} className="right num col-fit">
                     {c}
                   </td>
                 ))}
@@ -1618,28 +1620,33 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   return (
     <Card title="Placements by rung" subtitle={`${PLACEMENT_HINT}${unfiltered ? PLACEMENT_UNFILTERED_NOTE : ''}`} padded={false} className="card--table">
       <div className="table-wrap">
-        <table className="table">
+        <table className="table placements-table">
           <thead>
             <tr>
-              <th>Rung</th>
-              <th className="right">Placements</th>
-              <th className="right">Hits</th>
-              <th className="right">Hit share</th>
-              <th className="right">Tokens read</th>
-              <th className="right">Tokens promised</th>
+              <th className="col-fill">Rung</th>
+              <th className="right col-fit">Placements</th>
+              <th className="right col-fit">Hits</th>
+              <th className="right col-fit">Hit share</th>
+              <th className="right col-fit">Tokens read</th>
+              <th className="right col-fit">Tokens promised</th>
             </tr>
           </thead>
           <tbody>
-            {(rows ?? []).map((r) => (
-              <tr key={r.rung}>
-                <td>{placementRungLabel(r.rung)}</td>
-                {placementCells(r).map((cell, i) => (
-                  <td key={i} className="right num">
-                    {cell}
+            {(rows ?? []).map((r) => {
+              const rung = placementRungLabel(r.rung);
+              return (
+                <tr key={r.rung}>
+                  <td className="col-fill" title={rung}>
+                    {rung}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {placementCells(r).map((cell, i) => (
+                    <td key={i} className="right num col-fit">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
             {(rows === null || rows.length === 0) && (
               <tr>
                 <td colSpan={6} className={error ? '' : 'muted'}>
@@ -1664,11 +1671,11 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
         <table className="table budgets-table">
           <thead>
             <tr>
-              <th>Pool</th>
-              <th>Account</th>
-              <th>Spent</th>
-              <th className="right">Budget</th>
-              <th>Period ends</th>
+              <th className="col-fill">Pool</th>
+              <th className="col-fill">Account</th>
+              <th className="col-fit">Spent</th>
+              <th className="right col-fit">Budget</th>
+              <th className="col-fit">Period ends</th>
             </tr>
           </thead>
           <tbody>
@@ -1678,11 +1685,13 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
               const reached = b.spentUsd !== null && b.spentUsd >= b.budgetUsd && b.periodEnd !== null && Date.parse(b.periodEnd) > now;
               return (
                 <tr key={`${b.poolId}-${b.accountId}-${b.budgetPeriod}`}>
-                  <td className="mono">{b.poolId}</td>
-                  <td className="mono">
+                  <td className="mono col-fill" title={b.poolId}>
+                    {b.poolId}
+                  </td>
+                  <td className="mono col-fill" title={b.accountId}>
                     <Link to={`/accounts/${b.accountId}`}>{b.accountId}</Link>
                   </td>
-                  <td>
+                  <td className="col-fit">
                     <span className="budgets-table__spent">
                       {b.spentUsd === null ? (
                         <span className="muted" title="The ledger has not reported this member's spend yet">
@@ -1702,10 +1711,12 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
                     </span>
                     <Meter value={ratio} tone={reached ? 'low' : ratio >= 0.8 ? 'warn' : 'accent'} thin label={`Spend of ${b.accountId} in pool ${b.poolId} against its budget`} />
                   </td>
-                  <td className="right num">
+                  <td className="right num col-fit">
                     {fmtUsd(b.budgetUsd)} per {b.budgetPeriod}
                   </td>
-                  <td title={b.periodEnd ? fmtAbsolute(b.periodEnd) : undefined}>{b.periodEnd ? <span className="num">{fmtPeriodEnd(b.periodEnd)}</span> : <span className="muted">-</span>}</td>
+                  <td className="col-fit" title={b.periodEnd ? fmtAbsolute(b.periodEnd) : undefined}>
+                    {b.periodEnd ? <span className="num">{fmtPeriodEnd(b.periodEnd)}</span> : <span className="muted">-</span>}
+                  </td>
                 </tr>
               );
             })}

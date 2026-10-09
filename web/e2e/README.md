@@ -30,17 +30,21 @@ lines (short of the Refresh pill and inside the card, the backoff line in the
 serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the timeline's chips on
 the Quota windows section, the Quota cards' one height (the head's and the foot's rules at one offset on every card),
 the remaining cards, the error state, the lines under the quota rings, the recent requests' model cells and their
-table's fit, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted
-entry, the placement and budget tables, the request table's fit, the request pages' widths, walked on a load of their
-own once every view's shot is taken, the speed filter, the traffic cards (each Analytics check
-opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,
+table's fit, the recent requests' columns (Key the fill), the cost-cap rows, the live feed, the wasted-probe rows, the
+burn cards, the plan legend's model unlisted entry, the placement and budget tables, the Analytics tables' columns, each
+read on the tab that draws it (the Traffic breakdown's group column the fill, Rung on the placements table, Pool and
+Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit, the
+request pages' widths, walked on a load of their own once every view's shot is taken, the speed
+filter, the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked
+under the filter bar at the end of the Latency tab,
 the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's decision card,
 which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by
 800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on the first rung
 placement the log lists), the subscription end editor, the catalog popup and its columns (Model and Name the fills),
 the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its
-cell and cutting its own label with the ellipsis), the key dialog's Access selects, the Pool select against the Status
-select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
+cell and cutting its own label with the ellipsis), the Models rules table's columns (Pattern the fill), the key dialog's
+Access selects, the Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440
+by 900 (the head's height
 closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the
 lead, Cost reference one line at the head's top right), the cost reference, the session table's fit and its columns
 (each fit column as wide as its content, the Session column the fill), the session id's width, the session row menu, the

@@ -2436,6 +2436,24 @@ async function analyticsTables(theme) {
 }
 
 /**
+ * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
+ * the landing tab (its group column the fill, Key under the default grouping), the placements table on Cache (Rung)
+ * and the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view returns
+ * to Traffic afterwards, as the other Analytics checks leave it.
+ */
+async function analyticsColumns(theme) {
+  await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
+  try {
+    if (!(await tabTo(theme, 'Cache'))) return;
+    await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
+    if (!(await tabTo(theme, 'Burn'))) return;
+    await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
  * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
  * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
  * the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
@@ -3499,8 +3517,9 @@ async function sessionsTableFits(theme) {
  * Every header cell of `selector` after its `fixed` leading ones carries col-fit or col-fill, the col-fill ones read
  * `fill` in order, and each row's cell carries its header's class. A fit column is as wide as the larger of its widest
  * cell's inline content plus that cell's horizontal padding and the cells' `min-width`, within 1 px, the header among
- * the cells: a block child (a `.sub` line) spans its cell whatever it holds, so it is read by its own inline runs
- * rather than its box, while an inline child's box counts whole, its padding included. A flex container's items are
+ * the cells: a block child (a `.sub` line) spans its cell whatever it holds, so it is read by its own inline runs or
+ * its own `min-width` (the budgets meter's floor), whichever is wider, rather than its box, while an inline child's
+ * box counts whole, its padding included. A flex container's items are
  * one run of boxes with their gaps (a Standing cell's badges), and a form control is its box whatever its display (a
  * select's options draw no boxes of their own). An out-of-flow child (a screen-reader-only description, a select's
  * chevron) takes no room in its cell and is left out. Two or more fill
@@ -3542,7 +3561,8 @@ async function tableColumns(theme, view, selector, fill, fixed = 0) {
         else if (items || atomic(node) || inline(getComputedStyle(node).display)) run.push(node);
         else {
           flush();
-          widest = Math.max(widest, inlineWidth(node));
+          // A block child's min-width sizes the column even when the child draws no inline content (a meter's floor).
+          widest = Math.max(widest, inlineWidth(node), parseFloat(getComputedStyle(node).minWidth) || 0);
         }
       }
       flush();
@@ -4001,6 +4021,7 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
+        await tableColumns(theme, 'dashboard', '.dash__recent', ['Key']);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
@@ -4034,6 +4055,7 @@ try {
         await burnCards(theme);
         await planLegend(theme);
         await analyticsTables(theme);
+        await analyticsColumns(theme);
         await trafficCards(theme);
         await analyticsTabs(theme);
         await stickyStrip(theme);
@@ -4055,6 +4077,7 @@ try {
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
       }
+      if (view.path === '/models') await tableColumns(theme, 'models', '.models__rules table', ['Pattern']);
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         await speedFilter(theme);

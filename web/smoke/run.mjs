@@ -474,6 +474,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -6172,6 +6173,7 @@ m = await mount('/models');
   expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
+  columnsMarked('/models the rules table marks Pattern as its fill column', rulesCard()?.querySelector('table'), ['Pattern']);
   const select = m.container.querySelector('select[aria-label="Key"]');
   if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
   else {
@@ -8988,6 +8990,23 @@ expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by ou
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
+  // The breakdown tables are picked by card title: the Cache tab draws the placements table under the same card class,
+  // and that one has its own check.
+  const BREAKDOWNS = [
+    ['Traffic', 'Traffic by key', ['Key']],
+    ['Cache', 'Misses by reason by key', ['Key']],
+    ['Cache', 'Cache by model', ['Model']],
+  ];
+  let read = 0;
+  for (const [label, title, fill] of BREAKDOWNS) {
+    await tab(m, label);
+    const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('table');
+    if (table) read += 1;
+    columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
+  }
+  results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
+}
+{
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
   const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -9264,6 +9283,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     rows: [...(card(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim())),
   });
   await tab(m, 'Cache');
+  columnsMarked('/analytics the placements table marks Rung as its fill column', m.container.querySelector('.placements-table'), ['Rung']);
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -9283,6 +9303,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
   });
   await tab(m, 'Burn');
+  columnsMarked('/analytics the budgets table marks Pool and Account as its fill columns', m.container.querySelector('.budgets-table'), ['Pool', 'Account']);
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
