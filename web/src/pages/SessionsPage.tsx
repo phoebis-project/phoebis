@@ -635,7 +635,7 @@ function SessionRows({
                 </div>
                 {agents.map((a) => (
                   <div className="agents__row" key={a.agentId}>
-                    <span className="mono">{a.agentId}</span>
+                    <span className="mono agents__id" title={a.agentId}>{a.agentId}</span>
                     <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
                       {undatedModel(a.model)}
                     </span>

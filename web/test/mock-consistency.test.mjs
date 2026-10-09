@@ -374,6 +374,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const notebook = s.keys.find((k) => k.id === 'notebook');
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
   });
+
+  test(`the last warmed session holds an agent in each lifecycle word, two released records and a seventeen-character id, listed out of the view's order, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const bySession = new Map();
+    for (const r of recipes) bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
+    const full = [...bySession.values()].filter((rows) => ['busy', 'idle', 'parked', 'released'].every((word) => rows.some((r) => r.agentState === word)));
+    assert.equal(full.length, 1, 'one session holds every lifecycle word');
+    const rows = full[0];
+    const released = rows.filter((r) => r.agentState === 'released');
+    assert.equal(released.length, 2, 'two released records');
+    for (const r of released) assert.deepEqual([r.state, r.cause, r.nextProbeAt], ['ended', 'agent_released', null], `${r.agentId} reads as the route answers a released agent`);
+    assert.equal(recipes.filter((r) => r.agentId.length === 17).length, 1, 'one id of the length Claude Code gives a subagent');
+    assert.equal(s.sessions.find((x) => x.sessionId === rows[0].sessionId).agents, rows.length, 'the session row counts every record, the released ones too');
+    // The list's order is not the view's: the parked row precedes the idle one, whose last request is newer than the
+    // busy one's.
+    const words = rows.filter((r) => r.agentState !== 'released').map((r) => (r.agentId === 'main' ? 'main' : r.agentState));
+    assert.deepEqual(words, ['main', 'busy', 'parked', 'idle']);
+    const at = (word) => Date.parse(rows.find((r) => r.agentId !== 'main' && r.agentState === word).lastRequestAt);
+    assert.ok(at('idle') > at('busy'), 'the idle row is the newer request');
+    const overview = await s.api.getKeepaliveOverview();
+    const count = (word) => recipes.filter((r) => r.agentState === word).length;
+    assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');
+    assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.

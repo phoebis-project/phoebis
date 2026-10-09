@@ -45,7 +45,9 @@ const sessionSpec: {
   // The laptop key allows Haiku 4.5 and Sonnet 5 only, so its subagents stay inside that list.
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
+  // The last session with a recipe: four of its agents are written below, so it holds an agent in each lifecycle
+  // word, two of them released.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 6, companion: 'reporting' },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
@@ -198,7 +200,7 @@ const SUBAGENT_HOLDS = new Map<number, RecipeCause>([
   // A subagent whose park ran past the pool's parked ceiling.
   [4, 'parked_limit'],
   [7, 'affinity_too_short'],
-  // The last agent the story draws, so holding it moves no other roll.
+  // Holding it moves no value a reader sees: the agents drawn after it take their fields from the written rows.
   [9, 'probe_pool_exhausted'],
 ]);
 
@@ -224,6 +226,24 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   scheduled: 'retained',
   unsupported_shape: 'not_retained',
 };
+
+/**
+ * The index in `sessionSpec` of the last session with a recipe: its rows past the drawn pair are written, not rolled.
+ */
+const WRITTEN_SESSION = 9;
+/**
+ * The four subagents the last warmed session holds beyond its drawn pair, written so the session holds an agent in
+ * each lifecycle word, two of them released, and an id of the length Claude Code gives a subagent. The list's order (a
+ * released row first, the parked row before the idle one, and the idle row's last request newer than the drawn busy
+ * row's) differs from the lifecycle order main, busy, idle, parked, so lines drawn in the list's order read differently
+ * from lines sorted into it.
+ */
+const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
+  { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+  { agentId: '4f0c2a9e7b61d3c58', agentState: 'parked', cause: 'scheduled', deadline: ahead(41 * MINUTE), lastProbeAt: ago(2 * MINUTE), lastRequestAt: ago(6 * MINUTE), nextProbeAt: ahead(150_000), parkKind: 'background', state: 'retained', wakeAt: null },
+  { agentId: 'b2d8', agentState: 'idle', cause: 'scheduled', deadline: null, lastProbeAt: ago(MINUTE), lastRequestAt: ago(30_000), nextProbeAt: ahead(200_000), parkKind: null, state: 'retained', wakeAt: null },
+  { agentId: '91aa', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(7 * MINUTE), lastRequestAt: ago(12 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+];
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   const mainState = pin.keepalive.state;
@@ -255,6 +275,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
     const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
+    // The last warmed session's rows past its drawn pair are written, so a reader meets every lifecycle word.
+    const written = i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -279,6 +301,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       state,
       ttlSeconds,
       wakeAt,
+      ...written,
     };
   });
 });
@@ -341,9 +364,6 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 // dashboard's sum read one count.
 for (const p of POOLS) p.activePins = SESSIONS.filter((x) => x.pinned && keyById.get(x.keyId)?.poolId === p.id).length;
 
-// Counted off the recipes so the tiles cannot drift from the table below them.
-const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
-
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.
 const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length;
@@ -362,10 +382,11 @@ const IDLE_RETURNED = [24, 16, 11, 12, 7, 4, 2, 2, 1, 0];
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
+  // Counted off the recipes so the tiles cannot drift from the table below them.
   agents: {
-    busy: WARMED.filter((p) => p.keepalive.state === 'busy').reduce((n, p) => n + p.agents, 0),
-    idle: WARMED.filter((p) => p.keepalive.state === 'idle').reduce((n, p) => n + p.agents, 0),
-    parked: WARMED.filter((p) => p.keepalive.state === 'parked').reduce((n, p) => n + p.agents, 0),
+    busy: RECIPES.filter((r) => r.agentState === 'busy').length,
+    idle: RECIPES.filter((r) => r.agentState === 'idle').length,
+    parked: RECIPES.filter((r) => r.agentState === 'parked').length,
   },
   busGaps: 0,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
