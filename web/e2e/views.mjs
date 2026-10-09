@@ -3059,9 +3059,11 @@ const POPOVER_VIEWPORTS = [
  * Opens the popover of the open card's station that `stationOf` finds at each viewport and reads its box inside the
  * card's less 8 px either side and inside the part of the card on screen and the window less 8 px either side, its
  * inline width bound the least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16,
- * its table's heads on at most two lines, and nothing in it scrolling sideways. `table` holds that it draws a table,
- * and `striped` that its table's second row takes the candidate table's even-row color and its first row does not.
- * Escape closes it after each reading.
+ * its table's heads on at most two lines, nothing in it scrolling sideways, its computed visibility `visible`, since
+ * the box stays hidden until its placement reveals it, and its computed transition `none`, since the box is measured
+ * at the window's corner and then moved under its anchor. `table` holds that it draws a table, and `striped` that its
+ * table's second row takes the candidate table's even-row color and its first row does not. Escape closes it after
+ * each reading.
  */
 async function popoverBounds(theme, what, stationOf, { striped = false, table = false, viewports = POPOVER_VIEWPORTS } = {}) {
   const say = (message) => failures.push(`${theme} /routing-log: ${message}`);
@@ -3106,6 +3108,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         renderer: [...popover.classList].find((n) => n.startsWith('strip-popover--')) ?? null,
         rows: [...popover.querySelectorAll('.strip-popover__table tbody tr')].slice(0, 2).map((tr) => fill(tr.cells[0])),
         shown,
+        transition: getComputedStyle(popover).transitionProperty,
+        visibility: getComputedStyle(popover).visibility,
         wraps: [...popover.querySelectorAll('.table-wrap')].map((w) => ({ client: w.clientWidth, scroll: w.scrollWidth })),
       };
     });
@@ -3124,6 +3128,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
     if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
     if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);
+    if (got.visibility !== 'visible') say(`${where} computes visibility ${got.visibility} once placed, not visible`);
+    if (got.transition !== 'none') say(`${where} transitions ${got.transition}, where nothing of the box may animate between where it is measured and where it stands`);
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
     if ((await page.locator('.strip-popover').count()) !== 0) say(`${where}: Escape left the popover open`);

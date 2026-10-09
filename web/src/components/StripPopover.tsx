@@ -201,10 +201,11 @@ function Block({ plan }: { plan: PopoverPlan }) {
  * One station's, leaf's or terminus's facts over the card. A fixed box in a portal, since the log's table wrap clips
  * anything absolute inside it: no taller than the window less 8 px above and below, scrolling what runs past that,
  * measured at the window's corner, then centered under its anchor 8 px below, kept 8 px inside the part of the card's
- * box on screen, moved above the anchor where it would pass the window's bottom, and kept 8 px inside the window. A
- * strip redrawn for a record that no longer holds the anchor takes the anchor's button away, and the popover closes
- * with it. A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it. Tab
- * past its end moves on to the strip's next button and Shift+Tab before its start back to the anchor.
+ * box on screen, moved above the anchor where it would pass the window's bottom, and kept 8 px inside the window, and
+ * hidden until that placement is done. A strip redrawn for a record that no longer holds the anchor takes the anchor's
+ * button away, and the popover closes with it. A key that opened it moves focus into it, and focus leaving it for
+ * anything but its anchor closes it. Tab past its end moves on to the strip's next button and Shift+Tab before its
+ * start back to the anchor.
  */
 export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; layout: StripLayout; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
@@ -236,6 +237,7 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
     const below = at.bottom + GAP;
     const top = below + box.height > tall - GAP ? at.top - GAP - box.height : below;
     el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
+    el.style.visibility = 'visible';
   }, [anchor, bounds, onClose]);
   // A new plan places it again, and so does a strip redrawn for a new width or a measured label, which moves the
   // anchor it stands under.
@@ -282,7 +284,10 @@ export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinne
   const headId = `${id}-head`;
   const { head } = plan;
   return createPortal(
-    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed' }} onBlur={leave} onKeyDown={tab}>
+    // Hidden until `place` has put it under its anchor, so a frame painted before then shows nothing. React writes a
+    // style key only when its value changes between renders, so the reveal `place` writes on the element outlives a
+    // re-render.
+    <div ref={ref} className={`strip-popover strip-popover--${plan.renderer}${pinned ? ' is-pinned' : ''}`} id={id} role="dialog" aria-modal="false" aria-labelledby={headId} tabIndex={-1} style={{ position: 'fixed', visibility: 'hidden' }} onBlur={leave} onKeyDown={tab}>
       <div className="strip-popover__head">
         <span className="strip-popover__title" id={headId}>
           {head.account !== null ? rowValue([head.account]) : head.word}

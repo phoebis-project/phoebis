@@ -2341,7 +2341,8 @@
 /* A station's popover sits over the card in the body, outside the card's rules, so it sets the card's type itself.
    An unpinned one lets the pointer through to the strip, and a pinned one takes it so it and its table scroll. The
    width bound is the window's, which the component tightens to the card's, and the component bounds its height by the
-   window's. */
+   window's. The box is measured at the window's corner and then moved under its anchor, so nothing of it may animate
+   between the two. */
 .strip-popover {
   position: fixed;
   z-index: 20;
@@ -2353,6 +2354,7 @@
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
+  transition: none;
   pointer-events: none;
 }
 

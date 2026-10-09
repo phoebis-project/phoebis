@@ -288,7 +288,10 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           );
         })}
       </div>
-      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} layout={layout} onClose={close} pinned={popover.pinned} plan={popover.plan} />}
+      {/* A new anchor's box mounts hidden and waits for its own placement, where a box handed the new anchor would be
+          placed again in view. A placement again for the same anchor (a new plan, a redrawn strip, a resize, a scroll)
+          keeps its box shown, and the focus a keyboard user holds in it. */}
+      {popover !== null && <StripPopover key={openedKey} anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} layout={layout} onClose={close} pinned={popover.pinned} plan={popover.plan} />}
     </div>
   );
 }
