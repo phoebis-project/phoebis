@@ -9119,7 +9119,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim()];
     };
     const probeNoted = probeTile();
-    const wasted = cardIn('Wasted probes')?.textContent?.includes('how these sessions are used. In dollars at list prices.') ?? false;
+    const wasted = cardIn('Wasted probes')?.textContent?.includes('says the parked ceilings do. In dollars at list prices.') ?? false;
     results.push({
       name: '/analytics the Unit select is drawn in the Cache and Cache warming headers too and the cache cost card reads the note under Window shares with no account named',
       ok: cacheSelect?.value === 'share' && warmingSelect?.value === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
