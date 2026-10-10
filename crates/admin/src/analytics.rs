@@ -423,24 +423,15 @@ pub(crate) async fn burn(
         ..Default::default()
     };
     let read = if group_by == "session" {
-        let kinds = kinds.clone();
         state
             .ledger
             .db()
-            .read(move |c| session_burn_series(c, &tables, &kinds, &tiers, &filter))
+            .read(move |c| session_burn_series(c, &tables, &tiers, &filter))
             .await
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
         // rather than the range read again per group under the reader lock.
-        burn_groups_paged(
-            state.ledger.db(),
-            &tables,
-            &kinds,
-            &tiers,
-            &filter,
-            &group_by,
-        )
-        .await
+        burn_groups_paged(state.ledger.db(), &tables, &tiers, &filter, &group_by).await
     };
     let series = match read {
         Ok(s) => s,

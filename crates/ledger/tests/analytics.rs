@@ -10,8 +10,8 @@ use phoebis_ledger::{
     series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, FundingFilter,
     GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
     PlanTables, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect,
-    SeriesFilter, SharePricing, Speed, SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    SeriesFilter, SharePricing, Speed, SubscriptionCosts, Tiers, WindowShares, BILLED_FUNDING,
+    FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -2137,18 +2137,15 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         )
         .unwrap();
     };
-    // Both rows carry a nonzero `estimated_usd`, so a burn that priced every row both ways instead of by kind
-    // would still pass the dollar assertion; only pricing by kind can pass both.
+    // Both rows carry a nonzero `estimated_usd`, so a burn that priced every row both ways instead of by its
+    // funding would still pass the dollar assertion; only pricing by funding can pass both.
     plant("sub", "oauth-a", "oauth", 9.99, None);
     plant("key", "api-b", "api_key", 1.25, None);
-    // Absent from `kinds` below: its tokens must reach neither total, its cache reads included, the one row
-    // carrying any so the cached half of the assertion below has something to leave out.
+    // Absent from the registry below: a plan row of an account the registry no longer holds prices no share without
+    // a tier and no dollar under the plan, while its tokens still count, its cache reads included, the one row
+    // carrying any so the cached half of the assertion below reads them.
     plant("unknown", "unknown-c", "oauth", 4.0, Some(500));
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([
-        ("oauth-a".to_string(), AccountKind::Oauth),
-        ("api-b".to_string(), AccountKind::ApiKey),
-    ]);
     let tiers: Tiers = HashMap::from([("oauth-a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
@@ -2157,7 +2154,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         ..SeriesFilter::default()
     };
     let points = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap();
     let point = points
         .iter()
@@ -2198,15 +2195,74 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
     );
     assert_eq!(
         (point.cached_tokens, point.uncached_tokens),
-        (0, 2_000),
-        "the row absent from kinds contributes to neither total"
+        (500, 3_000),
+        "the row of the account the registry no longer holds counts its tokens and prices nothing"
+    );
+}
+
+/// The burn prices a row by the funding its key carries, so the registry's later state moves no dollar into a share:
+/// an api_key account's row reads the same dollars and no share once a sized tier is on file for its id, as it is
+/// once an oauth account takes the id over.
+#[test]
+fn an_api_key_account_s_burn_row_reads_in_dollars_once_its_id_is_recreated_as_oauth() {
+    let tables = PlanTables::shipped();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let row = RollupRow {
+        input_tokens: 1_000,
+        estimated_usd: 1.25,
+        ..RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "k",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            BILLED_FUNDING,
+        )
+    };
+    let reading = |tiers: Tiers| {
+        let point = burn_series_over(std::slice::from_ref(&row), &tables, &tiers, &filter)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == 3_600_000)
+            .unwrap();
+        (
+            point.usd,
+            point.five_hour_share,
+            point.seven_day_share,
+            point.tokens,
+        )
+    };
+    let recorded = reading(Tiers::new());
+    assert_eq!(
+        recorded,
+        (1.25, None, None, 1_000),
+        "an api_key account's row prices in dollars from estimated_usd"
+    );
+    let recreated = reading(HashMap::from([(
+        "k".to_string(),
+        Some(MAX_20X.to_string()),
+    )]));
+    assert_eq!(
+        recreated, recorded,
+        "and reads the same once a sized tier is on file for the id"
     );
 }
 
 #[test]
 fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
@@ -2241,7 +2297,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
     let unpriced = row("claude-opus-5", "standard", 0.0);
     let fast = row("claude-opus-5-5", "fast", 0.25);
     for rows in [[unpriced.clone(), fast.clone()], [fast, unpriced]] {
-        let point = burn_series_over(&rows, &tables, &kinds, &tiers, &filter)
+        let point = burn_series_over(&rows, &tables, &tiers, &filter)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -2257,7 +2313,6 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
 #[test]
 fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
@@ -2290,7 +2345,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
                 },
             )
         };
-        burn_series_over(&[row], &tables, &kinds, tiers, &filter)
+        burn_series_over(&[row], &tables, tiers, &filter)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -2330,7 +2385,6 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
 #[test]
 fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard_row() {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
@@ -2358,7 +2412,7 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
                 PLAN_FUNDING,
             )
         };
-        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+        burn_series_over(&[row], &tables, &tiers, &filter)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -2379,7 +2433,6 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
 #[test]
 fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_tier() {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
@@ -2419,7 +2472,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
             .is_none(),
         "the model has no weight"
     );
-    let point = burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+    let point = burn_series_over(&[row], &tables, &tiers, &filter)
         .unwrap()
         .into_iter()
         .find(|p| p.at == 3_600_000)
@@ -2437,7 +2490,6 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
 fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
     let mut tables = phoebis_ledger::test_tables::subscription_costs();
     tables.costs.peak.capacity_factor.seven_day = 0.5;
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: WEEKDAY_PEAK - 3_600_000,
@@ -2464,7 +2516,7 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
                 PLAN_FUNDING,
             )
         };
-        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+        burn_series_over(&[row], &tables, &tiers, &filter)
             .unwrap()
             .into_iter()
             .find(|p| p.at == hour_of(at) * 1_000)
@@ -2520,7 +2572,6 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         .unwrap();
     }
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: WEEKDAY_PEAK - 3_600_000,
@@ -2529,7 +2580,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         ..SeriesFilter::default()
     };
     let points = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap();
     let peak = points
         .iter()
@@ -2577,7 +2628,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         ..filter.clone()
     };
     let daily_points = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &daily_filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &daily_filter))
         .unwrap();
     let day = daily_points
         .iter()
@@ -2631,7 +2682,6 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
     )
     .unwrap();
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), None)]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -2641,7 +2691,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
         ..SeriesFilter::default()
     };
     let point = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -2693,12 +2743,6 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     plant("tierless", "oauth", 5.0);
     plant("key", "api_key", 5.0);
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([
-        ("key".to_string(), AccountKind::ApiKey),
-        ("max".to_string(), AccountKind::Oauth),
-        ("pro".to_string(), AccountKind::Oauth),
-        ("tierless".to_string(), AccountKind::Oauth),
-    ]);
     let tiers: Tiers = HashMap::from([
         ("max".to_string(), Some(MAX_20X.to_string())),
         ("pro".to_string(), Some(PRO.to_string())),
@@ -2713,7 +2757,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
             accounts: vec![account.into()],
             ..SeriesFilter::default()
         };
-        db.read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        db.read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
             .unwrap()
             .into_iter()
             .find(|p| p.at == hour)
@@ -2810,7 +2854,6 @@ fn plant_in_the_off_band_hour(
 /// The off-band hour's burn point of `account`, a Max 20x subscription.
 fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::BurnPoint {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([(account.to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([(account.to_string(), Some(MAX_20X.to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -2820,7 +2863,7 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
         accounts: vec![account.into()],
         ..SeriesFilter::default()
     };
-    db.read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+    db.read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -2927,7 +2970,6 @@ fn a_row_on_a_model_without_a_weight_prices_no_share_and_its_tokens_still_count(
     )
     .unwrap();
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("max".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("max".to_string(), Some(MAX_20X.to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -2937,7 +2979,7 @@ fn a_row_on_a_model_without_a_weight_prices_no_share_and_its_tokens_still_count(
         ..SeriesFilter::default()
     };
     let point = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -2995,7 +3037,6 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         tables.band_factor(FIVE_HOUR, started) == 1.0 && factor > 1.0,
         "the attempt starts before the band and completes inside it"
     );
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: WEEKDAY_BAND_OPENS - 3_600_000,
@@ -3004,7 +3045,7 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
         .unwrap();
     let point = sessions
         .iter()
@@ -3078,7 +3119,6 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
         .unwrap();
     }
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -3088,7 +3128,7 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
         .unwrap();
     let point = |session: &str| {
         sessions
@@ -3273,7 +3313,6 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
     plant_funded(&db, "r-plan", "s", None, 3.0);
     plant_funded(&db, "r-overage", "s", Some(true), 7.0);
     let tables = share_tables();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -3295,7 +3334,7 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
         "the fold files the two requests under their fundings"
     );
     let point = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -3342,7 +3381,6 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
     plant_funded(&db, "r-plan", "s-mixed", None, 3.0);
     plant_funded(&db, "r-overage", "s-mixed", Some(true), 7.0);
     let tables = share_tables();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -3352,7 +3390,7 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
         .unwrap();
     let point = sessions
         .iter()
@@ -3419,11 +3457,6 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
         db.insert_request(&request, &attempts, None).unwrap();
     }
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([
-        ("a".to_string(), AccountKind::Oauth),
-        ("b".to_string(), AccountKind::ApiKey),
-        ("c".to_string(), AccountKind::Oauth),
-    ]);
     let tiers: Tiers = HashMap::from([
         ("a".to_string(), Some(MAX_20X.to_string())),
         ("c".to_string(), Some(PRO.to_string())),
@@ -3461,9 +3494,9 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
                 ..scope
             };
             let read = db
-                .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+                .read_blocking(|c| burn_series(c, &tables, &tiers, &filter))
                 .unwrap();
-            let over = burn_series_over(&rows, &tables, &kinds, &tiers, &filter).unwrap();
+            let over = burn_series_over(&rows, &tables, &tiers, &filter).unwrap();
             assert!(
                 read.iter()
                     .any(|p| p.five_hour_share.is_some() || p.usd > 0.0),
@@ -3572,7 +3605,7 @@ fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
     assert!(db.read_blocking(|c| rewrite_series(c, &filter)).is_err());
     let tables = PlanTables::shipped();
     assert!(db
-        .read_blocking(|c| burn_series(c, &tables, &HashMap::new(), &HashMap::new(), &filter))
+        .read_blocking(|c| burn_series(c, &tables, &HashMap::new(), &filter))
         .is_err());
 }
 

@@ -2892,28 +2892,23 @@ struct UsageRow<'a> {
     funding: Funding,
 }
 
-/// The shares of an oauth account's two windows (each banded at the row's own instant) when `tier`
-/// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
-/// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account, and
-/// one in overage, adds its `estimated_usd` and a zero share where the tables size its tier: fast mode spends
-/// usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader
-/// the account is priced in its window unit. A bucket holding a row the table cannot price answers `None` on that
-/// window, whichever row came first, and a row with no token has nothing to price and leaves both windows as the
+/// The row's funding decides its unit, so the kind the registry holds for the account now has no say and a deleted
+/// or recreated account moves no dollar into a share: `estimated_usd` for a row an api_key account served, the shares
+/// of a subscription's two windows (each banded at the row's own instant) for a plan row when `tier` names one the
+/// tables size, and no share for a plan row with no tier on file, an account the registry no longer holds among them.
+/// A fast row and one in overage add their `estimated_usd` and a zero share where the tables size the tier: fast mode
+/// spends usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a
+/// reader the account is priced in its window unit. A bucket holding a row the table cannot price answers `None` on
+/// that window, whichever row came first, and a row with no token has nothing to price and leaves both windows as the
 /// other rows set them.
-fn price_usage(
-    point: &mut BurnPoint,
-    kind: Option<AccountKind>,
-    tier: Option<&str>,
-    tables: &PlanTables,
-    row: &UsageRow,
-) {
+fn price_usage(point: &mut BurnPoint, tier: Option<&str>, tables: &PlanTables, row: &UsageRow) {
     let tokens = row.input_tokens
         + row.cache_read_tokens
         + row.cache_write_5m_tokens
         + row.cache_write_1h_tokens
         + row.output_tokens;
-    match kind {
-        Some(AccountKind::Oauth) if matches!(row.funding, Funding::Fast | Funding::Overage) => {
+    match row.funding {
+        Funding::Fast | Funding::Overage => {
             point.usd += row.estimated_usd;
             // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at,
             // so the zero rests on the tier alone.
@@ -2926,7 +2921,7 @@ fn price_usage(
                 }
             }
         }
-        Some(AccountKind::Oauth) => {
+        Funding::Plan => {
             let usage = PinUsage {
                 input: row.input_tokens,
                 cache_read: row.cache_read_tokens,
@@ -2962,8 +2957,7 @@ fn price_usage(
                 }
             }
         }
-        Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
-        None => return,
+        Funding::ApiKey => point.usd += row.estimated_usd,
     }
     point.cached_tokens += row.cache_read_tokens;
     point.tokens += tokens;
@@ -2984,12 +2978,11 @@ pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupR
 pub fn burn_series(
     conn: &Connection,
     tables: &PlanTables,
-    kinds: &HashMap<String, AccountKind>,
     tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let rows = burn_rows(conn, filter)?;
-    burn_series_over(&rows, tables, kinds, tiers, filter)
+    burn_series_over(&rows, tables, tiers, filter)
 }
 
 /// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket. A
@@ -3000,7 +2993,6 @@ pub fn burn_series(
 pub fn burn_series_over(
     rows: &[RollupRow],
     tables: &PlanTables,
-    kinds: &HashMap<String, AccountKind>,
     tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
@@ -3013,7 +3005,6 @@ pub fn burn_series_over(
             filter.bucket_seconds,
             row,
             tables,
-            kinds,
             tiers,
         );
     }
@@ -3046,7 +3037,6 @@ fn price_burn_row(
     bucket_seconds: i64,
     row: &RollupRow,
     tables: &PlanTables,
-    kinds: &HashMap<String, AccountKind>,
     tiers: &Tiers,
 ) {
     if row.hour < first {
@@ -3055,10 +3045,8 @@ fn price_burn_row(
     let Some(point) = points.get_mut(((row.hour - first) / bucket_seconds) as usize) else {
         return;
     };
-    let kind = kinds.get(&row.account_id).copied();
     price_usage(
         point,
-        kind,
         tiers.get(&row.account_id).and_then(Option::as_deref),
         tables,
         &UsageRow {
@@ -3082,7 +3070,6 @@ fn price_burn_row(
 pub async fn burn_groups_paged(
     db: &Arc<LedgerDb>,
     tables: &PlanTables,
-    kinds: &HashMap<String, AccountKind>,
     tiers: &Tiers,
     filter: &SeriesFilter,
     group_by: &str,
@@ -3117,15 +3104,7 @@ pub async fn burn_groups_paged(
             .entry(group.clone())
             .or_insert_with(|| (empty_burn_points(first, last, filter.bucket_seconds), false));
         *held |= row.hour >= from_hour && row.hour < last;
-        price_burn_row(
-            points,
-            first,
-            filter.bucket_seconds,
-            row,
-            tables,
-            kinds,
-            tiers,
-        );
+        price_burn_row(points, first, filter.bucket_seconds, row, tables, tiers);
     })
     .await?;
     Ok(groups
@@ -3306,7 +3285,6 @@ fn read_session_attempts(
 pub fn session_burn_series(
     conn: &Connection,
     tables: &PlanTables,
-    kinds: &HashMap<String, AccountKind>,
     tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
@@ -3345,7 +3323,6 @@ pub fn session_burn_series(
         };
         price_usage(
             point,
-            kinds.get(&a.account_id).copied(),
             tiers.get(&a.account_id).and_then(Option::as_deref),
             tables,
             &UsageRow {
