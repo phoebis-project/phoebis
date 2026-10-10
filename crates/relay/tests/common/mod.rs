@@ -1094,6 +1094,29 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     req
 }
 
+/// The OAuth non-first-party fixture with its `messages` replaced, so a scenario sends a real conversation turn
+/// whose chains the relay reads. The fixture's two system markers and its 26 tools stay, so the diagnostics
+/// member's gate holds, and it carries no billing hash and no `diagnostics` member of its own.
+pub fn conversation_request(
+    key: &str,
+    model: &str,
+    session: &str,
+    messages: &[serde_json::Value],
+) -> Request<Body> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
+    value["model"] = serde_json::Value::from(model);
+    value["messages"] = serde_json::Value::Array(messages.to_vec());
+    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &native,
+        key,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
 /// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
 pub const PLACEHOLDER_LINE: &str =
     "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";

@@ -24,10 +24,11 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, EvidenceSource,
-    Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence, PinRef,
-    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
-    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
+    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, ConversationLookup,
+    EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence,
+    PinRef, PredecessorQuery, Presented, Refusal, RefusalFacts, RefusedRequest, Report,
+    RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -2131,8 +2132,35 @@ impl Relay {
             let previous = memory_key
                 .map(|key| self.memory.previous(key, &account.id, folded_model))
                 .unwrap_or_default();
-            let diagnostics = (admitted.diagnostics && !skip.contains(&Injected::Diagnostics))
-                .then_some(previous.message_id.as_deref());
+            // The answer the request continues, on the selected account alone: the deepest boundary of its own
+            // conversation, or of the conversation it forked from, that holds an answer. The session memory's last
+            // id is the fallback, as a first turn after a compaction or a model switch has no boundary to match.
+            let own_root = admitted.identity.session_id.as_deref();
+            let roots: Vec<&str> = own_root
+                .into_iter()
+                .chain(admitted.identity.forked_from.as_deref())
+                .collect();
+            let no_incarnation = |_: &str| None;
+            let named: Option<Option<String>> = (admitted.diagnostics
+                && !skip.contains(&Injected::Diagnostics)
+                && !admitted.client_diagnostics)
+                .then(|| {
+                    self.router
+                        .predecessor(&PredecessorQuery {
+                            canonical_model: &admitted.identity.canonical_model,
+                            account_id: &account.id,
+                            key_id: &admitted.key.id,
+                            key_generation: admitted.key.created_at,
+                            roots: &roots,
+                            message_boundaries: admitted
+                                .chains
+                                .map(|c| &c.message_boundaries[..])
+                                .unwrap_or(&[]),
+                            incarnation_of: &no_incarnation,
+                        })
+                        .or_else(|| previous.message_id.clone())
+                });
+            let diagnostics = named.as_ref().map(|id| id.as_deref());
             let edits = edit_body(
                 &mut edited,
                 &NativeEdit {
