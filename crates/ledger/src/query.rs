@@ -1757,7 +1757,8 @@ struct ShareSums {
     plan_output_tokens: u64,
     /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio. An overage probe's
     /// own credit files under `overage` and enters neither side, while the recipe's settlement carries that probe's
-    /// waste under `plan`, so the ratio reads every probe's waste against the plan-funded probe dollars.
+    /// waste under `plan`, so the ratio reads every probe's waste a standard recipe settled against the plan-funded
+    /// probe dollars. A fast recipe's credits and settlement file under `fast` and enter neither side.
     plan_probe_cost_usd: f64,
     plan_wasted_probe_usd: f64,
 }

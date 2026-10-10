@@ -126,7 +126,11 @@ function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<s
 /** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */
 const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.ttftMs !== null && r.durationMs - r.ttftMs > 0 && r.usage.output > 0 ? r.usage.output / ((r.durationMs - r.ttftMs) / 1000) : null);
 
-/** Who paid for a request: its serving attempt's side, and a request no attempt served is billed in dollars. */
+/**
+ * Who paid for a request: its serving attempt's side. A row no attempt served files under `plan`, the ledger's filing,
+ * which `onSide` reads off the empty trail, so the `api_key` answer here only keeps such a row out of the plan shares
+ * it has none of.
+ */
 const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length - 1] ?? null);
 /**
  * Whether a row falls on the funding filter's side. The ledger files a request no attempt served under `plan` on the

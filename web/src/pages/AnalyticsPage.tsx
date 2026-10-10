@@ -840,7 +840,8 @@ export function AnalyticsPage() {
           </div>
           <div className="grid-2">
             <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} unit={unit} />
-            {/* The split is a dollar figure in every position, so under shares it reads the whole, as under the default. */}
+            {/* The split is a dollar figure in every position, so under shares it reads the whole, as under the
+                default. */}
             <Card title="Cost split" subtitle={`By token kind, in dollars at the API price list, ${UNIT_SPLIT[unit === 'share' ? 'all' : unit]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
