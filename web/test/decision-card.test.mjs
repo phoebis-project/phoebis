@@ -308,7 +308,7 @@ test('a popover enters the document hidden and is revealed only once placed, and
     assert.equal(popovers().length, 0, 'a second click on the pinned station closes it');
   } finally {
     observer.disconnect();
-    HTMLElement.prototype.getBoundingClientRect = measure;
+    delete HTMLElement.prototype.getBoundingClientRect;
     for (const box of watched) delete box.style.visibility;
     delete html.clientWidth;
     delete html.clientHeight;

@@ -3080,7 +3080,7 @@ async function stripPointer(theme, where, floor = false) {
     const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
     const svg = strip?.querySelector('svg');
     if (!strip || !svg) return null;
-    const scrollY = window.scrollY;
+    const { scrollX, scrollY } = window;
     strip.scrollIntoView({ block: 'center' });
     const below = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
     const origin = svg.getBoundingClientRect();
@@ -3125,7 +3125,7 @@ async function stripPointer(theme, where, floor = false) {
       ...stations.flatMap((b) => read(b.dataset.station, b, svg.querySelector(`circle[data-station="${b.dataset.station}"]`), b.querySelector('.strip-station__word'))),
       ...termini.flatMap((b) => read(b.dataset.terminus, b, svg.querySelector(`circle[data-terminus="${b.dataset.terminus}"]`), b.querySelector('.strip-terminus__word'))),
     ];
-    window.scrollTo(0, scrollY);
+    window.scrollTo(scrollX, scrollY);
     return { buttons: stations.length + termini.length, nodes: nodes.length, points, width: Number(svg.getAttribute('width')) };
   }, !floor);
   measurements.push(`${theme} /routing-log strip pointer of ${where} ${JSON.stringify(got === null ? null : { ...got, points: got.points.map((p) => [p.name, p.what, p.x, p.y, p.hit ? 'button' : p.at]) })}`);
