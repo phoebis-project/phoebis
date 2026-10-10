@@ -2493,6 +2493,23 @@ function readRequestsTable() {
     const columns = [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
     const classes = [...table.querySelectorAll('tbody .requests__client-text')];
     const cut = classes.filter((c) => c.scrollWidth > c.clientWidth);
+    // The fills' floor: a cut Client text holds at least sixteen characters of its own font,
+    // one character read off a `ch` probe appended to its cell and removed. The widths come off the rects, since
+    // `clientWidth` rounds to a pixel and sixteen characters seldom land on one, with half a pixel for the layout's
+    // own rounding.
+    const chOf = (cell) => {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'display:inline-block;width:1ch';
+      cell.appendChild(probe);
+      const ch = probe.getBoundingClientRect().width;
+      probe.remove();
+      return ch;
+    };
+    const short = classes
+      .filter((s) => s.scrollWidth > s.clientWidth)
+      .map((s) => ({ least: 16 * chOf(s.closest('td')), text: s.textContent ?? '', width: s.getBoundingClientRect().width }))
+      .filter((s) => s.width + 0.5 < s.least)
+      .map((s) => `"${s.text}" holds ${Math.round(s.width * 100) / 100}px, under sixteen characters of its font (${Math.round(s.least * 100) / 100}px)`);
     const lines = (el) => {
       const range = document.createRange();
       range.selectNodeContents(el);
@@ -2509,6 +2526,7 @@ function readRequestsTable() {
       client: wrap.clientWidth,
       columns,
       drawer: document.querySelector('.drawer') !== null,
+      floor: { cut: classes.filter((s) => s.scrollWidth > s.clientWidth).length, short },
       least,
       rows: table.querySelectorAll('tbody tr').length,
       scroll: table.scrollWidth,
@@ -2523,13 +2541,14 @@ function readRequestsTable() {
  * need, its narrowest layout and the columns' widths are recorded, the Client text gives up its room behind an
  * ellipsis with the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
  * The router pass's seed fits the card, so there the fit is asserted. The mock story's rows carry values wider than
- * the 990 px card (its default set measured 1060 px there under the fills' former caps, and each fill now floors at
- * sixteen characters), so in the mock pass the width is recorded and the table scrolls inside its wrap. The share
- * measure below reads the same width with the Cost column's widest text.
+ * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
+ * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
+ * holds at least sixteen characters of its font, the fills' floor. The share measure below reads the same
+ * width with the Cost column's widest text.
  */
 async function requestsTableFits(theme) {
   const read = await readRequestsTable();
-  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
+  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
   if (read === null) {
     failures.push(`${theme} /requests: no request table to measure`);
     return;
@@ -2538,6 +2557,7 @@ async function requestsTableFits(theme) {
   if (!mock && read.scroll > read.client) failures.push(`${theme} /requests: the table needs ${read.scroll}px of its wrap's ${read.client}px`);
   if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
   for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
+  for (const text of read.floor.short) failures.push(`${theme} /requests: the cut text ${text}`);
   if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
   for (const text of read.ttfb.split) failures.push(`${theme} /requests: the TTFB cell "${text}" draws its figure and its unit on two lines`);
 }
@@ -4376,7 +4396,7 @@ async function sessionsTableFits(theme) {
  * line (a Standing cell's badges stacked) fails, since the one-run read measures a stacked run at the column's width
  * and would pass it, except in a column `wrapping` names by its header's text (an unlabeled column by the empty
  * string): there the cell's flex row drops its items under each other by design, so the column is as wide as its
- * widest single item and the stacked read is no failure. Two or more fill
+ * widest single item, which is the need its width is held to, and the stacked read is no failure. Two or more fill
  * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
  * exists, else its parent element, unless `overflowRecorded` holds, when a table wider than its wrap is recorded
  * rather than failed (the request table in the mock pass, whose story's values run past its card at 1280 by 800).
@@ -4387,7 +4407,7 @@ async function sessionsTableFits(theme) {
  */
 async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRecorded = false, wrapping = [] } = {}) {
   const say = (what) => failures.push(`${theme} /${view} ${selector}: ${what}`);
-  const read = await page.evaluate((sel) => {
+  const read = await page.evaluate(({ sel, wrapping }) => {
     const table = document.querySelector(sel);
     if (!table) return null;
     const wrap = table.closest('.table-wrap') ?? table.parentElement;
@@ -4440,11 +4460,19 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
       const boxes = [...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect());
       return boxes.filter((b, i) => i > 0 && b.top >= boxes[i - 1].bottom - 1).length + 1;
     };
+    // A wrapping cell's flex row drops its items under each other, so its need is its widest single item; a cell of
+    // the column without a flex row (its header) reads as any other.
+    const widestItem = (c) => {
+      const flex = [c, ...c.children].find((n) => ['flex', 'inline-flex'].includes(getComputedStyle(n).display));
+      if (!flex) return inlineWidth(c);
+      return Math.max(0, ...[...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect().width));
+    };
     const columns = ths.map((th, i) => {
       const cells = [th, ...rows.map((r) => r.children[i])];
+      const wraps = wrapping.includes(th.textContent?.trim() ?? '');
       const needs = cells.map((c) => {
         const s = getComputedStyle(c);
-        return Math.max(inlineWidth(c) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight), parseFloat(s.minWidth) || 0);
+        return Math.max((wraps ? widestItem(c) : inlineWidth(c)) + parseFloat(s.paddingLeft) + parseFloat(s.paddingRight), parseFloat(s.minWidth) || 0);
       });
       return {
         cellsOff: cells.slice(1).filter((c) => classOf(c) !== classOf(th)).length,
@@ -4456,7 +4484,7 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
       };
     });
     return { client: wrap.clientWidth, columns, rows: rows.length, scroll: table.scrollWidth };
-  }, selector);
+  }, { sel: selector, wrapping });
   measurements.push(`${theme} /${view} ${selector} columns ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px over ${read.rows} rows: ${JSON.stringify(read.columns.map((c) => [c.label, c.cls, c.width, c.need]))}`}`);
   if (read === null) return say('no table to measure');
   if (mock && read.rows === 0) say('no rows to measure');

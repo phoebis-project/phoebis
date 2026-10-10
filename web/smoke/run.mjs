@@ -6519,11 +6519,14 @@ m.unmount();
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
 {
-  // The fill cell holds two lines (the class over the agent type), so each text span carries its own text as its
-  // title rather than the cell, and the id span the row's whole id, which its Details link names.
+  // The client cell holds two lines (the class over the agent type), so each of its spans carries its own text as its
+  // title.
+  // The id span carries the row's whole id, which its Details link
+  // names.
   const rows = [...m.container.querySelectorAll('.requests__table tbody tr')];
-  const spans = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client-text, .requests__client .sub')]);
-  const offText = spans.filter((s) => s.getAttribute('title') !== s.textContent).map((s) => `${JSON.stringify(s.textContent)} titled ${s.getAttribute('title') ?? 'nothing'}`);
+  const classes = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client-text')]);
+  const agents = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client .sub')]);
+  const offText = [...classes, ...agents].filter((s) => s.getAttribute('title') !== s.textContent).map((s) => `${JSON.stringify(s.textContent)} titled ${s.getAttribute('title') ?? 'nothing'}`);
   const ids = rows.map((tr) => ({
     id: tr.querySelector('.requests__links a[href^="/requests/"]')?.getAttribute('href')?.slice('/requests/'.length).split('?')[0] ?? null,
     shown: tr.querySelector('td .sub.mono')?.textContent?.replace(/…$/, '') ?? '',
@@ -6532,8 +6535,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const offId = ids.filter((r) => r.id === null || r.title !== r.id || !r.id.startsWith(r.shown)).map((r) => `${r.id} shown as ${r.shown}, titled ${r.title}`);
   results.push({
     name: '/requests every client and agent type span carries its own text as its title, and the id span the whole id',
-    ok: rows.length > 0 && spans.length > 0 && offText.length === 0 && offId.length === 0,
-    missing: [`${rows.length} rows`, `${spans.length} spans`, ...offText.slice(0, 3), ...offId.slice(0, 3)],
+    ok: rows.length > 0 && classes.length > 0 && agents.length > 0 && offText.length === 0 && offId.length === 0,
+    missing: [`${rows.length} rows`, `${classes.length} classes, ${agents.length} agent types`, ...offText.slice(0, 3), ...offId.slice(0, 3)],
   });
 }
 {
@@ -6573,6 +6576,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   expect('/requests turning Transport on through the Columns control draws its SSE badges', m.text(), ['SSE', 'Transport']);
   // With Kind on as well, every one of the thirteen columns is drawn, so the hidden ones carry their class too.
   await turn('Kind');
+  // A turn that finds no label does nothing, so the head is counted before the classes are read.
+  results.push({ name: '/requests with Pool, Transport and Kind on the head draws fourteen cells, the three among them', ok: heads().length === 14 && ['Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
   columnsMarked('/requests every one of the thirteen columns is fit or fill, with Client the fill', m.container.querySelector('.requests__table'), ['Client']);
   await turn('Kind');
   await turn('Pool');

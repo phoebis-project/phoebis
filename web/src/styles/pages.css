@@ -1809,8 +1809,8 @@
   }
 }
 
-/* The cells sit 8 px apart, so the fit columns leave the Client fill its room in a 990 px card at
-   1280 by 800. */
+/* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
+   card as they can. Where a story's values run past the card the table scrolls inside its wrap. */
 .requests__table th,
 .requests__table td {
   padding-left: 4px;
@@ -1832,9 +1832,9 @@
   white-space: nowrap;
 }
 
-/* A fill cell here holds two lines (the class over the agent type), so the cut sits on each text's own box rather than
-   on the cell: a box bounded by the cell's room ends in an ellipsis past it and reads whole on its own title. Firefox
-   applies no max-width to a table cell, which a bound on the box sidesteps. */
+/* The client cell holds two lines (the class over the agent type), so the cut sits on each text's own box rather than
+   on the cell: bounded by the cell's room, a box ends in an ellipsis past it
+   and reads whole on its title. */
 .requests__client-text {
   display: inline-block;
   max-width: 100%;
@@ -1848,13 +1848,14 @@
   white-space: nowrap;
 }
 
-/* The fit columns leave the fill little in a 990 px card, so its cell keeps a floor of sixteen characters,
-   and grows past it where the room is.
-   The floor sits on the cell, which the column's width
-   is read off: a floor on the text's box alone widens nothing (the cell's zero max-width clamps the column) and clips
-   the text behind the cell without its ellipsis. A table wider than its card scrolls inside `.table-wrap`. */
+/* The fit columns leave the fill little in a 990 px card, so its cell keeps a floor of sixteen characters of
+   its text and grows past it where the room is. The floor bounds the border box, so it carries the cell's 8 px of
+   padding (4 px each side) on top of the sixteen characters.
+   The floor sits on the cell, which the column's width is read off: a floor on the
+   text's box alone widens nothing (the cell's zero max-width clamps the column) and clips the text behind the cell
+   without its ellipsis. A table wider than its card scrolls inside `.table-wrap`. */
 .requests__table td.requests__client {
-  min-width: 16ch;
+  min-width: calc(16ch + 8px);
 }
 
 /* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
@@ -1864,7 +1865,7 @@
 }
 
 /* The held marker follows the count at the step size the `.trail__step` rule gives the card's badges, so the row reads
-   as one run, and drops under the count where the column is narrow. */
+   as one run, and drops under the count, since a fit column is as wide as its widest single item. */
 .requests__attempts {
   display: inline-flex;
   flex-wrap: wrap;
