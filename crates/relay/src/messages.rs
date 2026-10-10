@@ -187,8 +187,10 @@ pub struct RelayOutcome {
     /// The head's unified `overage-in-use` flag on the committed attempt, the fact the ledger files the request's
     /// funding under; `None` for a local answer or a head without the unified headers.
     pub overage_in_use: Option<bool>,
-    /// The kind of the account the last attempt dispatched under, the fact the ledger files the attempt's funding
-    /// from, so a reader of the answer needs no registry for it; `None` for an answer before any selection.
+    /// The served account's kind as the leg that answered stamped it at its selection, whether the upstream's head or
+    /// the relay's own answer followed. It rides the outcome so a probe's credit files beside its request row off the
+    /// answer alone, an account that leaves the registry while the probe is in flight included. `None` for an answer
+    /// the relay built before any selection.
     pub account_kind: Option<AccountKind>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing

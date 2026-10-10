@@ -66,8 +66,10 @@ pub(crate) struct ProbeResult {
     /// Whether the answer's head said overage was in use, off `RelayOutcome::overage_in_use`: the fact the ledger
     /// files the probe's request row under, so the credit files beside it.
     pub in_overage: bool,
-    /// The serving account's kind off `RelayOutcome::account_kind`, the fact the request row files its funding
-    /// under; `None` for an answer the relay never built.
+    /// The served account's kind off `RelayOutcome::account_kind`, as the leg that answered stamped it at its
+    /// selection: the fact the request row files its funding under, carried so the credit files beside it even when
+    /// the account leaves the registry while the probe is in flight. `None` for an answer the relay built before any
+    /// selection.
     pub account_kind: Option<AccountKind>,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
@@ -154,9 +156,9 @@ pub struct ProbeRecord {
     pub in_overage: bool,
     pub key: SessionKey,
     pub key_generation: i64,
-    /// The serving account's kind as the relay dispatched under it, off the answer, so the credit files under the
-    /// kind the request row carries whatever the registry holds by the time it lands; `None` for an answer the relay
-    /// never built.
+    /// The served account's kind as the leg that answered stamped it, off the answer rather than the registry, so the
+    /// credit files under the kind the request row carries even when the account leaves while the probe is in flight.
+    /// `None` for an answer the relay built before any selection, which prices nothing.
     pub kind: Option<AccountKind>,
     pub outcome: ProbeOutcome,
     pub pool_id: String,

@@ -773,8 +773,9 @@ pub(crate) enum Verdict {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
-    /// The unit the covering probe's cost settled in. `None` when the account it warmed left the registry before the
-    /// probe landed, in which case the credit never fires (`same_account` cannot match a gone account either).
+    /// The unit the covering probe's cost settled in, decided by the kind the probe's answer carried, so an account
+    /// that leaves the registry while its probe is in flight still lands a unit. `None` when the answer named no
+    /// account (one the relay built before any selection), in which case the credit never fires.
     pub unit: Option<SavingsUnit>,
     pub model: String,
     /// The covering recipe's speed, which the credited request's has to match.
@@ -2266,9 +2267,9 @@ impl Engine {
                     // covering probe warmed. A prefix cached elsewhere by ordinary traffic is no probe's to
                     // credit.
                     let same_account = prior.account == agent.account;
-                    // The probe that covered this recipe may have served on an account the registry has
-                    // since dropped, which earns no credit: `same_account` would already exclude it once a
-                    // real selection lands somewhere else, but a gone account funds nothing to check.
+                    // A probe whose answer named no account (one the relay built before any selection)
+                    // settled in no unit and funds nothing to credit, whatever `same_account` says of the
+                    // account it was meant for.
                     let unit = prior.unit;
                     (prior.covered
                         && gap_exceeded
