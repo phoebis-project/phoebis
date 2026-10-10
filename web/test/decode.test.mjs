@@ -1275,9 +1275,9 @@ test('a recipe held under the horizon or ended at the parked limit keeps that ca
   assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
-test('the downstream snippet is the six recommended lines with the public URL left to the operator', () => {
+test('the downstream snippet is the seven recommended lines with the public URL left to the operator', () => {
   assert.equal(d.PLACEHOLDER_URL, 'https://router.example.com');
-  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
+  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
 });
 
 test('a session fold groups on the client each row named', () => {

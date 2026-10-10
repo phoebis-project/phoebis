@@ -3420,14 +3420,25 @@
 /* The floor gives a cause badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  grid-template-columns: 64px 140px 84px 44px 76px 76px 112px 64px minmax(150px, 1fr);
-  gap: 4px 10px;
+  /* The first track holds a subagent id of the length Claude Code gives one, seventeen characters, whole in the
+     row's monospace size: the measured width, read in the browser pass. The tracks and gaps stay within the 910px an
+     expanded line has in a 990px card at 1280px. */
+  grid-template-columns: 124px 140px 84px 44px 76px 76px 112px 64px minmax(130px, 1fr);
+  gap: 4px 6px;
   align-items: center;
   padding: 6px 12px;
 }
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
+}
+
+/* A longer id cuts with an ellipsis inside its track, and the whole id reads on the cell's title. */
+.agents__id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A badge keeps its text on one line, so the cause badge after the state badge carries the wrap itself: a long cause

@@ -11753,6 +11753,181 @@ m.unmount();
   });
   page.unmount();
 }
+{
+  // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
+  // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's last request. A
+  // session id outlives a key id created again, so the session alone would answer both holders' requests. The page's
+  // own `now` is a sample up to five seconds old, so the range is read on the clock at the click, which the last case
+  // moves past the sample.
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  // The log's widths, each a minute short for the log's own load after the click, spelled out so the check holds the
+  // page to them.
+  const WIDTHS = [
+    ['1h', HOUR - MINUTE],
+    ['6h', 6 * HOUR - MINUTE],
+    ['24h', 24 * HOUR - MINUTE],
+  ];
+  const rangeAt = (lastRequestAt, at) => (lastRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(lastRequestAt) <= width)?.[0] ?? null));
+  const listed = await api.listSessions();
+  const lifetime = (s) => `${s.keyId}@${s.keyGeneration}`;
+  const rowsOf = (page) => [...page.container.querySelectorAll('tbody tr.srow')];
+  const sessionOf = (page, tr) => {
+    const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
+    const key = sessionCell(page, tr, 'Key');
+    const historical = key?.querySelector('.sub') !== null;
+    return listed.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
+  };
+  const toggleMenu = async (page, tr) => {
+    tr?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    return [...(tr?.querySelectorAll('.menu__list button') ?? [])];
+  };
+  const entryOf = async (page, tr) => (await toggleMenu(page, tr)).find((b) => b.textContent?.trim() === 'View in requests');
+  const keysFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
+  const landing = (page) => {
+    const at = page.location();
+    const params = new URLSearchParams(at.search);
+    const keys = keysFilter(page);
+    return {
+      keyFilter: keys?.querySelector('.mselect__trigger')?.textContent?.trim() ?? null,
+      // The live-key options list bare ids, so a lifetime is a value none of them carries: the trigger still counts
+      // it and offers its Clear.
+      keyFilterSet: keys?.classList.contains('has-value') === true && keys.querySelector('.mselect__clear[aria-label="Clear Keys"]') !== null,
+      keys: params.get('keys'),
+      path: at.pathname,
+      range: params.get('range'),
+      search: params.get('search'),
+      select: page.container.querySelector('select[aria-label="Date range"]')?.value ?? null,
+      typed: page.container.querySelector('input.filters__search')?.value ?? null,
+    };
+  };
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const first = rowsOf(page)[0];
+  const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
+  await toggleMenu(page, first);
+  const quiet = rowsOf(page).find((tr) => Number(sessionCell(page, tr, 'Requests')?.textContent) === 0);
+  const off = await entryOf(page, quiet);
+  await toggleMenu(page, quiet);
+  // A row inside the hour, one past it inside six hours and one past six hours inside a day, where the story has them.
+  const bands = [
+    ['1h', (age) => age <= HOUR],
+    ['6h', (age) => age > HOUR && age <= 6 * HOUR],
+    ['24h', (age) => age > 6 * HOUR && age <= 24 * HOUR],
+  ];
+  const followed = [];
+  for (const [band, holds] of bands) {
+    const tr = rowsOf(page).find((r) => {
+      const s = sessionOf(page, r);
+      return s !== undefined && s.requests > 0 && s.lastRequestAt !== null && holds(CLOCK_ORIGIN - Date.parse(s.lastRequestAt));
+    });
+    if (tr === undefined) continue;
+    const s = sessionOf(page, tr);
+    (await entryOf(page, tr))?.click();
+    await page.settle(300);
+    followed.push({ band, got: landing(page), key: lifetime(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  // The story's two rows of one session id under two generations of a key id, each clicked in turn. The log's reads
+  // are wrapped to capture the query the page sent and the rows it answered, and the drawn Key cells are read beside
+  // them, since the cells name the key id alone. The same search over the earlier holder's window without the key,
+  // read at a page size past the story's rows, holds both generations, so a scope the address drops shows.
+  const gone = listed.find((s) => s.historical && s.requests > 0);
+  const kept = listed.find((s) => gone !== undefined && !s.historical && s.keyId === gone.keyId && s.sessionId === gone.sessionId && s.requests > 0);
+  const { listRequests } = api;
+  const reads = [];
+  api.listRequests = async (...args) => {
+    const answer = await listRequests.apply(api, args);
+    reads.push({ answer, query: args[0] });
+    return answer;
+  };
+  const pair = [];
+  for (const s of [gone, kept]) {
+    if (s === undefined) continue;
+    const tr = rowsOf(page).find((r) => {
+      const at = sessionOf(page, r);
+      return at !== undefined && at.keyId === s.keyId && at.sessionId === s.sessionId && at.historical === s.historical;
+    });
+    reads.length = 0;
+    (await entryOf(page, tr))?.click();
+    await page.settle(300);
+    const read = reads[reads.length - 1];
+    const answered = read?.answer.requests ?? [];
+    const heads = [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+    const drawn = [...page.container.querySelectorAll('.requests__table tbody tr')].map((row) => row.children[heads.indexOf('Key')]?.textContent?.trim() ?? '');
+    const filter = keysFilter(page);
+    filter?.querySelector('.mselect__trigger')?.click();
+    await page.settle(150);
+    const options = [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    const unscoped = read === undefined ? [] : (await listRequests.call(api, { ...read.query, cursor: undefined, keyIds: [], limit: 500 })).requests;
+    pair.push({
+      checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length,
+      drawn: [...new Set(drawn)],
+      drawnCount: drawn.length,
+      historical: s.historical,
+      key: lifetime(s),
+      keyId: s.keyId,
+      listed: [...new Set(answered.map(lifetime))],
+      listedCount: answered.length,
+      offered: options.length,
+      reads: reads.map((r) => (r.query?.keyIds ?? []).join(',')),
+      unscoped: [...new Set(unscoped.map(lifetime))].sort(),
+    });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  api.listRequests = listRequests;
+  // Unmounted before the next mount, since an unmount puts the clock back to live and `tick` needs it frozen.
+  page.unmount();
+  // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, moved to one
+  // second inside the hour at the mount's instant: two seconds later, at the click, it is past the hour.
+  const { listSessions } = api;
+  const moved = listed.find((s) => s.requests > 0);
+  const isMoved = (s) => moved !== undefined && s.sessionId === moved.sessionId && s.keyId === moved.keyId && s.historical === moved.historical;
+  api.listSessions = async () => (await listSessions.call(api)).map((s) => (isMoved(s) ? { ...s, lastRequestAt: isoAt(CLOCK_ORIGIN - 59 * MINUTE + 1_000) } : s));
+  const later = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const movedRow = rowsOf(later).find((r) => {
+    const s = sessionOf(later, r);
+    return s !== undefined && isMoved(s);
+  });
+  const entry = await entryOf(later, movedRow);
+  tick(2_000);
+  entry?.click();
+  await later.settle(300);
+  const atClick = landing(later);
+  api.listSessions = listSessions;
+  await later.navigate('/sessions');
+  later.unmount();
+  results.push({
+    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page with the session in its search, the row's key lifetime in its key filter and the narrowest range that covers its last request, listing that holder's requests alone",
+    ok:
+      labels.indexOf('View in requests') === labels.indexOf('View in routing log') - 1 &&
+      labels.indexOf('View in requests') > labels.indexOf('View in analytics') &&
+      off !== undefined &&
+      off.disabled &&
+      (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
+      followed.length > 0 &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      movedRow !== undefined &&
+      atClick.path === '/requests' &&
+      atClick.keys === lifetime(moved) &&
+      atClick.range === '6h' &&
+      atClick.select === '6h' &&
+      pair.length === 2 &&
+      pair[0].key !== pair[1].key &&
+      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === 0) &&
+      pair.every((p) => (pair.find((x) => x.historical)?.unscoped ?? []).includes(p.key)),
+    missing: [
+      labels.join('|'),
+      off === undefined ? 'no entry on the row without requests' : `without requests disabled=${off.disabled} title=${off.getAttribute('title')}`,
+      `bands found ${followed.map((f) => f.band).join(',') || 'none'}`,
+      ...followed.map((f) => JSON.stringify(f)),
+      `at the click ${movedRow === undefined ? 'no moved row' : JSON.stringify(atClick)}`,
+      `the shared pair ${pair.length === 0 ? 'not found' : pair.map((p) => JSON.stringify(p)).join(' ')}`,
+    ],
+  });
+}
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
@@ -11800,13 +11975,17 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   }
   {
     // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
-    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe.
+    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe. The Agents
+    // figure leaves out the subagents the mod released under a live session, which draw no line, and its title names
+    // them beside the records.
     const ov = await api.getKeepaliveOverview();
+    const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released').length;
     const strip = [...m.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
     const read = (label) => strip.find(([l]) => l === label) ?? [];
+    const agentsTitle = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     const want = [
       ['Sessions', `${ov.limits?.sessions.count} of 128`],
-      ['Agents', `${ov.limits?.agents.count} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
+      ['Agents', `${ov.limits?.agents.count - hidden} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -11815,8 +11994,11 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         ov.limits?.sessions.count > 0 &&
         ov.limits?.agents.count > 0 &&
+        hidden > 0 &&
+        agentsTitle.includes(`The engine holds ${ov.limits?.agents.count} agent records`) &&
+        agentsTitle.includes(`${hidden} of them are subagents the mod released`) &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
-      missing: strip.map((t) => t.join(' | ')),
+      missing: [...strip.map((t) => t.join(' | ')), `hidden ${hidden}`, agentsTitle || 'no Agents title'],
     });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
@@ -12119,8 +12301,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same three entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in routing log|Release',
+      name: '/sessions the overflow menu carries the same four entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in requests|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
     // The routing log reads the session's decisions, which need no ledgered request, so only the jump into
@@ -12202,7 +12384,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await openMenu(gone);
     results.push({
       name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 2 && !goneItems.includes('Release'),
+      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
       missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();
@@ -12421,6 +12603,63 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     chip?.querySelector('button')?.click();
     await m.settle(400);
     results.push({ name: '/analytics session chip removes itself', ok: m.container.querySelector('.chip--removable') === null, missing: chipText() });
+  }
+
+  // The session that holds a released record lists its recipes out of the view's order. Its main line is found by its
+  // Agent cell, since main's badge reads the session's own word, and the words after it never step back.
+  await m.navigate('/sessions');
+  {
+    const holder = (await api.listKeepaliveRecipes()).find((r) => r.agentState === 'released')?.sessionId;
+    const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === holder);
+    row?.click();
+    await m.settle(150);
+    const lines = [...m.container.querySelectorAll('.srow__detail .agents__row:not(.agents__row--head)')].map((l) => ({
+      id: l.firstElementChild?.textContent?.trim() ?? '',
+      title: l.firstElementChild?.getAttribute('title') ?? null,
+      word: l.querySelector('.agents__life .badge')?.textContent?.trim() ?? '',
+    }));
+    const ORDER = ['busy', 'idle', 'parked', 'released'];
+    const after = lines.slice(1);
+    const at = (id) => lines.findIndex((l) => l.id === id);
+    const long = lines.find((l) => l.id === '4f0c2a9e7b61d3c58');
+    results.push({
+      name: '/sessions the recipe lines run main, busy, idle, parked, newest last request first inside a group',
+      ok:
+        lines[0]?.id === 'main' &&
+        JSON.stringify(after.filter((l) => l.word !== 'released').map((l) => l.word)) === JSON.stringify(['busy', 'idle', 'parked']) &&
+        at('b2d8') > 0 &&
+        at('b2d8') < at('4f0c2a9e7b61d3c58') &&
+        after.every((l, i) => ORDER.includes(l.word) && (i === 0 || ORDER.indexOf(l.word) >= ORDER.indexOf(after[i - 1].word))) &&
+        long !== undefined &&
+        long.title === long.id,
+      missing: lines.map((l) => `${l.id} ${l.word}${l.title === l.id ? '' : ` title ${l.title}`}`),
+    });
+    row?.click();
+    await m.settle(150);
+  }
+  // A subagent the mod released under a live session draws no line, and the Agents column and tile leave the released
+  // lines out of their counts by taking them off the engine's record counts. The column stays on.
+  {
+    const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
+    const ov = await api.getKeepaliveOverview();
+    await showColumn(m, 'Agents');
+    const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === hidden[0]?.sessionId);
+    row?.click();
+    await m.settle(150);
+    const lines = [...m.container.querySelectorAll('.srow__detail .agents__row:not(.agents__row--head)')].map((l) => ({
+      id: l.firstElementChild?.textContent?.trim() ?? '',
+      word: l.querySelector('.agents__life .badge')?.textContent?.trim() ?? '',
+    }));
+    const count = cell(row, 'Agents')?.textContent?.trim();
+    const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
+    const want = `${ov.limits?.agents.count - hidden.length} of 1,024`;
+    results.push({
+      name: '/sessions a released line is not listed and the Agents column and tile leave it out of their counts',
+      ok: hidden.length > 0 && lines.length === 4 && lines.every((l) => l.word !== 'released' && !['e7c1', '91aa'].includes(l.id)) && count === '4' && count === String(lines.length) && tile === want,
+      missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`, `tile ${tile ?? 'absent'}, want ${want}`],
+    });
+    row?.click();
+    await m.settle(150);
   }
 
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
@@ -13202,7 +13441,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -13247,8 +13486,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
-    name: '/settings the main snippet is the six recommended lines',
-    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
+    name: '/settings the main snippet is the seven recommended lines',
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
@@ -13263,6 +13502,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const want = [
     'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
     '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
     'DISABLE_TELEMETRY=1',
@@ -13274,6 +13514,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
+    'Marks the session a consumer subscription, which no organization policy governs',
+    'The client documents it nowhere, and a future build may drop it.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
     'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',

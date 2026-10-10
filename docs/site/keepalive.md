@@ -38,9 +38,10 @@ alone: a session that switches between fast mode and standard requests earns no 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
 `inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
-from what the router sent, never from the marker the client wrote. The first probe after a turn follows that
-turn's cache TTL; the probe itself writes with the TTL its agent's branch holds in the rule set, which the next probe
-then follows.
+from what the router sent, never from the marker the client wrote. A usage that reports a cache write without saying
+which TTL it was written at, as the stream's running totals do, proves nothing about the TTL and leaves what the engine
+knew in place. The first probe after a turn follows that turn's cache TTL; the probe itself writes with the TTL its
+agent's branch holds in the rule set, which the next probe then follows.
 
 Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
 cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
@@ -62,10 +63,11 @@ ceiling and switch is a pool field or a constant of the router. It installs from
 ```
 
 The mod needs Claude Code 2.1.287 or later and does nothing on an older client. With its options unset it reports to
-`ANTHROPIC_BASE_URL` under the router key in `ANTHROPIC_AUTH_TOKEN`, then `CLAUDE_CODE_OAUTH_TOKEN`, so the
-[client block](client.md#for-the-keepalive-mod) needs no line of its own for it, and without a URL or a key it reports
-nothing. It behaves the same in the terminal, the Desktop app, the VS Code extension's chat panel, `claude -p` and the
-Agent SDK.
+`ANTHROPIC_BASE_URL` under the router key in `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then
+`CLAUDE_CODE_OAUTH_TOKEN`, so the [client block](client.md#for-the-keepalive-mod) needs no line of its own for it beyond
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#claude_code_subscription_type), which lets its reports leave the process,
+and without a URL or a key it reports nothing. It behaves the same in the terminal, the Desktop app, the VS Code
+extension's chat panel, `claude -p` and the Agent SDK.
 
 The mod reports on the main conversation, whose agent id is `main`, and on each subagent the client lists. An agent's
 open set holds the background commands and the subagents it started that have not ended yet, and the session's crons
@@ -261,8 +263,11 @@ pool dialog shows them by bucket.
 
 The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the
 cause. The cause's sentence shows on hover over the state word and again in the row's expanded detail. Every agent
-that has sent a real request keeps its row until its session leaves the engine, so a recipe that ended, or a request
-that was not kept, still shows with its cause.
+that has sent a real request keeps its record in the engine until its session leaves it, and its line in the view with
+it, so a recipe that ended, or a request that was not kept, still shows with its cause. The one line that leaves earlier
+is a subagent's the mod released while its session lives: the view drops it at its next re-read, while the engine keeps
+the record, which refuses a late request and a late probe result under that id and holds its slot of the agent cap until
+the session leaves.
 
 | State | What it means |
 | --- | --- |
@@ -270,7 +275,7 @@ that was not kept, still shows with its cause.
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
 | `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
 | `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
-| `ended` | The recipe was discarded and the agent's row stays: a ceiling, a lapse, an eviction, a release or an end. |
+| `ended` | The recipe was discarded: a ceiling, a lapse, an eviction, a release or an end. |
 
 Each state reads these causes:
 
@@ -390,24 +395,29 @@ session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with a strip of tiles. Sessions, Agents and Retained read the keepalive engine's sessions, agent
 records and retained prompt bytes, each as a count of the cap the bootstrap file sets (`3 of 128`, `12 of 1,024`,
-`40 MiB of 256 MiB`). The Sessions tile's note counts the listed rows whose mod reports or went silent and those with a
-recipe, and the Agents tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by
-outcome, sessions whose cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus
-events. A tile whose read failed draws a dash with the reason on hover, and Try again under the tiles reads them again,
-as a line above the table does for a failed account read. Its table lists one row per session, the session id first and
-the row's menu at the row's end, and offers ten more columns through the Columns control, seven shown by default
-(last request, agents and next probe start hidden): key, model, account, last used,
-requests, last request, agents, companion, cache warming, and next probe. The session column cuts a long id with an
-ellipsis and shows the whole id on hover. The model column reads the family and version, with the whole id on hover, and
-the account cell names the account's kind on hover and to a screen reader. The companion column reads the mod's state,
-`reporting`, `silent` or `none` (see [The mod](#the-mod)), and under `reporting` how long ago the person was last seen
-at the terminal, as `presence 12s ago`. Opening a row expands into one line per agent that has sent a real request: its
-model, pinned account and TTL, the last request, the last and the next probe, and the probes sent today with the
-requests they kept warm, counted from midnight UTC. The line ends on its state word with the cause beside it, the
-cause's sentence on hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word
-for the agent, with a parked agent's park kind and its deadline or wake time
-(`parked · background · deadline in 1h 12m`), and repeats the state's and the cause's sentences. A session's menu
-offers "View in analytics" once it has ledgered traffic, "View in routing log" whenever the row has a routing session,
+`40 MiB of 256 MiB`), the Agents figure less the subagents the mod released while their session lives, which draw no
+line and keep their slot of the cap until their session leaves, with the records and the released count on hover. The
+Sessions tile's note counts the listed rows whose mod reports or went silent and those with a recipe, and the Agents
+tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by outcome, sessions whose
+cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus events. A tile whose read
+failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as a line above the table
+does for a failed account read. Its table lists one row per session, the session id first and the row's menu at the
+row's end, and offers ten more columns through the Columns control, seven shown by default (last
+request, agents and next probe start hidden): key, model, account, last used, requests, last request,
+agents, companion, cache warming, and next probe. The session column cuts a long id with an ellipsis and shows the whole
+id on hover. The model column reads the family and version, with the whole id on hover, and the account cell names the
+account's kind on hover and to a screen reader. The companion column reads the mod's state, `reporting`, `silent` or
+`none` (see [The mod](#the-mod)), and under `reporting` how long ago the person was last seen at the terminal, as
+`presence 12s ago`. Opening a row expands into one line per agent that has sent a real request: its model, pinned
+account and TTL, the last request, the last and the next probe, and the probes sent today with the requests they kept
+warm, counted from midnight UTC, the lines running main first, then the busy, idle and parked agents, newest last
+request first inside each group, a subagent the mod released while its session lives drawing no line, and the Agents
+column leaving it out of its count. The line ends on its state word with the cause beside it, the cause's sentence on
+hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word for the agent, with
+a parked agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`), and repeats the
+state's and the cause's sentences. A session's menu offers "View in analytics" and "View in requests" once it has
+ledgered traffic, the latter opening the request log on the session's requests under the row's key inside the narrowest
+of its ranges that covers the session's last request, "View in routing log",
 which opens the log on that session's decisions, and Release. The analytics view opens on the requests of the key holder
 the row belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending requests stays
 on it, and its tiles once a minute.

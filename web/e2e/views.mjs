@@ -4550,8 +4550,8 @@ async function sessionIdWidth(theme) {
 /**
  * A Sessions row's menu closes the row, so its list opens leftward from the trigger: aligned to the trigger's left
  * edge it would run past the table wrap's right edge, which clips it. The trigger sits in the row's last cell, the
- * list's right edge lies at or left of the wrap's, each item takes a pointer at its center, and the three entries draw
- * a list 160 px wide and 109 px tall.
+ * list's right edge lies at or left of the wrap's, each item takes a pointer at its center, and the entries draw a list
+ * 160 px wide, 32.85 px per entry over 10 px of padding and borders.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -4591,17 +4591,21 @@ async function sessionRowMenu(theme) {
   await atRest();
   measurements.push(`${theme} /sessions row menu ${JSON.stringify(read)}`);
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
+  // 10 px of padding and borders, then 32.85 px per entry (7 px of padding twice over the 13 px font's 1.45 leading),
+  // as the four entries measured 141 px.
+  const height = Math.round(10 + 32.85 * read.items.length);
   if (!read.last) say("the trigger sits in a cell other than the row's last");
   if (read.list.right > read.wrap.right) say(`the list ends at ${read.list.right}px, right of the table wrap's edge at ${read.wrap.right}px`);
   if (read.items.length === 0) say('the list draws no item');
-  if (read.list.width !== 160 || read.list.height !== 109) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 109px`);
+  if (read.list.width !== 160 || read.list.height !== height) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by ${height}px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
 /**
  * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, and
  * State closes the line's columns. A cause badge wraps inside its own State cell, its left and right edges within the
- * cell's box, and its right edge against the table's visible edge is logged beside them.
+ * cell's box, and its right edge against the table's visible edge is logged beside them. The id cell carries the whole
+ * id on its title, and the id's laid-out width fits the first track, the widest id logged with its track.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -4619,9 +4623,13 @@ async function agentLines(theme) {
       const state = row.querySelector('.agents__state');
       const cell = state.getBoundingClientRect();
       const [badge, cause] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+      // A range over the id's text measures it as laid out, which an ellipsis hides from the cell's own box.
+      const idRange = document.createRange();
+      idRange.selectNodeContents(row.children[0]);
       return {
         agent: row.children[0].textContent?.trim(),
         cell: { left: Math.round(cell.left), right: Math.round(cell.right) },
+        id: { text: row.children[0].textContent?.trim(), title: row.children[0].getAttribute('title'), track: row.children[0].clientWidth, width: Math.round(idRange.getBoundingClientRect().width * 100) / 100 },
         more: Math.round(row.querySelector('.agents__more')?.getBoundingClientRect().right ?? 0),
         // A line that cannot wrap runs past its box rather than widening it, which the box's own edge never shows.
         overflows: [...row.querySelectorAll(':scope > span, .agents__more > *')].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.className || el.textContent?.trim().slice(0, 24)),
@@ -4632,7 +4640,9 @@ async function agentLines(theme) {
     return { edge: edge === null ? null : Math.round(edge), head, lines };
   });
   const reasons = read.lines.filter((l) => l.reason !== null);
-  measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: reasons.filter((l) => l.reason.right > read.edge).map((l) => l.agent), wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]) })}`);
+  const widest = read.lines.reduce((w, l) => (w === null || l.id.width > w.id.width ? l : w), null);
+  const stateRight = read.lines.reduce((r, l) => (l.stateRight !== null && (r === null || l.stateRight > r) ? l.stateRight : r), null);
+  measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, stateRight, head: read.head, id: widest === null ? null : { agent: widest.agent, track: widest.id.track, width: widest.id.width }, past: reasons.filter((l) => l.reason.right > read.edge).map((l) => l.agent), wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]) })}`);
   if (read.lines.length > 0 && read.head[read.head.length - 1] !== 'State') say(`the agent lines end ${JSON.stringify(read.head.slice(-1))}, not State`);
   if (mock && read.lines.length === 0) say('Expand all opened no agent line');
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
@@ -4643,6 +4653,9 @@ async function agentLines(theme) {
     say(`agent ${line.agent}'s lifecycle and cause lines end at ${line.more}px, past the table's visible edge at ${read.edge}px`);
   }
   for (const line of read.lines.filter((l) => l.overflows.length > 0)) say(`agent ${line.agent}'s line runs past its cells: ${JSON.stringify(line.overflows)}`);
+  // A cut id still reads whole on hover, and the story's longest id fits its track, so none is cut.
+  for (const line of read.lines.filter((l) => l.id.title !== l.id.text)) say(`agent ${line.agent}'s id cell carries the title ${JSON.stringify(line.id.title)}, not its whole id`);
+  for (const line of read.lines.filter((l) => l.id.width > l.id.track)) say(`agent ${line.agent}'s id takes ${line.id.width}px, wider than its ${line.id.track}px track`);
   const head = await page.evaluate(() => [...(document.querySelector('.agents__row--head')?.children ?? [])].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent?.trim()));
   if (head.length > 0) say(`the agent lines' head runs past its cells: ${JSON.stringify(head)}`);
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {

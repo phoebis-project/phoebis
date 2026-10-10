@@ -557,10 +557,9 @@ impl Inner {
             .unwrap();
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
-        let ttl = record.usage.ttl_ms(
-            agent.ttl_ms,
-            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
-        );
+        let previous_ms = agent.ttl_ms;
+        let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
+        let ttl = record.usage.ttl_ms(previous_ms, requested_ms);
         agent.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
             cost: record.cost_usd,
@@ -657,6 +656,14 @@ impl Inner {
         agent.failures = 0;
         agent.retry_at = None;
         agent.ttl_ms = ttl;
+        crate::engine::note_ttl_change(
+            key,
+            agent_id,
+            previous_ms,
+            ttl,
+            requested_ms,
+            &record.usage,
+        );
         agent.cache_started = job.started;
         agent.expires = Some(job.started + ttl);
         agent.jitter_frac = rand::random::<f64>();
