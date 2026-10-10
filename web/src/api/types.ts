@@ -591,7 +591,8 @@ export interface RequestShape {
 
 /** The instants a request passed through, in the order it passed them. A phase the ledger holds no instant for
  *  reads null: a row from before the two columns on `writtenAt` and `streamEndAt`, a request with no attempt on
- *  `selectedAt`, `writtenAt` and `headAt`, a failed stream on `firstContentAt` and `streamEndAt`. */
+ *  `selectedAt`, `writtenAt` and `headAt`, a failed stream on `firstContentAt` and `streamEndAt`, and a JSON
+ *  answer on `streamEndAt`, since nothing streamed. */
 export interface RequestPhases {
   finishedAt: string | null;
   firstContentAt: string | null;
@@ -1091,7 +1092,7 @@ export interface AnalyticsQuery {
   /** Patterns, one per line; a row matches when any matches its client class in full. */
   clients?: string[];
   from: string;
-  /** Absent keeps every row; the two values partition them. */
+  /** Absent keeps every row, and the two values partition them. */
   funding?: FundingFilter;
   groupBy: AnalyticsGroupBy;
   includeProbes?: boolean;
@@ -1179,7 +1180,7 @@ export interface AnalyticsGroup {
   keyId: string | null;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
-  /** The plan-funded requests and output tokens the shares were summed over; null where `costShares` is. */
+  /** The plan-funded requests and output tokens the shares were summed over, null where `costShares` is. */
   planOutputTokens: number | null;
   planRequests: number | null;
   probeCostUsd: number;

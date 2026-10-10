@@ -9,8 +9,8 @@ use std::time::Duration;
 use phoebis_oauth::{BackoffEdge, UsageError, UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
-    credits_from_usage, sample_from_usage, Report, RouterHandle, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use phoebis_transport::response::ResponseHead;
@@ -165,22 +165,11 @@ pub fn samples_from_poll(
     (quota, extra)
 }
 
-/// The length the lead over pace reads for any window that is not a week, the router's own figure.
-const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
-
 /// How far a sampled reading runs ahead of its window's pace at the sample's instant: the utilization less the
-/// share of the window elapsed by its reset (a week for a `seven_day*` window, five hours otherwise, 0 without a
-/// reset), the router's own arithmetic over the raw sample rather than its prediction.
+/// share of the window elapsed by its reset, the router's own arithmetic (`elapsed_share_at`) over the raw sample
+/// rather than its prediction.
 pub fn lead_over_pace(window: &str, utilization: f64, reset_at: Option<i64>, at: i64) -> f64 {
-    let length = if window.starts_with(SEVEN_DAY) {
-        WEEK_MS
-    } else {
-        FIVE_HOUR_MS
-    };
-    let elapsed = reset_at.map_or(0.0, |reset| {
-        (length.saturating_sub(reset.saturating_sub(at)) as f64 / length as f64).clamp(0.0, 1.0)
-    });
-    utilization - elapsed
+    utilization - elapsed_share_at(window, reset_at, at)
 }
 
 /// Whether the poll asks about this account: every OAuth account that holds a credential, paused or not,

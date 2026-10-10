@@ -26,8 +26,8 @@ export function PhaseWaterfall({ phases }: { phases: RequestPhases }) {
   });
   const last = [...points].reverse().find((p) => p.at !== null)?.at ?? startMs;
   const total = Math.max(1, last - startMs);
-  // A segment spans from the previous measured phase to this one; a phase with
-  // no timestamp draws nothing rather than a zero-width sliver.
+  // A segment spans from the previous measured phase to this one, and a phase with no timestamp draws nothing
+  // rather than a zero-width sliver.
   const segments: { color: string; label: string; width: number }[] = [];
   let prev = startMs;
   points.slice(1).forEach((p, i) => {

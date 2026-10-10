@@ -655,7 +655,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     sweeper.abort();
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
     drop(keepalive);
-    // The listeners are done; a relayed body runs on its own task. A cut connection drops its body channel's
+    // The listeners are done, while a relayed body runs on its own task. A cut connection drops its body channel's
     // receiver, so the body task ends at its next send and publishes its completion, which the ledger and the
     // memory below are still alive to take. A body task blocked on an upstream read waits for the relay's idle
     // timeout, and the margin is what a shutdown gives it.

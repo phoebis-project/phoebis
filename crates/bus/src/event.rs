@@ -497,9 +497,9 @@ pub fn header_published(name: &str) -> bool {
     !HEADER_DENYLIST.contains(&lower.as_str())
 }
 
-/// Bound on the `User-Agent` a ledger row or a live entry keeps, the same as the identity fields carry: the
-/// header reaches both from a request refused before any key was read, so it is the one string an
-/// unauthenticated caller can put there.
+/// Bound on the `User-Agent` a ledger row keeps, the same as the identity fields carry: the header reaches the
+/// row from a request refused before any key was read, so it is the one string an unauthenticated caller can put
+/// there.
 pub const USER_AGENT_MAX_BYTES: usize = 256;
 
 pub fn user_agent_of(headers: &[(String, String)]) -> Option<String> {

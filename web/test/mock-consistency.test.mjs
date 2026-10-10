@@ -599,6 +599,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.equal(p.selectedAt, r.attempts[0]?.startedAt ?? null, `${r.id} is selected when its first attempt starts`);
       assert.equal(p.headAt === null ? null : Date.parse(p.headAt) - received, r.ttfbMs, `${r.id}'s head against its ttfbMs`);
       assert.equal(p.finishedAt === null ? null : Date.parse(p.finishedAt) - received, r.durationMs, `${r.id}'s finish against its durationMs`);
+      // The close is a stream's alone, and one that ended short or was canceled never reached it.
+      if (r.transport !== 'sse' || r.outcome === 'incomplete' || r.outcome === 'canceled') assert.equal(p.streamEndAt, null, `${r.id} closes no stream`);
+      if (r.kind === 'count_tokens') assert.equal(p.firstContentAt, null, `${r.id} streams no content token`);
     }
   });
 
@@ -639,9 +642,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const counted = plan.filter((r) => r.kind !== 'probe');
       const probes = plan.filter((r) => r.kind === 'probe');
       const cost = summed(counted, tier, usageOf);
-      // An unpriced window is absent from the group's map, as the route answers it; a request row keeps the key with null.
+      // An unpriced window is absent from the group's map, as the route answers it, while a request row keeps the key
+      // with null.
       assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).filter((w) => cost[w] !== null).sort(), `${g.key}'s windows`);
-      for (const [w, want] of Object.entries(g.costShares ?? {})) close(want, cost[w], `${g.key}'s ${w}`);
+      for (const [w, got] of Object.entries(g.costShares ?? {})) close(got, cost[w], `${g.key}'s ${w}`);
       const read = summed(counted, tier, (r) => ({ ...usageOf(r), cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }));
       const write = summed(counted, tier, (r) => ({ ...usageOf(r), cacheRead: 0, input: 0, output: 0 }));
       // An unpriced window is absent from the cache and probe maps, as the route answers them.

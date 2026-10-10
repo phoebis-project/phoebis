@@ -2917,13 +2917,18 @@ async function requestDrawerCompact(theme) {
     if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
   };
   // The cost row's share chips take the status badge's type, sit on one line each inside the cell, and the muted
-  // equivalent follows them on one line inside it; a cost row with no chip (a request billed in dollars) is recorded.
+  // equivalent follows them on one line inside it. A cost row with no chip (a request billed in dollars) is recorded
+  // in the router pass, whose seeded requests an API key account serves, and fails the mock pass, whose story's
+  // newest request a subscription window paid for.
   const costRow = (where, got) => {
     if (got.cost === null) {
       say(`${where} has no Estimated cost row to read`);
       return;
     }
-    if (got.cost.chips.length === 0) return;
+    if (got.cost.chips.length === 0) {
+      if (mock) say(`${where}: the cost row draws no share chip`);
+      return;
+    }
     const inside = (e) => e.left >= got.cost.cell.left && e.right <= got.cost.cell.right;
     for (const c of got.cost.chips) {
       if (got.reference !== null && c.box !== got.reference) say(`${where}: the cost row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
@@ -4460,8 +4465,8 @@ async function tableColumns(theme, view, selector, fill, fixed = 0, { overflowRe
       const boxes = [...flex.children].filter((n) => !['absolute', 'fixed'].includes(getComputedStyle(n).position)).map((n) => n.getBoundingClientRect());
       return boxes.filter((b, i) => i > 0 && b.top >= boxes[i - 1].bottom - 1).length + 1;
     };
-    // A wrapping cell's flex row drops its items under each other, so its need is its widest single item; a cell of
-    // the column without a flex row (its header) reads as any other.
+    // A wrapping cell's flex row drops its items under each other, so its need is its widest single item, and a cell
+    // of the column without a flex row (its header) reads as any other.
     const widestItem = (c) => {
       const flex = [c, ...c.children].find((n) => ['flex', 'inline-flex'].includes(getComputedStyle(n).display));
       if (!flex) return inlineWidth(c);
@@ -4996,7 +5001,7 @@ try {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);
         // The Status, Attempts and links cells drop their second item under the first, and the links column's header
-        // is empty; in the mock pass the story's values run past the card, so the table's width is a record there.
+        // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
         await speedFilter(theme);

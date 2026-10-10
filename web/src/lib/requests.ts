@@ -6,13 +6,13 @@ import { fmtUsd, shareLabel } from '@/lib/format';
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
 
-/** The two windows every subscription shares, drawn first in this order; a model's own week follows them. */
+/** The two windows every subscription shares, drawn first in this order, and a model's own week follows them. */
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
 
-/** A request's cost in its native unit: the shares the route answered for a plan-funded request (the windows it
- *  priced, a null one left out), in the order 5-hour, 7-day, then the model week; the dollars with the funding word
- *  for one billed in dollars; the dollar equivalent alone where the route priced no share; the zero dollars of a
- *  request no account served, which has no funding to name. */
+/** A request's cost in its native unit. A plan-funded request carries the shares the route answered (the windows it
+ *  priced, a null one left out), in the order 5-hour, 7-day, then the model week. One billed in dollars carries the
+ *  dollars with the funding word. One the route priced no share for carries the dollar equivalent alone, and a
+ *  request no account served the zero dollars, with no funding to name. */
 export type CostUnit =
   | { kind: 'dollars'; funding: Exclude<Funding, 'plan'>; usd: number }
   | { kind: 'shares'; shares: { key: string; share: number }[]; usd: number }
@@ -36,9 +36,10 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costShares' | 'cost
   return { kind: 'shares', shares, usd: r.costUsd };
 }
 
-/** The table cell's two lines and title: the model week's share where there is one, else the 7-day's, over the
- *  5-hour share; the dollars over the funding word or `equivalent`; every share and the equivalent on the title; an
- *  unserved request's dollars alone, with no second line and no title. */
+/** The table cell's two lines and title. A share unit draws the model week's share where there is one, else the
+ *  7-day's, over the 5-hour share, with every share and the equivalent on the title. A dollar unit draws the dollars
+ *  over the funding word or `equivalent`, and an unserved request's dollars alone, with no second line and no
+ *  title. */
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
   if (unit.kind === 'unpriced') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: NO_SHARE_TITLE };

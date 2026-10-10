@@ -458,6 +458,16 @@ test("one account's shares read from the account filter under the account groupi
   assert.equal(d.oneAccountOf('model', ['primary']), null, 'another grouping mixes accounts in every group');
 });
 
+test('the model week is labeled by the key the share map carries, so a second model week reads under its own name', () => {
+  assert.equal(d.weekLabelOf('seven_day_fable'), '7-day Fable');
+  assert.equal(d.weekLabelOf('seven_day_opus'), 'seven_day_opus', 'a week the console has no label for reads under its key');
+  assert.equal(d.weekLabelOf(undefined), '7-day Fable', 'no map names a week');
+  assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_opus: 0.04 } }), accountGroup({ costShares: null })]), 'seven_day_opus');
+  assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 } }), accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 } })]), '7-day Fable, seven_day_opus', 'each distinct week once');
+  assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 } })]), '7-day Fable', 'a table of Sonnet groups keeps the Fable week column');
+  assert.deepEqual(d.shareLines([{ at: '2026-09-16T11:00:00.000Z', groups: [accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 }, key: 'primary' })] }]).weeks, { primary: 'seven_day_opus' }, 'the lines name the week each account charts');
+});
+
 test('a share row labels each window and divides the 7-day share per plan request and per 1k plan output', () => {
   const base = accountGroup();
   const g = accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 }, planOutputTokens: 2000, planRequests: 4, requests: 10, tokens: { ...base.tokens, output: 5000 } });
@@ -486,7 +496,7 @@ test("the share lines carry each account's 7-day and week shares per bucket with
     ],
     'a bucket an account has no group in, and a window it has no share on, read null, which the chart leaves as a gap',
   );
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }] }, 'no share map, no line');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], weeks: {} }, 'no share map, no line');
 });
 
 test('a share line with one priced bucket between two gaps marks it as an isolated slot, which the chart draws as a dot', () => {

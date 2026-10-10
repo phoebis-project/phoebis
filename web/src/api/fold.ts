@@ -1,7 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
+import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel } from '@/lib/format';
-import { fundingOf } from '@/lib/costs';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
@@ -10,8 +10,9 @@ const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5), p90: percentileFromHistogram(h, 0.9), p95: percentileFromHistogram(h, 0.95), p99: percentileFromHistogram(h, 0.99) });
 
 /**
- * A group as the routes answer one, every figure present but the shares: a fold sums groups that may span accounts,
- * whose windows do not add, so it prices none.
+ * A group as the routes answer one, every figure present and the shares null. `foldGroups` fills `costShares` under
+ * the account grouping alone, where one account's windows add, since a group of any other dimension spans accounts
+ * whose windows do not.
  */
 const empty = (key: string, label = key): AnalyticsGroup => ({
   attempts: 0,
@@ -127,7 +128,12 @@ const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.
 
 /** Who paid for a request: its serving attempt's side, and a request no attempt served is billed in dollars. */
 const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length - 1] ?? null);
-const onSide = (r: RequestLog, side: FundingFilter) => (fundingOfRow(r) === 'plan') === (side === 'plan');
+/**
+ * Whether a row falls on the funding filter's side. The ledger files a request no attempt served under `plan` on the
+ * unattributed account, so the filter follows that filing rather than the cell's dollar unit: a session view and the
+ * grouped routes then count the same rows under each position.
+ */
+const onSide = (r: RequestLog, side: FundingFilter) => (r.attempts.length === 0 || fundingOfRow(r) === 'plan') === (side === 'plan');
 
 /**
  * The plan-funded rows' shares summed per window into the group, as the route sums them under the account grouping:

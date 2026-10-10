@@ -21,8 +21,8 @@ const countsOf = (usage: Usage): Record<TokenSegment['key'], number> => ({
 });
 
 /**
- * The request's token kinds in the Tokens chart's order, each with its count and its share of the total; a kind with
- * no tokens is left out; the plain output is the output less its thinking share.
+ * The request's token kinds in the Tokens chart's order, each with its count and its share of the total. A kind with
+ * no tokens is left out, and the plain output is the output less its thinking share.
  */
 export function tokenSegments(usage: Usage): TokenSegment[] {
   const total = tokensTotal(usage);

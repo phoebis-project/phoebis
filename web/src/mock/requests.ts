@@ -1057,11 +1057,11 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   if (!pool || !head || r.kind === 'count_tokens' || pinned?.accountId !== from || !serves(from, r.canonicalModel)) return null;
   const at = Date.parse(head.startedAt);
   const fast = fastTurn(r.keyId, r.model, r.kind);
-  const kindOf = (id: string) => ACCOUNTS.find((a) => a.id === id)?.kind;
+  const registryKind = (id: string) => ACCOUNTS.find((a) => a.id === id)?.kind;
   const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
-  const holds = kindOf(head.accountId) === 'api_key' || (known && !spent(head.windows));
+  const holds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
   // A move prefers a cool destination: one whose leads over pace sit under the band and that no round shed from
   // within the dwell. One that is not cool is taken only where no sibling is, which this rule leaves undecided.
   const elapsed = (w: AttemptWindow) => Math.min(1, Math.max(0, 1 - (Date.parse(w.resetsAt ?? '') - at) / (w.id === '5h' ? 5 * HOUR : 7 * DAY)));
@@ -1069,10 +1069,10 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || w.utilization - elapsed(w) < band);
   const rested = !(head.accountId === SHED_ROUND.accountId && at >= SHED_ROUND.at && at - SHED_ROUND.at < pool.sourceDwellSeconds * 1_000);
   if (!under || !rested) return null;
-  const toPlan = kindOf(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
+  const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
   if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return holds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
-  if (!fast && pool.overagePolicy === 'prefer_plan' && kindOf(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
-  if (kindOf(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.sourceDwellSeconds * 1_000 ? 'return_to_plan' : null;
+  if (!fast && pool.overagePolicy === 'prefer_plan' && registryKind(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
+  if (registryKind(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.sourceDwellSeconds * 1_000 ? 'return_to_plan' : null;
   return null;
 }
 
@@ -2020,13 +2020,14 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
       output_tokens: request.usage.output,
     },
   };
-  // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw; a JSON answer as its
-  // object. The opening frame carries the message with its usage and no content, as the upstream sends it.
+  // A stream is stored as the text of its events, the way the ledger keeps the bytes it saw, and a JSON answer as
+  // its object. The opening frame carries the message with its usage, no content and no stop reason, as the
+  // upstream sends it, the reason arriving on the message_delta frame.
   const cut = ANSWER_TEXT.indexOf('Moving');
   const response =
     request.transport === 'sse'
       ? [
-          sseFrame('message_start', { type: 'message_start', message: { ...message, content: [] } }),
+          sseFrame('message_start', { type: 'message_start', message: { ...message, content: [], stop_reason: null } }),
           sseFrame('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
           sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(0, cut) } }),
           sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(cut) } }),

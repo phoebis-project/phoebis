@@ -1,9 +1,9 @@
 use phoebis_routing::{
-    cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
-    warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
-    BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided,
-    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason,
+    cohort_hold, decide, effective_warm, elapsed_share_at, lane_key, release_reasons, resolve,
+    select, warm, warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts,
+    BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState,
+    Decided, DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts,
+    HoldOutcome, LaneFacts, LongContextRates, MemberSpend, MigrateReason,
     OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegistrySnapshot, RequestFlags, RoutingState, SelectRequest, SelectResult,
     StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
@@ -10647,6 +10647,22 @@ fn a_pin_half_through_a_week_ten_percent_elapsed_sheds_at_a_margin_of_a_fifth() 
         "the week's lead of 0.4 starts a round and the marked pin moves to the sibling behind its pace"
     );
     assert_eq!(st.last_shed("p", "a"), Some(T));
+}
+
+#[test]
+fn the_round_s_elapsed_share_is_the_exported_reading_of_its_window_s_reset() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran on this decision").facts;
+    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), T);
+    assert!(
+        (round.elapsed_share - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
+        "the engine's reading and the exported arithmetic agree on a tenth of the week: {} against {exported}",
+        round.elapsed_share
+    );
 }
 
 #[test]

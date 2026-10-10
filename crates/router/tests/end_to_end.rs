@@ -3404,7 +3404,7 @@ usage:
     up.shutdown().await;
 }
 
-/// The headless browser pass the sub-project ends with: every view in both themes at 1280 wide, one element
+/// The headless browser pass the full gate ends with: every view in both themes at 1280 wide, one element
 /// per view, no console error, screenshots kept outside the repository. Skipped unless PHOEBIS_E2E_BROWSER=1, so
 /// a build host without Chromium still runs the rest of this suite.
 #[tokio::test]

@@ -278,7 +278,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     // (curl, a subcommand, the health probe) is the operator's own hand. Where this listener terminates TLS, or a
     // front says the browser's leg does, the `Origin` must be `https://` too: a page on this host over plain HTTP
     // could otherwise drive a bodiless write with a cookie some browsers send across schemes. A front that
-    // terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name the front; a forged
+    // terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name the front, and a forged
     // header on a plain listener only costs the forger the `http://` origin it would need. The login is checked
     // too: a forced login is the one mutation an unauthenticated caller can reach.
     if bearer.is_none() && mutation {

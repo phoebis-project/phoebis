@@ -1296,8 +1296,9 @@ pub struct CacheShare {
 }
 
 /// The probe rows' share of a window and the wasted probes' part of it: the group's probe share times the ratio of
-/// its wasted-probe dollars to its probe-cost dollars over its accounting rows, since the rollups keep no token
-/// counts for the wasted probes alone; `None` while the group's probe dollars are zero.
+/// its wasted-probe dollars to its plan-funded probe-cost dollars over its accounting rows, since the rollups keep
+/// no token counts for the wasted probes alone. `wasted` is `None` while the group's plan-funded probe dollars are
+/// zero.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ProbeShare {
     pub cost: f64,
@@ -1342,8 +1343,8 @@ pub struct GroupRow {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
-    /// Keyed by window id, `five_hour`, `seven_day` and the model week; a window absent where a plan row a known
-    /// tier holds could not be priced on it, never for a row whose model the window does not apply to; `None` for
+    /// Keyed by window id, `five_hour`, `seven_day` and the model week. A window is absent where a plan row a known
+    /// tier holds could not be priced on it, never for a row whose model the window does not apply to. `None` for
     /// an api_key group, an oauth group with no tier on file, an account the registry does not hold, and under
     /// every grouping but account.
     pub cost_shares: Option<IndexMap<&'static str, f64>>,
@@ -1362,7 +1363,7 @@ pub struct SeriesPoint {
 }
 
 /// Which rows a read keeps by who paid for them: `Billed` the overage and fast rows and every row of an api_key
-/// account, `Plan` the plan rows of an oauth account or of one the registry no longer holds; the two partition the
+/// account, `Plan` the plan rows of an oauth account or of one the registry no longer holds. The two partition the
 /// rows, so their sums add up to the unfiltered sum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1754,8 +1755,9 @@ struct ShareSums {
     probe_cost: IndexMap<&'static str, WindowSum>,
     plan_requests: u64,
     plan_output_tokens: u64,
-    /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio: an overage probe's
-    /// credit files under `overage` and enters neither.
+    /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio. An overage probe's
+    /// own credit files under `overage` and enters neither side, while the recipe's settlement carries that probe's
+    /// waste under `plan`, so the ratio reads every probe's waste against the plan-funded probe dollars.
     plan_probe_cost_usd: f64,
     plan_wasted_probe_usd: f64,
 }
@@ -2906,7 +2908,7 @@ struct UsageRow<'a> {
 /// one in overage, adds its `estimated_usd` and a zero share where the tables size its tier: fast mode spends
 /// usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader
 /// the account is priced in its window unit. A bucket holding a row the table cannot price answers `None` on that
-/// window, whichever row came first; a row with no token has nothing to price and leaves both windows as the
+/// window, whichever row came first, and a row with no token has nothing to price and leaves both windows as the
 /// other rows set them.
 fn price_usage(
     point: &mut BurnPoint,

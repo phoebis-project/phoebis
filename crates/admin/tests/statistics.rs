@@ -653,6 +653,18 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
         first["utilization_5h_max"].is_null() && first["pins_created"] == 0,
         "an hour with samples and no attempt carries no peak and no count: {first}"
     );
+    // Indexing a missing `windows` would read null and pass the null checks below, so the object is pinned first.
+    assert_eq!(
+        first["windows"]
+            .as_object()
+            .map(|w| w.keys().cloned().collect::<Vec<_>>()),
+        Some(vec![
+            "five_hour".to_string(),
+            "seven_day".to_string(),
+            "seven_day_fable".to_string()
+        ]),
+        "the sample-only hour's windows is an object over the three base keys: {first}"
+    );
     let five = &first["windows"]["five_hour"];
     assert_eq!(five["utilization"].as_f64(), Some(0.62));
     assert_eq!(five["reset_at"].as_i64(), Some(five_hour_at + 4 * HOUR));

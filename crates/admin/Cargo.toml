@@ -31,7 +31,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
-futures = { workspace = true }
 http-body-util = { workspace = true }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }

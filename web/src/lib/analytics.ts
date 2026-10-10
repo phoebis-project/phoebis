@@ -2,6 +2,7 @@ import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
+import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
@@ -43,8 +44,8 @@ export const MAX_BURN_LINES = 7;
 export const OTHER_KEY = 'other';
 /**
  * The unit a burn line charts in. `unknown` is a subscription account the cost model does not size, its tier missing
- * or one the model has no capacity row for: it has no share to draw, and dollars only for what its fast-mode answers
- * spent.
+ * or one the model has no capacity row for: it has no share to draw, and dollars only for what its fast-mode and
+ * overage answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -194,6 +195,16 @@ export const oneAccountOf = (groupBy: AnalyticsGroupBy, accountIds: string[]): s
 const SHARED_WINDOWS = ['five_hour', 'seven_day'];
 /** The model week's key in a share map, the one key beside the two shared windows, undefined where the map has none. */
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
+/**
+ * The model week's label for a share map's key: the window label of the key, so a second model week reads under its
+ * own name, and the Fable week's where no map names one.
+ */
+export const weekLabelOf = (key: string | undefined): string => (key === undefined ? WINDOW_LABEL['7d_fable'] : (WINDOW_LABEL[windowKeyId(key) ?? ''] ?? key));
+/** The share table's model week column, named by the week keys its groups carry, each distinct week once. */
+export const weekColumnOf = (groups: Pick<AnalyticsGroup, 'costShares'>[]): string => {
+  const labels = [...new Set(groups.map((g) => (g.costShares === null ? undefined : weekKeyOf(g.costShares))).filter((k): k is string => k !== undefined).map(weekLabelOf))];
+  return labels.length ? labels.join(', ') : weekLabelOf(undefined);
+};
 /** A window's share as the map carries it: null where absent or carried as null. */
 const windowShare = (shares: Record<string, number | null> | null, key: string | undefined): number | null => (shares === null || key === undefined || !own(shares, key) ? null : shares[key]);
 
@@ -219,22 +230,26 @@ export function shareRow(g: AnalyticsGroup): { fiveHour: string | null; perReque
 /**
  * Per account the 7-day share (solid) and the model week's (dashed) per bucket as `<account>:7d` and
  * `<account>:week`, the 5-hour share beside them as `<account>:5h` for the tooltip, a gap (null) where a bucket has
- * none. The accounts are the groups carrying a share map, so an API key account draws no line.
+ * none, and per account the key its model week is charted under (`weeks`), undefined where no bucket names one. The
+ * accounts are the groups carrying a share map, so an API key account draws no line.
  */
-export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[] } {
+export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
+  const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;
     for (const g of p.groups) {
       if (g.costShares === null) continue;
+      const week = weekKeyOf(g.costShares);
+      weeks[g.key] ??= week;
       row[`${g.key}:5h`] = windowShare(g.costShares, 'five_hour');
       row[`${g.key}:7d`] = windowShare(g.costShares, 'seven_day');
-      row[`${g.key}:week`] = windowShare(g.costShares, weekKeyOf(g.costShares));
+      row[`${g.key}:week`] = windowShare(g.costShares, week);
     }
     return row;
   });
-  return { accounts, data };
+  return { accounts, data, weeks };
 }
 
 const HOUR_MS = 3_600_000;
@@ -248,9 +263,10 @@ export function sampledWindows(rollups: AccountRollup[]): string[] {
 }
 
 /**
- * The Pace score beside a lead, as the routing preview scores an account: the remaining share over the hours from the
- * sample's instant to the reset, floored at nothing remaining. Null without a reset or a utilization, and null for a
- * reset at or before the sample, since the window has reset since and left the sample stale.
+ * The Pace score beside a lead: the remaining share over the hours from the sample's instant to the reset, floored at
+ * nothing remaining, the ratio the routing preview scores an account by (the preview adds its own deadline cap and
+ * minute floor over the engine's prediction rather than a raw sample). Null without a reset or a utilization, and null
+ * for a reset at or before the sample, since the window has reset since and left the sample stale.
  */
 export const paceScoreOf = (sample: WindowSample): number | null => {
   if (sample.resetsAt === null || sample.utilization === null) return null;

@@ -19,8 +19,9 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
  * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's
  * `corrections`, one factor per model the fit corrected. The window-keyed maps are open the same way, one entry
- * per window the rows priced or sampled: a group's `costShares` (a share or null per window), its `cacheShares`
- * and `probeShares` (an object per window) and an account hour's `windows` (a sample per window). Matched by path
+ * per window the rows priced or sampled: a group's `costShares` (a share per window, an unpriced window dropped),
+ * its `cacheShares` and `probeShares` (an object per window) and an account hour's `windows` (a sample per
+ * window). Matched by path
  * only where the fixture's own shape there is an object, so a same-named scalar (`Overview.hourly[].errors`, a
  * plain count) still takes the ordinary type check below. */
 const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.cacheShares', '.probeShares', '.windows'];
@@ -63,7 +64,8 @@ export function same(want, got, path = '', depth = 0, passthrough = () => false)
     const entryShape = Object.values(want)[0];
     if (entryShape === undefined) return [];
     const kinds = MAP_ENTRY_KINDS.find(([at]) => at.test(path))?.[1] ?? [];
-    // An object entry is held to the fixture's first entry's shape; a scalar one to its type, or a kind the map admits.
+    // An object entry is held to the fixture's first entry's shape, and a scalar one to its type, or a kind the map
+    // admits.
     return Object.entries(got).flatMap(([k, v]) => (kinds.includes(kindOf(v)) ? [] : typeof entryShape === 'object' ? same(entryShape, v, `${path}.${k}`, depth + 1, passthrough) : typeof v === entryShape ? [] : [`${path}.${k}: ${typeof v} against ${entryShape}`]));
   }
   if (want === 'null' || want === 'empty') return [];

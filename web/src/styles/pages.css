@@ -1810,7 +1810,7 @@
 }
 
 /* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
-   card as they can. Where a story's values run past the card the table scrolls inside its wrap. */
+   card as they can. Where the values run past the card the table scrolls inside its wrap. */
 .requests__table th,
 .requests__table td {
   padding-left: 4px;

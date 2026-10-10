@@ -32,8 +32,8 @@ pub(crate) struct ShareContext {
 }
 
 impl ShareContext {
-    /// `accounts()` and one `subscription()` per oauth account; a store failure is the route's 500.
-    // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+    /// `accounts()` and one `subscription()` per oauth account. A store failure is the route's 500.
+    // The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
     // pointer chase and nothing else.
     #[allow(clippy::result_large_err)]
     pub(crate) fn read(state: &AdminState) -> Result<ShareContext, Response> {

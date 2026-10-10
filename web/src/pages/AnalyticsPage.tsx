@@ -16,7 +16,7 @@ import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
-import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekKeyOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -440,6 +440,8 @@ export function AnalyticsPage() {
   const oneAccount = oneAccountOf(groupBy, filters.accountId);
   const oneGroup = useMemo(() => (oneAccount === null ? null : (costGroups.find((g) => g.key === oneAccount) ?? null)), [costGroups, oneAccount]);
   const cacheShareRows = useMemo(() => (unit === 'share' && oneAccount !== null ? cacheShareRowsOf(costPoints, oneAccount) : []), [unit, oneAccount, costPoints]);
+  // The cache chart's week rows are keyed off the one account's map, so its legend names that map's week.
+  const cacheWeek = weekLabelOf(oneGroup === null || oneGroup.cacheShares === null ? undefined : weekKeyOf(oneGroup.cacheShares));
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== '' || sessionId !== null || includeProbes;
   // The burn, rewrite and fit routes read the range alone, so every filter of the bar passes them by.
   const unfiltered = otherFilters || filters.accountId.length > 0;
@@ -466,7 +468,7 @@ export function AnalyticsPage() {
   const costLoading = funded ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale : loading;
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : null;
   const shareTiles = shareTilesOf(groupBy, oneAccount, oneGroup, costLoading);
-  const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, costLoading);
+  const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, costLoading, sessionId !== null);
   const unitControl = <UnitSelect value={unit} onChange={chooseUnit} />;
   // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
@@ -774,10 +776,10 @@ export function AnalyticsPage() {
                     content={timeTip<CacheShareRow>((p) => [
                       { color: ink.series[3], label: 'write (5-hour)', value: shareOrDash(p.write.fiveHour) },
                       { color: ink.series[3], label: 'write (7-day)', value: shareOrDash(p.write.sevenDay) },
-                      { color: ink.series[3], label: 'write (7-day Fable)', value: shareOrDash(p.write.week) },
+                      { color: ink.series[3], label: `write (${cacheWeek})`, value: shareOrDash(p.write.week) },
                       { color: ink.series[2], label: 'read (5-hour)', value: shareOrDash(p.read.fiveHour) },
                       { color: ink.series[2], label: 'read (7-day)', value: shareOrDash(p.read.sevenDay) },
-                      { color: ink.series[2], label: 'read (7-day Fable)', value: shareOrDash(p.read.week) },
+                      { color: ink.series[2], label: `read (${cacheWeek})`, value: shareOrDash(p.read.week) },
                     ])}
                   />
                   <Bar dataKey="write.sevenDay" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
@@ -838,7 +840,7 @@ export function AnalyticsPage() {
           </div>
           <div className="grid-2">
             <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} unit={unit} />
-            {/* The split is a dollar figure in every position; under shares it reads the whole, as under the default. */}
+            {/* The split is a dollar figure in every position, so under shares it reads the whole, as under the default. */}
             <Card title="Cost split" subtitle={`By token kind, in dollars at the API price list, ${UNIT_SPLIT[unit === 'share' ? 'all' : unit]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
@@ -863,7 +865,7 @@ export function AnalyticsPage() {
               subtitle="Shares of each account's own windows for the range, over its plan-funded requests"
               loading={costLoading}
               groupLabel={groupLabel}
-              columns={['Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']}
+              columns={['Plan requests', '5-hour', '7-day', weekColumnOf(costGroups), 'Per request', 'Per 1k output']}
               rows={costGroups.map((g) => {
                 const r = shareRow(g);
                 return { key: g.key, label: g.label, cells: [g.planRequests === null ? '-' : fmtInt(g.planRequests), r.fiveHour ?? '-', r.sevenDay ?? '-', r.week ?? '-', r.perRequest ?? '-', r.perThousand ?? '-'] };
@@ -1059,20 +1061,21 @@ function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: Analyt
 /**
  * The Probe cost tile per position: under "Window shares" the named account's probe share of its 7-day window with
  * the other windows and the probe count in the note, a dash with the count where none is priced, and the note alone
- * with none or several accounts named. Under a dollar position the position's probe dollars.
+ * with none or several accounts named. Under a dollar position the position's probe dollars. A session view folds
+ * request rows, which measure no probe count, so `session` reads the count unmeasured on both paths even where the
+ * fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
  */
-function probeTileOf(unit: AnalyticsUnit, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean): { note: string; value: string | null } {
+function probeTileOf(unit: AnalyticsUnit, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean, session: boolean): { note: string; value: string | null } {
   if (unit === 'share') {
     if (oneAccount === null) return { note: SHARE_NOTE, value: loading ? null : '-' };
-    // A group folded from request rows measures no probe count, as the dollar branch reads it unmeasured too.
-    const probes = group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
+    const probes = session || group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
     const shares = group?.probeShares ?? null;
     const named = (key: string | undefined) => (shares === null || key === undefined || !own(shares, key) ? null : shareLabel(key, shares[key].cost));
     const sevenDay = named('seven_day');
     const others = [named('five_hour'), named(shares === null ? undefined : weekKeyOf(shares))].filter((s): s is string => s !== null);
     return { note: [...others, probes].join(', '), value: loading ? null : (sevenDay ?? '-') };
   }
-  const unmeasured = totals.fromRequests === true;
+  const unmeasured = session || totals.fromRequests === true;
   return { note: unmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[unit]}`, value: loading ? null : unmeasured ? '-' : fmtUsd(totals.probeCostUsd) };
 }
 
@@ -1507,7 +1510,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
         loading={loading}
         error={error}
         empty={groupBy === 'account' ? undefined : SHARE_NOTE}
-        legend={lines.accounts.flatMap((a) => [{ color: groupSlot(a), label: `${a} (7-day)`, shape: 'line' as const }, ...(weekOf(a) ? [{ color: groupSlot(a), dashed: true, label: `${a} (7-day Fable)`, shape: 'line' as const }] : [])])}
+        legend={lines.accounts.flatMap((a) => [{ color: groupSlot(a), label: `${a} (7-day)`, shape: 'line' as const }, ...(weekOf(a) ? [{ color: groupSlot(a), dashed: true, label: `${a} (${weekLabelOf(lines.weeks[a])})`, shape: 'line' as const }] : [])])}
       >
         <LineChart data={lines.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -1519,7 +1522,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
               lines.accounts.flatMap((a) => [
                 { color: groupSlot(a), label: `${a} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
                 { color: groupSlot(a), label: `${a} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
-                { color: groupSlot(a), label: `${a} (7-day Fable)`, value: shareOrDash(p[`${a}:week`]) },
+                { color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) },
               ]),
             )}
           />
@@ -1637,7 +1640,7 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers; its plan quota spends window share, charted under Plan per hour";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers. Its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: 'Other (fast mode or overage)' };
@@ -1702,8 +1705,8 @@ function BurnCharts({
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
   // Every other grouping mixes both kinds of account, so its lines chart the dollars their API-key traffic and
-  // fast-mode answers spent; under the account grouping a subscription account, or a folded rest of them, draws a
-  // dollar line only for the usage credits its fast-mode answers spent.
+  // fast-mode and overage answers spent. Under the account grouping a subscription account, or a folded rest of
+  // them, draws a dollar line only for what its fast-mode and overage answers spent.
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? SPEND_REST_LABEL[l.unit] : nameOf(l));
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byAccount && !l.other && l.unit === 'window_share');

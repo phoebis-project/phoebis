@@ -1069,7 +1069,8 @@ test('a session fold under a funding side keeps the rows that side paid for', ()
   assert.equal(requestsUnder('plan'), 2, 'the plan rows alone');
   const hourAfter = new Date(Date.parse(plan.at) + 3_600_000).toISOString();
   assert.equal(d.foldRequests(rows, 3_600_000, plan.at, hourAfter, 'all', { funding: 'plan' })[0].groups[0].requests, 2, 'the bucketed fold keeps the same side');
-  assert.deepEqual(d.foldGroups([{ ...plan, attempts: [], costShares: null, id: 'unserved' }], 'all', { funding: 'billed' }).map((g) => g.requests), [1], 'a request no attempt served is billed in dollars');
+  const unserved = [{ ...plan, attempts: [], costShares: null, id: 'unserved' }];
+  assert.deepEqual([d.foldGroups(unserved, 'all', { funding: 'plan' }).map((g) => g.requests), d.foldGroups(unserved, 'all', { funding: 'billed' }).length], [[1], 0], 'a request no attempt served falls on the plan side, as the ledger files it');
 });
 
 test("a session fold under the account grouping sums the rows' shares, leaves a window no row's model applies to absent, nulls one a row could not price and nulls the map where no share applies", () => {

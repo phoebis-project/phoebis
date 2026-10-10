@@ -7089,10 +7089,13 @@ await m.navigate(`/requests/${laptopRow.id}`);
   const matched = legend.every((l) => l.count !== null && l.count === tableOf(ROW_OF[l.label]));
   const segments = m.container.querySelectorAll('.drawer .token-bar__seg').length;
   const aria = m.container.querySelector('.drawer .token-bar__track')?.getAttribute('aria-label') ?? '';
+  // A segment's title names its kind, so its width is read against that kind's share of the row's tokens.
+  const widths = [...m.container.querySelectorAll('.drawer .token-bar__seg')].map((seg) => ({ label: seg.getAttribute('title')?.split(':')[0] ?? '', width: parseFloat(seg.style.width) }));
+  const sized = widths.length === kinds && widths.every((w) => w.label in counts && Math.abs(w.width - (counts[w.label] / total) * 100) < 0.01);
   results.push({
-    name: "/requests the token bar's segments count the kinds with tokens and its legend's counts equal the Usage table's",
-    ok: kinds > 0 && segments === kinds && JSON.stringify(legend.map((l) => l.label)) === JSON.stringify(ORDER) && matched && aria.startsWith(`${total.toLocaleString('en-US')} tokens`),
-    missing: [`${segments} segments for ${kinds} kinds`, JSON.stringify(legend), aria],
+    name: "/requests the token bar's segments count the kinds with tokens, each as wide as its share, and its legend's counts equal the Usage table's",
+    ok: kinds > 0 && segments === kinds && sized && JSON.stringify(legend.map((l) => l.label)) === JSON.stringify(ORDER) && matched && aria.startsWith(`${total.toLocaleString('en-US')} tokens`),
+    missing: [`${segments} segments for ${kinds} kinds`, JSON.stringify(widths), JSON.stringify(legend), aria],
   });
 }
 {
@@ -7224,7 +7227,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 
   // The frozen clock lets one tick fire the page's 15-second clock, which redraws the drawer around the same answer.
-  // The request is a JSON object, serialized once; the response is the text of a stream, split into its frames
+  // The request is a JSON object, serialized once, and the response is the text of a stream, split into its frames
   // once. The split is counted on the line split the frame reader runs over the stored text, since the reader itself
   // is a binding inside the bundle.
   const firstCheck = '/requests the first draw serializes each captured body once';
@@ -10282,9 +10285,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
     const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
     const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
-    // nightly's morning ran Fable on the plan, so its row prices three windows; primary served the story's Sonnet 5
-    // turns, which the cost model has no weight for, so its two shared windows read unpriced beside its Fable week;
-    // secondary serves Sonnet 5 alone and reads unpriced; studio's one row ran a laptop-lane model with no Fable week.
+    // nightly's morning ran Fable on the plan, so its row prices three windows. primary served the story's Sonnet 5
+    // turns, which the cost model has no weight for, so its two shared windows read unpriced beside its Fable week.
+    // secondary serves Sonnet 5 alone and reads unpriced, and studio's one row ran a laptop-lane model with no Fable
+    // week.
     const tableRead = {
       nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
       primary: reads(cellsOf('primary'), ['count', 'dash', 'dash', 'share', 'dash', 'dash']),
@@ -10427,6 +10431,39 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [`served ${served?.id} on ${served?.accountId}`, `meta ${meta.slice(0, 40)}`, `tile ${JSON.stringify(read)}`],
       });
       session.unmount();
+    }
+    {
+      // Where the fold keeps no row of the named account (its rows all billed in dollars) or no row at all (a billed
+      // position over a session the plan paid for), the tile still names the missing count rather than reading zero.
+      const probeTile = (page) => {
+        const tile = [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+        return [tile?.querySelector('.stat__value')?.textContent?.trim(), tile?.querySelector('.stat__note')?.textContent?.trim()];
+      };
+      const inSession = (r) => requests.filter((x) => x.sessionId === r.sessionId && x.keyId === r.keyId);
+      const billedOnly = requests.find((r) => r.sessionId !== null && r.accountId !== null && inSession(r).filter((x) => x.accountId === r.accountId).every((x) => costUnitOf(x).kind === 'dollars'));
+      const planOnly = requests.find((r) => r.sessionId !== null && inSession(r).every((x) => costUnitOf(x).kind !== 'dollars'));
+      const name = '/analytics a session view reads the Probe cost tile as not in the request log where its fold holds no group';
+      if (!billedOnly || !planOnly) results.push({ name, ok: false, missing: [`billed-only session ${billedOnly?.sessionId}`, `plan-only session ${planOnly?.sessionId}`] });
+      else {
+        const billed = await mount(`/analytics?session=${encodeURIComponent(billedOnly.sessionId)}&key=${encodeURIComponent(`${billedOnly.keyId}@${billedOnly.keyGeneration}`)}&unit=share#cache-warming`);
+        await groupPage(billed, 'account');
+        const filter = [...billed.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Account'));
+        filter?.querySelector('.mselect__trigger')?.click();
+        await billed.settle(150);
+        [...(filter?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === billedOnly.accountId)?.click();
+        await billed.settle(900);
+        const underShares = probeTile(billed);
+        billed.unmount();
+        const plan = await mount(`/analytics?session=${encodeURIComponent(planOnly.sessionId)}&key=${encodeURIComponent(`${planOnly.keyId}@${planOnly.keyGeneration}`)}&unit=usd#cache-warming`);
+        await plan.settle(900);
+        const underBilled = probeTile(plan);
+        plan.unmount();
+        results.push({
+          name,
+          ok: JSON.stringify(underShares) === JSON.stringify(['-', 'not in the request log']) && JSON.stringify(underBilled) === JSON.stringify(['-', 'not in the request log']),
+          missing: [`${billedOnly.sessionId} on ${billedOnly.accountId} under shares ${JSON.stringify(underShares)}`, `${planOnly.sessionId} under billed dollars ${JSON.stringify(underBilled)}`],
+        });
+      }
     }
   }
   {
@@ -13996,12 +14033,13 @@ m.unmount();
     missing: [why(loneCount.container.querySelector('.trail-count'))],
   });
   loneCount.unmount();
-  const lone = await mountNode(React.createElement(AttemptTrail, { attempts: [{ accountId: 'primary', cooldownSet: null, index: 0, outcome: 'succeeded', upstreamStatus: 200 }] }));
+  const lone = await mountNode(React.createElement(AttemptTrail, { attempts: [{ accountId: 'primary', cooldownSet: null, index: 0, outcome: 'succeeded', upstreamStatus: 200 }, { accountId: 'secondary', cooldownSet: null, index: 1, outcome: 'transport_error', upstreamStatus: null }] }));
   const trail = lone.container.querySelector('.trail');
   const node = describedBy(trail);
+  const LONE_LINES = '1. primary: succeeded, HTTP 200, no cooldown set\n2. secondary: transport error, no status, no cooldown set';
   results.push({
-    name: 'a trail outside every host describes through a node beside it',
-    ok: node !== null && node === trail.nextElementSibling && node.textContent === '1. primary: succeeded, HTTP 200, no cooldown set' && node.textContent === trail.getAttribute('title') && trail.textContent === 'primary 200',
+    name: 'a trail outside every host describes through a node beside it, an attempt with no status read as "no status"',
+    ok: node !== null && node === trail.nextElementSibling && node.textContent === LONE_LINES && node.textContent === trail.getAttribute('title') && trail.textContent === 'primary 200secondary …',
     missing: [why(trail), node ? JSON.stringify(node.textContent) : 'no node', JSON.stringify(trail?.textContent ?? '')],
   });
   lone.unmount();

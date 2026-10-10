@@ -1441,8 +1441,8 @@ async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
 #[test]
 fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let sample = |bucket: i64, utilization: f64| QuotaSampleRecord {
-        account_id: "a".into(),
+    let sample_of = |account: &str, bucket: i64, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
         bucket,
         window: FIVE_HOUR.into(),
         utilization: Some(utilization),
@@ -1450,8 +1450,10 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         source: "poll".into(),
         observed_at: Some(bucket * 1_000 + 17_000),
     };
+    let sample = |bucket: i64, utilization: f64| sample_of("a", bucket, utilization);
     // Three samples in the hour from 3,600 s written out of order, one in the hour after, and one before the
-    // epoch, whose hour floors below it rather than truncating toward zero.
+    // epoch, whose hour floors below it rather than truncating toward zero. A second account samples the same two
+    // hours at other buckets, so a read that forgot to scope its newest bucket to the account would drop one side.
     db.insert_samples(
         &[
             sample(3_900, 0.1),
@@ -1459,6 +1461,9 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
             sample(4_200, 0.2),
             sample(7_500, 0.4),
             sample(-2_700, 0.05),
+            sample_of("b", 4_400, 0.9),
+            sample_of("b", 4_000, 0.8),
+            sample_of("b", 7_300, 0.7),
         ],
         None,
     )
@@ -1467,9 +1472,17 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         .read_blocking(|c| hourly_window_samples(c, -3_600, 10_800))
         .unwrap();
     assert_eq!(
-        rows.iter().map(|r| (r.hour, r.bucket)).collect::<Vec<_>>(),
-        vec![(-3_600, -2_700), (3_600, 4_500), (7_200, 7_500)],
-        "the newest of the three, the one of the next hour, and the negative bucket under the hour below it"
+        rows.iter()
+            .map(|r| (r.account_id.as_str(), r.hour, r.bucket))
+            .collect::<Vec<_>>(),
+        vec![
+            ("a", -3_600, -2_700),
+            ("a", 3_600, 4_500),
+            ("a", 7_200, 7_500),
+            ("b", 3_600, 4_400),
+            ("b", 7_200, 7_300),
+        ],
+        "per account the newest of its hour, the negative bucket under the hour below it, ordered by account"
     );
     assert_eq!(
         rows[1],
@@ -1489,7 +1502,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
         .unwrap();
     assert_eq!(
         bounded.iter().map(|r| r.bucket).collect::<Vec<_>>(),
-        vec![4_500],
+        vec![4_500, 4_400],
         "the bounds are hours in seconds, the upper one exclusive"
     );
 }

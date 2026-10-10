@@ -1677,13 +1677,20 @@ fn ahead(state: &RoutingState, account_id: &str, window: &str, now: i64) -> Opti
 
 /// The share of `window` that has elapsed at `now` by the reading's reset, 0 for a reading that names none.
 fn elapsed_share(reading: &WindowReading, window: &str, now: i64) -> f64 {
+    elapsed_share_at(window, reading.reset, now)
+}
+
+/// The share of `window` that has elapsed at `at` by its reset `reset_at`: a week for a `seven_day*` window and
+/// five hours otherwise, clamped to the window, and 0 without a reset. The one arithmetic behind the engine's
+/// pace reading and the ledger's lead over a raw sample, so the two readings cannot drift apart.
+pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, at: i64) -> f64 {
     let length = if window.starts_with(SEVEN_DAY) {
         WEEK_MS
     } else {
         FIVE_HOUR_MS
     };
-    reading.reset.map_or(0.0, |reset| {
-        (length.saturating_sub(reset.saturating_sub(now)) as f64 / length as f64).clamp(0.0, 1.0)
+    reset_at.map_or(0.0, |reset| {
+        (length.saturating_sub(reset.saturating_sub(at)) as f64 / length as f64).clamp(0.0, 1.0)
     })
 }
 

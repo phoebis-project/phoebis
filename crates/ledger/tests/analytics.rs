@@ -10,8 +10,8 @@ use phoebis_ledger::{
     series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, FundingFilter,
     GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
     PlanTables, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect,
-    SeriesFilter, SharePricing, SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING, NO_CLASS,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    SeriesFilter, SharePricing, Speed, SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING,
+    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1979,6 +1979,93 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
         plan.0 == 0.0 && plan.1 == 0.0 && (plan.2 - 0.01).abs() < 1e-12,
         "plan keeps the settlement's waste alone: {plan:?}"
     );
+}
+
+#[test]
+fn a_fast_recipe_s_credit_files_under_fast_whatever_its_overage_flag() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                at: WEEKDAY_OFF_PEAK,
+                key_id: "k".into(),
+                pool_id: "p".into(),
+                account_id: "a".into(),
+                canonical_model: "claude-fable-5-1".into(),
+                kind: "probe".into(),
+                probe_cost_usd: 0.04,
+                overage_in_use: Some(true),
+                speed: Some(Speed::Fast),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.speed.as_str(), r.funding.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("fast", FAST_FUNDING)],
+        "the recipe's speed keys the credit before the overage flag: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_tierless_oauth_group_and_an_account_the_registry_lacks_answer_no_share() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-tierless",
+            account: "t",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-unknown",
+            account: "u",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let mut kinds = share_kinds();
+    kinds.insert("t".to_string(), AccountKind::Oauth);
+    let tiers = share_tiers("test_tier");
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &kinds,
+        Some(pricing),
+    )
+    .await;
+    for key in ["t", "u"] {
+        let g = group(&groups, key);
+        assert!(
+            g.cost_shares.is_none()
+                && g.cache_shares.is_none()
+                && g.probe_shares.is_none()
+                && g.plan_requests.is_none()
+                && g.plan_output_tokens.is_none(),
+            "{key} answers the five members null: {g:?}"
+        );
+    }
 }
 
 #[test]

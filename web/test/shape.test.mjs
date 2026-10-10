@@ -60,8 +60,8 @@ test('a window-keyed map takes any window, a request row\'s share map a null ent
   const got = { cacheShares: { five_hour: { read: 1, write: 2 }, seven_day_fable: { read: 3, write: 4 } }, costShares: { five_hour: 1, seven_day_fable: 2 }, windows: { five_hour: { lead: 0.1 } } };
   assert.deepEqual(same(want, got), []);
   assert.deepEqual(same(want, { ...got, cacheShares: { seven_day: { read: 1 } }, costShares: { five_hour: 'one' } }), ['.cacheShares.seven_day.write: only in the decoded fixture', '.costShares.five_hour: string against number']);
-  // A request row carries an applicable window the cost model could not price as null; a group's map drops it, as
-  // the route does, so a null there is a finding.
+  // A request row carries an applicable window the cost model could not price as null, while a group's map drops it,
+  // as the route does, so a null there is a finding.
   const rows = shapeOf({ requests: [{ costShares: { five_hour: 1 } }] });
   assert.deepEqual(same(rows, { requests: [{ costShares: { five_hour: 1, seven_day: null } }] }), []);
   assert.deepEqual(same(shapeOf({ request: { costShares: { five_hour: 1 } } }), { request: { costShares: { seven_day: null } } }), []);
