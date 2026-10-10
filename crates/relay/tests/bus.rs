@@ -3,18 +3,24 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::http::Request;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{
-    AttemptOutcome, Bus, ClientFacts, Delivery, Event, Fork, Outcome, Phase, ResponseChunk,
-    Subscriber,
+    AttemptOutcome, Bus, ClientFacts, Delivery, DiagnosticsSource, Event, Fork, Outcome, Phase,
+    RequestComplete, ResponseChunk, Subscriber,
 };
-use phoebis_relay::Limits;
+use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_relay::{Limits, MemoryKey};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
+/// The session id the first-party fixture's head carries.
+const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
+const REFUSED_DIAGNOSTICS: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"unknown field diagnostics."}}"#;
 
 /// The events of one request in publish order, with the chunks pulled out beside them.
 fn split(events: Vec<Event>) -> (Vec<Event>, Vec<ResponseChunk>) {
@@ -584,6 +590,212 @@ async fn after_the_head_an_sse_error_fails_a_lost_upstream_reads_incomplete_and_
             complete.status
         ),
         (Outcome::Canceled, Some("account_cancelled"), 503)
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+fn json_answer(status: u16, body: &str) -> Respond {
+    Respond::Json {
+        status,
+        headers: vec![],
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+fn ok_with_id(id: &str) -> Respond {
+    json_answer(
+        200,
+        &format!(
+            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        ),
+    )
+}
+
+/// Sends `request`, reads its answer to the end and returns the completion the relay published for it.
+async fn completion_of(
+    h: &Harness,
+    sub: &mut Subscriber,
+    request: Request<Body>,
+) -> (u16, RequestComplete) {
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    let status = resp.status().as_u16();
+    let _ = resp.into_body().collect().await;
+    let (events, _) = drain_until_complete(sub).await;
+    let complete = events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .expect("the request completed");
+    (status, complete)
+}
+
+#[tokio::test]
+async fn the_completion_event_names_the_members_source_and_the_writers_follow_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    for respond in [
+        ok_with_id("msg_client"),
+        ok_with_id("msg_router"),
+        ok_with_id("msg_gated"),
+        json_answer(200, r#"{"input_tokens":7}"#),
+        json_answer(400, REFUSED_DIAGNOSTICS),
+        ok_with_id("msg_strip"),
+    ] {
+        up.push_credential_rule(A, "/v1/messages", respond);
+    }
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await;
+    let client_session = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        FIRST_PARTY_SESSION,
+        "main",
+    );
+    let remembered = || {
+        h.relay
+            .previous(&client_session, "a", "claude-sonnet-4-5")
+            .message_id
+    };
+
+    let client = request_from_fixture(
+        inference_head(FixtureKind::OauthFirstParty),
+        body(BodyFixture::FirstParty9b244),
+        KEY,
+    );
+    let (status, complete) = completion_of(&h, &mut sub, client).await;
+    assert_eq!(status, 200);
+    assert_eq!(complete.diagnostics, Some(DiagnosticsSource::Client));
+    assert_eq!(remembered().as_deref(), Some("msg_client"));
+
+    let (status, complete) = completion_of(
+        &h,
+        &mut sub,
+        request_for(KEY, "claude-sonnet-4-5", "s-router"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(complete.diagnostics, Some(DiagnosticsSource::Router));
+
+    let mut gated = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &without_tools(body(BodyFixture::Oauth), false),
+        KEY,
+    );
+    set_header(&mut gated, "x-claude-code-session-id", "s-gated");
+    let (status, complete) = completion_of(&h, &mut sub, gated).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        complete.diagnostics, None,
+        "the gate gave the body no member"
+    );
+
+    let count = Request::builder()
+        .method("POST")
+        .uri("/v1/messages/count_tokens")
+        .header("Authorization", format!("Bearer {KEY}"))
+        .header("User-Agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", "s-count")
+        .body(Body::from(
+            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let (status, complete) = completion_of(&h, &mut sub, count).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        complete.diagnostics, None,
+        "a token count carries no member"
+    );
+
+    // Under the client-member turn's session: the first pass names that turn's answer, the 400 strips the member,
+    // and the retry's answer, sent without one, must not replace it.
+    let (status, complete) = completion_of(
+        &h,
+        &mut sub,
+        request_for(KEY, "claude-sonnet-4-5", FIRST_PARTY_SESSION),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let sent = up.requests();
+    assert_eq!(sent.len(), 6, "the strip retried once on the same account");
+    assert!(phoebis_cch::object_member_span(&sent[4].body, &["diagnostics"]).is_some());
+    assert!(phoebis_cch::object_member_span(&sent[5].body, &["diagnostics"]).is_none());
+    assert_eq!(
+        complete.diagnostics, None,
+        "the answering pass sent no member"
+    );
+    assert_eq!(
+        remembered().as_deref(),
+        Some("msg_client"),
+        "the session still names the turn that carried the member"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_whose_account_left_after_its_head_completes_with_the_legs_source() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Stall {
+            status: 200,
+            headers: vec![],
+            events: vec![],
+        },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await;
+    let app = h.app.clone();
+    let stalled = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let resp = stalled.await.unwrap();
+    assert_eq!(resp.status(), 503);
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!()
+    };
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.diagnostics
+        ),
+        (
+            Outcome::Canceled,
+            Some("account_cancelled"),
+            Some(DiagnosticsSource::Router)
+        ),
+        "the upstream compared the leg's body before the account left"
     );
     up.release();
     up.shutdown().await;

@@ -891,6 +891,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: Some("msg_k1_1".into()),
             finished_at: now,
         }));
@@ -949,6 +950,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: now,
         }));

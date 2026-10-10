@@ -18,9 +18,9 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, Event, Fork,
-    Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, ResponseHead as BusHead, Usage,
+    AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, DiagnosticsSource,
+    Event, Fork, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
+    ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
@@ -192,6 +192,9 @@ pub struct RelayOutcome {
     /// answer alone, an account that leaves the registry while the probe is in flight included. `None` for an answer
     /// the relay built before any selection.
     pub account_kind: Option<AccountKind>,
+    /// The source of the `diagnostics` member on the answering leg's body; `None` for an answer the relay built
+    /// before any leg and for a leg that sent none.
+    pub diagnostics: Option<DiagnosticsSource>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
@@ -683,6 +686,7 @@ impl Trace {
                 .held
                 .as_ref()
                 .and_then(|h| serde_json::to_string(h).ok()),
+            diagnostics: outcome.diagnostics,
             message_id,
             finished_at,
         }))
@@ -1586,7 +1590,17 @@ impl Relay {
         let cache_diagnostics_on = snapshot
             .pool(&key.pool_id)
             .is_some_and(|p| p.cache_diagnostics);
-        let diagnostics = cache_diagnostics_on && trace.kind != Kind::CountTokens;
+        // Mirrors the client's own gate: the member and its beta go only where the client cached and sent tools,
+        // so a helper that shares no prefix with its conversation never reports a false miss. The markers are the
+        // client's, read before the cache TTL policy's rewrite, so a body the policy gives a member stays
+        // member-less. An empty `tools` array is no tools list.
+        let diagnostics = cache_diagnostics_on
+            && trace.kind != Kind::CountTokens
+            && facts.markers_ttl_ms.is_some()
+            && facts.shape.tool_count >= 1;
+        // The same raw lookup `insert_diagnostics` makes, so the recorded source and the edit never disagree.
+        let client_diagnostics = trace.kind != Kind::CountTokens
+            && phoebis_cch::object_member_span(&raw, &["diagnostics"]).is_some();
         let cache_ttl_policy = snapshot
             .pool(&key.pool_id)
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
@@ -1615,6 +1629,7 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            client_diagnostics,
             client_gzip,
             client_version,
             deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
@@ -2263,6 +2278,15 @@ impl Relay {
                 .chain(&head.injected)
                 .copied()
                 .collect();
+            // The source of the member on this pass's body: a strip retry rebuilt the body without it, so its pass
+            // reads none and remembers nothing.
+            let diagnostics = if admitted.client_diagnostics {
+                Some(DiagnosticsSource::Client)
+            } else if body_injected.contains(&Injected::Diagnostics) {
+                Some(DiagnosticsSource::Router)
+            } else {
+                None
+            };
             let responding = Responding {
                 account,
                 attempt: *attempt,
@@ -2276,6 +2300,7 @@ impl Relay {
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
+                diagnostics,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
                 floor_held: &admitted.floor_held,
@@ -2512,6 +2537,7 @@ impl Relay {
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         outcome.overage_in_use = UnifiedHeaders::parse(&head).and_then(|u| u.overage_in_use);
+        outcome.diagnostics = ctx.diagnostics;
         self.report_overage(ctx.account, &head, head_at).await;
         self.report_head_sample(
             ctx.account,
@@ -2765,30 +2791,35 @@ impl Relay {
                         .record_request_id(key, &ctx.account.id, id, arrived);
                 }
                 // Built once and moved into whichever branch below commits: a JSON answer and a streamed one
-                // both reach the caller through `stream()`, so both parse for a message id the same way.
+                // both reach the caller through `stream()`, so both parse for a message id the same way. An
+                // answer is remembered only for a request that carried or received the member, so a helper the
+                // gate refused never becomes the next turn's named predecessor.
                 let on_message_id: Option<
                     Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>,
-                > = ctx.memory_key.map(|key| {
-                    let memory = self.memory.clone();
-                    let key = key.clone();
-                    let account_id = ctx.account.id.clone();
-                    // The same wire-spelling key `previous` reads above, not the resolved identity: see its
-                    // comment.
-                    let model = ctx.identity.folded_model.clone();
-                    let clock = self.clock.clone();
-                    Box::new(move |id: String| {
-                        // Awaited on the body task before the next piece goes out, so the caller's next
-                        // request finds the id in memory and a shutdown flush carries it; the restore is
-                        // a store read only on a miss. Stamped at fire time, so a slow body never moves
-                        // `last_seen` back to the head's clock.
-                        Box::pin(async move {
-                            let now = (clock)();
-                            memory.restore(&key, now).await;
-                            memory.record_message_id(&key, &account_id, &model, &id, now);
-                        }) as BoxFuture<'static, ()>
-                    })
-                        as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
-                });
+                > = ctx
+                    .memory_key
+                    .filter(|_| ctx.diagnostics.is_some())
+                    .map(|key| {
+                        let memory = self.memory.clone();
+                        let key = key.clone();
+                        let account_id = ctx.account.id.clone();
+                        // The same wire-spelling key `previous` reads above, not the resolved identity: see its
+                        // comment.
+                        let model = ctx.identity.folded_model.clone();
+                        let clock = self.clock.clone();
+                        Box::new(move |id: String| {
+                            // Awaited on the body task before the next piece goes out, so the caller's next
+                            // request finds the id in memory and a shutdown flush carries it; the restore is
+                            // a store read only on a miss. Stamped at fire time, so a slow body never moves
+                            // `last_seen` back to the head's clock.
+                            Box::pin(async move {
+                                let now = (clock)();
+                                memory.restore(&key, now).await;
+                                memory.record_message_id(&key, &account_id, &model, &id, now);
+                            }) as BoxFuture<'static, ()>
+                        })
+                            as Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>
+                    });
                 // Sent where the answer ends, the only place its usage is known.
                 let renewal = self.renewal(&ctx);
                 let affinity = self.affinity(&ctx);
@@ -3147,6 +3178,7 @@ impl Relay {
             request_id: ctx.trace.request_id.clone(),
             seq: ctx.seq,
             attempt: u32::from(ctx.attempt),
+            remembers: ctx.diagnostics.is_some() && ctx.trace.kind != Kind::Probe,
         })
     }
 
@@ -3552,7 +3584,7 @@ impl Relay {
     /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
     /// attempt would overwrite that outcome in the ledger.
     async fn cancelled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
-        let outcome = self.outcome(
+        let mut outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
             Some(ctx.identity),
@@ -3567,6 +3599,9 @@ impl Relay {
             None,
             ctx.cache_ttl_ms,
         );
+        // The upstream compared this leg's body before the account left, so the canceled completion names the
+        // member's source as the head's outcome does.
+        outcome.diagnostics = ctx.diagnostics;
         self.answer(
             ctx.trace,
             ACCOUNT_CANCELLED.response(ctx.request_id),
@@ -3616,6 +3651,7 @@ impl Relay {
             cache_ttl_ms,
             overage_in_use: None,
             account_kind: None,
+            diagnostics: None,
             obstacle: None,
             held: trace.held(),
         }
@@ -3885,11 +3921,13 @@ impl Relay {
             );
         }
         if let Some(affinity) = affinity {
+            // A drained error names no answer.
             affinity.send(
                 (self.clock)(),
                 head.status,
                 usage.as_ref(),
                 fast,
+                None,
                 &mut waiting,
             );
         }
@@ -3985,6 +4023,9 @@ struct Responding<'a> {
     credential_generation: u64,
     /// `Admitted::deadline`, which ends the refresh ladder's wait.
     deadline: Option<i64>,
+    /// The source of the member on this pass's body, read for the completion event, the session memory's hook and
+    /// the affinity report's id: an answer is remembered only for a request that carried or received the member.
+    diagnostics: Option<DiagnosticsSource>,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`, which a throttle's classification reads.
     fast: bool,
@@ -4092,6 +4133,8 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The client's body carries its own top-level `diagnostics` member, which the edit never rewrites.
+    client_diagnostics: bool,
     /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.
     client_gzip: bool,
     client_version: Option<String>,
@@ -4099,9 +4142,11 @@ struct Admitted<'a> {
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
     /// `None` when `head_timeout` is no longer than the margin.
     deadline: Option<i64>,
-    /// The pool's `cache_diagnostics` switch, resolved at admission and never for a `count_tokens` request: the
-    /// public schema refuses an unknown top-level member and the beta names nothing there, and a 400 on that path
-    /// must never latch the account for its inference requests.
+    /// Whether the relay inserts the `diagnostics` member and its beta, resolved at admission: the pool's
+    /// `cache_diagnostics` switch is on, the request is not a `count_tokens` request, and the client's body carries
+    /// a cache marker of its own and a tools list of one or more. A count never gets either, since the public
+    /// schema refuses an unknown top-level member and the beta names nothing there, and a 400 on that path must
+    /// never latch the account for its inference requests.
     diagnostics: bool,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the

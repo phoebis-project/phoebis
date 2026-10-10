@@ -14,6 +14,8 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const ACCT_SECRET: &str = "sk-ant-api03-ACCT0001";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
+/// The session id the first-party fixture's head carries.
+const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
 const REFUSED_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header."}}"#;
 const REFUSED_REQUEST_ID: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unrecognized request header `x-client-request-id`."}}"#;
@@ -62,6 +64,27 @@ fn diagnostics_previous(body: &[u8]) -> Option<String> {
     value["diagnostics"]["previous_message_id"]
         .as_str()
         .map(String::from)
+}
+
+fn carries_the_beta(r: &fake_upstream::RecordedRequest) -> bool {
+    beta_header(r).is_some_and(|b| b.split(',').any(|t| t.trim() == CACHE_DIAGNOSIS_BETA))
+}
+
+/// Every `cache_control` value's raw text, in body order.
+fn markers(body: &[u8]) -> Vec<String> {
+    phoebis_cch::cache_control_spans(body)
+        .unwrap()
+        .into_iter()
+        .map(|(start, end)| String::from_utf8(body[start..end].to_vec()).unwrap())
+        .collect()
+}
+
+/// `native` on the OAuth non-first-party head under `session`.
+fn oauth_request(native: &[u8], session: &str) -> Request<Body> {
+    let mut req =
+        request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), native, KEY);
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
 }
 
 /// The five digits after `cch=` on the billing line `find_cch` reads, `None` for a body that carries none.
@@ -512,6 +535,310 @@ async fn a_clients_own_beta_passes_through_once_with_the_switch_off_and_no_membe
     assert!(
         !has_diagnostics(&sent.body),
         "the relay adds no member with the switch off"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_with_tools_and_no_marker_gets_neither_the_member_nor_the_beta() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let native = without_markers(body(BodyFixture::Oauth));
+    assert!(markers(&native).is_empty(), "the client cached nothing");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(oauth_request(&native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(
+        !has_diagnostics(&sent.body),
+        "no member for a body without a marker of the client's: {}",
+        String::from_utf8_lossy(&sent.body)
+    );
+    assert!(!carries_the_beta(sent), "{:?}", beta_header(sent));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_with_a_marker_and_no_tools_or_an_empty_tools_array_gets_neither() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    for (session, empty) in [("s1", false), ("s2", true)] {
+        let native = without_tools(body(BodyFixture::Oauth), empty);
+        assert!(!markers(&native).is_empty(), "the client's markers stay");
+        let resp = h
+            .app
+            .clone()
+            .oneshot(oauth_request(&native, session))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    let sent = up.requests();
+    assert_eq!(sent.len(), 2);
+    for (r, shape) in sent
+        .iter()
+        .zip(["no `tools` member", "an empty `tools` array"])
+    {
+        assert!(!has_diagnostics(&r.body), "{shape}: no member");
+        assert!(!carries_the_beta(r), "{shape}: no beta");
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_marker_less_body_with_tools_under_inject_when_absent_takes_the_policys_member_and_no_diagnostics(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            cache_ttl: r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#,
+            ..Default::default()
+        },
+    )
+    .await;
+    // The fixture's head names no request class, so the policy gives the body its member.
+    let native = without_markers(body(BodyFixture::Oauth));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(oauth_request(&native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert_eq!(
+        markers(&sent.body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
+        "the wire carries the policy's one marker"
+    );
+    assert!(
+        phoebis_cch::object_member_span(&sent.body, &["cache_control"]).is_some(),
+        "and it is the top-level member"
+    );
+    assert!(
+        !has_diagnostics(&sent.body),
+        "the gate reads the client's own markers, before the policy's rewrite"
+    );
+    assert!(!carries_the_beta(sent), "{:?}", beta_header(sent));
+    up.shutdown().await;
+}
+
+/// Pins the member-less client, the case the insertion exists for: a reduced-shape turn with markers and tools
+/// that sends no member of its own.
+#[tokio::test]
+async fn a_member_less_reduced_shape_turn_takes_the_member_and_the_beta_and_its_second_turn_names_the_first_answer(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        !has_diagnostics(body(BodyFixture::Oauth)),
+        "the reduced shape sends no member"
+    );
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    assert!(has_diagnostics(&up.requests()[0].body));
+    assert_diagnosed_shape(&up.requests()[0], None);
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
+    assert_diagnosed_shape(&up.requests()[1], Some("msg_01"));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_sent_member_on_a_body_without_tools_passes_through_as_sent_and_its_answers_id_is_remembered(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    // The first-party fixture as a client that sends its own member and no tools signs it.
+    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    phoebis_cch::remove_top_level_member(&mut native, "tools").expect("the fixture carries tools");
+    let native = phoebis_cch::sign(&native).expect("the fixture signs");
+    let (start, end) = phoebis_cch::object_member_span(&native, &["diagnostics"])
+        .expect("the client sends its own member");
+    let req = request_from_fixture(inference_head(FixtureKind::OauthFirstParty), &native, KEY);
+    let betas_of = |list: Option<&str>| {
+        list.map_or(0, |l| {
+            l.split(',')
+                .filter(|t| t.trim() == CACHE_DIAGNOSIS_BETA)
+                .count()
+        })
+    };
+    let client_betas = betas_of(
+        req.headers()
+            .get("anthropic-beta")
+            .map(|v| v.to_str().unwrap()),
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let sent = &up.requests()[0];
+    let (sent_start, sent_end) = phoebis_cch::object_member_span(&sent.body, &["diagnostics"])
+        .expect("the client's member reaches the upstream");
+    assert_eq!(
+        &sent.body[sent_start..sent_end],
+        &native[start..end],
+        "the member goes as the client sent it"
+    );
+    assert!(
+        betas_of(beta_header(sent)) <= client_betas,
+        "the beta goes no more often than the client sent it: {:?}",
+        beta_header(sent)
+    );
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        FIRST_PARTY_SESSION,
+        "main",
+    );
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+            .as_deref(),
+        Some("msg_01"),
+        "a request that carried the member has its answer remembered"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn after_a_turn_the_gate_refused_the_memory_still_names_the_turn_before_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_01"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_02"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_03"));
+    let h = harness(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s1",
+        "main",
+    );
+    let remembered = || {
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+    };
+
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    assert_eq!(remembered().as_deref(), Some("msg_01"));
+
+    // A turn of the same session that sends no tools list: the gate gives it no member, so its answer is not
+    // the next turn's predecessor.
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(oauth_request(
+            &without_tools(body(BodyFixture::Oauth), false),
+            "s1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
+    r2.into_body().collect().await.unwrap();
+    assert!(!has_diagnostics(&up.requests()[1].body));
+    assert_eq!(
+        remembered().as_deref(),
+        Some("msg_01"),
+        "the gated turn's answer is not remembered"
+    );
+
+    let r3 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r3.status(), 200);
+    assert_eq!(
+        diagnostics_previous(&up.requests()[2].body).as_deref(),
+        Some("msg_01"),
+        "the next diagnosed turn names the turn before the gated one"
     );
     up.shutdown().await;
 }

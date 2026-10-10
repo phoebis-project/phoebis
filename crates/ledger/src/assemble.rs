@@ -853,6 +853,7 @@ mod tests {
             response_bytes: Some(20),
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: 1_500,
         })
@@ -881,6 +882,7 @@ mod tests {
             response_bytes,
             response_chunks,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: 1_500,
         }
