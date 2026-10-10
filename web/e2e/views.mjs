@@ -1957,7 +1957,7 @@ async function quotaPollLines(theme) {
 let cardTones = {};
 
 /**
- * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
+ * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
  * longer reset cell may wrap but never runs past its column. Every live window's meter carries its pace mark inside
  * the meter's horizontal bounds and taller than the track. The router's seed has no subscription account, so only
@@ -2088,6 +2088,134 @@ async function quotaCardHeights(theme) {
     const values = cards.map((c) => c[key]);
     if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
   }
+}
+
+/** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
+const QUOTA_FLOOR = 397;
+
+/** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
+const QUOTA_NARROW = [
+  { height: 800, width: 375 },
+  { height: 844, width: 390 },
+];
+
+/**
+ * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
+ * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
+ * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's
+ * widest chip and the reset column no wider than the card's widest reset label within its 114 px bound. A meter held
+ * at its 120 px minimum while the columns run past the card passes a width reading alone, and a fixed column on a card
+ * wide enough passes every reading but its own. The pace mark stands out of flow inside its meter, so the meter's box
+ * and the columns read the same with it, and `quotaChips` reads the mark. The check reads in the window the pass set,
+ * then in one that lands two cards on the card grid's floor: twice the floor and the grid's 14 px gap beside the
+ * gutter the first reading measures, the grid's left edge and the content's right padding, so the sidebar's width and
+ * the page's padding come from the page. A higher floor sets one card in a row there, and a lower one keeps two in a
+ * row in a window 1 px narrower, which the check reads next. Last it reads in two phone windows, where the shell drops
+ * its sidebar and the content is narrower than the floor. There the page scrolls nothing sideways and every card ends
+ * inside the window, and the readings above hold except the reset column's, since the reset label takes a row of its
+ * own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and the check steps no
+ * clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed has no
+ * subscription account, so only the story's pass has meters to read.
+ */
+async function quotaMeters(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      const kind = (el) => (el.classList.contains('meter') ? (el.classList.contains('meter--absent') ? 'absent meter' : 'meter') : el.classList.contains('qwin__reset') ? 'reset' : 'chip');
+      // A chip stretches to its column, so its own width is its parts, the gap between them and its padding.
+      const chipWidth = (chip) => {
+        const s = getComputedStyle(chip);
+        const parts = [...chip.children].map((el) => el.getBoundingClientRect().width);
+        const edges = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) + parseFloat(s.borderLeftWidth) + parseFloat(s.borderRightWidth);
+        return tenth(parts.reduce((sum, w) => sum + w, 0) + parseFloat(s.columnGap) * Math.max(0, parts.length - 1) + edges);
+      };
+      // A reset label stretches to its column too, so its own width is its text's, the widths of its lines summed: an
+      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it.
+      const textWidth = (label) => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return tenth([...range.getClientRects()].reduce((sum, r) => sum + r.width, 0));
+      };
+      const content = (el) => (kind(el) === 'chip' ? chipWidth(el) : kind(el) === 'reset' ? textWidth(el) : null);
+      const grid = document.querySelector('.quota-grid');
+      const main = grid?.closest('.content');
+      const [one, two] = [...document.querySelectorAll('.qcard')].map((card) => card.getBoundingClientRect());
+      return {
+        cards: [...document.querySelectorAll('.qcard')]
+          .filter((card) => card.querySelector('.qcard__windows'))
+          .map((card) => {
+            const body = card.querySelector('.qcard__body');
+            const room = body.getBoundingClientRect().right - parseFloat(getComputedStyle(body).paddingRight);
+            const windows = card.querySelector('.qcard__windows');
+            return {
+              cells: [...windows.children].map((el) => ({ content: content(el), kind: kind(el), past: tenth(el.getBoundingClientRect().right - room), text: el.textContent?.trim() ?? '', width: tenth(el.getBoundingClientRect().width) })),
+              client: windows.clientWidth,
+              name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
+              scroll: windows.scrollWidth,
+              width: tenth(card.getBoundingClientRect().width),
+            };
+          }),
+        ends: [...document.querySelectorAll('.qcard')].map((card) => ({ name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', right: tenth(card.getBoundingClientRect().right) })),
+        grid: tenth(grid?.getBoundingClientRect().width ?? 0),
+        gutter: grid && main ? tenth(grid.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingRight)) : null,
+        page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
+        rows: one && two ? { first: tenth(one.bottom), second: tenth(two.top) } : null,
+        view: window.innerWidth,
+      };
+    });
+  const check = async (where) => {
+    const got = await read();
+    const at = `in a ${got.view}px window`;
+    measurements.push(`${theme} /quota meters ${at} ${JSON.stringify({ cards: got.cards.map((c) => [c.name, c.width, c.scroll, c.client, c.cells.map((x) => (x.content === null ? [x.kind, x.width, x.past] : [x.kind, x.width, x.past, x.content]))]), ends: got.ends.map((c) => c.right), grid: got.grid, gutter: got.gutter, page: got.page, rows: got.rows })}`);
+    if (mock && got.cards.length === 0) say(`the story has subscription windows, yet no card draws them ${at}`);
+    for (const card of got.cards) {
+      for (const meter of card.cells.filter((x) => x.kind.endsWith('meter') && x.width < 120)) say(`${card.name}'s ${meter.kind} is ${meter.width}px wide ${at}, under 120 px`);
+      if (card.scroll > card.client) say(`${card.name}'s windows need ${card.scroll}px of their ${card.client}px ${at}`);
+      for (const cell of card.cells.filter((x) => x.past > 0.5)) say(`${card.name}'s ${cell.kind} ${JSON.stringify(cell.text)} ends ${cell.past}px past the card's padding ${at}, where the card cuts it`);
+      // A card's rows are one grid, so its chips share one column, which sized to its content is its widest chip's, and
+      // its reset labels share another, which is its widest label's up to the bound.
+      const chips = card.cells.filter((x) => x.kind === 'chip');
+      const resets = card.cells.filter((x) => x.kind === 'reset');
+      const widest = Math.max(...chips.map((x) => x.content));
+      const chipColumn = Math.max(...chips.map((x) => x.width));
+      const label = Math.max(...resets.map((x) => x.content));
+      const resetColumn = Math.max(...resets.map((x) => x.width));
+      if (chips.length > 0 && chipColumn > widest + 1) say(`${card.name}'s chip column is ${chipColumn}px wide ${at}, more than 1 px past its widest chip's ${widest}px`);
+      if (where !== 'narrow' && resets.length > 0 && resetColumn > Math.min(label, 114) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < 114 ? `its widest label's ${label}px` : 'its 114 px bound'}`);
+    }
+    if (where === 'floor') {
+      for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^Fable\d+% left$/.test(x.text)))) say(`no card holds the story's widest chip ${at}`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+, no reading since$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
+    }
+    if (where === 'under') {
+      if (mock && got.rows === null) say(`the story has several subscription accounts, yet fewer than two cards stand ${at}`);
+      if (got.rows && got.rows.second < got.rows.first) say(`the first two cards share a row ${at}, where the card grid's ${QUOTA_FLOOR}px floor leaves room for one`);
+    }
+    if (where === 'narrow') {
+      if (got.page.scroll > got.page.client) say(`the page needs ${got.page.scroll}px of its ${got.page.client}px ${at}, so it scrolls sideways`);
+      for (const card of got.ends.filter((c) => c.right > got.page.client + 0.5)) say(`${card.name}'s card ends ${Math.round((card.right - got.page.client) * 10) / 10}px past the window's right edge ${at}`);
+    }
+    return got;
+  };
+  const was = page.viewportSize();
+  const first = await check('pass');
+  if (first.gutter === null) {
+    if (mock) say('the page draws no card grid to set the floor beside');
+    return;
+  }
+  // Rounded up, since a window a fraction short of twice the floor and the gap sets one card in a row.
+  const floor = Math.ceil(first.gutter + 2 * QUOTA_FLOOR + 14);
+  await page.setViewportSize({ height: was.height, width: floor });
+  await check('floor');
+  await page.setViewportSize({ height: was.height, width: floor - 1 });
+  await check('under');
+  for (const size of QUOTA_NARROW) {
+    await page.setViewportSize(size);
+    await check('narrow');
+  }
+  await page.setViewportSize(was);
 }
 
 /**
@@ -3295,6 +3423,91 @@ async function stripWords(theme, where) {
 }
 
 /**
+ * Every station's and way out's button takes the pointer over its own dot and the gap to its words, and no further.
+ * `elementFromPoint` at the node's center, at four points on the outer edge of its drawn ring (the radius and 1 px,
+ * half the stroke), halfway across the gap between the rim and the button's near edge and, unless `floor`, at the
+ * word's center answers that button or a descendant of it. On the line halfway to the next node of its row, beside the
+ * dot on the side away from that node and, for a station, across the line on the side away from its words, the last two
+ * the radius and 6 px past the rim, it answers anything else. A way out's words stand right of its node on the line, so
+ * its beside point is the left one and it has no side of the line away from its words. Each node is paired with its
+ * button by the name its circle carries, and its center and radius are the circle's own attributes, since the drawing's
+ * user units are its pixels. The read answers inside the viewport alone and the sticky topbar covers the window's top
+ * 52 px, so the strip is scrolled to the window's middle first and the page's scroll is put back after, and a point
+ * that still lies outside that room fails on its own rather than passing for a miss. `floor` reads a strip laid out at
+ * its 640 px floor, the tightest spacing it draws, where a neighbor's stub word can stand over a station's word, so the
+ * words are left to the full-width readings.
+ */
+async function stripPointer(theme, where, floor = false) {
+  const say = (message) => failures.push(`${theme} /routing-log: ${where}: ${message}`);
+  const got = await page.evaluate((words) => {
+    const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+    const svg = strip?.querySelector('svg');
+    if (!strip || !svg) return null;
+    const { scrollX, scrollY } = window;
+    strip.scrollIntoView({ block: 'center' });
+    const below = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+    const origin = svg.getBoundingClientRect();
+    const nodes = [...svg.querySelectorAll('circle[data-station], circle[data-terminus]')].map((el) => ({ el, r: Number(el.getAttribute('r')), x: origin.left + Number(el.getAttribute('cx')), y: origin.top + Number(el.getAttribute('cy')) }));
+    const describe = (el) => (el ? `${el.tagName.toLowerCase()}${[...el.classList].map((c) => `.${c}`).join('')}` : 'nothing');
+    const missing = (name, what) => ({ at: `no ${what}`, hit: false, name, own: true, visible: false, what, x: null, y: null });
+    const sample = (name, button, what, own, x, y) => {
+      const at = document.elementFromPoint(x, y);
+      return { at: describe(at), hit: at !== null && button.contains(at), name, own, visible: y > below && y < window.innerHeight && x >= 0 && x < document.documentElement.clientWidth, what, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 };
+    };
+    const read = (name, button, circle, word) => {
+      const node = nodes.find((n) => n.el === circle);
+      if (!node) return [missing(name, 'node')];
+      const { r, x, y } = node;
+      const box = button.getBoundingClientRect();
+      const row = nodes.filter((n) => n !== node && Math.abs(n.y - y) < 1);
+      const next = row.filter((n) => n.x > x).sort((a, b) => a.x - b.x)[0] ?? row.filter((n) => n.x < x).sort((a, b) => b.x - a.x)[0];
+      const away = button.classList.contains('strip-terminus') || next === undefined || next.x > x ? -1 : 1;
+      // The button's near edge: a way out's left, a station's top under the line or its bottom over it.
+      const gap = box.left >= x ? [(x + r + box.left) / 2, y] : box.top >= y ? [x, (y + r + box.top) / 2] : [x, (y - r + box.bottom) / 2];
+      const points = [
+        sample(name, button, 'node', true, x, y),
+        sample(name, button, 'rim left', true, x - r - 1, y),
+        sample(name, button, 'rim right', true, x + r + 1, y),
+        sample(name, button, 'rim top', true, x, y - r - 1),
+        sample(name, button, 'rim bottom', true, x, y + r + 1),
+        sample(name, button, 'gap', true, ...gap),
+        sample(name, button, 'beside', false, x + away * (2 * r + 6), y),
+      ];
+      if (next) points.push(sample(name, button, 'line', false, (x + next.x) / 2, y));
+      // A station's words stand on one side of the line, so its box stops short of the other side.
+      if (button.classList.contains('strip-station')) points.push(sample(name, button, 'across', false, x, box.top >= y ? y - (2 * r + 6) : y + (2 * r + 6)));
+      if (words) {
+        const w = word?.getBoundingClientRect();
+        points.push(w ? sample(name, button, 'word', true, w.left + w.width / 2, w.top + w.height / 2) : missing(name, 'word'));
+      }
+      return points;
+    };
+    const stations = [...strip.querySelectorAll('.strip-station')];
+    const termini = [...strip.querySelectorAll('.strip-terminus')];
+    const points = [
+      ...stations.flatMap((b) => read(b.dataset.station, b, svg.querySelector(`circle[data-station="${b.dataset.station}"]`), b.querySelector('.strip-station__word'))),
+      ...termini.flatMap((b) => read(b.dataset.terminus, b, svg.querySelector(`circle[data-terminus="${b.dataset.terminus}"]`), b.querySelector('.strip-terminus__word'))),
+    ];
+    window.scrollTo(scrollX, scrollY);
+    return { buttons: stations.length + termini.length, nodes: nodes.length, points, width: Number(svg.getAttribute('width')) };
+  }, !floor);
+  measurements.push(`${theme} /routing-log strip pointer of ${where} ${JSON.stringify(got === null ? null : { ...got, points: got.points.map((p) => [p.name, p.what, p.x, p.y, p.hit ? 'button' : p.at]) })}`);
+  if (got === null) {
+    say('no strip to read');
+    return;
+  }
+  if (got.buttons === 0) say('the strip draws no station or way out to read');
+  if (got.nodes !== got.buttons) say(`the strip names ${got.nodes} nodes for ${got.buttons} buttons`);
+  if (floor && got.width !== 640) say(`the strip draws ${got.width}px where its 640 px floor is read`);
+  for (const p of got.points) {
+    if (p.x === null) say(`${p.name} has no ${p.what} to read`);
+    else if (!p.visible) say(`the ${p.what} point of ${p.name} at ${p.x},${p.y} lies outside the window below the topbar, where the pointer cannot be read`);
+    else if (p.own && !p.hit) say(`the pointer at the ${p.what} point of ${p.name} (${p.x},${p.y}) lands on ${p.at}, not on its button`);
+    else if (!p.own && p.hit) say(`the pointer at the ${p.what} point of ${p.name} (${p.x},${p.y}) lands on its button, which reaches past its dot and the gap to its words`);
+  }
+}
+
+/**
  * The contrast of every station's and way out's word on the open card against the background painted under it, by the
  * WCAG ratio of relative luminances, beside the card's muted text (`--ink-2` on `--surface`) read on a probe. The
  * buttons paint nothing, so a word reads on the first background painted above it, the open row's tint.
@@ -3403,9 +3616,11 @@ const POPOVER_VIEWPORTS = [
  * Opens the popover of the open card's station that `stationOf` finds at each viewport and reads its box inside the
  * card's less 8 px either side and inside the part of the card on screen and the window less 8 px either side, its
  * inline width bound the least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16,
- * its table's heads on at most two lines, and nothing in it scrolling sideways. `table` holds that it draws a table,
- * and `striped` that its table's second row takes the candidate table's even-row color and its first row does not.
- * Escape closes it after each reading.
+ * its table's heads on at most two lines, nothing in it scrolling sideways, its computed visibility `visible`, since
+ * the box stays hidden until its placement reveals it, and its computed transition `none`, since the box is measured
+ * at the window's corner and then moved under its anchor. `table` holds that it draws a table, and `striped` that its
+ * table's second row takes the candidate table's even-row color and its first row does not. Escape closes it after
+ * each reading.
  */
 async function popoverBounds(theme, what, stationOf, { striped = false, table = false, viewports = POPOVER_VIEWPORTS } = {}) {
   const say = (message) => failures.push(`${theme} /routing-log: ${message}`);
@@ -3450,6 +3665,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
         renderer: [...popover.classList].find((n) => n.startsWith('strip-popover--')) ?? null,
         rows: [...popover.querySelectorAll('.strip-popover__table tbody tr')].slice(0, 2).map((tr) => fill(tr.cells[0])),
         shown,
+        transition: getComputedStyle(popover).transitionProperty,
+        visibility: getComputedStyle(popover).visibility,
         wraps: [...popover.querySelectorAll('.table-wrap')].map((w) => ({ client: w.clientWidth, scroll: w.scrollWidth })),
       };
     });
@@ -3468,6 +3685,8 @@ async function popoverBounds(theme, what, stationOf, { striped = false, table = 
     if (got.popover.scroll > got.popover.client || got.wraps.some((w) => w.scroll > w.client)) say(`${where} scrolls sideways (${JSON.stringify({ popover: got.popover, wraps: got.wraps })})`);
     if (table && (got.renderer !== 'strip-popover--table' || got.heads.length === 0)) say(`${where} draws no table to read (${got.renderer}, ${got.heads.length} heads)`);
     if (striped && (got.rows.length < 2 || got.evenRow === null || got.rows[1] !== got.evenRow || got.rows[0] === got.rows[1])) say(`${where}: its rows read ${JSON.stringify(got.rows)}, not the candidate table's even-row ${got.evenRow} on the second row alone`);
+    if (got.visibility !== 'visible') say(`${where} computes visibility ${got.visibility} once placed, not visible`);
+    if (got.transition !== 'none') say(`${where} transitions ${got.transition}, where nothing of the box may animate between where it is measured and where it stands`);
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
     if ((await page.locator('.strip-popover').count()) !== 0) say(`${where}: Escape left the popover open`);
@@ -3648,6 +3867,7 @@ async function decisionCard(theme) {
     if (got.surface.drawn !== got.surface.stations) say(`${where}: the strip draws ${got.surface.drawn} stations, not the ${got.surface.stations} of its record's steps and placeholders`);
     counts.push(got.surface.drawn);
     await stripWords(theme, where);
+    await stripPointer(theme, where);
     if (got.table === null) say(`${where} draws no candidate table`);
     else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
     else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
@@ -3728,10 +3948,23 @@ async function decisionCard(theme) {
     await page.setViewportSize({ height, width });
     await advance(2 * CLOCK_STEP_MS);
     await stripWords(theme, `the shed move's card at ${width} by ${height}`);
+    if (!short) await stripPointer(theme, `the shed move's card at ${width} by ${height}`);
     await shedPopoverHeight(theme, `the shed move's card at ${width} by ${height}`, short);
   }
+  // No window reaches the strip's 640 px floor on the log, whose fixed columns keep the card's strip 958 px wide or
+  // wider, so its slot is held to the floor on the page. The step below, which redraws the strip for 1280 by 800, then
+  // draws it at the floor, and the first step of the Move station's popover reading redraws it for its slot again, so
+  // the floor reading adds no step of the page's clock.
+  const slot = (width) =>
+    page.evaluate((w) => {
+      const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+      if (strip) strip.style.maxWidth = w;
+    }, width);
+  await slot('640px');
   await page.setViewportSize({ height: 800, width: 1280 });
   await advance(2 * CLOCK_STEP_MS);
+  await stripPointer(theme, "the shed move's card at the strip's 640 px floor", true);
+  await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
   // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box.
   await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
@@ -5028,6 +5261,7 @@ try {
         await quotaChips(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
+        await quotaMeters(theme);
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that

@@ -188,11 +188,12 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
             .map((p) => (
               <path key={p.i} className={`strip-path is-${p.state} strip-path--${p.kind}`} d={p.d} />
             ))}
+          {/* Each names its button, so a check pairs them by name and a failure names the station. */}
           {stations.map((s) => (
-            <circle key={s.id} className={classes('strip-node', `is-${s.state}`, s.decisive && 'is-decisive')} cx={layout.stations[s.id].x} cy={layout.stations[s.id].y} r={RADIUS} />
+            <circle key={s.id} className={classes('strip-node', `is-${s.state}`, s.decisive && 'is-decisive')} cx={layout.stations[s.id].x} cy={layout.stations[s.id].y} r={RADIUS} data-station={s.id} />
           ))}
           {termini.map(({ p, t }) => (
-            <circle key={t.kind} className={classes('strip-node', `is-${t.state}`, 'strip-node--terminus', t.state === 'taken' && `strip-node--${t.tone}`)} cx={p.x} cy={p.y} r={TERMINUS_RADIUS} />
+            <circle key={t.kind} className={classes('strip-node', `is-${t.state}`, 'strip-node--terminus', t.state === 'taken' && `strip-node--${t.tone}`)} cx={p.x} cy={p.y} r={TERMINUS_RADIUS} data-terminus={t.kind} />
           ))}
         </svg>
         {stations.map((s, i) => {
@@ -288,7 +289,10 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
           );
         })}
       </div>
-      {popover !== null && <StripPopover anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} layout={layout} onClose={close} pinned={popover.pinned} plan={popover.plan} />}
+      {/* A new anchor's box mounts hidden and waits for its own placement, where a box handed the new anchor would be
+          placed again in view. A placement again for the same anchor (a new plan, a redrawn strip, a resize, a scroll)
+          keeps its box shown, and the focus a keyboard user holds in it. */}
+      {popover !== null && <StripPopover key={openedKey} anchor={popover.anchor} bounds={boundsOf(popover.anchor)} focus={popover.focus} id={popoverId} layout={layout} onClose={close} pinned={popover.pinned} plan={popover.plan} />}
     </div>
   );
 }

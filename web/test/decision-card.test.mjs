@@ -216,6 +216,105 @@ test('Escape closes a hover-opened popover with the pointer still', async () => 
   assert.equal(popovers().length, 0, 'Escape closes it with no pointer event between');
 });
 
+test('a popover enters the document hidden and is revealed only once placed, and a new anchor mounts a new hidden box', async () => {
+  const { container, pick } = await freshCard();
+  const card = pick.closest('.decision-card');
+  assert.ok(card, 'the strip stands in its card');
+  const rect = (left, top, width, height) => ({ bottom: top + height, height, left, right: left + width, top, width, x: left, y: top });
+  // jsdom lays nothing out, so the window, the card, the anchors and the box take figures of their own, nonzero, so a
+  // reveal ahead of the final offsets reads the corner's 0px against them.
+  const rects = new Map([
+    [card, rect(100, 100, 1000, 500)],
+    [pick, rect(400, 180, 60, 20)],
+  ]);
+  const html = document.documentElement;
+  Object.defineProperty(html, 'clientWidth', { configurable: true, get: () => 1280 });
+  Object.defineProperty(html, 'clientHeight', { configurable: true, get: () => 800 });
+  const reveals = new Map();
+  const watched = [];
+  const watch = (box) => {
+    if (Object.hasOwn(box.style, 'visibility')) return;
+    const inherited = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(box.style), 'visibility');
+    Object.defineProperty(box.style, 'visibility', {
+      configurable: true,
+      get() {
+        return inherited.get.call(this);
+      },
+      set(value) {
+        if (value === 'visible' && !reveals.has(box)) reveals.set(box, { left: this.left, maxHeight: this.maxHeight, maxWidth: this.maxWidth, top: this.top });
+        inherited.set.call(this, value);
+      },
+    });
+    watched.push(box);
+  };
+  // jsdom keeps the measure on Element.prototype, so a replacement on HTMLElement.prototype shadows it for this case
+  // alone. The box's first measurement comes before any of its final offsets, so the reveal is watched from there.
+  const measure = HTMLElement.prototype.getBoundingClientRect;
+  const seen = [];
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    if (!this.classList.contains('strip-popover')) return rects.get(this) ?? measure.call(this);
+    seen.push({ box: this, visibility: this.style.visibility });
+    watch(this);
+    return rect(0, 0, 300, 200);
+  };
+  const log = [];
+  const observer = new window.MutationObserver((records) => log.push(...records));
+  observer.observe(document.body, { attributeFilter: ['style'], attributeOldValue: true, childList: true, subtree: true });
+  const take = () => log.push(...observer.takeRecords());
+  // A box outside the body makes no record, so the first style write recorded on it names the style it entered with.
+  const entered = (box) => {
+    if (!log.some((r) => r.type === 'childList' && [...r.addedNodes].includes(box))) return 'never seen entering';
+    const write = log.find((r) => r.type === 'attributes' && r.target === box);
+    if (write === undefined) return box.style.visibility;
+    const probe = document.createElement('div');
+    probe.setAttribute('style', write.oldValue ?? '');
+    return probe.style.visibility;
+  };
+  const readings = (box) => seen.filter((s) => s.box === box).map((s) => s.visibility);
+  const placed = (box) => ({ left: box.style.left, maxHeight: box.style.maxHeight, maxWidth: box.style.maxWidth, top: box.style.top });
+  try {
+    act(() => pick.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    take();
+    assert.equal(popovers().length, 1, 'a hover opens one popover');
+    const first = popovers()[0];
+    assert.equal(entered(first), 'hidden', 'the box enters the document hidden');
+    assert.ok(readings(first).length > 0, 'the box is measured when it is placed');
+    assert.equal(readings(first)[0], 'hidden', `the box is hidden at its first measurement: ${readings(first).join(', ')}`);
+    assert.deepEqual(reveals.get(first), placed(first), 'the box is revealed with its final offsets and bounds in place');
+    assert.ok(Object.values(placed(first)).every((v) => v !== '0px'), `the box stands off the corner: ${JSON.stringify(placed(first))}`);
+    assert.equal(first.style.visibility, 'visible', 'the box is visible once placed');
+    act(() => pick.click());
+    take();
+    assert.equal(popovers().length, 1, 'the click that pins a hovered popover keeps one box');
+    assert.ok(popovers()[0] === first, 'the pinned box is the hovered one');
+    assert.ok(first.classList.contains('is-pinned'), 'the click pins it');
+    assert.equal(first.style.visibility, 'visible', 'the pinned box stays shown');
+    const other = [...container.querySelectorAll('.strip-station')].find((b) => b !== pick);
+    assert.ok(other, 'the strip draws a second station to click');
+    rects.set(other, rect(600, 180, 60, 20));
+    act(() => other.click());
+    take();
+    assert.equal(popovers().length, 1, 'a click on a second station while one is pinned leaves one popover');
+    const second = popovers()[0];
+    assert.ok(second !== first, 'the second station gets a box of its own');
+    assert.ok(!first.isConnected, 'the first box left the document');
+    assert.equal(entered(second), 'hidden', 'the new box enters the document hidden');
+    assert.ok(readings(second).length > 0, 'the new box is measured when it is placed');
+    assert.equal(readings(second)[0], 'hidden', `the new box is hidden at its first measurement: ${readings(second).join(', ')}`);
+    assert.deepEqual(reveals.get(second), placed(second), 'the new box is revealed with its final offsets and bounds in place');
+    assert.ok(Object.values(placed(second)).every((v) => v !== '0px'), `the new box stands off the corner: ${JSON.stringify(placed(second))}`);
+    assert.equal(second.style.visibility, 'visible', 'the new box is visible once placed');
+    act(() => other.click());
+    assert.equal(popovers().length, 0, 'a second click on the pinned station closes it');
+  } finally {
+    observer.disconnect();
+    delete HTMLElement.prototype.getBoundingClientRect;
+    for (const box of watched) delete box.style.visibility;
+    delete html.clientWidth;
+    delete html.clientHeight;
+  }
+});
+
 test("outside a host a chip's hover is its title alone, so the Prefix cell and a popover row read their chips alone", async () => {
   // The static placement's chosen member holds the rung's entry, whose hash chip both the Prefix cell and the rung's
   // popover draw.
@@ -233,4 +332,16 @@ test("outside a host a chip's hover is its title alone, so the Prefix cell and a
   }
   assert.ok(rows.some((r) => r.titled > 0), 'a rung popover draws a titled chip in a row');
   for (const r of rows) assert.deepEqual([r.nodes, r.text], [0, r.chips], `a popover row reads its chips alone: ${r.text}`);
+});
+
+test("every node names its button: a station's circle its station and a way out's circle its way out, one to one", async () => {
+  for (const [requestId, seq] of [['req_ef099b34-453', 1], ['req_868264bc-611', 1]]) {
+    const strip = (await storyCard(requestId, seq)).querySelector('.decision-strip');
+    assert.ok(strip, `${requestId} draws a strip`);
+    // The circles are the only elements that carry the attribute without the button's class.
+    const names = (selector, attribute) => [...strip.querySelectorAll(selector)].map((el) => el.getAttribute(attribute)).sort();
+    assert.ok(names('.strip-station', 'data-station').length > 0 && names('.strip-terminus', 'data-terminus').length > 0, `${requestId} draws stations and ways out`);
+    assert.deepEqual(names('circle[data-station]', 'data-station'), names('.strip-station', 'data-station'), `${requestId}: the station circles name the station buttons, one each`);
+    assert.deepEqual(names('circle[data-terminus]', 'data-terminus'), names('.strip-terminus', 'data-terminus'), `${requestId}: the way out circles name the way out buttons, one each`);
+  }
 });
