@@ -333,3 +333,15 @@ test("outside a host a chip's hover is its title alone, so the Prefix cell and a
   assert.ok(rows.some((r) => r.titled > 0), 'a rung popover draws a titled chip in a row');
   for (const r of rows) assert.deepEqual([r.nodes, r.text], [0, r.chips], `a popover row reads its chips alone: ${r.text}`);
 });
+
+test("every node names its button: a station's circle its station and a way out's circle its way out, one to one", async () => {
+  for (const [requestId, seq] of [['req_ef099b34-453', 1], ['req_868264bc-611', 1]]) {
+    const strip = (await storyCard(requestId, seq)).querySelector('.decision-strip');
+    assert.ok(strip, `${requestId} draws a strip`);
+    // The circles are the only elements that carry the attribute without the button's class.
+    const names = (selector, attribute) => [...strip.querySelectorAll(selector)].map((el) => el.getAttribute(attribute)).sort();
+    assert.ok(names('.strip-station', 'data-station').length > 0 && names('.strip-terminus', 'data-terminus').length > 0, `${requestId} draws stations and ways out`);
+    assert.deepEqual(names('circle[data-station]', 'data-station'), names('.strip-station', 'data-station'), `${requestId}: the station circles name the station buttons, one each`);
+    assert.deepEqual(names('circle[data-terminus]', 'data-terminus'), names('.strip-terminus', 'data-terminus'), `${requestId}: the way out circles name the way out buttons, one each`);
+  }
+});

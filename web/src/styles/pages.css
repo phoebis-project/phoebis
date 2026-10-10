@@ -2324,6 +2324,43 @@
   align-items: flex-start;
 }
 
+/* The SVG lets the pointer through, so each button grows an empty box over its node and the gap to it, and the hover,
+   the click and the cursor reach the dot through the button. The figures are the layout's constants in px: a station's
+   box is 2 * RADIUS + 8 wide (6.5 px radius, 4 px past the node either side) and LABEL_OFFSET + RADIUS + 2 tall
+   (12 + 6.5 + 2), from the button's near edge over the node to 2 px past its far side and 3.5 px short of a label on
+   the line's other side, so a neighbor's label there keeps its own hover. A way out's node is centered TERMINUS_WORD_X
+   (14 px) left of its button, so its box runs TERMINUS_WORD_X + TERMINUS_RADIUS + 2 (14 + 7.5 + 2) to the left, stands
+   2 * TERMINUS_RADIUS + 4 (7.5 * 2 + 4) tall and is centered on the node: TERMINUS_ROW_HALF - TERMINUS_RADIUS - 2
+   (11 - 7.5 - 2) under the button's top, or TERMINUS_LINE_HALF - TERMINUS_RADIUS - 2 (8 - 7.5 - 2) over it when the
+   word stacks over the badge. The boxes leave the flex flow and paint nothing, and the browser pass holds the figures
+   to the drawn nodes, so a constant that moves a dot or a label off its box fails it. */
+.strip-station::before {
+  position: absolute;
+  bottom: 100%;
+  left: calc(50% - 10.5px);
+  width: 21px;
+  height: 20.5px;
+  content: '';
+}
+
+.strip-station--above::before {
+  top: 100%;
+  bottom: auto;
+}
+
+.strip-terminus::before {
+  position: absolute;
+  top: 1.5px;
+  right: 100%;
+  width: 23.5px;
+  height: 19px;
+  content: '';
+}
+
+.strip-terminus--stacked::before {
+  top: -1.5px;
+}
+
 .strip-station.is-selected,
 .strip-candidate.is-selected,
 .strip-terminus.is-selected {

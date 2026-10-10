@@ -2951,6 +2951,91 @@ async function stripWords(theme, where) {
 }
 
 /**
+ * Every station's and way out's button takes the pointer over its own dot and the gap to its words, and no further.
+ * `elementFromPoint` at the node's center, at four points on the outer edge of its drawn ring (the radius and 1 px,
+ * half the stroke), halfway across the gap between the rim and the button's near edge and, unless `floor`, at the
+ * word's center answers that button or a descendant of it. On the line halfway to the next node of its row, beside the
+ * dot on the side away from that node and, for a station, across the line on the side away from its words, the last two
+ * the radius and 6 px past the rim, it answers anything else. A way out's words stand right of its node on the line, so
+ * its beside point is the left one and it has no side of the line away from its words. Each node is paired with its
+ * button by the name its circle carries, and its center and radius are the circle's own attributes, since the drawing's
+ * user units are its pixels. The read answers inside the viewport alone and the sticky topbar covers the window's top
+ * 52 px, so the strip is scrolled to the window's middle first and the page's scroll is put back after, and a point
+ * that still lies outside that room fails on its own rather than passing for a miss. `floor` reads a strip laid out at
+ * its 640 px floor, the tightest spacing it draws, where a neighbor's stub word can stand over a station's word, so the
+ * words are left to the full-width readings.
+ */
+async function stripPointer(theme, where, floor = false) {
+  const say = (message) => failures.push(`${theme} /routing-log: ${where}: ${message}`);
+  const got = await page.evaluate((words) => {
+    const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+    const svg = strip?.querySelector('svg');
+    if (!strip || !svg) return null;
+    const scrollY = window.scrollY;
+    strip.scrollIntoView({ block: 'center' });
+    const below = document.querySelector('.topbar')?.getBoundingClientRect().bottom ?? 0;
+    const origin = svg.getBoundingClientRect();
+    const nodes = [...svg.querySelectorAll('circle[data-station], circle[data-terminus]')].map((el) => ({ el, r: Number(el.getAttribute('r')), x: origin.left + Number(el.getAttribute('cx')), y: origin.top + Number(el.getAttribute('cy')) }));
+    const describe = (el) => (el ? `${el.tagName.toLowerCase()}${[...el.classList].map((c) => `.${c}`).join('')}` : 'nothing');
+    const missing = (name, what) => ({ at: `no ${what}`, hit: false, name, own: true, visible: false, what, x: null, y: null });
+    const sample = (name, button, what, own, x, y) => {
+      const at = document.elementFromPoint(x, y);
+      return { at: describe(at), hit: at !== null && button.contains(at), name, own, visible: y > below && y < window.innerHeight && x >= 0 && x < document.documentElement.clientWidth, what, x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 };
+    };
+    const read = (name, button, circle, word) => {
+      const node = nodes.find((n) => n.el === circle);
+      if (!node) return [missing(name, 'node')];
+      const { r, x, y } = node;
+      const box = button.getBoundingClientRect();
+      const row = nodes.filter((n) => n !== node && Math.abs(n.y - y) < 1);
+      const next = row.filter((n) => n.x > x).sort((a, b) => a.x - b.x)[0] ?? row.filter((n) => n.x < x).sort((a, b) => b.x - a.x)[0];
+      const away = button.classList.contains('strip-terminus') || next === undefined || next.x > x ? -1 : 1;
+      // The button's near edge: a way out's left, a station's top under the line or its bottom over it.
+      const gap = box.left >= x ? [(x + r + box.left) / 2, y] : box.top >= y ? [x, (y + r + box.top) / 2] : [x, (y - r + box.bottom) / 2];
+      const points = [
+        sample(name, button, 'node', true, x, y),
+        sample(name, button, 'rim left', true, x - r - 1, y),
+        sample(name, button, 'rim right', true, x + r + 1, y),
+        sample(name, button, 'rim top', true, x, y - r - 1),
+        sample(name, button, 'rim bottom', true, x, y + r + 1),
+        sample(name, button, 'gap', true, ...gap),
+        sample(name, button, 'beside', false, x + away * (2 * r + 6), y),
+      ];
+      if (next) points.push(sample(name, button, 'line', false, (x + next.x) / 2, y));
+      // A station's words stand on one side of the line, so its box stops short of the other side.
+      if (button.classList.contains('strip-station')) points.push(sample(name, button, 'across', false, x, box.top >= y ? y - (2 * r + 6) : y + (2 * r + 6)));
+      if (words) {
+        const w = word?.getBoundingClientRect();
+        points.push(w ? sample(name, button, 'word', true, w.left + w.width / 2, w.top + w.height / 2) : missing(name, 'word'));
+      }
+      return points;
+    };
+    const stations = [...strip.querySelectorAll('.strip-station')];
+    const termini = [...strip.querySelectorAll('.strip-terminus')];
+    const points = [
+      ...stations.flatMap((b) => read(b.dataset.station, b, svg.querySelector(`circle[data-station="${b.dataset.station}"]`), b.querySelector('.strip-station__word'))),
+      ...termini.flatMap((b) => read(b.dataset.terminus, b, svg.querySelector(`circle[data-terminus="${b.dataset.terminus}"]`), b.querySelector('.strip-terminus__word'))),
+    ];
+    window.scrollTo(0, scrollY);
+    return { buttons: stations.length + termini.length, nodes: nodes.length, points, width: Number(svg.getAttribute('width')) };
+  }, !floor);
+  measurements.push(`${theme} /routing-log strip pointer of ${where} ${JSON.stringify(got === null ? null : { ...got, points: got.points.map((p) => [p.name, p.what, p.x, p.y, p.hit ? 'button' : p.at]) })}`);
+  if (got === null) {
+    say('no strip to read');
+    return;
+  }
+  if (got.buttons === 0) say('the strip draws no station or way out to read');
+  if (got.nodes !== got.buttons) say(`the strip names ${got.nodes} nodes for ${got.buttons} buttons`);
+  if (floor && got.width !== 640) say(`the strip draws ${got.width}px where its 640 px floor is read`);
+  for (const p of got.points) {
+    if (p.x === null) say(`${p.name} has no ${p.what} to read`);
+    else if (!p.visible) say(`the ${p.what} point of ${p.name} at ${p.x},${p.y} lies outside the window below the topbar, where the pointer cannot be read`);
+    else if (p.own && !p.hit) say(`the pointer at the ${p.what} point of ${p.name} (${p.x},${p.y}) lands on ${p.at}, not on its button`);
+    else if (!p.own && p.hit) say(`the pointer at the ${p.what} point of ${p.name} (${p.x},${p.y}) lands on its button, which reaches past its dot and the gap to its words`);
+  }
+}
+
+/**
  * The contrast of every station's and way out's word on the open card against the background painted under it, by the
  * WCAG ratio of relative luminances, beside the card's muted text (`--ink-2` on `--surface`) read on a probe. The
  * buttons paint nothing, so a word reads on the first background painted above it, the open row's tint.
@@ -3310,6 +3395,7 @@ async function decisionCard(theme) {
     if (got.surface.drawn !== got.surface.stations) say(`${where}: the strip draws ${got.surface.drawn} stations, not the ${got.surface.stations} of its record's steps and placeholders`);
     counts.push(got.surface.drawn);
     await stripWords(theme, where);
+    await stripPointer(theme, where);
     if (got.table === null) say(`${where} draws no candidate table`);
     else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
     else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
@@ -3390,10 +3476,23 @@ async function decisionCard(theme) {
     await page.setViewportSize({ height, width });
     await advance(2 * CLOCK_STEP_MS);
     await stripWords(theme, `the shed move's card at ${width} by ${height}`);
+    if (!short) await stripPointer(theme, `the shed move's card at ${width} by ${height}`);
     await shedPopoverHeight(theme, `the shed move's card at ${width} by ${height}`, short);
   }
+  // No window reaches the strip's 640 px floor on the log, whose fixed columns keep the card's strip 958 px wide or
+  // wider, so its slot is held to the floor on the page. The step below, which redraws the strip for 1280 by 800, then
+  // draws it at the floor, and the first step of the Move station's popover reading redraws it for its slot again, so
+  // the floor reading adds no step of the page's clock.
+  const slot = (width) =>
+    page.evaluate((w) => {
+      const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+      if (strip) strip.style.maxWidth = w;
+    }, width);
+  await slot('640px');
   await page.setViewportSize({ height: 800, width: 1280 });
   await advance(2 * CLOCK_STEP_MS);
+  await stripPointer(theme, "the shed move's card at the strip's 640 px floor", true);
+  await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
   // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box.
   await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });

@@ -188,11 +188,12 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
             .map((p) => (
               <path key={p.i} className={`strip-path is-${p.state} strip-path--${p.kind}`} d={p.d} />
             ))}
+          {/* Each names its button, so a check pairs them by name and a failure names the station. */}
           {stations.map((s) => (
-            <circle key={s.id} className={classes('strip-node', `is-${s.state}`, s.decisive && 'is-decisive')} cx={layout.stations[s.id].x} cy={layout.stations[s.id].y} r={RADIUS} />
+            <circle key={s.id} className={classes('strip-node', `is-${s.state}`, s.decisive && 'is-decisive')} cx={layout.stations[s.id].x} cy={layout.stations[s.id].y} r={RADIUS} data-station={s.id} />
           ))}
           {termini.map(({ p, t }) => (
-            <circle key={t.kind} className={classes('strip-node', `is-${t.state}`, 'strip-node--terminus', t.state === 'taken' && `strip-node--${t.tone}`)} cx={p.x} cy={p.y} r={TERMINUS_RADIUS} />
+            <circle key={t.kind} className={classes('strip-node', `is-${t.state}`, 'strip-node--terminus', t.state === 'taken' && `strip-node--${t.tone}`)} cx={p.x} cy={p.y} r={TERMINUS_RADIUS} data-terminus={t.kind} />
           ))}
         </svg>
         {stations.map((s, i) => {
