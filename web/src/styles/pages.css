@@ -688,6 +688,24 @@
   white-space: normal;
 }
 
+/* Under 900 px the shell drops its sidebar and keeps 16 px of content padding per side, so a 375 px window leaves the
+   card grid 343 px, short of its floor. There a card takes no more than the grid's width and never ends past the
+   window. The reset label gives up its column for a row of its own under the meter, which leaves the card's body room
+   for the widest chip, the 6 px gap and a meter of 120 px or more. */
+@media (max-width: 899px) {
+  .quota-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(397px, 100%), 1fr));
+  }
+
+  .qcard__windows {
+    grid-template-columns: max-content minmax(120px, 1fr);
+  }
+
+  .qwin__reset {
+    grid-column: 1 / -1;
+  }
+}
+
 /* Timeline */
 .timeline {
   padding: 18px 20px;

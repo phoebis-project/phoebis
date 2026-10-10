@@ -2094,6 +2094,12 @@ async function quotaCardHeights(theme) {
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
 const QUOTA_FLOOR = 397;
 
+/** Two phone windows under the shell's 900 px breakpoint, where the content is narrower than the card grid's floor. */
+const QUOTA_NARROW = [
+  { height: 800, width: 375 },
+  { height: 844, width: 390 },
+];
+
 /**
  * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
  * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
@@ -2105,9 +2111,12 @@ const QUOTA_FLOOR = 397;
  * then in one that lands two cards on the card grid's floor: twice the floor and the grid's 14 px gap beside the
  * gutter the first reading measures, the grid's left edge and the content's right padding, so the sidebar's width and
  * the page's padding come from the page. A higher floor sets one card in a row there, and a lower one keeps two in a
- * row in a window 1 px narrower, which the check reads last. Then it puts the pass's window back. A resize arms no
- * timer on this page, and the check steps no clock and scrolls nothing, so the view's shot keeps its instants and its
- * topbar. The router's seed has no subscription account, so only the story's pass has meters to read.
+ * row in a window 1 px narrower, which the check reads next. Last it reads in two phone windows, where the shell drops
+ * its sidebar and the content is narrower than the floor. There the page scrolls nothing sideways and every card ends
+ * inside the window, and the readings above hold except the reset column's, since the reset label takes a row of its
+ * own across the grid. Then it puts the pass's window back. A resize arms no timer on this page, and the check steps no
+ * clock and scrolls nothing, so the view's shot keeps its instants and its topbar. The router's seed has no
+ * subscription account, so only the story's pass has meters to read.
  */
 async function quotaMeters(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -2148,8 +2157,10 @@ async function quotaMeters(theme) {
               width: tenth(card.getBoundingClientRect().width),
             };
           }),
+        ends: [...document.querySelectorAll('.qcard')].map((card) => ({ name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', right: tenth(card.getBoundingClientRect().right) })),
         grid: tenth(grid?.getBoundingClientRect().width ?? 0),
         gutter: grid && main ? tenth(grid.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingRight)) : null,
+        page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
         rows: one && two ? { first: tenth(one.bottom), second: tenth(two.top) } : null,
         view: window.innerWidth,
       };
@@ -2157,7 +2168,7 @@ async function quotaMeters(theme) {
   const check = async (where) => {
     const got = await read();
     const at = `in a ${got.view}px window`;
-    measurements.push(`${theme} /quota meters ${at} ${JSON.stringify({ cards: got.cards.map((c) => [c.name, c.width, c.scroll, c.client, c.cells.map((x) => (x.content === null ? [x.kind, x.width, x.past] : [x.kind, x.width, x.past, x.content]))]), grid: got.grid, gutter: got.gutter, rows: got.rows })}`);
+    measurements.push(`${theme} /quota meters ${at} ${JSON.stringify({ cards: got.cards.map((c) => [c.name, c.width, c.scroll, c.client, c.cells.map((x) => (x.content === null ? [x.kind, x.width, x.past] : [x.kind, x.width, x.past, x.content]))]), ends: got.ends.map((c) => c.right), grid: got.grid, gutter: got.gutter, page: got.page, rows: got.rows })}`);
     if (mock && got.cards.length === 0) say(`the story has subscription windows, yet no card draws them ${at}`);
     for (const card of got.cards) {
       for (const meter of card.cells.filter((x) => x.kind.endsWith('meter') && x.width < 120)) say(`${card.name}'s ${meter.kind} is ${meter.width}px wide ${at}, under 120 px`);
@@ -2172,7 +2183,7 @@ async function quotaMeters(theme) {
       const label = Math.max(...resets.map((x) => x.content));
       const resetColumn = Math.max(...resets.map((x) => x.width));
       if (chips.length > 0 && chipColumn > widest + 1) say(`${card.name}'s chip column is ${chipColumn}px wide ${at}, more than 1 px past its widest chip's ${widest}px`);
-      if (resets.length > 0 && resetColumn > Math.min(label, 114) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < 114 ? `its widest label's ${label}px` : 'its 114 px bound'}`);
+      if (where !== 'narrow' && resets.length > 0 && resetColumn > Math.min(label, 114) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < 114 ? `its widest label's ${label}px` : 'its 114 px bound'}`);
     }
     if (where === 'floor') {
       for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
@@ -2182,6 +2193,10 @@ async function quotaMeters(theme) {
     if (where === 'under') {
       if (mock && got.rows === null) say(`the story has several subscription accounts, yet fewer than two cards stand ${at}`);
       if (got.rows && got.rows.second < got.rows.first) say(`the first two cards share a row ${at}, where the card grid's ${QUOTA_FLOOR}px floor leaves room for one`);
+    }
+    if (where === 'narrow') {
+      if (got.page.scroll > got.page.client) say(`the page needs ${got.page.scroll}px of its ${got.page.client}px ${at}, so it scrolls sideways`);
+      for (const card of got.ends.filter((c) => c.right > got.page.client + 0.5)) say(`${card.name}'s card ends ${Math.round((card.right - got.page.client) * 10) / 10}px past the window's right edge ${at}`);
     }
     return got;
   };
@@ -2197,6 +2212,10 @@ async function quotaMeters(theme) {
   await check('floor');
   await page.setViewportSize({ height: was.height, width: floor - 1 });
   await check('under');
+  for (const size of QUOTA_NARROW) {
+    await page.setViewportSize(size);
+    await check('narrow');
+  }
   await page.setViewportSize(was);
 }
 
