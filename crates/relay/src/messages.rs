@@ -1425,6 +1425,7 @@ impl Relay {
             request_class.as_deref(),
             &self.router,
         );
+        let auxiliary = crate::identity::is_auxiliary(request_class.as_deref());
         trace
             .observed(
                 Some(&key),
@@ -1627,6 +1628,7 @@ impl Relay {
         let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
         let admitted = Admitted {
             auto_mode_server,
+            auxiliary,
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
@@ -1740,7 +1742,8 @@ impl Relay {
                     marker: admitted.markers_ttl_ms.is_some()
                         || (matches!(admitted.trace.kind, Kind::Inference | Kind::Probe)
                             && admitted.cache_ttl_policy.enabled
-                            && admitted.cache_ttl_policy.inject_when_absent),
+                            && admitted.cache_ttl_policy.inject_when_absent
+                            && !admitted.auxiliary),
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
                     lane: admitted.lane.clone(),
@@ -2104,7 +2107,7 @@ impl Relay {
             let markerless = match admitted.trace.kind {
                 Kind::CountTokens => Markerless::GoesAsSent,
                 Kind::Inference | Kind::Probe => {
-                    if admitted.cache_ttl_policy.inject_when_absent {
+                    if admitted.cache_ttl_policy.inject_when_absent && !admitted.auxiliary {
                         Markerless::TakesTheMember
                     } else {
                         Markerless::GoesAsSent
@@ -4154,6 +4157,9 @@ struct RestoreContext {
 struct Admitted<'a> {
     /// The key's override else the pool's, read once at admission.
     auto_mode_server: bool,
+    /// The request's class is auxiliary (a class header outside the refreshing classes): the cache TTL policy's
+    /// `inject_when_absent` leaves such a body as sent, since a one-off helper's write is a write nothing reads.
+    auxiliary: bool,
     /// The pool's own policy, off by default; read once at admission since a migrated attempt still prices the
     /// same request against the same policy, only the account's overage state changes per destination.
     cache_ttl_policy: CacheTtlPolicy,
