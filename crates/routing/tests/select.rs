@@ -298,6 +298,7 @@ fn affinity_row(
         root: root.into(),
         lane: lane_key(model, "standard", "none", "-"),
         depth: 1,
+        message_id: None,
     }
 }
 

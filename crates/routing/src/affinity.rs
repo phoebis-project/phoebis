@@ -148,6 +148,7 @@ fn row_of(model: &str, hash: &str, entry: &AffinityEntry) -> AffinityRow {
         root: entry.root.clone(),
         lane: entry.lane.clone(),
         depth: entry.depth,
+        message_id: None,
     }
 }
 
@@ -988,6 +989,7 @@ mod tests {
             root: "b1".into(),
             lane: crate::lane_key("m", "standard", "none", "-"),
             depth: 3,
+            message_id: None,
         }]);
         assert_eq!(map.entry("m", "b3").map(|e| e.depth), Some(3));
     }
