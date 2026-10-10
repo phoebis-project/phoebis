@@ -443,6 +443,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 request_id: "r-0".into(),
                 seq: 1,
                 attempt: 1,
+                message_id: None,
             },
         ))
         .await;
@@ -1383,6 +1384,7 @@ fn warmed(
         request_id: request_id.into(),
         seq: 1,
         attempt: 1,
+        message_id: None,
     })
 }
 

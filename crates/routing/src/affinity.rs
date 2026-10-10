@@ -26,6 +26,10 @@ pub struct AffinityEntry {
     /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it, or 0 for an
     /// entry restored from a row stored before the registry kept it.
     pub depth: u32,
+    /// The upstream id of the newest answer produced at this boundary on the account that holds the entry,
+    /// written for a request that carried or received the cache diagnostics member. A static entry never
+    /// carries one.
+    pub message_id: Option<String>,
 }
 
 /// An entry the purge removed, with why: `ttl` for one past its key's idle TTL or whose key no pool serves,
@@ -107,6 +111,9 @@ pub struct AffinityReport {
     pub request_id: String,
     pub seq: u32,
     pub attempt: u32,
+    /// The answer's upstream id, for the tail boundary alone. It is `None` for an answer whose request neither
+    /// carried nor received the cache diagnostics member, for a probe, and for an answer that named no id.
+    pub message_id: Option<String>,
 }
 
 pub struct ConversationQuery<'a> {
@@ -119,6 +126,20 @@ pub struct ConversationQuery<'a> {
     pub incarnation_of: &'a dyn Fn(&str) -> Option<u64>,
 }
 
+/// What the relay asks for the diagnostics member's value once the account is selected: the answer the request
+/// continues, on that account alone.
+pub struct PredecessorQuery<'a> {
+    pub canonical_model: &'a str,
+    /// The selected account, under its current incarnation as `incarnation_of` reads it.
+    pub account_id: &'a str,
+    pub key_id: &'a str,
+    pub key_generation: i64,
+    /// The roots an entry may carry: the request's own root and, for a fork, the conversation it forked from.
+    pub roots: &'a [&'a str],
+    pub message_boundaries: &'a [String],
+    pub incarnation_of: &'a dyn Fn(&str) -> Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationMatch {
     pub root: String,
@@ -128,6 +149,9 @@ pub struct ConversationMatch {
 /// What the relay's climb asks: implemented by the map and by the handle.
 pub trait ConversationLookup {
     fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch>;
+    /// The id of the deepest boundary of `query` that holds an answer on the selected account, under the
+    /// request's key and generation and one of its roots. Warmth and the lane play no part.
+    fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String>;
 }
 
 /// A boundary under the model it was reported for: an entry's place in the map.
@@ -148,7 +172,7 @@ fn row_of(model: &str, hash: &str, entry: &AffinityEntry) -> AffinityRow {
         root: entry.root.clone(),
         lane: entry.lane.clone(),
         depth: entry.depth,
-        message_id: None,
+        message_id: entry.message_id.clone(),
     }
 }
 
@@ -183,6 +207,7 @@ impl AffinityMap {
                     root: row.root,
                     lane: row.lane,
                     depth: row.depth,
+                    message_id: row.message_id,
                 },
             );
         }
@@ -292,7 +317,13 @@ impl AffinityMap {
         let message_ttl = message_ttl_ms.unwrap_or(0);
         let mut rows = Vec::new();
 
+        let tail = report.message_boundaries.len();
         for (index, boundary) in report.message_boundaries.iter().enumerate() {
+            // The answer continues the whole list, so only the tail names it: a prefix boundary keeps the answer
+            // of the turn that ended there.
+            let message_id = (index + 1 == tail)
+                .then_some(report.message_id.as_deref())
+                .flatten();
             if let Some(row) = self.upsert(
                 &canonical_model,
                 boundary,
@@ -303,6 +334,7 @@ impl AffinityMap {
                 message_confirmed,
                 message_ttl,
                 report.prefix_tokens,
+                message_id,
             ) {
                 rows.push(row);
             }
@@ -322,6 +354,7 @@ impl AffinityMap {
                     static_confirmed,
                     static_ttl,
                     size,
+                    None,
                 ) {
                     rows.push(row);
                 }
@@ -408,6 +441,7 @@ impl AffinityMap {
         confirmed: bool,
         ttl_ms: i64,
         prefix_tokens: u64,
+        message_id: Option<&str>,
     ) -> Option<AffinityRow> {
         let existing = self
             .entries
@@ -432,6 +466,17 @@ impl AffinityMap {
                     entry.ttl_ms = (entry.written_at + entry.ttl_ms - report.now).max(0);
                     entry.written_at = report.now;
                 }
+                // An answer of the account's earlier incarnation is no answer of the holder the lookup selects, so
+                // the id leaves before the refresh carries the entry over.
+                if entry.incarnation != report.incarnation {
+                    entry.message_id = None;
+                }
+                // The tail's id is written under the conversation's own root alone: another conversation sending
+                // the same list (two sessions opening with one template message) keeps this one's answer findable
+                // and falls back to its own memory.
+                if let Some(id) = message_id.filter(|_| entry.root == root) {
+                    entry.message_id = Some(id.to_string());
+                }
                 // The root stays the one the boundary was first recorded under: a later writer sharing it (a fork's
                 // own turns landing on the same account) refreshes the links and the warmth, never re-roots the
                 // conversation that got here first.
@@ -450,6 +495,7 @@ impl AffinityMap {
                 .then(|| entry.root.clone()),
             None => None,
         };
+        let entry_root = inherited_root.unwrap_or_else(|| root.to_string());
         let entry = AffinityEntry {
             chain,
             account_id: report.account_id.clone(),
@@ -459,7 +505,10 @@ impl AffinityMap {
             prefix_tokens: if confirmed { prefix_tokens } else { 0 },
             key_id: report.key_id.clone(),
             key_generation: report.key_generation,
-            root: inherited_root.unwrap_or_else(|| root.to_string()),
+            message_id: message_id
+                .filter(|_| entry_root == root)
+                .map(str::to_string),
+            root: entry_root,
             lane: report.lane.clone(),
             depth,
         };
@@ -491,6 +540,26 @@ impl ConversationLookup for AffinityMap {
             depth: Some(depth),
         })
     }
+
+    /// The deepest boundary that holds an answer on the selected account, under the request's key and generation
+    /// and one of its roots. An entry that fails a test is stepped over, as `conversation` steps over one the key
+    /// does not own. Warmth plays no part: an expired entry still names the answer the request continues.
+    fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String> {
+        let names_an_answer = |entry: &AffinityEntry| -> bool {
+            entry.message_id.is_some()
+                && entry.account_id == query.account_id
+                && (query.incarnation_of)(&entry.account_id) == Some(entry.incarnation)
+                && entry.key_id == query.key_id
+                && entry.key_generation == query.key_generation
+                && query.roots.contains(&entry.root.as_str())
+        };
+        self.deepest(
+            query.canonical_model,
+            query.message_boundaries,
+            names_an_answer,
+        )
+        .and_then(|(_, entry)| entry.message_id.clone())
+    }
 }
 
 #[cfg(test)]
@@ -520,6 +589,7 @@ mod tests {
             request_id: "r-1".into(),
             seq: 1,
             attempt: 1,
+            message_id: None,
         }
     }
 
@@ -774,6 +844,7 @@ mod tests {
             root: "b1".into(),
             lane: crate::lane_key("m", "standard", "none", "-"),
             depth: 1,
+            message_id: None,
         };
         assert!(!entry.live(1_000));
         let warm = AffinityEntry {
@@ -992,5 +1063,49 @@ mod tests {
             message_id: None,
         }]);
         assert_eq!(map.entry("m", "b3").map(|e| e.depth), Some(3));
+    }
+
+    #[test]
+    fn a_restored_entry_keeps_the_message_id_its_row_names() {
+        let map = AffinityMap::from_rows(vec![AffinityRow {
+            model: "m".into(),
+            hash: "b1".into(),
+            chain: AffinityChain::Message,
+            account_id: "a".into(),
+            incarnation: 1,
+            written_at: 1_000,
+            ttl_ms: 300_000,
+            prefix_tokens: 500,
+            key_id: "k".into(),
+            key_generation: 0,
+            root: "b1".into(),
+            lane: crate::lane_key("m", "standard", "none", "-"),
+            depth: 1,
+            message_id: Some("msg_01".into()),
+        }]);
+        assert_eq!(
+            map.entry("m", "b1").and_then(|e| e.message_id.as_deref()),
+            Some("msg_01")
+        );
+    }
+
+    #[test]
+    fn drain_carries_the_message_id_a_refresh_wrote() {
+        let mut map = AffinityMap::default();
+        let one = |now: i64, message_id: Option<&str>| AffinityReport {
+            message_boundaries: Arc::from(["b1".to_string()]),
+            message_id: message_id.map(String::from),
+            ..report("k", "a", now)
+        };
+        map.record(&one(1_000, None));
+        map.record(&one(2_000, Some("msg_01")));
+        assert_eq!(
+            map.drain()
+                .iter()
+                .map(|row| (row.hash.as_str(), row.message_id.as_deref()))
+                .collect::<Vec<_>>(),
+            [("b1", Some("msg_01"))],
+            "the refreshed row persists the id the refresh wrote"
+        );
     }
 }

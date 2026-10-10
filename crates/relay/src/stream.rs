@@ -332,6 +332,7 @@ impl AffinityFacts {
             request_id: self.request_id,
             seq: self.seq,
             attempt: self.attempt,
+            message_id: None,
         };
         let file = move |router: &RouterHandle, seq: Option<u64>| {
             if let Some(seq) = seq {

@@ -383,7 +383,7 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use phoebis_routing::ConversationMatch;
+    use phoebis_routing::{ConversationMatch, PredecessorQuery};
     use phoebis_store::RulesMode;
 
     fn key() -> ApiKeyRow {
@@ -447,6 +447,11 @@ mod tests {
                     .map(|(_, m)| m.clone())
             })
         }
+
+        /// The climb never asks for the answer a request continues.
+        fn predecessor(&self, _: &PredecessorQuery<'_>) -> Option<String> {
+            None
+        }
     }
 
     /// A lookup the climb under test must never ask: the case fails the moment it does.
@@ -454,6 +459,10 @@ mod tests {
 
     impl ConversationLookup for Panicking {
         fn conversation(&self, _: &ConversationQuery<'_>) -> Option<ConversationMatch> {
+            panic!("the lookup must never be asked on this climb")
+        }
+
+        fn predecessor(&self, _: &PredecessorQuery<'_>) -> Option<String> {
             panic!("the lookup must never be asked on this climb")
         }
     }

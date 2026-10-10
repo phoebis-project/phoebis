@@ -6,12 +6,13 @@ use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, BurnUnit, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
-    KeyRefusal, LongContextRates, MemberSpend, PinRef, PinUsage, Presented, RateTable,
-    Rates, Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
-    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
-    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState, DecisionRecord,
+    DecisionSummary, Exhaustion, KeyRefusal, LongContextRates, MemberSpend, PinRef,
+    PinUsage, PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedRequest,
+    ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectRequest,
+    SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus,
+    COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -207,6 +208,7 @@ fn affinity_report(
         request_id: "r-1".into(),
         seq: 1,
         attempt: 1,
+        message_id: None,
     }
 }
 
@@ -5865,6 +5867,70 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
     assert!(
         store.load_routing().unwrap().affinity.is_empty(),
         "a report under the old incarnation writes nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // Held, so the purge cannot drop the entry under the other incarnation before the walk is asked to step over
+    // it.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let seq = handle
+        .report(Report::Affinity(AffinityReport {
+            message_id: Some("msg_01".into()),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await
+        .expect("an affinity report takes a number");
+    assert!(
+        handle
+            .wait_for_report(seq, tokio::time::Instant::now() + WRITTEN)
+            .await
+    );
+    let key_generation = handle.snapshot().key("k").unwrap().created_at;
+    // The caller's reading answers an incarnation the snapshot never held, so only the handle's own reading of
+    // the snapshot decides which entries the walk accepts.
+    let stale = |_: &str| Some(2_u64);
+    // A report without a session roots its entries at its first boundary, so a one-boundary lookup names that
+    // boundary as its root.
+    let query = |hash: &str| {
+        let message_boundaries = [hash.to_string()];
+        handle.predecessor(&PredecessorQuery {
+            canonical_model: "claude-sonnet-5",
+            account_id: "a",
+            key_id: "k",
+            key_generation,
+            roots: &[hash],
+            message_boundaries: &message_boundaries,
+            incarnation_of: &stale,
+        })
+    };
+    assert_eq!(
+        query("b1"),
+        Some("msg_01".to_string()),
+        "the entry sits under the account's current incarnation"
+    );
+
+    handle.affinity().write().unwrap().record(&AffinityReport {
+        incarnation: 2,
+        message_boundaries: Arc::from(["c1".to_string()]),
+        message_id: Some("msg_c1".into()),
+        ..affinity_report(&handle, "a", 2_000)
+    });
+    assert_eq!(
+        query("c1"),
+        None,
+        "an entry under an incarnation the snapshot does not hold is stepped over"
     );
 }
 
