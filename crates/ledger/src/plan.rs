@@ -11,9 +11,8 @@ use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
 use phoebis_routing::{window_for, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
-use phoebis_store::AccountKind;
 
-use crate::rollup::{FAST_FUNDING, OVERAGE_FUNDING};
+use crate::rollup::{BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING};
 use crate::LedgerError;
 
 const SHIPPED_SUBSCRIPTION_COSTS: &str = include_str!("../subscription_costs.yaml");
@@ -692,14 +691,25 @@ pub fn funding_of(
 }
 
 impl Funding {
-    /// A rollup row's funding from its key's word and its account's kind: an api_key account's rows file under
-    /// `plan` in the key, so the kind decides first.
-    pub fn of_rollup(kind: AccountKind, funding: &str) -> Funding {
-        match (kind, funding) {
-            (AccountKind::ApiKey, _) => Funding::ApiKey,
-            (AccountKind::Oauth, FAST_FUNDING) => Funding::Fast,
-            (AccountKind::Oauth, OVERAGE_FUNDING) => Funding::Overage,
-            (AccountKind::Oauth, _) => Funding::Plan,
+    /// A rollup row's funding from its key's word alone: the key carries the served attempt's funding whole, so the
+    /// kind the registry holds for the account now has no say, and a deleted or recreated account moves no row.
+    pub fn of_rollup(funding: &str) -> Funding {
+        match funding {
+            BILLED_FUNDING => Funding::ApiKey,
+            FAST_FUNDING => Funding::Fast,
+            OVERAGE_FUNDING => Funding::Overage,
+            _ => Funding::Plan,
+        }
+    }
+
+    /// The word the rollup key files the funding under: `billed` for `ApiKey`, since the key names who paid where
+    /// `as_str` names the account's kind for the request routes.
+    pub fn rollup_word(self) -> &'static str {
+        match self {
+            Funding::Plan => PLAN_FUNDING,
+            Funding::Overage => OVERAGE_FUNDING,
+            Funding::Fast => FAST_FUNDING,
+            Funding::ApiKey => BILLED_FUNDING,
         }
     }
 

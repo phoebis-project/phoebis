@@ -694,13 +694,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
   });
 
-  test(`every rollup's funding reads the answer that served its requests, a request no attempt served filing under plan, at ${at}`, async () => {
+  test(`every rollup's funding reads the answer that served its requests, an API key account's answer filing under billed and a request no attempt served under plan, at ${at}`, async () => {
     const s = await story;
-    // The ledger keys a rollup's funding off the served answer: a fast answer files fast whatever the account's
-    // kind, a head in overage files overage, and a request no attempt served, whatever speed it asked for, files
-    // plan. The requested speed names the speed key alone.
+    // The ledger keys a rollup's funding off the served answer: an API key account's answer files billed whatever
+    // its speed or overage flag, a fast answer files fast, a head in overage files overage, and a request no attempt
+    // served, whatever speed it asked for, files plan. The requested speed names the speed key alone.
     const fundingOf = (r) => {
       const last = r.attempts[r.attempts.length - 1];
+      if (last?.accountKind === 'api_key') return 'billed';
       return last?.response.speed === 'fast' ? 'fast' : last?.overageInUse === true ? 'overage' : 'plan';
     };
     const laneOf = (hour, keyId, poolId, accountId, model, kind, sessionId) => [hour, keyId, poolId, accountId, model, kind, sessionId].join('|');

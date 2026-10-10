@@ -344,7 +344,10 @@ export function AnalyticsPage() {
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
   const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation]);
-  const costBreakdown = useAsync(() => (funded && fundedTab ? api.getAnalyticsBreakdown({ ...query, funding }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, fundedTab, generation]);
+  // The Cache warming card's Probe cost tile is the one reader of the funded breakdown on its tab, and it reads the
+  // probe rows counted: a dollar side drops the other side's real rows, and a group left with probe rows alone drops
+  // out of a breakdown that does not count probes, taking the probes' dollars and count with it.
+  const costBreakdown = useAsync(() => (funded && fundedTab ? api.getAnalyticsBreakdown({ ...query, funding, includeProbes: query.includeProbes || tab === 'cache-warming' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, fundedTab, tab, generation]);
   const placements = useAsync(
     () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
@@ -1655,8 +1658,8 @@ const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its wid
 const PARTIAL_TONE = 0.5;
 
 /**
- * A plan line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
- * share with a null or the series' end on both sides draws no segment of its own.
+ * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
+ * value with a null or the series' end on both sides draws no segment of its own.
  */
 const isolatedDot = (values: (number | null)[], color: string) => {
   const isolated = isolatedSlots(values);
@@ -2103,8 +2106,10 @@ function AccountsSection({
             <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
             <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
             <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
+            {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a slope, and
+                a sampled bucket with a gap or the range's edge on both sides draws as a dot, as the share chart draws one. */}
             {accounts.map((a) => (
-              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={isolatedDot(usage.data.map((r) => r[a]), accountColor(ink, slotOf(a)))} isAnimationActive={false} />
             ))}
           </LineChart>
         </ChartCard>
@@ -2116,7 +2121,7 @@ function AccountsSection({
             <ReferenceLine y={0} stroke={ink.axis} />
             <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
             {accounts.map((a) => (
-              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={isolatedDot(pace.data.map((r) => r[a]), accountColor(ink, slotOf(a)))} isAnimationActive={false} />
             ))}
           </LineChart>
         </ChartCard>

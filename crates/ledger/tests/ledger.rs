@@ -3918,6 +3918,30 @@ fn an_attempt_folds_under_fast_overage_or_plan_funding() {
 }
 
 #[test]
+fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage_flag() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    plant_every_funding(&db, ("b", "api_key"));
+    let mut rows = db
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.funding, r.speed, r.requests))
+        .collect::<Vec<_>>();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("billed".to_string(), "fast".to_string(), 3),
+            ("billed".to_string(), "standard".to_string(), 2),
+        ],
+        "an api_key account's answer is billed in dollars whatever its speed or the head's overage flag, and the key \
+         says so without the registry"
+    );
+}
+
+#[test]
 fn member_spends_sums_the_metered_rows_alone_when_asked() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     plant_every_funding(&db, ("a", "oauth"));

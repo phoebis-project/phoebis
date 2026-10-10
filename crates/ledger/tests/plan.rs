@@ -4,10 +4,9 @@
 
 use phoebis_ledger::test_tables::{self, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    funding_of, Funding, LedgerError, PlanTables, SubscriptionCosts, FAST_FUNDING,
+    funding_of, Funding, LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::AccountKind;
 
 /// Monday 2026-09-21 at 14:00 UTC, inside the band while Pacific daylight time holds.
 const SEPTEMBER_AFTERNOON: i64 = 1_789_999_200_000;
@@ -829,13 +828,18 @@ fn the_funding_reads_the_account_kind_before_the_speed_and_the_overage_flag() {
         "an api_key attempt is billed in dollars whatever its speed or overage flag"
     );
     assert_eq!(
-        Funding::of_rollup(AccountKind::ApiKey, FAST_FUNDING),
+        Funding::of_rollup(BILLED_FUNDING),
         Funding::ApiKey,
-        "an api_key account's rollup row is billed in dollars whatever its key's word"
+        "an api_key account's rollup row carries its billing in its key's word"
     );
     assert_eq!(
-        Funding::of_rollup(AccountKind::Oauth, FAST_FUNDING),
+        Funding::of_rollup(FAST_FUNDING),
         Funding::Fast,
-        "an oauth account's fast row draws usage credits"
+        "a fast row draws usage credits"
+    );
+    assert_eq!(
+        Funding::ApiKey.rollup_word(),
+        BILLED_FUNDING,
+        "and the word of an api_key attempt's funding is the billed one"
     );
 }

@@ -68,7 +68,7 @@ const COMPANION_HINT: Record<CompanionState, string> = {
   silent: 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
 };
 const COUNTS_HINT = 'Probes sent and requests they kept warm since midnight UTC';
-const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics.';
+const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or the request log.';
 interface Row {
   account: Account | null;
   /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */

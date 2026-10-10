@@ -11,7 +11,7 @@ use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
 use phoebis_ledger::{PlanTables, PriceTable};
-use phoebis_relay::{RelayOutcome, ServedUnder};
+use phoebis_relay::RelayOutcome;
 use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::AccountKind;
 use serde_json::Value;
@@ -63,7 +63,8 @@ pub(crate) struct ProbeResult {
     /// The TTL the relay dispatched the probe's body with, off `RelayOutcome::cache_ttl_ms`; `None` when the
     /// body went as sent.
     pub cache_ttl_ms: Option<i64>,
-    /// The account's overage state at the selection the probe dispatched under, off `ServedUnder`.
+    /// Whether the answer's head said overage was in use, off `RelayOutcome::overage_in_use`: the fact the ledger
+    /// files the probe's request row under, so the credit files beside it.
     pub in_overage: bool,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
@@ -145,8 +146,8 @@ pub struct ProbeRecord {
     pub cost_usd: f64,
     /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
     pub fast: bool,
-    /// The account's overage state at the selection the probe dispatched under, which keys the credit row's
-    /// funding: the answer's rate-limit headers never reach the engine, so the selection's state decides.
+    /// Whether the probe's answer reported overage in use, the fact its request row files under: the credit row
+    /// keys the same funding, and the settlement unit follows the same side.
     pub in_overage: bool,
     pub key: SessionKey,
     pub key_generation: i64,
@@ -268,7 +269,6 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                 let response = relay.probe(marker, request).await;
                 let status = response.status().as_u16();
                 let outcome = response.extensions().get::<RelayOutcome>().cloned();
-                let served_under = response.extensions().get::<ServedUnder>().copied();
                 let retry_after_secs = retry_after_secs(response.headers());
                 let body = read_bounded(response.into_body()).await;
                 ProbeResult {
@@ -281,7 +281,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     error_code: outcome.as_ref().and_then(|o| o.error_code.clone()),
                     body,
                     cache_ttl_ms: outcome.as_ref().and_then(|o| o.cache_ttl_ms),
-                    in_overage: served_under.is_some_and(|s| s.in_overage),
+                    in_overage: outcome
+                        .as_ref()
+                        .is_some_and(|o| o.overage_in_use == Some(true)),
                     retry_after_secs,
                     obstacle: outcome.as_ref().and_then(|o| o.obstacle),
                 }

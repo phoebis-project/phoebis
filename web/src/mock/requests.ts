@@ -1556,13 +1556,13 @@ const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 const heldRng = createRng(6_133);
 
 /**
- * Who paid for a request, as the ledger keys its rollups off the answer that served it: a fast answer's credits
- * before anything, then the head's overage flag, else the plan. A request no attempt served files under `plan`
- * whatever speed it asked for, and an API key account's standard answers file under `plan` here too, the kind
- * telling them apart.
+ * Who paid for a request, as the ledger keys its rollups off the answer that served it: `billed` for an API key
+ * account's answer before anything, then a fast answer's credits, then the head's overage flag, else the plan. A
+ * request no attempt served files under `plan` whatever speed it asked for.
  */
 const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
   const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+  if (last?.accountKind === 'api_key') return 'billed';
   if (last?.response.speed === 'fast') return 'fast';
   return last?.overageInUse === true ? 'overage' : 'plan';
 };

@@ -634,19 +634,9 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 None,
             )
             .unwrap();
-            let paged = series_paged(
-                &db,
-                &filter,
-                &live,
-                from,
-                to,
-                bucket,
-                group_by,
-                &HashMap::new(),
-                None,
-            )
-            .await
-            .unwrap();
+            let paged = series_paged(&db, &filter, &live, from, to, bucket, group_by, None)
+                .await
+                .unwrap();
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
@@ -660,18 +650,9 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
                 &filter.user_agent_groups,
                 None,
             );
-            let paged = breakdown_paged(
-                &db,
-                &filter,
-                &live,
-                from,
-                to,
-                group_by,
-                &HashMap::new(),
-                None,
-            )
-            .await
-            .unwrap();
+            let paged = breakdown_paged(&db, &filter, &live, from, to, group_by, None)
+                .await
+                .unwrap();
             assert_eq!(
                 serde_json::to_value(&paged).unwrap(),
                 serde_json::to_value(&unpaged).unwrap(),
@@ -1171,7 +1152,6 @@ async fn account_groups(
     filter: &RollupFilter,
     from: i64,
     to: i64,
-    kinds: &HashMap<String, AccountKind>,
     pricing: Option<SharePricing<'_>>,
 ) -> Vec<GroupRow> {
     breakdown_paged(
@@ -1181,7 +1161,6 @@ async fn account_groups(
         from,
         to,
         "account",
-        kinds,
         pricing,
     )
     .await
@@ -1266,15 +1245,7 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares_an
         tiers: &tiers,
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(
-        &db,
-        &RollupFilter::default(),
-        from,
-        to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     let a = group(&groups, "a");
     let cost = a
         .cost_shares
@@ -1351,15 +1322,7 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
         tiers: &tiers,
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(
-        &db,
-        &RollupFilter::default(),
-        from,
-        to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     let cost = group(&groups, "a")
         .cost_shares
         .as_ref()
@@ -1476,15 +1439,7 @@ async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
         tiers: &tiers,
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(
-        &db,
-        &RollupFilter::default(),
-        from,
-        to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     let a = group(&groups, "a");
     assert!(
         a.cost_shares.as_ref().is_some_and(|m| m.is_empty()),
@@ -1533,9 +1488,9 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
     let inference_share = fable_shares(&tables, inference)[FIVE_HOUR].unwrap();
     let probe_share = fable_shares(&tables, probe)[FIVE_HOUR].unwrap();
     let read = |filter: RollupFilter| {
-        let (db, kinds) = (db.clone(), &kinds);
+        let db = db.clone();
         async move {
-            let groups = account_groups(&db, &filter, from, to, kinds, Some(pricing)).await;
+            let groups = account_groups(&db, &filter, from, to, Some(pricing)).await;
             let a = group(&groups, "a");
             (
                 a.cost_shares
@@ -1637,7 +1592,7 @@ async fn the_wasted_probe_share_reads_the_group_s_dollar_ratio_over_its_separate
     };
     let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
     let (credits_from, credits_to) = hour_range(next_hour);
-    let groups = account_groups(&db, &with_probes(), from, credits_to, &kinds, Some(pricing)).await;
+    let groups = account_groups(&db, &with_probes(), from, credits_to, Some(pricing)).await;
     let probes = group(&groups, "a")
         .probe_shares
         .as_ref()
@@ -1651,15 +1606,8 @@ async fn the_wasted_probe_share_reads_the_group_s_dollar_ratio_over_its_separate
         }),
         "the wasted part is the probe share times a cent over four cents: {probes:?} vs {cost}"
     );
-    let credits = account_groups(
-        &db,
-        &with_probes(),
-        credits_from,
-        credits_to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let credits =
+        account_groups(&db, &with_probes(), credits_from, credits_to, Some(pricing)).await;
     let probes = group(&credits, "a")
         .probe_shares
         .as_ref()
@@ -1706,15 +1654,7 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
         tiers: &tiers,
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(
-        &db,
-        &RollupFilter::default(),
-        from,
-        to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     let a = group(&groups, "a");
     let plan = fable_shares(&tables, usage(1_000, 100))[FIVE_HOUR].unwrap();
     assert!(
@@ -1778,7 +1718,7 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let filter = RollupFilter::default();
-    let breakdown = account_groups(&db, &filter, from, to, &kinds, Some(pricing)).await;
+    let breakdown = account_groups(&db, &filter, from, to, Some(pricing)).await;
     let points = series_paged(
         &db,
         &filter,
@@ -1787,7 +1727,6 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
         to,
         3_600,
         "account",
-        &kinds,
         Some(pricing),
     )
     .await
@@ -1852,16 +1791,15 @@ async fn the_funding_filter_partitions_the_rows() {
             ..ShareRow::default()
         },
     );
-    let kinds = share_kinds();
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let read = |funding: Option<FundingFilter>| {
-        let (db, kinds) = (db.clone(), &kinds);
+        let db = db.clone();
         async move {
             let filter = RollupFilter {
                 funding,
                 ..RollupFilter::default()
             };
-            account_groups(&db, &filter, from, to, kinds, None)
+            account_groups(&db, &filter, from, to, None)
                 .await
                 .iter()
                 .map(|g| (g.key.clone(), g.requests))
@@ -1886,6 +1824,112 @@ async fn the_funding_filter_partitions_the_rows() {
         (sum(&billed), sum(&plan), sum(&every)),
         (3, 2, 5),
         "the two subsets partition the rows"
+    );
+}
+
+/// A row files under the funding its serving attempt had, so the registry's later state moves none of it: an api_key
+/// account's rows stay billed once the account is deleted and once its id comes back as an oauth account with a tier
+/// on file, and that recreation prices none of them as a share.
+#[tokio::test]
+async fn an_api_key_account_s_rows_stay_billed_when_the_registry_drops_or_recreates_the_account() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-api",
+            account: "k",
+            account_kind: "api_key",
+            ..ShareRow::default()
+        },
+    );
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let tables = share_tables();
+    let counts = |groups: &[GroupRow]| {
+        groups
+            .iter()
+            .map(|g| (g.key.clone(), g.requests))
+            .collect::<Vec<_>>()
+    };
+    let deleted: HashMap<String, AccountKind> = HashMap::new();
+    let recreated = HashMap::from([("k".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("k".to_string(), Some("test_tier".to_string()))]);
+    for (registry, kinds) in [("deleted", &deleted), ("recreated as oauth", &recreated)] {
+        let pricing = SharePricing {
+            tables: &tables,
+            kinds,
+            tiers: &tiers,
+        };
+        let read = |funding: FundingFilter| {
+            let filter = RollupFilter {
+                funding: Some(funding),
+                ..RollupFilter::default()
+            };
+            let db = db.clone();
+            async move { account_groups(&db, &filter, from, to, Some(pricing)).await }
+        };
+        let billed = read(FundingFilter::Billed).await;
+        let plan = read(FundingFilter::Plan).await;
+        assert_eq!(
+            counts(&billed),
+            [("k".to_string(), 1)],
+            "the api_key row stays billed with the account {registry}"
+        );
+        assert!(
+            plan.is_empty(),
+            "and leaves the plan side empty with the account {registry}: {plan:?}"
+        );
+        assert!(
+            group(&billed, "k")
+                .cost_shares
+                .as_ref()
+                .is_none_or(|m| m.is_empty()),
+            "and prices no share with the account {registry}: {billed:?}"
+        );
+    }
+}
+
+/// The mirror: an oauth account's plan row stays on the plan side once the registry says its id is an api_key account.
+#[tokio::test]
+async fn an_oauth_account_s_plan_row_stays_plan_when_its_id_is_recreated_as_an_api_key_account() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            ..ShareRow::default()
+        },
+    );
+    let tables = share_tables();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::ApiKey)]);
+    let tiers = Tiers::new();
+    let pricing = SharePricing {
+        tables: &tables,
+        kinds: &kinds,
+        tiers: &tiers,
+    };
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let read = |funding: FundingFilter| {
+        let db = db.clone();
+        async move {
+            let filter = RollupFilter {
+                funding: Some(funding),
+                ..RollupFilter::default()
+            };
+            account_groups(&db, &filter, from, to, Some(pricing))
+                .await
+                .iter()
+                .map(|g| (g.key.clone(), g.requests))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        read(FundingFilter::Plan).await,
+        [("a".to_string(), 1)],
+        "the plan row stays on the plan side"
+    );
+    assert!(
+        read(FundingFilter::Billed).await.is_empty(),
+        "and never moves to the billed side"
     );
 }
 
@@ -1955,16 +1999,15 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
         (OVERAGE_FUNDING, PLAN_FUNDING),
         "the credit files under the probe's overage and the settlement under the plan: {rows:?}"
     );
-    let kinds = share_kinds();
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
     let read = |funding: FundingFilter| {
-        let (db, kinds) = (db.clone(), &kinds);
+        let db = db.clone();
         async move {
             let filter = RollupFilter {
                 funding: Some(funding),
                 ..with_probes()
             };
-            let groups = account_groups(&db, &filter, from, to, kinds, None).await;
+            let groups = account_groups(&db, &filter, from, to, None).await;
             let a = group(&groups, "a");
             (a.cost_usd, a.probe_cost_usd, a.wasted_probe_usd)
         }
@@ -2046,15 +2089,7 @@ async fn a_tierless_oauth_group_and_an_account_the_registry_lacks_answer_no_shar
         tiers: &tiers,
     };
     let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
-    let groups = account_groups(
-        &db,
-        &RollupFilter::default(),
-        from,
-        to,
-        &kinds,
-        Some(pricing),
-    )
-    .await;
+    let groups = account_groups(&db, &RollupFilter::default(), from, to, Some(pricing)).await;
     for key in ["t", "u"] {
         let g = group(&groups, key);
         assert!(

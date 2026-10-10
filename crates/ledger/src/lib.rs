@@ -70,9 +70,9 @@ pub use record::{
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
     fold_request, fold_user_agent, hour_of, read_account_rollups, read_rollups, read_rollups_paged,
-    AccountRollupRow, CostSplit, KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES,
-    EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING,
-    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    AccountRollupRow, CostSplit, KeySelector, RollupRow, RollupSelect, BILLED_FUNDING,
+    DIMENSION_MAX_BYTES, EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE, NO_CLASS, OTHER_DIMENSION,
+    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, BATCH_RETRY_DELAYS,

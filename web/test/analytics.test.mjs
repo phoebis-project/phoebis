@@ -532,6 +532,19 @@ test('the session and non-session views agree on the share averages over one mix
   assert.deepEqual(d.shareRow(folded), { fiveHour: '50%', perRequest: '12.5%', perThousand: '62.5%', sevenDay: '25%', week: null });
 });
 
+test("a plan-funded row with no token joins the session fold's plan count and not its share total, as the ledger sums it", () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const shares = { five_hour: 0.25, seven_day: 0.125 };
+  const rows = [
+    { ...plan, costShares: shares, id: 'p-priced' },
+    // A failed attempt on a model the cost model has no weight for: the route answers no share for a charge of nothing.
+    { ...plan, costShares: null, id: 'p-failed', outcome: 'failed', usage: { ...plan.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 } },
+  ];
+  const [folded] = d.foldGroups(rows, 'account');
+  assert.deepEqual(folded.costShares, shares, "the total is the priced row's shares");
+  assert.deepEqual([folded.planRequests, folded.planOutputTokens], [2, plan.usage.output], 'the failed row still counts as a plan request');
+});
+
 /** An account's hour as the accounts route answers it, the peaks and counts empty, the windows as given. */
 const rollup = (accountId, hourMs, windows) => ({ accountId, cooldownSeconds: 0, hour: new Date(hourMs).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows });
 const windowSample = (over = {}) => ({ lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });

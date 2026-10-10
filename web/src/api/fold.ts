@@ -139,18 +139,25 @@ const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length -
  */
 const onSide = (r: RequestLog, side: FundingFilter) => (r.attempts.length === 0 || fundingOfRow(r) === 'plan') === (side === 'plan');
 
+/** The five token counts a share is priced from, as the ledger sums them before it prices a row. */
+const tokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
+
 /**
  * The plan-funded rows' shares summed per window into the group, as the route sums them under the account grouping:
  * a window no row's model applies to is no key, a window a row carries as null (the cost model could not price it) is
  * null whatever the other rows priced, and the rest sum. A row whose account the route could not price (`{}`, or
  * no map at all) nulls the map and both counts, as the route answers such an account, since the fold holds no window
- * rule of its own to say which windows that row's model applies to. No plan-funded row is no shares.
+ * rule of its own to say which windows that row's model applies to. No plan-funded row is no shares. A plan-funded
+ * row with no token (a failed attempt the route priced nothing for) joins the counts and not the shares, as the
+ * ledger's sums skip it: its empty map would otherwise read as an account the route could not price and dash the
+ * priced rows' total.
  */
 function foldShares(g: AnalyticsGroup, rows: RequestLog[]) {
   const plan = rows.filter((r) => fundingOfRow(r) === 'plan');
-  if (plan.length === 0 || plan.some((r) => r.costShares === null || Object.keys(r.costShares).length === 0)) return;
+  const priced = plan.filter((r) => tokensOf(r) > 0);
+  if (priced.length === 0 || priced.some((r) => r.costShares === null || Object.keys(r.costShares).length === 0)) return;
   const shares: Record<string, number | null> = {};
-  for (const r of plan) {
+  for (const r of priced) {
     for (const [window, share] of Object.entries(r.costShares ?? {})) {
       const sum = shares[window];
       shares[window] = share === null || sum === null ? null : (sum ?? 0) + share;

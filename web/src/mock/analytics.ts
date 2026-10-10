@@ -40,12 +40,11 @@ export interface HourlyRollup {
   /** Attempts that moved to another member before the request succeeded. */
   failovers: number;
   /**
-   * Who paid for the hour's requests, as the ledger keys its rollups off the served answer: a fast answer's credits
-   * (`fast` on an API key account as on a subscription), the head's overage, or the plan. An API key account's
-   * standard answers file under `plan` here too, the account's kind telling them apart, and so does a request no
-   * attempt served.
+   * Who paid for the hour's requests, as the ledger keys its rollups off the served answer: `billed` for an API key
+   * account's answer whatever its speed, else a fast answer's credits, else the head's overage, else the plan, which a
+   * request no attempt served files under too.
    */
-  funding: 'fast' | 'overage' | 'plan';
+  funding: 'billed' | 'fast' | 'overage' | 'plan';
   histograms: LatencyHistograms;
   hour: string;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read. */
@@ -120,13 +119,12 @@ const KIND_OF = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
 const TIER_OF = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
 
 /**
- * Whether a row falls on the side the funding filter keeps, as the route reads it: `plan` is a plan-funded row of an
- * account that is not an API key (one the registry lacks included), `billed` its complement.
+ * Whether a row falls on the side the funding filter keeps, as the route reads it off the row's own funding: `plan` is
+ * a plan-funded row, `billed` its complement, and the registry's current kinds move no row.
  */
 function passesFunding(r: HourlyRollup, funding: AnalyticsQuery['funding']): boolean {
   if (funding === undefined) return true;
-  const plan = r.funding === 'plan' && KIND_OF.get(r.accountId) !== 'api_key';
-  return funding === 'plan' ? plan : !plan;
+  return funding === 'plan' ? r.funding === 'plan' : r.funding !== 'plan';
 }
 
 function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: number): boolean {

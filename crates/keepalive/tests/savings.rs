@@ -1124,22 +1124,21 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
     );
 }
 
-/// A probe's credit row files under the funding its selection stood under, the account's overage state when the
-/// probe was placed, since the answer's rate-limit headers never reach the engine. The probe's own request row
-/// reads the head's overage fact, so with the account in overage both rows file under `overage`.
-#[tokio::test]
-async fn an_overage_probe_s_request_and_credit_rows_file_under_overage_as_the_selection_s_state_decides(
-) {
+/// The two rollup rows of one probe on `o` by role, sorted, after a probe placed with the account in overage or on
+/// the plan as `in_overage` says, whose answer carried the unified overage header at `head_flag`.
+async fn probe_row_fundings(in_overage: bool, head_flag: &str) -> Vec<(&'static str, String)> {
     let mut r = rig(plan_funded_spec()).await;
-    r.enter_overage("o", r.now() + 10_000_000).await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.in_use)
-    })
-    .await;
+    if in_overage {
+        r.enter_overage("o", r.now() + 10_000_000).await;
+        settled(&r, |r| async move {
+            r.h.router
+                .overage("o")
+                .await
+                .unwrap()
+                .is_some_and(|e| e.in_use)
+        })
+        .await;
+    }
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -1157,7 +1156,7 @@ async fn an_overage_probe_s_request_and_credit_rows_file_under_overage_as_the_se
             status: 200,
             headers: vec![(
                 "anthropic-ratelimit-unified-overage-in-use".into(),
-                "true".into(),
+                head_flag.into(),
             )],
             body: read_back,
         },
@@ -1183,13 +1182,49 @@ async fn an_overage_probe_s_request_and_credit_rows_file_under_overage_as_the_se
     let rows = rollups(&r, |rows| probe_rows_of_o(rows).len() == 2).await;
     let mut fundings = probe_rows_of_o(&rows);
     fundings.sort();
+    fundings
+}
+
+/// A probe's request row files under the overage fact its answer's head reported, and its credit row files beside
+/// it: with the account in overage and the head agreeing, both rows read `overage`.
+#[tokio::test]
+async fn an_overage_probe_s_request_and_credit_rows_file_under_the_overage_its_answer_reported() {
     assert_eq!(
-        fundings,
+        probe_row_fundings(true, "true").await,
         [
             ("credit", "overage".to_string()),
             ("request", "overage".to_string())
         ],
-        "both rows of the probe file under the overage the selection stood in: {rows:?}"
+        "both rows of the probe file under the overage its answer reported"
+    );
+}
+
+/// The head decides for both rows. A probe placed on the plan whose answer reports overage in use (the account
+/// entered overage between the selection and the answer) files its credit under `overage` beside its request row,
+/// never under the plan the selection stood on.
+#[tokio::test]
+async fn a_probe_placed_on_the_plan_whose_answer_reports_overage_files_both_rows_under_overage() {
+    assert_eq!(
+        probe_row_fundings(false, "true").await,
+        [
+            ("credit", "overage".to_string()),
+            ("request", "overage".to_string())
+        ],
+        "the credit follows the head, not the selection"
+    );
+}
+
+/// And the other way: a probe placed in overage whose answer reports the plan paying (the window reset between the
+/// selection and the answer) files both rows under `plan`.
+#[tokio::test]
+async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_both_rows_under_plan() {
+    assert_eq!(
+        probe_row_fundings(true, "false").await,
+        [
+            ("credit", "plan".to_string()),
+            ("request", "plan".to_string())
+        ],
+        "the credit follows the head, not the selection"
     );
 }
 

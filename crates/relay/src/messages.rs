@@ -184,6 +184,9 @@ pub struct RelayOutcome {
     pub upstream_request_id: Option<String>,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
     pub cache_ttl_ms: Option<i64>,
+    /// The head's unified `overage-in-use` flag on the committed attempt, the fact the ledger files the request's
+    /// funding under; `None` for a local answer or a head without the unified headers.
+    pub overage_in_use: Option<bool>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
@@ -202,9 +205,10 @@ pub const REAUTH_OBSTACLE: &str = "reauth_required";
 /// and its selection; the keepalive retries a probe on it, since the next one admits under the new pool.
 const POOL_MOVED: &str = "pool_moved";
 
-/// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
-/// The keepalive's probe path is the one reader today: a probe's cost and the credit it later earns price
-/// through the funding its own serving attempt had, which can only be read off the selection that dispatched it.
+/// Which side funded the account a request served under at its selection, on the response's extensions beside
+/// `RelayOutcome`. The selection's own fact: a probe's request row and its credit file under the answer's
+/// `RelayOutcome::overage_in_use` instead, so the two rows never part over a window reset or an overage entry
+/// between the selection and the head.
 #[derive(Clone, Copy, Debug)]
 pub struct ServedUnder {
     pub in_overage: bool,
@@ -1851,8 +1855,8 @@ impl Relay {
                     continue;
                 }
                 Leg::Respond(mut response) => {
-                    // Every kind rides this, not the probe path alone: the keepalive's is the only reader
-                    // today, but a request's own funding is a fact of its selection, not of who asked for it.
+                    // Every kind rides this, not the probe path alone: a request's selection funding is a fact of
+                    // the request, not of who asked for it.
                     response.extensions_mut().insert(ServedUnder {
                         in_overage: selection.in_overage,
                     });
@@ -2496,6 +2500,7 @@ impl Relay {
             ctx.cache_ttl_ms,
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
+        outcome.overage_in_use = UnifiedHeaders::parse(&head).and_then(|u| u.overage_in_use);
         self.report_overage(ctx.account, &head, head_at).await;
         self.report_head_sample(
             ctx.account,
@@ -3598,6 +3603,7 @@ impl Relay {
             head_at,
             upstream_request_id: None,
             cache_ttl_ms,
+            overage_in_use: None,
             obstacle: None,
             held: trace.held(),
         }

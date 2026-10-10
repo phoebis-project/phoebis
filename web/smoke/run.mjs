@@ -10411,6 +10411,26 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       paced.unmount();
     }
+    {
+      // One sampled hour between two empty ones: the lines leave their null buckets unconnected, so the bucket draws
+      // as a dot on the Window usage and the Pace cards alike, as the share chart draws an isolated priced bucket.
+      const now = Date.now();
+      const hours = [5, 4, 3].map((h) => Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000);
+      const sample = { lead: 0.2, resetsAt: new Date(hours[1] + 2 * 3_600_000).toISOString(), sampledAt: new Date(hours[1] + 1_800_000).toISOString(), utilization: 0.6 };
+      api.listAccountRollups = async () => hours.map((at, i) => ({ accountId: 'primary', cooldownSeconds: 0, hour: new Date(at).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows: i === 1 ? { five_hour: sample } : {} }));
+      const lone = await mount('/analytics#accounts');
+      const cardOf = (t) => [...lone.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const dotsIn = (t) => cardOf(t)?.querySelectorAll('.recharts-line-dots .recharts-line-dot').length ?? 0;
+      const curvesIn = (t) => [...(cardOf(t)?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d') ?? '');
+      const curves = [...curvesIn('Window usage'), ...curvesIn('Pace')];
+      results.push({
+        name: '/analytics the Window usage and Pace cards mark a sampled bucket between two empty ones with a dot and leave the gaps unconnected',
+        ok: dotsIn('Window usage') === 1 && dotsIn('Pace') === 1 && curvesIn('Window usage').length > 0 && curvesIn('Pace').length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
+        missing: [`${dotsIn('Window usage')} usage dots`, `${dotsIn('Pace')} pace dots`, ...curves],
+      });
+      lone.unmount();
+      delete api.listAccountRollups;
+    }
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     {
       // A session view folds request rows, which carry no probe count, so the tile's note says so rather than zero.
@@ -10464,6 +10484,42 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           missing: [`${billedOnly.sessionId} on ${billedOnly.accountId} under shares ${JSON.stringify(underShares)}`, `${planOnly.sessionId} under billed dollars ${JSON.stringify(underBilled)}`],
         });
       }
+    }
+    {
+      // One account whose real requests the plan paid for and whose probes ran in overage, answered as the route
+      // answers it: a dollar side keeps that side's rows alone, and a breakdown that does not count probes drops a
+      // group left with probe rows alone. Under Billed dollars the tile still reads the probes' dollars and count,
+      // and the two positions add up to the whole.
+      const now = Date.now();
+      const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
+      const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
+      const five = { failed: 0, held: 0, migrated: 0, ok: 5, skipped: 0 };
+      const none = { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 };
+      api.getAnalyticsBreakdown = async (q) => {
+        const real = q.funding !== 'billed';
+        const probed = q.funding !== 'plan';
+        if (!real && !q.includeProbes) return [];
+        return [{ ...template, probeCostUsd: probed ? 0.5 : 0, probes: probed ? five : none, requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0) }];
+      };
+      const tileUnder = async (unit) => {
+        const page = await mount(`/analytics${unit ? `?unit=${unit}` : ''}#cache-warming`);
+        await page.settle(900);
+        const tile = [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+        const read = [tile?.querySelector('.stat__value')?.textContent?.trim() ?? '', tile?.querySelector('.stat__note')?.textContent?.trim() ?? ''];
+        page.unmount();
+        return read;
+      };
+      const whole = await tileUnder('');
+      const billed = await tileUnder('usd');
+      const plan = await tileUnder('equivalent');
+      const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
+      const count = (read) => Number(/^(\d[\d,]*) probes, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
+      results.push({
+        name: '/analytics under Billed dollars the Probe cost tile reads the probes an overage paid for beside plan-funded requests, and the two positions add up to the whole',
+        ok: template !== undefined && usd(billed) === 0.5 && count(billed) === 5 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
+        missing: [`template ${template?.key}`, `whole ${JSON.stringify(whole)}`, `billed ${JSON.stringify(billed)}`, `plan ${JSON.stringify(plan)}`],
+      });
+      delete api.getAnalyticsBreakdown;
     }
   }
   {
@@ -12305,8 +12361,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in requests|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
-    // The routing log reads the session's decisions, which need no ledgered request, so only the jump into
-    // the ledger's view waits on one.
+    // The routing log reads the session's decisions, which need no ledgered request, while both ledger
+    // jumps wait on one: the analytics jump is checked here, and the View in requests block above checks its own
+    // entry.
     const jumps = items.filter((b) => b.textContent?.trim() === 'View in analytics');
     const log = items.find((b) => b.textContent?.trim() === 'View in routing log');
     const session = sessionCell(m, barren, 'Session')?.getAttribute('title') ?? '';

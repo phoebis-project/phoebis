@@ -1389,8 +1389,7 @@ pub struct RollupFilter {
     /// Patterns under the wildcard grammar; a row matches when any pattern matches its client in full.
     pub clients: Vec<String>,
     pub include_probes: bool,
-    /// Applied in memory beside the pattern filters, paired with the registry's account kinds; `None` keeps every
-    /// row.
+    /// Applied in memory beside the pattern filters, off the key's funding word; `None` keeps every row.
     pub funding: Option<FundingFilter>,
 }
 
@@ -1594,17 +1593,14 @@ fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
                 .any(|p| crate::pattern::matches(p, &r.client)))
 }
 
-/// Whether a row passes the filter's funding predicate, which pairs the key's funding word with the account's kind
-/// as the registry holds it now, since an api_key account's rows file under `plan` in the key. `Billed` and `Plan`
-/// are complements, so the two reads partition the rows.
-fn passes_funding(r: &RollupRow, f: &RollupFilter, kinds: &HashMap<String, AccountKind>) -> bool {
-    let Some(funding) = f.funding else {
-        return true;
-    };
-    let api_key = kinds.get(&r.account_id) == Some(&AccountKind::ApiKey);
-    match funding {
-        FundingFilter::Billed => r.funding != PLAN_FUNDING || api_key,
-        FundingFilter::Plan => r.funding == PLAN_FUNDING && !api_key,
+/// Whether a row passes the filter's funding predicate, read off the key's funding word alone: the key carries the
+/// served attempt's funding whole, an api_key account's rows under `billed`, so the registry's current state moves
+/// no row. `Billed` and `Plan` are complements, so the two reads partition the rows.
+fn passes_funding(r: &RollupRow, f: &RollupFilter) -> bool {
+    match f.funding {
+        None => true,
+        Some(FundingFilter::Billed) => r.funding != PLAN_FUNDING,
+        Some(FundingFilter::Plan) => r.funding == PLAN_FUNDING,
     }
 }
 
@@ -1918,7 +1914,7 @@ impl GroupSums {
             return;
         };
         let shares = entry.shares.get_or_insert_with(ShareSums::default);
-        if Funding::of_rollup(AccountKind::Oauth, &row.funding) == Funding::Plan {
+        if Funding::of_rollup(&row.funding) == Funding::Plan {
             shares.add(row, tier, pricing.tables, counted);
         }
     }
@@ -2033,8 +2029,8 @@ pub fn breakdown(
 }
 
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
-/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. `kinds` pairs with the
-/// funding filter, `pricing` prices the groups' shares under the account grouping.
+/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. `pricing` prices the
+/// groups' shares under the account grouping.
 #[allow(clippy::too_many_arguments)]
 pub async fn series_paged(
     db: &Arc<LedgerDb>,
@@ -2044,7 +2040,6 @@ pub async fn series_paged(
     to: i64,
     bucket_seconds: i64,
     group_by: &str,
-    kinds: &HashMap<String, AccountKind>,
     pricing: Option<SharePricing<'_>>,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
     if bucket_seconds <= 0 {
@@ -2068,10 +2063,7 @@ pub async fn series_paged(
     let probes_counted = filter.probes_counted();
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
-            if !passes_patterns(row, filter)
-                || !passes_funding(row, filter, kinds)
-                || row.hour < first
-            {
+            if !passes_patterns(row, filter) || !passes_funding(row, filter) || row.hour < first {
                 return;
             }
             let index = ((row.hour - first) / bucket_seconds) as usize;
@@ -2099,9 +2091,7 @@ pub async fn series_paged(
 }
 
 /// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
-/// group sums as the pages arrive. `kinds` pairs with the funding filter, `pricing` prices the groups' shares under
-/// the account grouping.
-#[allow(clippy::too_many_arguments)]
+/// group sums as the pages arrive. `pricing` prices the groups' shares under the account grouping.
 pub async fn breakdown_paged(
     db: &Arc<LedgerDb>,
     filter: &RollupFilter,
@@ -2109,14 +2099,13 @@ pub async fn breakdown_paged(
     from: i64,
     to: i64,
     group_by: &str,
-    kinds: &HashMap<String, AccountKind>,
     pricing: Option<SharePricing<'_>>,
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
     let probes_counted = filter.probes_counted();
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
-            if passes_patterns(row, filter) && passes_funding(row, filter, kinds) {
+            if passes_patterns(row, filter) && passes_funding(row, filter) {
                 sums.add(
                     row,
                     group_by,
@@ -2898,8 +2887,8 @@ struct UsageRow<'a> {
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
     at: i64,
-    /// Who paid for the row: a rollup row's key read against its account's kind, an attempt's three facts. Never
-    /// the rollup's speed, which also files a request that asked for fast mode and was served without it.
+    /// Who paid for the row: a rollup row's key word, an attempt's three facts. Never the rollup's speed, which
+    /// also files a request that asked for fast mode and was served without it.
     funding: Funding,
 }
 
@@ -3081,9 +3070,7 @@ fn price_burn_row(
             output_tokens: row.output_tokens,
             estimated_usd: row.estimated_usd,
             at: row.hour * 1_000,
-            // A row whose account the registry no longer holds has no kind to read its key against, and
-            // `price_usage` adds nothing for it, so the word here is never read.
-            funding: kind.map_or(Funding::Plan, |kind| Funding::of_rollup(kind, &row.funding)),
+            funding: Funding::of_rollup(&row.funding),
         },
     );
 }

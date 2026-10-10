@@ -79,9 +79,8 @@ type Selection = (
     Tiers,
 );
 
-/// The registry's account kinds, which the funding filter pairs with a row's funding word, and under the account
-/// grouping alone each oauth account's tier, which the shares price under: no other grouping answers a share, so
-/// none reads a tier or fails on that read.
+/// The registry's account kinds and, under the account grouping alone, each oauth account's tier, which the shares
+/// price under: no other grouping answers a share, so none reads a tier or fails on that read.
 #[allow(clippy::result_large_err)]
 fn kinds_and_tiers(
     state: &AdminState,
@@ -170,7 +169,6 @@ pub(crate) async fn series(
         to,
         bucket,
         &group_by,
-        &kinds,
         pricing,
     )
     .await
@@ -203,7 +201,6 @@ pub(crate) async fn breakdown(
         from,
         to,
         &group_by,
-        &kinds,
         pricing,
     )
     .await

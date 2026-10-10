@@ -7,10 +7,13 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use phoebis_store::AccountKind;
+
 use crate::db::LedgerDb;
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
+use crate::plan::funding_of;
 use crate::pricing::Speed;
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
@@ -36,6 +39,9 @@ pub const PLAN_FUNDING: &str = "plan";
 pub const OVERAGE_FUNDING: &str = "overage";
 /// The funding of an attempt served fast, whose answer draws usage credits in dollars.
 pub const FAST_FUNDING: &str = "fast";
+/// The funding of an attempt an api_key account served: billed in dollars whatever its speed or the head's overage
+/// flag, as `funding_of` reads the kind first.
+pub const BILLED_FUNDING: &str = "billed";
 
 /// The folded vocabulary the hour row is keyed on; the request row keeps the raw values. A caller picks its user
 /// agent, its effort and its class, and the client is derived from both headers, so an unbounded value would grow
@@ -163,9 +169,11 @@ pub struct RollupRow {
     /// The speed the last attempt's answer reported, else `fast` when the request asked for it, else
     /// `STANDARD_SPEED`; a dimension, so it sits in the key.
     pub speed: String,
-    /// Who paid for the attempt: `fast` when it was served fast, whose answer draws usage credits in dollars
-    /// whatever the overage flag; else `overage` when the head's unified headers said overage was in use; else
-    /// `plan`. A dimension, so it sits in the key.
+    /// Who paid for the attempt, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
+    /// whatever its speed or overage flag; else `fast` when it was served fast, whose answer draws usage credits in
+    /// dollars whatever the overage flag; else `overage` when the head's unified headers said overage was in use;
+    /// else `plan`. Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a
+    /// deleted or recreated account moves none of its rows. A dimension, so it sits in the key.
     pub funding: String,
     pub requests: u64,
     pub succeeded: u64,
@@ -432,13 +440,11 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         // which spent nothing.
         last.and_then(|a| a.speed.as_deref())
             .unwrap_or_else(|| fold_speed(request.requested_speed.as_deref())),
-        // A fast answer draws usage credits in dollars whatever the overage flag, so it is metered on a plan
-        // account too.
-        match last {
-            Some(a) if a.speed.as_deref() == Some("fast") => FAST_FUNDING,
-            Some(a) if a.overage_in_use == Some(true) => OVERAGE_FUNDING,
-            _ => PLAN_FUNDING,
-        },
+        // The served attempt's funding whole, read off its own three facts, so the key tells billed spend from plan
+        // spend without the registry. A request no attempt served files under `plan`.
+        last.map_or(PLAN_FUNDING, |a| {
+            funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
+        }),
     );
     d.requests = 1;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
@@ -756,10 +762,12 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         } else {
             STANDARD_SPEED
         },
-        // A credit carries no head of its own to read overage from: it files under the overage state the engine saw
-        // at the probe's selection, after the fast check, so a fast probe's credit files beside its request row,
-        // which `delta_of` keys `fast` whatever the overage flag.
-        if delta.speed == Some(Speed::Fast) {
+        // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
+        // api_key account, `fast` for a fast recipe (whose request row `delta_of` keys `fast` whatever the overage
+        // flag), else the overage fact the probe's answer reported, else `plan`.
+        if delta.account_kind == Some(AccountKind::ApiKey) {
+            BILLED_FUNDING
+        } else if delta.speed == Some(Speed::Fast) {
             FAST_FUNDING
         } else if delta.overage_in_use == Some(true) {
             OVERAGE_FUNDING

@@ -1,6 +1,7 @@
 //! One struct per ledger table, field order matching the table's column order.
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
+use phoebis_store::AccountKind;
 
 use crate::LedgerError;
 
@@ -343,9 +344,13 @@ pub struct KeepaliveDelta {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
-    /// The account's overage state at the selection the probe was placed under, which keys a probe's credit row
-    /// beside its request row's head-reported funding. `None` for a kept-warm credit, a skip or a settlement, which
-    /// have no probe of their own and file under `plan`, or under `fast` for a fast recipe.
+    /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
+    /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a
+    /// settlement, and for a probe whose account left the registry before its answer landed.
+    pub account_kind: Option<AccountKind>,
+    /// Whether the probe's answer reported overage in use, the fact its request row files under, so the credit row
+    /// keys the same funding. `None` for a kept-warm credit, a skip or a settlement, which have no probe of their
+    /// own and file under `plan`, or under `fast` for a fast recipe.
     pub overage_in_use: Option<bool>,
     /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
     /// the derived `Default`'s `None` files standard.

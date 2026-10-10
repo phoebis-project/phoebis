@@ -2,12 +2,13 @@
 mod common;
 use std::time::Duration;
 
-use common::{get, json, login, post, wait_json};
+use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::Delivery;
 use phoebis_ledger::{
     AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
+use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause};
 
 const HOUR: i64 = 3_600_000;
 
@@ -1754,6 +1755,76 @@ async fn funding_plan_keeps_the_plan_row_and_one_of_an_account_the_registry_no_l
         (sum(&billed) + sum(&plan), sum(&every)),
         (5, 5),
         "the two filtered sums add up to the unfiltered sum: {billed:?} and {plan:?}"
+    );
+}
+
+/// The partition is recorded with each row, so the registry's later state moves no dollar between the two sides: the
+/// api_key account's row stays billed once the account is deleted and once its id comes back as an oauth account.
+#[tokio::test]
+async fn the_funding_partition_holds_when_an_api_key_account_is_deleted_and_its_id_recreated_as_oauth(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for row in funded_rows() {
+        parts.ledger.record(row);
+    }
+    landed(
+        &parts,
+        &[
+            "fund-overage",
+            "fund-fast",
+            "fund-direct",
+            "fund-plan",
+            "fund-gone",
+        ],
+    )
+    .await;
+    let read = |funding: &str| {
+        let url =
+            format!("/admin/analytics/breakdown?range=24h&group_by=account&funding={funding}");
+        let (app, cookie) = (&parts.app, &cookie);
+        async move { request_counts(&json(get(app, &url, Some(cookie)).await).await) }
+    };
+    let partition = || async { (read("billed").await, read("plan").await) };
+    let recorded = partition().await;
+    assert_eq!(
+        recorded,
+        (
+            vec![("business".to_string(), 2), ("direct".to_string(), 1)],
+            vec![("business".to_string(), 1), ("gone".to_string(), 1)]
+        ),
+        "the partition as the rows were recorded"
+    );
+    assert_eq!(
+        delete(&parts.app, "/admin/accounts/direct", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        partition().await,
+        recorded,
+        "a deleted account's rows keep their funding"
+    );
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "direct".into(),
+            kind: AccountKind::Oauth,
+            label: "Direct again".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Unpaired,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    assert_eq!(
+        partition().await,
+        recorded,
+        "an id recreated as an oauth account keeps its api_key rows billed"
     );
 }
 
