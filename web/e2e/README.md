@@ -31,7 +31,10 @@ Quota cards' chips and reset cells (each on one line inside its column, the wind
 window's pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows section (each
 inside its column, a chip with a share in the background and ink of the card chip of the same tone, primary's used fill
 at the share the page computed, and the lane label's ink at 4.5:1 or better over each tone's fill), the Quota cards' one
-height (the head's and the foot's rules at one offset on every card), the remaining cards, the error state, the lines
+height (the head's and the foot's rules at one offset on every card), every Quota card's meters at least 120 px wide,
+its window cells inside its padding, its chip column as wide as its widest chip and its reset column as wide as its
+widest label within its 114 px bound, at 1280 by 800 and in a window that sets two cards on the card grid's floor (one
+card in a row 1 px narrower), the remaining cards, the error state, the lines
 under the quota rings, the recent requests' model cells and their table's fit, the recent requests' columns (Key the
 fill), the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry,
 the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic

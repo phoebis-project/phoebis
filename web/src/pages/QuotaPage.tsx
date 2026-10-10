@@ -291,9 +291,9 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
 }
 
 /**
- * One window as three cells of the card grid: the chip, the meter, and the
- * reset label. `qwin__chip` marks the cell the fixed first column sizes, so
- * every row of every card hands its meter the same starting x.
+ * One window as three cells of the card grid: the chip, the meter, and the reset label. The grid sizes the chip and
+ * the reset to their content and hands the meter the rest, and `qwin__chip` names the chip's cell for the checks that
+ * read a row by its cells.
  */
 function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.

@@ -1958,7 +1958,7 @@ async function quotaPollLines(theme) {
 let cardTones = {};
 
 /**
- * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
+ * The Quota cards' chips with their shares read "left" against the columns that hold them: every card's window
  * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
  * longer reset cell may wrap but never runs past its column. Every live window's meter carries its pace mark inside
  * the meter's horizontal bounds and taller than the track. The router's seed has no subscription account, so only
@@ -2089,6 +2089,115 @@ async function quotaCardHeights(theme) {
     const values = cards.map((c) => c[key]);
     if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
   }
+}
+
+/** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
+const QUOTA_FLOOR = 397;
+
+/**
+ * Every Quota card's window grid holds its three columns: each meter, live or absent, at least 120 px wide, the grid
+ * needing no more than its own width, no chip, meter or reset label ending past the room inside the card's border and
+ * its body's padding, where the card's `overflow: hidden` would cut it, the chip column no wider than the card's
+ * widest chip and the reset column no wider than the card's widest reset label within its 114 px bound. A meter held
+ * at its 120 px minimum while the columns run past the card passes a width reading alone, and a fixed column on a card
+ * wide enough passes every reading but its own. The pace mark stands out of flow inside its meter, so the meter's box
+ * and the columns read the same with it, and `quotaChips` reads the mark. The check reads in the window the pass set,
+ * then in one that lands two cards on the card grid's floor: twice the floor and the grid's 14 px gap beside the
+ * gutter the first reading measures, the grid's left edge and the content's right padding, so the sidebar's width and
+ * the page's padding come from the page. A higher floor sets one card in a row there, and a lower one keeps two in a
+ * row in a window 1 px narrower, which the check reads last. Then it puts the pass's window back. A resize arms no
+ * timer on this page, and the check steps no clock and scrolls nothing, so the view's shot keeps its instants and its
+ * topbar. The router's seed has no subscription account, so only the story's pass has meters to read.
+ */
+async function quotaMeters(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      const kind = (el) => (el.classList.contains('meter') ? (el.classList.contains('meter--absent') ? 'absent meter' : 'meter') : el.classList.contains('qwin__reset') ? 'reset' : 'chip');
+      // A chip stretches to its column, so its own width is its parts, the gap between them and its padding.
+      const chipWidth = (chip) => {
+        const s = getComputedStyle(chip);
+        const parts = [...chip.children].map((el) => el.getBoundingClientRect().width);
+        const edges = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight) + parseFloat(s.borderLeftWidth) + parseFloat(s.borderRightWidth);
+        return tenth(parts.reduce((sum, w) => sum + w, 0) + parseFloat(s.columnGap) * Math.max(0, parts.length - 1) + edges);
+      };
+      // A reset label stretches to its column too, so its own width is its text's, the widths of its lines summed: an
+      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it.
+      const textWidth = (label) => {
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return tenth([...range.getClientRects()].reduce((sum, r) => sum + r.width, 0));
+      };
+      const content = (el) => (kind(el) === 'chip' ? chipWidth(el) : kind(el) === 'reset' ? textWidth(el) : null);
+      const grid = document.querySelector('.quota-grid');
+      const main = grid?.closest('.content');
+      const [one, two] = [...document.querySelectorAll('.qcard')].map((card) => card.getBoundingClientRect());
+      return {
+        cards: [...document.querySelectorAll('.qcard')]
+          .filter((card) => card.querySelector('.qcard__windows'))
+          .map((card) => {
+            const body = card.querySelector('.qcard__body');
+            const room = body.getBoundingClientRect().right - parseFloat(getComputedStyle(body).paddingRight);
+            const windows = card.querySelector('.qcard__windows');
+            return {
+              cells: [...windows.children].map((el) => ({ content: content(el), kind: kind(el), past: tenth(el.getBoundingClientRect().right - room), text: el.textContent?.trim() ?? '', width: tenth(el.getBoundingClientRect().width) })),
+              client: windows.clientWidth,
+              name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
+              scroll: windows.scrollWidth,
+              width: tenth(card.getBoundingClientRect().width),
+            };
+          }),
+        grid: tenth(grid?.getBoundingClientRect().width ?? 0),
+        gutter: grid && main ? tenth(grid.getBoundingClientRect().left + parseFloat(getComputedStyle(main).paddingRight)) : null,
+        rows: one && two ? { first: tenth(one.bottom), second: tenth(two.top) } : null,
+        view: window.innerWidth,
+      };
+    });
+  const check = async (where) => {
+    const got = await read();
+    const at = `in a ${got.view}px window`;
+    measurements.push(`${theme} /quota meters ${at} ${JSON.stringify({ cards: got.cards.map((c) => [c.name, c.width, c.scroll, c.client, c.cells.map((x) => (x.content === null ? [x.kind, x.width, x.past] : [x.kind, x.width, x.past, x.content]))]), grid: got.grid, gutter: got.gutter, rows: got.rows })}`);
+    if (mock && got.cards.length === 0) say(`the story has subscription windows, yet no card draws them ${at}`);
+    for (const card of got.cards) {
+      for (const meter of card.cells.filter((x) => x.kind.endsWith('meter') && x.width < 120)) say(`${card.name}'s ${meter.kind} is ${meter.width}px wide ${at}, under 120 px`);
+      if (card.scroll > card.client) say(`${card.name}'s windows need ${card.scroll}px of their ${card.client}px ${at}`);
+      for (const cell of card.cells.filter((x) => x.past > 0.5)) say(`${card.name}'s ${cell.kind} ${JSON.stringify(cell.text)} ends ${cell.past}px past the card's padding ${at}, where the card cuts it`);
+      // A card's rows are one grid, so its chips share one column, which sized to its content is its widest chip's, and
+      // its reset labels share another, which is its widest label's up to the bound.
+      const chips = card.cells.filter((x) => x.kind === 'chip');
+      const resets = card.cells.filter((x) => x.kind === 'reset');
+      const widest = Math.max(...chips.map((x) => x.content));
+      const chipColumn = Math.max(...chips.map((x) => x.width));
+      const label = Math.max(...resets.map((x) => x.content));
+      const resetColumn = Math.max(...resets.map((x) => x.width));
+      if (chips.length > 0 && chipColumn > widest + 1) say(`${card.name}'s chip column is ${chipColumn}px wide ${at}, more than 1 px past its widest chip's ${widest}px`);
+      if (resets.length > 0 && resetColumn > Math.min(label, 114) + 1) say(`${card.name}'s reset column is ${resetColumn}px wide ${at}, more than 1 px past ${label < 114 ? `its widest label's ${label}px` : 'its 114 px bound'}`);
+    }
+    if (where === 'floor') {
+      for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^Fable\d+% left$/.test(x.text)))) say(`no card holds the story's widest chip ${at}`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+, no reading since$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
+    }
+    if (where === 'under') {
+      if (mock && got.rows === null) say(`the story has several subscription accounts, yet fewer than two cards stand ${at}`);
+      if (got.rows && got.rows.second < got.rows.first) say(`the first two cards share a row ${at}, where the card grid's ${QUOTA_FLOOR}px floor leaves room for one`);
+    }
+    return got;
+  };
+  const was = page.viewportSize();
+  const first = await check('pass');
+  if (first.gutter === null) {
+    if (mock) say('the page draws no card grid to set the floor beside');
+    return;
+  }
+  // Rounded up, since a window a fraction short of twice the floor and the gap sets one card in a row.
+  const floor = Math.ceil(first.gutter + 2 * QUOTA_FLOOR + 14);
+  await page.setViewportSize({ height: was.height, width: floor });
+  await check('floor');
+  await page.setViewportSize({ height: was.height, width: floor - 1 });
+  await check('under');
+  await page.setViewportSize(was);
 }
 
 /**
@@ -4768,6 +4877,7 @@ try {
         await quotaChips(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
+        await quotaMeters(theme);
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
