@@ -663,9 +663,9 @@ impl PlanTables {
 }
 
 /// Who paid for an attempt. The account's kind decides first: an api_key account's answer is billed in dollars
-/// whatever its speed or overage flag, as the burn pricer matches the kind first. On an oauth account a fast
-/// answer draws usage credits, then an answer in overage is billed in dollars, else the subscription's window paid.
-/// The console's `fundingOf` reads the same three facts in the same order.
+/// whatever its speed or overage flag, and the rollup key files it under `billed` so every reader prices it so. On
+/// an oauth account a fast answer draws usage credits, then an answer in overage is billed in dollars, else the
+/// subscription's window paid. The console's `fundingOf` reads the same three facts in the same order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Funding {

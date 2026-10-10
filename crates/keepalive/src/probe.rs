@@ -66,6 +66,9 @@ pub(crate) struct ProbeResult {
     /// Whether the answer's head said overage was in use, off `RelayOutcome::overage_in_use`: the fact the ledger
     /// files the probe's request row under, so the credit files beside it.
     pub in_overage: bool,
+    /// The serving account's kind off `RelayOutcome::account_kind`, the fact the request row files its funding
+    /// under; `None` for an answer the relay never built.
+    pub account_kind: Option<AccountKind>,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
@@ -151,8 +154,9 @@ pub struct ProbeRecord {
     pub in_overage: bool,
     pub key: SessionKey,
     pub key_generation: i64,
-    /// The serving account's kind, looked up by `account` after the response; `None` when the account left the
-    /// registry between dispatch and landing.
+    /// The serving account's kind as the relay dispatched under it, off the answer, so the credit files under the
+    /// kind the request row carries whatever the registry holds by the time it lands; `None` for an answer the relay
+    /// never built.
     pub kind: Option<AccountKind>,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
@@ -255,6 +259,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             body: None,
             cache_ttl_ms: None,
             in_overage: false,
+            account_kind: None,
             retry_after_secs: None,
             obstacle: None,
         }),
@@ -284,6 +289,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     in_overage: outcome
                         .as_ref()
                         .is_some_and(|o| o.overage_in_use == Some(true)),
+                    account_kind: outcome.as_ref().and_then(|o| o.account_kind),
                     retry_after_secs,
                     obstacle: outcome.as_ref().and_then(|o| o.obstacle),
                 }
@@ -300,16 +306,12 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let now = engine.now();
     let table = engine.parts.pricing.current();
     let tables = engine.parts.tables.clone();
-    // The serving account's kind decides the unit this probe's cost settles in. It is read from the snapshot taken
-    // here, after the response, so a registry write mid-exchange never changes which account this probe is charged
-    // against.
-    let snapshot = engine.parts.router.snapshot();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let mut record = inner.probe_record(&job, &exchange, &table);
-        record.kind = snapshot.account(&record.account).map(|a| a.kind);
-        // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
-        // request either, so its probe settles in dollars like today and the credit path never matches it.
+        let record = inner.probe_record(&job, &exchange, &table);
+        // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
+        // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
+        // relay never built names no account: its probe settles in dollars and the credit path never matches it.
         let in_overage = record.in_overage;
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
         // A fast replay draws usage credits whatever the account's funding, so it settles in dollars.
@@ -407,6 +409,7 @@ impl Inner {
             Exchange::Answered(result) => result,
         };
         record.in_overage = result.in_overage;
+        record.kind = result.account_kind;
         if let Some(account) = &result.account {
             record.account = account.clone();
         }

@@ -1362,9 +1362,9 @@ pub struct SeriesPoint {
     pub groups: Vec<GroupRow>,
 }
 
-/// Which rows a read keeps by who paid for them: `Billed` the overage and fast rows and every row of an api_key
-/// account, `Plan` the plan rows of an oauth account or of one the registry no longer holds. The two partition the
-/// rows, so their sums add up to the unfiltered sum.
+/// Which rows a read keeps by who paid for them, off the funding each row was recorded under: `Billed` the billed,
+/// overage and fast rows, `Plan` the plan rows. The two partition the rows, so their sums add up to the unfiltered
+/// sum, and the registry's later state moves no row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FundingFilter {

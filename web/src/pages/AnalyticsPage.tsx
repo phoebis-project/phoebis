@@ -344,10 +344,16 @@ export function AnalyticsPage() {
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
   const costSeries = useAsync(() => (funded && fundedTab ? api.getAnalyticsSeries({ ...query, funding }) : Promise.resolve<AnalyticsPoint[] | null>(null)), [query, funding, funded, fundedTab, generation]);
-  // The Cache warming card's Probe cost tile is the one reader of the funded breakdown on its tab, and it reads the
-  // probe rows counted: a dollar side drops the other side's real rows, and a group left with probe rows alone drops
-  // out of a breakdown that does not count probes, taking the probes' dollars and count with it.
-  const costBreakdown = useAsync(() => (funded && fundedTab ? api.getAnalyticsBreakdown({ ...query, funding, includeProbes: query.includeProbes || tab === 'cache-warming' }) : Promise.resolve<AnalyticsGroup[] | null>(null)), [query, funding, funded, fundedTab, tab, generation]);
+  // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
+  // rows counted under every position, the whole and the shares included: a breakdown that does not count probes
+  // drops a group left with probe rows alone, whether a dollar side dropped the group's real rows or the group is
+  // probe-only in the whole (the probe kind, an idle account over a short range), and the three positions add up
+  // only when all three keep it. Under the whole and the shares the read carries no funding.
+  const warming = sessionId === null && tab === 'cache-warming';
+  const costBreakdown = useAsync(
+    () => ((funded && fundedTab) || warming ? api.getAnalyticsBreakdown({ ...query, funding: funded ? funding : undefined, includeProbes: query.includeProbes || warming }) : Promise.resolve<AnalyticsGroup[] | null>(null)),
+    [query, funding, funded, fundedTab, warming, generation],
+  );
   const placements = useAsync(
     () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
@@ -420,8 +426,8 @@ export function AnalyticsPage() {
   }, [sessionId, funding, funded, points, stale, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, costSeries.stale, costSeries.data]);
   const costGroups = useMemo(() => {
     if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(rows, groupBy, { ...foldOptions, funding });
-    return funded ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
-  }, [sessionId, funding, funded, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
+    return funded || warming ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
+  }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
   const costBuckets = useMemo<Bucket[]>(
     () =>
       costPoints === points
@@ -468,8 +474,8 @@ export function AnalyticsPage() {
   const speedError = sessionId === null ? bySpeed.error : null;
   // The funded reads stand or fall on their own: while one is out or stale the cost surfaces read loading, and its
   // failure draws in place of their figures, so no figure of one position stands under another's subtitle.
-  const costLoading = funded ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale : loading;
-  const costError = funded ? (costSeries.error ?? costBreakdown.error) : null;
+  const costLoading = funded ? costSeries.data === null || costSeries.stale || costBreakdown.data === null || costBreakdown.stale : warming ? costBreakdown.data === null || costBreakdown.stale : loading;
+  const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? costBreakdown.error : null;
   const shareTiles = shareTilesOf(groupBy, oneAccount, oneGroup, costLoading);
   const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, costLoading, sessionId !== null);
   const unitControl = <UnitSelect value={unit} onChange={chooseUnit} />;
@@ -2106,8 +2112,9 @@ function AccountsSection({
             <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
             <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
             <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, value: pct(p[a]) })))} />
-            {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a slope, and
-                a sampled bucket with a gap or the range's edge on both sides draws as a dot, as the share chart draws one. */}
+            {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a
+                slope, and a sampled bucket with a gap or the range's edge on both sides draws as a dot, as the share
+                chart draws one. */}
             {accounts.map((a) => (
               <Line key={a} type="monotone" dataKey={a} stroke={accountColor(ink, slotOf(a))} strokeWidth={1.5} dot={isolatedDot(usage.data.map((r) => r[a]), accountColor(ink, slotOf(a)))} isAnimationActive={false} />
             ))}

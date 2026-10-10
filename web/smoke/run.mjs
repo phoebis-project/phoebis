@@ -10486,20 +10486,21 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       }
     }
     {
-      // One account whose real requests the plan paid for and whose probes ran in overage, answered as the route
-      // answers it: a dollar side keeps that side's rows alone, and a breakdown that does not count probes drops a
-      // group left with probe rows alone. Under Billed dollars the tile still reads the probes' dollars and count,
-      // and the two positions add up to the whole.
+      // One account whose real requests the plan paid for and whose probes ran in overage, and a second whose rows in
+      // the range are probes in overage alone, answered as the route answers them: a dollar side keeps that side's
+      // rows alone, and a breakdown that does not count probes drops a group left with probe rows alone. The tile
+      // reads every probe's dollars and count under the whole as under Billed dollars, and the two positions add up
+      // to the whole.
       const now = Date.now();
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
-      const five = { failed: 0, held: 0, migrated: 0, ok: 5, skipped: 0 };
-      const none = { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 };
+      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
       api.getAnalyticsBreakdown = async (q) => {
         const real = q.funding !== 'billed';
         const probed = q.funding !== 'plan';
-        if (!real && !q.includeProbes) return [];
-        return [{ ...template, probeCostUsd: probed ? 0.5 : 0, probes: probed ? five : none, requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0) }];
+        const mixed = real || q.includeProbes ? [{ ...template, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0) }] : [];
+        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3 }] : [];
+        return [...mixed, ...probeOnly];
       };
       const tileUnder = async (unit) => {
         const page = await mount(`/analytics${unit ? `?unit=${unit}` : ''}#cache-warming`);
@@ -10515,8 +10516,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
       const count = (read) => Number(/^(\d[\d,]*) probes, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
       results.push({
-        name: '/analytics under Billed dollars the Probe cost tile reads the probes an overage paid for beside plan-funded requests, and the two positions add up to the whole',
-        ok: template !== undefined && usd(billed) === 0.5 && count(billed) === 5 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
+        name: '/analytics under Billed dollars the Probe cost tile reads the probes an overage paid for beside plan-funded requests and for a probe-only group, and the two positions add up to the whole',
+        ok: template !== undefined && usd(whole) === 0.8 && count(whole) === 8 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
         missing: [`template ${template?.key}`, `whole ${JSON.stringify(whole)}`, `billed ${JSON.stringify(billed)}`, `plan ${JSON.stringify(plan)}`],
       });
       delete api.getAnalyticsBreakdown;

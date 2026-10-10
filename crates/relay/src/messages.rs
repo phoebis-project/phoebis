@@ -187,6 +187,9 @@ pub struct RelayOutcome {
     /// The head's unified `overage-in-use` flag on the committed attempt, the fact the ledger files the request's
     /// funding under; `None` for a local answer or a head without the unified headers.
     pub overage_in_use: Option<bool>,
+    /// The kind of the account the last attempt dispatched under, the fact the ledger files the attempt's funding
+    /// from, so a reader of the answer needs no registry for it; `None` for an answer before any selection.
+    pub account_kind: Option<AccountKind>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
@@ -1860,6 +1863,12 @@ impl Relay {
                     response.extensions_mut().insert(ServedUnder {
                         in_overage: selection.in_overage,
                     });
+                    // Stamped here rather than where the upstream's head is read, so an answer the relay built
+                    // itself after the selection carries the attempt's account kind too, the fact the ledger files
+                    // the attempt's funding from.
+                    if let Some(outcome) = response.extensions_mut().get_mut::<RelayOutcome>() {
+                        outcome.account_kind = Some(selection.account.kind);
+                    }
                     return response;
                 }
             }
@@ -3604,6 +3613,7 @@ impl Relay {
             upstream_request_id: None,
             cache_ttl_ms,
             overage_in_use: None,
+            account_kind: None,
             obstacle: None,
             held: trace.held(),
         }

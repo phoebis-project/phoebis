@@ -1,7 +1,7 @@
 //! The keepalive's ledger rows: a kept-warm request's credit, a probe's cost, a migrated probe's price, and the wasted
 //! count settled when a recipe stops or the request after a probe returns cold.
 mod common;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use common::*;
@@ -1121,6 +1121,129 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
         ),
         (0, BTreeMap::from([("cold_return".to_string(), 1)])),
         "the standard request read nothing the fast probe kept"
+    );
+}
+
+/// An api_key account's keepalive rows file beside its requests, under `billed`: the credit of a request its probe kept
+/// warm, the settlement of the probes nobody came back for when the idle window closed, and the skip of a due probe
+/// the entry's lapse withheld, each filed by the kind the registry held when the row was written.
+#[tokio::test]
+async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed() {
+    let body = priced_body();
+    let fundings = |rows: &[RollupRow], pick: fn(&RollupRow) -> bool| {
+        rows.iter()
+            .filter(|row| pick(row))
+            .map(|row| row.funding.clone())
+            .collect::<BTreeSet<_>>()
+    };
+    let billed = BTreeSet::from(["billed".to_string()]);
+    // A probe at 270 s, and a real request past the TTL that reads what it kept.
+    let mut r = rig(RigSpec::default()).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(60_000);
+    r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(
+        fundings(&rows, |row| row.kept_warm_requests > 0),
+        billed,
+        "the kept-warm credit: {rows:?}"
+    );
+    // Three probes nobody comes back for, settled when the idle window closes before the fourth.
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            max_idle_seconds: 1_000,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.state("main", "idle");
+    for _ in 0..4 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    assert_eq!(r.status("main").reason, Reason::IdleLimit);
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
+    assert_eq!(
+        fundings(&rows, |row| row.wasted_probes > 0),
+        billed,
+        "the settlement: {rows:?}"
+    );
+    // A recipe whose entry lapses before its probe is due, so the probe is withheld.
+    let mut r = rig(RigSpec::default()).await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(20 * MINUTE);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    let rows = rollups(&r, |rows| probe_rows(rows).probes_skipped == 1).await;
+    assert_eq!(
+        fundings(&rows, |row| row.probes_skipped > 0),
+        billed,
+        "the skip: {rows:?}"
+    );
+}
+
+/// The account a probe served under leaves the registry while the probe is in flight: the credit files under the
+/// kind the answer carried, beside the request row, and asks the registry nothing.
+#[tokio::test]
+async fn a_probe_whose_account_is_deleted_in_flight_files_its_credit_beside_its_request_row() {
+    let mut r = rig(RigSpec::default()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.h.store.delete_account("a", "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    // The probe's request row, and its credit row: the deletion cuts the answer's body short in this rig, so the
+    // credit prices nothing and is told by its empty request and waste counts rather than by a cost.
+    let probe_rows_of_a = |rows: &[RollupRow]| {
+        rows.iter()
+            .filter(|row| {
+                row.kind == "probe"
+                    && row.account_id == "a"
+                    && (row.requests > 0 || (row.wasted_probes == 0 && row.probes_skipped == 0))
+            })
+            .map(|row| {
+                (
+                    if row.requests > 0 {
+                        "request"
+                    } else {
+                        "credit"
+                    },
+                    row.funding.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let rows = rollups(&r, |rows| probe_rows_of_a(rows).len() == 2).await;
+    let mut fundings = probe_rows_of_a(&rows);
+    fundings.sort();
+    assert_eq!(
+        fundings,
+        [
+            ("credit", "billed".to_string()),
+            ("request", "billed".to_string())
+        ],
+        "both rows of the probe file under the api_key account's billing: {rows:?}"
     );
 }
 

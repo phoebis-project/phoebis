@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
+use phoebis_store::AccountKind;
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
@@ -146,6 +147,15 @@ fn delta(
 }
 
 impl Engine {
+    /// The kind the registry holds for `account` at this record, which decides the row's funding once, as a served
+    /// attempt's kind decides a request row's: an api_key account's credit, settlement and skip file under `billed`
+    /// beside its requests. `None` for no account, or one the registry no longer holds, whose row files by its speed
+    /// and overage alone.
+    fn account_kind_of(&self, account: Option<&str>) -> Option<AccountKind> {
+        let snapshot = self.parts.router.snapshot();
+        account.and_then(|id| snapshot.account(id).map(|a| a.kind))
+    }
+
     /// Every probe the upstream served lands here, landed on its recipe or not: the cost is the pool's whatever
     /// happened to the recipe while the probe was in flight.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
@@ -196,6 +206,7 @@ impl Engine {
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         d.kept_warm_tokens = tokens;
+        d.account_kind = self.account_kind_of(account);
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -214,6 +225,7 @@ impl Engine {
         d.wasted_probe_usd = settlement.costs.iter().sum();
         d.wasted_probe_reasons =
             BTreeMap::from([(settlement.label.as_str().to_string(), d.wasted_probes)]);
+        d.account_kind = self.account_kind_of(settlement.account.as_deref());
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -240,6 +252,7 @@ impl Engine {
             fast,
         );
         d.probes_skipped = 1;
+        d.account_kind = self.account_kind_of(account);
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts.metrics.observe_skipped(pool_id, state.as_str());
     }
