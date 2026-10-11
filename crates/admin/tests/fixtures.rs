@@ -1504,39 +1504,56 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         other => panic!("the account at its cap holds the request, not {other:?}"),
     };
 
-    // Held, then exhausted: no slot frees within the pool's 60-second bound, so the relay marks the wait run out and
-    // the re-selection finds both members attempted, answered as a pool at its cap. Its id sorts below the held and
-    // exhausted stories', whose rows the console's decoder tests read first.
+    // Held, then exhausted: with both members at their cap no slot frees within the pool's 60-second bound, so the
+    // relay marks the wait run out, passes the other member over once the request's one bound has passed, and the
+    // selection after finds both attempted with no leg dialed, answered as a pool at its cap. Its id sorts below the
+    // held and exhausted stories', whose rows the console's decoder tests read first.
+    let direct_busy = parts.router.in_flight().dispatched("direct", now);
     let capped = parts
         .router
-        .select(SelectRequest {
-            attempted: vec!["direct".into()],
-            ..asked(parts, key_generation, "r-capped", 1, None)
-        })
+        .select(asked(parts, key_generation, "r-capped", 1, None))
         .await
         .unwrap();
-    let capped_hold = match capped.result {
-        SelectResult::Held { hold, .. } => hold,
-        other => panic!("the account at its cap holds the request, not {other:?}"),
+    let wait = match capped.result {
+        SelectResult::Held { hold, .. } => phoebis_routing::HoldFacts {
+            held_ms: 60_000,
+            ran_out: true,
+            ..hold
+        },
+        other => panic!("a pool with every member at its cap holds the request, not {other:?}"),
     };
-    let run_out = parts
+    let passed = parts
         .router
         .select(SelectRequest {
-            attempted: vec!["direct".into(), "business".into()],
-            holds: vec![phoebis_routing::HoldFacts {
-                held_ms: 60_000,
-                ran_out: true,
-                ..capped_hold
-            }],
+            attempted: vec![wait.account_id.clone()],
+            holds: vec![wait.clone()],
             ..asked(parts, key_generation, "r-capped", 2, None)
         })
         .await
         .unwrap();
+    let passed_over = match passed.result {
+        SelectResult::Held { account_id, .. } => account_id,
+        other => panic!("the other member at its cap holds the request too, not {other:?}"),
+    };
+    assert_ne!(
+        passed_over, wait.account_id,
+        "the second hold is on the other member"
+    );
+    let exhausted = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec![wait.account_id.clone(), passed_over],
+            holds: vec![wait],
+            ..asked(parts, key_generation, "r-capped", 3, None)
+        })
+        .await
+        .unwrap();
     assert_eq!(
-        run_out.result,
+        exhausted.result,
         SelectResult::Exhausted(phoebis_routing::Exhaustion::Untimed),
         "with both members attempted the run-out exhausts the pool untimed"
     );
+    drop(direct_busy);
     drop(busy);
     let after_hold = parts
         .router

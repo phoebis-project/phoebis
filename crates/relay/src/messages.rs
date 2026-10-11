@@ -24,11 +24,10 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, exhaustion_status, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
-    EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts,
-    OverageEvidence, PinRef, Presented, Refusal, RefusalFacts, RefusedRequest, Report,
-    RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW,
+    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, EvidenceSource,
+    Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence, PinRef,
+    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
+    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1892,7 +1891,9 @@ impl Relay {
         at_cap: bool,
         auth_marked: bool,
     ) -> Response {
-        let (code, mut response) = match exhaustion {
+        // Each builder takes its status from `exhaustion_status` for its arm, the status the routing log's exhausted
+        // row records as its `answer`.
+        let (code, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
                 (failure.code, failure.response(admitted.request_id))
@@ -1918,10 +1919,6 @@ impl Relay {
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
         };
-        // The routing log's exhausted row records this same status as its `answer`, so the client's status is
-        // read from the one mapping both share.
-        *response.status_mut() = StatusCode::from_u16(exhaustion_status(exhaustion, at_cap))
-            .expect("the exhaustion statuses are valid HTTP statuses");
         let mut outcome = self.outcome(
             admitted.trace,
             Some(admitted.key),

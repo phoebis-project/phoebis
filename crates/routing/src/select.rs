@@ -455,8 +455,8 @@ pub enum Exhaustion {
 /// The HTTP status the relay answers an exhaustion with, which the exhausted decision's `answer` fact records too.
 /// `at_cap` is a request held at the cap, its wait run out or an account passed over, with no leg dialed: its untimed
 /// exhaustion is a pool at its in-flight cap, which frees on its own (429), rather than one only an operator can
-/// clear (503).
-pub fn exhaustion_status(exhaustion: &Exhaustion, at_cap: bool) -> u16 {
+/// clear (503). A `const fn`, so the relay's constant failures take their status from it.
+pub const fn exhaustion_status(exhaustion: &Exhaustion, at_cap: bool) -> u16 {
     match exhaustion {
         Exhaustion::Untimed if at_cap => 429,
         Exhaustion::ModelRejected => 404,

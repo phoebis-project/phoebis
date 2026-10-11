@@ -10131,7 +10131,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "type": "decision",
           "request_id": "r-capped",
-          "seq": 2,
+          "seq": 3,
           "attempt": 1,
           "attempt_count": null,
           "at": 1000000,
@@ -10185,6 +10185,62 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": null,
             "obstacle": null
           },
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-capped",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "held",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "direct",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "in_flight",
+              "value": "1/1",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            2,
+            1,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "direct",
+            "score": 1,
+            "unit": "percent"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": {
+            "account_id": "direct",
+            "cohort": null,
+            "bound_ms": 60000
+          },
+          "exhaustion": null,
           "refusal": null,
           "fast": false,
           "cache": null,

@@ -4,7 +4,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
-use phoebis_routing::KeyRefusal;
+use phoebis_routing::{exhaustion_status, Exhaustion, KeyRefusal};
 
 use crate::auth::AuthError;
 use crate::{BodyMember, RelayError};
@@ -46,6 +46,15 @@ pub fn anthropic_error(
         .body(Body::from(body))
         // Every argument above is either a validated `StatusCode` or ASCII this function just built.
         .expect("a local error response is always well formed")
+}
+
+/// The status an exhaustion is answered with, the routing crate's, which the routing log's exhausted row records as
+/// its `answer`, so the row and the client cannot disagree.
+pub(crate) const fn exhaustion_status_code(exhaustion: &Exhaustion, at_cap: bool) -> StatusCode {
+    match StatusCode::from_u16(exhaustion_status(exhaustion, at_cap)) {
+        Ok(status) => status,
+        Err(_) => panic!("the exhaustion statuses are valid HTTP statuses"),
+    }
 }
 
 impl Failure {
@@ -122,7 +131,7 @@ const AT_CAP_RETRY_AFTER_MAX: u64 = 19;
 /// `Retry-After` the pool's `retry_in_place_seconds` clamped to 1 through 19.
 pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
     Failure {
-        status: StatusCode::TOO_MANY_REQUESTS,
+        status: exhaustion_status_code(&Exhaustion::Untimed, true),
         error_type: "rate_limit_error",
         code: ACCOUNTS_AT_CAP,
         message: "every account in this pool is at its in-flight cap",
@@ -347,7 +356,7 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
 };
 
 pub(crate) const MODEL_REJECTED: Failure = Failure {
-    status: StatusCode::NOT_FOUND,
+    status: exhaustion_status_code(&Exhaustion::ModelRejected, false),
     error_type: "not_found_error",
     code: "model_rejected",
     message: "every account in this pool rejected the model",
@@ -460,5 +469,39 @@ mod tests {
             "body_shape",
             "the wire spelling"
         );
+    }
+
+    /// The routing log's exhausted row records the routing crate's status as its `answer`, so the builder the
+    /// relay answers an exhaustion with must carry that same status for the exhaustion's kind and at-cap reading.
+    #[test]
+    fn every_exhaustion_builder_answers_the_status_the_exhausted_row_records() {
+        for exhaustion in [
+            Exhaustion::FastCredits {
+                reason: "out_of_credits".into(),
+            },
+            Exhaustion::FastLane { deadline: 60_000 },
+            Exhaustion::ModelRejected,
+            Exhaustion::Pinned {
+                obstacle: "attempted",
+            },
+            Exhaustion::Timed {
+                deadline: 60_000,
+                window: "five_hour".into(),
+            },
+            Exhaustion::Untimed,
+        ] {
+            for at_cap in [false, true] {
+                let response = if exhaustion == Exhaustion::Untimed && at_cap {
+                    accounts_at_cap(60).response("r-1")
+                } else {
+                    crate::exhaustion::exhaustion_response(&exhaustion, 0, "r-1")
+                };
+                assert_eq!(
+                    response.status().as_u16(),
+                    exhaustion_status(&exhaustion, at_cap),
+                    "{exhaustion:?} at_cap {at_cap}"
+                );
+            }
+        }
     }
 }
