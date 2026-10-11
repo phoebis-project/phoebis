@@ -1727,7 +1727,7 @@ expect('/accounts/secondary', m.text(), [
   'claude-opus-5',
   'Clear',
   "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
-  'rate_limited',
+  'rate_limit (5h window exhausted)',
   'n/a',
   'Pro since',
   'Trial ends',
@@ -8093,7 +8093,7 @@ m.unmount();
       name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
-        hour.rows.length === 44 && hour.nextCursor === null && drawn.length === 25 &&
+        hour.rows.length === 45 && hour.nextCursor === null && drawn.length === 25 &&
         JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
@@ -8126,7 +8126,7 @@ m.unmount();
   }
   {
     // The day's rows too, so the cell is read on every kind the story holds and not on the last hour's alone.
-    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
+    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
     const wrong = [];
     let pairs = 0;
     for (const page of [m, day]) {
@@ -9551,11 +9551,10 @@ m.unmount();
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
-      reauth_required: ['Routing'],
       refresh_failed: ['Error'],
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
-      registry_changed: ['Change', 'shed ahead of pace', 'Actor', 'Reading it'],
+      registry_changed: ['Change', 'Fields', 'Actor'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
       shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
@@ -9565,18 +9564,17 @@ m.unmount();
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
-      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'refresh_failed',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
       'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
-    // The pairs the event carries the facts for: the state's effect, the gap's meaning, a registry edit's reading, the
-    // spent window's effect and the backoff's span.
+    // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect and
+    // the backoff's span.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
-      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace none`] }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
     };
     const modelLinks = {};

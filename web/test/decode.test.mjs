@@ -939,7 +939,8 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   assert.deepEqual(placed.cache, { hit: true, inputTokens: 1000, promisedTokens: 31200, readTokens: 500 });
   const refused = page.rows.find((r) => r.type === 'decision' && r.kind === 'refused');
   assert.deepEqual(refused.fact, [{ entity: { id: 'retired', kind: 'key' }, key: 'key', unit: null, value: 'retired' }], 'a fact names its entity');
-  assert.deepEqual(refused.refusal, { kind: 'key', reason: 'the key is not in the registry' });
+  assert.deepEqual(refused.refusal, { code: '', kind: 'key', reason: 'the key is not in the registry' }, 'a refusal written before its code reads an empty one');
+  assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }).refusal.code, 'revoked');
   const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
   assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
   assert.deepEqual(exhausted.exhaustion, { deadline: new Date(1_600_000).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
@@ -991,6 +992,12 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
   assert.ok(isIso(r.outcome.completion.completedAt));
+  // The fixture's record waited on no hold and refused nothing, so the run-out bit and the refusal code ride on a copy.
+  const held = (h) => ({ account_id: 'business', attempt: 1, cohort: null, held_ms: 60_000, ...h });
+  const ranOut = d.decodeDecisionRecord({ ...body, request: { ...body.request, holds: [held({}), held({ ran_out: true })] } });
+  assert.deepEqual(ranOut.request.holds.map((h) => h.ranOut), [false, true], 'a hold without the bit reads as one the relay did not answer at');
+  const revoked = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } } });
+  assert.deepEqual(revoked.outcome.refusal, { code: 'revoked', kind: 'key', reason: 'the key was revoked' });
 });
 
 test('a row with null optionals decodes to nulls', () => {
@@ -1017,7 +1024,7 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
   const body = fixture('decision');
   const refused = { ...body, pin: null, pin_reason: 'not_looked_up', outcome: { ...body.outcome, account_id: null, completion: null, kind: 'refused', pin_events: [], pin_written: null, refusal: { kind: 'client_drift', reason: 'hash' }, rung: null } };
   const r = d.decodeDecisionRecord(refused);
-  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { kind: 'client_drift', reason: 'hash' }]);
+  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { code: '', kind: 'client_drift', reason: 'hash' }]);
   assert.equal(d.decodeDecisionRecord({ ...refused, pin_reason: 'looked_away' }).pinReason, null, 'a word outside the list reads as none, which the raw answer still carries');
   assert.equal(d.decodeDecisionRecord(body).pinReason, null, "the fixture's placement reads its pin, so it names no reason");
   assert.deepEqual([...d.PIN_REASON_VALUES], ['not_looked_up', 'pinning_off']);

@@ -97,7 +97,7 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
-        reason: 'rate_limited (5h window exhausted)',
+        reason: 'rate_limit (5h window exhausted)',
         scope: 'account',
         setAt: ago(20 * MINUTE + 29_000),
         until: ahead(1 * HOUR + 12 * MINUTE),

@@ -1,6 +1,6 @@
 import type {
   AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
-  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowSample,
+  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -130,7 +130,9 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
   const phase = 1 - (resetThen - atMs) / period;
   const ceiling = shift === 0 ? 1 : Math.min(1, phase + EARLIER_LEAD);
   const utilization = Math.min(ceiling, Math.max(0.02, w.utilization * (shift === 0 ? phase / Math.max(0.05, 1 - (resetsAt - NOW) / period) : olderFactor())));
-  return { id: w.id, resetsAt: iso(resetThen), utilization: Math.round(utilization * 100) / 100 };
+  // A walked-back reading never reaches the limit by rounding or by its factor: only a story point says a window is
+  // spent. The nudge keeps a product that lands on a whole hundredth, 0.29 read as 28.999..., from losing one.
+  return { id: w.id, resetsAt: iso(resetThen), utilization: Math.min(Math.floor(utilization * 100 + 1e-9) / 100, 0.99) };
 };
 
 export const oauthWindows = (accountId: string, atMs: number, olderFactor: () => number = () => rng.float(0.4, 1.1)): AttemptWindow[] => {
@@ -142,7 +144,7 @@ export const oauthWindows = (accountId: string, atMs: number, olderFactor: () =>
   // rest send nothing and the detail panel reads n/a. A fixed factor rather than
   // a draw keeps the seeded stream the other fixtures read from where it was.
   if (!account.fableWindow) return reported;
-  return [...reported, walkBack(account.fableWindow, atMs, () => 0.8)];
+  return [...reported, storyReading(accountId, account.fableWindow, walkBack(account.fableWindow, atMs, () => 0.8), atMs)];
 };
 
 /** Neither a probe nor a token count thinks or reaches a server tool, so both carry the counts at zero. */
@@ -227,24 +229,26 @@ function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
 export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 
 /**
- * The story's own readings of a window where the walk back's even climb would not tell it: secondary's 5-hour window
- * runs hot from its opening at 10:42, so it leads its pace by the pool's 0.9 margin through the 11:00 shedding round
- * and the shed move after it, and reads spent from the head of 14:02:11.
+ * The story's own readings of a window where the walk back's even climb would not tell it, per account and window:
+ * secondary's 5-hour window runs hot from its opening at 10:42, so it leads its pace by the pool's 0.9 margin through
+ * the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
  */
-const STORY_READINGS: Record<string, { at: number; utilization: number }[]> = {
-  secondary: [
-    { at: clock(10, 42), utilization: 0 },
-    { at: clock(11, 0), utilization: 0.97 },
-    { at: clock(11, 8, 30), utilization: 0.99 },
-    { at: clock(14, 2, 10), utilization: 0.99 },
-    { at: clock(14, 2, 11), utilization: 1 },
-  ],
+const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
+  secondary: {
+    '5h': [
+      { at: clock(10, 42), utilization: 0 },
+      { at: clock(11, 0), utilization: 0.97 },
+      { at: clock(11, 8, 30), utilization: 0.99 },
+      { at: clock(14, 2, 10), utilization: 0.99 },
+      { at: clock(14, 2, 11), utilization: 1 },
+    ],
+  },
 };
 
-/** A 5-hour reading inside the window the story's readings cover, read off them. Any other reads as walked back. */
+/** A reading inside the live window the story's readings cover, read off them. Any other reads as walked back. */
 function storyReading(accountId: string, w: RateLimitWindow, read: AttemptWindow, atMs: number): AttemptWindow {
-  const points = STORY_READINGS[accountId];
-  if (!points || w.id !== '5h' || read.resetsAt !== w.resetsAt || atMs < points[0].at) return read;
+  const points = STORY_READINGS[accountId]?.[w.id];
+  if (!points || read.resetsAt !== w.resetsAt || atMs < points[0].at) return read;
   const after = points.findIndex((p) => p.at > atMs);
   if (after < 0) return { ...read, utilization: points[points.length - 1].utilization };
   const [from, to] = [points[after - 1], points[after]];

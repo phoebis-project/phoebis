@@ -10192,7 +10192,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "scope": "account",
             "until": 1600000,
-            "reason": "rate_limited",
+            "reason": "rate_limit",
             "window": "five_hour",
             "source_request_id": "r-move"
           }
@@ -10213,7 +10213,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "scope": "account",
             "until": 1600000,
-            "reason": "rate_limited",
+            "reason": "rate_limit",
             "window": "five_hour",
             "source_request_id": "r-move"
           }

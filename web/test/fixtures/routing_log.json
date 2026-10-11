@@ -594,7 +594,7 @@
         "detail": {
           "scope": "account",
           "until": 1600000,
-          "reason": "rate_limited",
+          "reason": "rate_limit",
           "window": "five_hour",
           "source_request_id": "r-move"
         }
@@ -615,7 +615,7 @@
         "detail": {
           "scope": "account",
           "until": 1600000,
-          "reason": "rate_limited",
+          "reason": "rate_limit",
           "window": "five_hour",
           "source_request_id": "r-move"
         }

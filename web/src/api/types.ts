@@ -814,7 +814,8 @@ export interface DecisionSummary {
   model: string | null;
   poolId: string | null;
   probe: boolean;
-  refusal: { kind: string; reason: string } | null;
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  refusal: { code: string; kind: string; reason: string } | null;
   requestId: string;
   rule: string | null;
   rung: Placement | null;
@@ -884,8 +885,11 @@ export interface RecordRequest {
   chain: { boundaries: number; staticBoundaries: number; staticHash: boolean };
   clientClass: string;
   flags: { contextCompacted: boolean; count: boolean; fast: boolean; marker: boolean; portable: boolean; probe: boolean };
-  /** The holds this request waited through before the decision, each with the wire attempt that waited. */
-  holds: { accountId: string; attempt: number; cohort: string | null; heldMs: number }[];
+  /**
+   * The holds this request waited through before the decision, each with the wire attempt that waited. `ranOut` is
+   * true on the hold whose bound the relay answered at.
+   */
+  holds: { accountId: string; attempt: number; cohort: string | null; heldMs: number; ranOut: boolean }[];
   keyGeneration: number;
   keyId: string;
   lane: { effort: string; speed: string; thinking: string };
@@ -1055,7 +1059,8 @@ export interface RecordOutcome {
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
-  refusal: { kind: string; reason: string } | null;
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  refusal: { code: string; kind: string; reason: string } | null;
   rule: string | null;
   rung: Placement | null;
   /** The pins the shedding round this decision ran marked, or null when no round ran. */

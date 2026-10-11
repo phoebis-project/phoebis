@@ -482,7 +482,7 @@ const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null ||
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 const holdOf = (v: unknown) => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort) }));
 const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
-const refusalOf = (v: unknown) => orNull(v, (x) => ({ kind: str(x.kind), reason: str(x.reason) }));
+const refusalOf = (v: unknown) => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
 const factOf = (v: unknown): SummaryFact[] => {
   const f = rec(v);
@@ -603,7 +603,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), canonicalModel: str(q.canonical_model),
       chain: { boundaries: num(chain.boundaries), staticBoundaries: num(chain.static_boundaries), staticHash: bool(chain.static_hash) }, clientClass: str(q.client_class),
       flags: { contextCompacted: bool(flags.context_compacted), count: bool(flags.count), fast: bool(flags.fast), marker: bool(flags.marker), portable: bool(flags.portable), probe: bool(flags.probe) },
-      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms) })),
+      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms), ranOut: bool(h.ran_out) })),
       keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
       registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id), seq: num(q.seq, 1),
     },
