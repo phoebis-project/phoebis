@@ -9,13 +9,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
+use fake_upstream::Respond;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
     LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
-use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
+use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 
 const DAY: i64 = 86_400_000;
 
@@ -971,6 +972,154 @@ async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and
     assert!(
         probe["id"].as_str().is_some_and(|id| !id.is_empty()),
         "the probe names its request: {probe}"
+    );
+}
+
+/// A probe the idle limit left pending comes back from a restart with what its settlement and a later turn read: the
+/// kind and the overage its answer carried, its coverage and unit, and its pending label.
+#[tokio::test]
+async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_label() {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        pool: PoolSpec {
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 500,
+            ..KeepalivePolicy::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    // The probe reads the prefix back and its answer reports overage in use.
+    let Respond::Json {
+        body: read_back, ..
+    } = probe_answer(2_000, 0)
+    else {
+        unreachable!("the standing probe answer is a JSON body")
+    };
+    r.up.push_credential_rule(
+        OAUTH,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![(
+                "anthropic-ratelimit-unified-overage-in-use".into(),
+                "true".into(),
+            )],
+            body: read_back,
+        },
+    );
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    let (_, agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (_, loaded) = second.persist_rows();
+    assert_eq!(
+        loaded, agents,
+        "the agent with its pending probe reads back as it stood"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&loaded[0].payload).unwrap();
+    let kept = &payload["kept"][0];
+    assert_eq!(
+        (
+            payload["kept"].as_array().map(Vec::len),
+            kept["kind"].as_str(),
+            kept["in_overage"].as_bool(),
+            kept["covered"].as_bool(),
+            kept["unit"].as_str(),
+            kept["pending"].as_str(),
+        ),
+        (
+            Some(1),
+            Some("oauth"),
+            Some(true),
+            Some(true),
+            Some("usd"),
+            Some("idle_limit")
+        ),
+        "{kept}"
+    );
+}
+
+/// A saved session of an older record version carries probes with no funding to settle under, so the load drops it
+/// whole: no session comes back, nothing settles, its session row and its agent row leave the registry, and one warn
+/// line names the count.
+#[tokio::test]
+async fn a_saved_session_of_record_version_one_is_dropped_at_the_load_with_one_line() {
+    let r = rig(on_disk()).await;
+    // The rig's session as a save writes it, its main agent holding no recipe, rewritten to version 1 with one kept
+    // probe in that version's shape.
+    let (mut sessions, mut agents) = r.engine.persist_rows();
+    assert_eq!((sessions.len(), agents.len()), (1, 1));
+    let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    payload["kept"] = serde_json::json!([{
+        "key_generation": r.generation("desktop"),
+        "pool_id": "main",
+        "canonical_model": "claude-sonnet-4-5",
+        "account": "a",
+        "fast": false,
+        "cost": "0.0006",
+        "entry_expires": NOW + 570_000,
+    }]);
+    agents[0].payload = payload.to_string();
+    sessions[0].record_version = 1;
+    agents[0].record_version = 1;
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents,
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let captured = Captured::default();
+    let second = r.restart().await;
+    {
+        let _guard = captured.install_at(tracing::Level::INFO);
+        second.load_persisted().await;
+    }
+    let stats = second.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents),
+        (0, 0),
+        "the older session is not restored"
+    );
+    assert_eq!(
+        (saved_sessions(&r).len(), saved_agents(&r).len()),
+        (0, 0),
+        "both its rows left the registry"
+    );
+    settle_ledger(&r, &mut 0).await;
+    assert_eq!(wasted_now(&r), BTreeMap::new(), "nothing settles");
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("saved keepalive"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one line for the load, none per row: {text}"
+    );
+    assert!(
+        lines[0].contains("WARN")
+            && lines[0].contains("older record version")
+            && lines[0].contains("dropped=1"),
+        "{text}"
     );
 }
 

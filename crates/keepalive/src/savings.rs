@@ -134,15 +134,6 @@ fn delta(
 }
 
 impl Engine {
-    /// The kind the registry holds for `account` at this record, which decides the row's funding once, as a served
-    /// attempt's kind decides a request row's: an api_key account's credit, settlement and skip file under `billed`
-    /// beside its requests. `None` for no account, or one the registry no longer holds, whose row files by its speed
-    /// and overage alone.
-    fn account_kind_of(&self, account: Option<&str>) -> Option<AccountKind> {
-        let snapshot = self.parts.router.snapshot();
-        account.and_then(|id| snapshot.account(id).map(|a| a.kind))
-    }
-
     /// Every probe the upstream served lands here, landed on its recipe or not: the cost is the pool's whatever
     /// happened to the recipe while the probe was in flight.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
@@ -166,7 +157,8 @@ impl Engine {
     }
 
     /// One request the previous recipe kept warm. The caller reads every part of the key off the agent under
-    /// the lock and hands them over, so nothing here needs the lock back.
+    /// the lock and hands them over, so nothing here needs the lock back. `kind` and `in_overage` are the credited
+    /// request's serving attempt's, so the credit files under the funding word its request row took.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_kept_warm(
         &self,
@@ -179,6 +171,8 @@ impl Engine {
         request_id: &str,
         tokens: u64,
         fast: bool,
+        kind: Option<AccountKind>,
+        in_overage: bool,
     ) {
         let mut d = delta(
             at,
@@ -193,10 +187,13 @@ impl Engine {
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         d.kept_warm_tokens = tokens;
-        d.account_kind = self.account_kind_of(account);
+        d.account_kind = kind;
+        d.overage_in_use = Some(in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
+    /// One wasted probe, filed under the funding its own cost row took: the kind it was served under, its answer's
+    /// overage and its speed.
     pub(crate) fn record_settlement(&self, at: i64, settlement: Settlement) {
         let mut d = delta(
             at,
@@ -208,11 +205,11 @@ impl Engine {
             "probe",
             settlement.fast,
         );
-        d.wasted_probes = settlement.costs.len() as u64;
-        d.wasted_probe_usd = settlement.costs.iter().sum();
-        d.wasted_probe_reasons =
-            BTreeMap::from([(settlement.label.as_str().to_string(), d.wasted_probes)]);
-        d.account_kind = self.account_kind_of(settlement.account.as_deref());
+        d.wasted_probes = 1;
+        d.wasted_probe_usd = settlement.cost;
+        d.wasted_probe_reasons = BTreeMap::from([(settlement.label.as_str().to_string(), 1)]);
+        d.account_kind = settlement.kind;
+        d.overage_in_use = Some(settlement.in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
@@ -228,7 +225,8 @@ impl Engine {
             skip.fast,
         );
         d.probes_skipped = 1;
-        d.account_kind = self.account_kind_of(skip.account.as_deref());
+        d.account_kind = skip.kind;
+        d.overage_in_use = Some(skip.in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts
             .metrics

@@ -245,8 +245,27 @@ fn presence(r: &mut Rig) {
     );
 }
 
+/// The end of the newest entry the agent's pending probes wrote, read off the payload a save would write.
+fn pending_lapse(r: &Rig, agent: &str) -> i64 {
+    let (_, agents) = r.engine.persist_rows();
+    let row = agents
+        .iter()
+        .find(|row| row.session_id == "session" && row.agent_id == agent)
+        .unwrap_or_else(|| panic!("no row for {agent}"));
+    let payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+    payload["kept"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|kept| kept["pending"].as_str().is_some())
+        .filter_map(|kept| kept["entry_expires"].as_i64())
+        .max()
+        .unwrap_or_else(|| panic!("{agent} holds no pending probe: {}", payload["kept"]))
+}
+
 /// The recipe is still retained at `end - 1` and ends with `reason` on the tick at `end`, its unanswered probes
-/// settled under `label`.
+/// settled under `label`: at once, or under `idle_limit` once the newest entry they wrote has ended, every probe
+/// pending until its own entry's end.
 async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str) {
     tick_to(r, end - 1).await;
     assert!(
@@ -262,6 +281,14 @@ async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str
         "{agent} ends at {end}: {status:?}"
     );
     assert!(status.probes > 0, "{status:?}");
+    if label == "idle_limit" {
+        assert_eq!(
+            status.unanswered as u64, status.probes,
+            "every probe stays pending at the end: {status:?}"
+        );
+        let lapse = pending_lapse(r, agent);
+        tick_to(r, lapse).await;
+    }
     assert_eq!(
         wasted(r, status.probes).await,
         BTreeMap::from([(label.to_string(), status.probes)]),

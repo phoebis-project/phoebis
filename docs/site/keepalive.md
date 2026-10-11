@@ -235,8 +235,10 @@ certain. A subagent's park follows the two park rules on its own, and the idle w
 is busy, parked or released. A busy agent that stays silent past the lead is probed with no ceiling of its own: a long
 foreground tool call on a five-minute entry stays covered, and the lease and the idle window bound a client that died.
 
-At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`, and its
-unanswered probes count as wasted under that reason. The next real request re-arms it.
+At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`. At the idle
+limit its unanswered probes stay pending until a real request reads them, which credits them inside their entry, or
+until their entry lapses, which counts them as wasted under `idle_limit`. Under `parked_limit` and `horizon` they count
+as wasted under that reason at once. The next real request re-arms the recipe.
 
 ### The return rate by idle age
 
@@ -330,7 +332,8 @@ under `horizon` or on a disabled pool leaves the same way, and one reopened or e
 probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
 cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
 sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
-stopped under `idle_limit` does, and shows on the wasted counter. A lapse also shows in that log line.
+stopped under `idle_limit` does, and shows on the wasted counter at once, while the probes of one stopped under
+`idle_limit` reach it as their entries lapse with no real request. A lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
@@ -358,7 +361,7 @@ kept:
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
 | `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
-| `idle_limit` | The idle window ran out before a real request answered the probe. |
+| `idle_limit` | The idle window ran out and the probe's entry lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
@@ -375,9 +378,11 @@ requests and tokens a probe kept off a cache miss on any model the request named
 probes cost, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe
 that landed on a different account than the recipe's. `wasted_probes` and `wasted_probe_usd` are the probes settled
 wasted by one of the reasons above and what they cost, and `wasted_probe_reasons` counts those wasted probes by the
-reason. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
-cooldown already held the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its
-ledger caught up and sent again, outside the failed probes since no account answered it.
+reason. Each wasted probe files under the funding its own cost row took, from the kind of the account that served it and
+whether its answer reported overage in use, so the wasted part of a probe share reads the plan-funded probes' waste
+against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for
+example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `held`, `migrated`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the

@@ -475,12 +475,15 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
     let read = last.and_then(|a| a.cache_read_tokens).unwrap_or(0);
     let wrote = last.and_then(|a| a.cache_write_5m_tokens).unwrap_or(0)
         + last.and_then(|a| a.cache_write_1h_tokens).unwrap_or(0);
-    if read > 0 {
-        d.cache_hits = 1
-    } else if wrote > 0 {
-        d.cache_misses = 1
-    } else {
-        d.uncached_requests = 1
+    // A held probe reached no cache and no account, so it counts under no request figure and no timing below.
+    if !held {
+        if read > 0 {
+            d.cache_hits = 1
+        } else if wrote > 0 {
+            d.cache_misses = 1
+        } else {
+            d.uncached_requests = 1
+        }
     }
     if let Some(a) = last {
         d.input_tokens = a.input_tokens.unwrap_or(0);
@@ -510,23 +513,25 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
     d.cache_read_usd = costs.cache_read_usd;
     d.cache_write_usd = costs.cache_write_usd;
     d.output_usd = costs.output_usd;
-    if let Some(t) = request.ttfb_ms {
-        d.ttfb_hist.record(t as f64);
-    }
-    if let Some(t) = request.ttfc_ms {
-        d.ttfc_hist.record(t as f64);
-    }
-    if let Some(t) = request.duration_ms {
-        d.duration_hist.record(t as f64);
-    }
-    if let (Some(out), Some(duration), Some(ttfc)) = (
-        last.and_then(|a| a.output_tokens),
-        request.duration_ms,
-        request.ttfc_ms,
-    ) {
-        let span_s = (duration - ttfc) as f64 / 1_000.0;
-        if span_s > 0.0 {
-            d.output_tps_hist.record(out as f64 / span_s);
+    if !held {
+        if let Some(t) = request.ttfb_ms {
+            d.ttfb_hist.record(t as f64);
+        }
+        if let Some(t) = request.ttfc_ms {
+            d.ttfc_hist.record(t as f64);
+        }
+        if let Some(t) = request.duration_ms {
+            d.duration_hist.record(t as f64);
+        }
+        if let (Some(out), Some(duration), Some(ttfc)) = (
+            last.and_then(|a| a.output_tokens),
+            request.duration_ms,
+            request.ttfc_ms,
+        ) {
+            let span_s = (duration - ttfc) as f64 / 1_000.0;
+            if span_s > 0.0 {
+                d.output_tps_hist.record(out as f64 / span_s);
+            }
         }
     }
     // A held probe asked no account, so its code names no failure the rate should count.
@@ -1836,6 +1841,34 @@ mod tests {
             delta_of(&refused, &[served]).speed,
             STANDARD_SPEED,
             "the speed the answer reported outranks the one the request asked for"
+        );
+    }
+
+    /// A probe the router held with `503 ledger_behind` asked no account, so it counts under its held column alone:
+    /// no cache figure, `uncached_requests` included, and no timing sample, whatever times its row carries.
+    #[test]
+    fn a_held_probe_counts_under_no_request_figure_and_no_timing() {
+        let held = RequestRecord {
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            error_code: Some("ledger_behind".into()),
+            attempts: 0,
+            ..request("rejected", Some(503), Some("k"))
+        };
+        let d = delta_of(&held, &[]);
+        assert_eq!(
+            (
+                (d.probes_held, d.requests),
+                (d.cache_hits, d.cache_misses, d.uncached_requests),
+                (
+                    d.ttfb_hist.count(),
+                    d.ttfc_hist.count(),
+                    d.duration_hist.count(),
+                    d.output_tps_hist.count()
+                ),
+            ),
+            ((1, 0), (0, 0, 0), (0, 0, 0, 0)),
+            "the held probe files under its held column alone, with no cache figure and no timing sample"
         );
     }
 

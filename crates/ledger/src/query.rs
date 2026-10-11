@@ -1806,10 +1806,10 @@ struct ShareSums {
     probe_cost: IndexMap<&'static str, WindowSum>,
     plan_requests: u64,
     plan_output_tokens: u64,
-    /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio. An overage probe's
-    /// own credit files under `overage` and enters neither side, while the recipe's settlement carries that probe's
-    /// waste under `plan`, so the ratio reads every probe's waste a standard recipe settled against the plan-funded
-    /// probe dollars. A fast recipe's credits and settlement file under `fast` and enter neither side.
+    /// The dollars of the group's plan-funded accounting rows, the two sides of the wasted ratio. A settlement is one
+    /// wasted probe filed under the funding its own cost row took, one row per funding, so an overage probe's credit
+    /// and its waste both file under `overage` and enter neither side, and the ratio reads the plan-funded probes'
+    /// waste against their own dollars. A fast recipe's credits and settlements file under `fast` and enter neither.
     plan_probe_cost_usd: f64,
     plan_wasted_probe_usd: f64,
 }

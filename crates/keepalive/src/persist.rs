@@ -16,15 +16,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
-    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe,
-    Wasted, MAIN_AGENT,
+    kind_of_word, kind_word, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket,
+    Inner, Kept, Observation, ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey,
+    Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
 
-/// The payloads' shape. Nothing is released, so no stored row of another version exists to read.
-pub(crate) const RECORD_VERSION: u32 = 1;
+/// The payloads' shape. A row of an older version is dropped at the load, since its probes carry no funding to
+/// settle under.
+pub(crate) const RECORD_VERSION: u32 = 2;
 
 /// A session row's key in the store: key id, key generation, session id.
 pub(crate) type PersistKey = (String, i64, String);
@@ -135,6 +136,8 @@ pub(crate) struct PersistedObservation {
     pub prior: Option<PersistedPrior>,
     pub poisoned: bool,
     pub recipe: PersistedRecipe,
+    pub kind: Option<String>,
+    pub in_overage: bool,
 }
 
 /// The recipe's fields beside the prompt and its header block: the hijack guard reads the two hashes, and the probe's
@@ -182,6 +185,8 @@ pub(crate) struct PersistedUnanswered {
     pub model: String,
     pub expires: i64,
     pub covered: bool,
+    pub kind: Option<String>,
+    pub in_overage: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,6 +199,11 @@ pub(crate) struct PersistedKept {
     #[serde(with = "exact")]
     pub cost: f64,
     pub entry_expires: i64,
+    pub kind: Option<String>,
+    pub in_overage: bool,
+    pub covered: bool,
+    pub unit: Option<String>,
+    pub pending: Option<String>,
 }
 
 /// A float as the text `f64`'s `Display` writes, which `str::parse` reads back to the same bits. serde_json's own float
@@ -231,6 +241,28 @@ fn optional_unit(word: Option<String>) -> Option<Option<SavingsUnit>> {
     match word {
         None => Some(None),
         Some(word) => unit_of(&word).map(Some),
+    }
+}
+
+/// A word the payload carries for an optional account kind: `None` reads as none, and a word this build does not know
+/// refuses the row.
+fn optional_kind(word: Option<String>) -> Option<Option<phoebis_store::AccountKind>> {
+    match word {
+        None => Some(None),
+        Some(word) => kind_of_word(&word).map(Some),
+    }
+}
+
+/// A word the payload carries for an optional wasted label: `None` reads as none, and a word this build does not know
+/// refuses the row.
+fn optional_wasted(word: Option<String>) -> Option<Option<Wasted>> {
+    match word {
+        None => Some(None),
+        Some(word) => Wasted::ALL
+            .iter()
+            .copied()
+            .find(|label| label.as_str() == word)
+            .map(Some),
     }
 }
 
@@ -329,6 +361,8 @@ impl PersistedAgent {
                     static_hash: o.recipe.static_hash.clone(),
                     tail_hash: o.recipe.tail_hash.clone(),
                 },
+                kind: o.kind.map(|kind| kind_word(kind).to_string()),
+                in_overage: o.in_overage,
             }),
             expires: agent.expires,
             jitter_frac: agent.jitter_frac,
@@ -377,6 +411,8 @@ impl PersistedAgent {
                     model: probe.model.clone(),
                     expires: probe.expires,
                     covered: probe.covered,
+                    kind: probe.kind.map(|kind| kind_word(kind).to_string()),
+                    in_overage: probe.in_overage,
                 })
                 .collect(),
             kept: agent
@@ -390,6 +426,11 @@ impl PersistedAgent {
                     fast: kept.fast,
                     cost: kept.cost,
                     entry_expires: kept.entry_expires,
+                    kind: kept.kind.map(|kind| kind_word(kind).to_string()),
+                    in_overage: kept.in_overage,
+                    covered: kept.covered,
+                    unit: kept.unit.map(unit_word),
+                    pending: kept.pending.map(|label| label.as_str().to_string()),
                 })
                 .collect(),
             last_real_at: agent.last_real_at,
@@ -475,22 +516,31 @@ impl PersistedAgent {
                     model: probe.model,
                     expires: probe.expires,
                     covered: probe.covered,
+                    kind: optional_kind(probe.kind)?,
+                    in_overage: probe.in_overage,
                 })
             })
             .collect::<Option<_>>()?;
         agent.kept = self
             .kept
             .into_iter()
-            .map(|kept| Kept {
-                key_generation: kept.key_generation,
-                pool_id: kept.pool_id,
-                canonical_model: kept.canonical_model,
-                account: kept.account,
-                fast: kept.fast,
-                cost: kept.cost,
-                entry_expires: kept.entry_expires,
+            .map(|kept| {
+                Some(Kept {
+                    key_generation: kept.key_generation,
+                    pool_id: kept.pool_id,
+                    canonical_model: kept.canonical_model,
+                    account: kept.account,
+                    fast: kept.fast,
+                    cost: kept.cost,
+                    entry_expires: kept.entry_expires,
+                    kind: optional_kind(kept.kind)?,
+                    in_overage: kept.in_overage,
+                    covered: kept.covered,
+                    unit: optional_unit(kept.unit)?,
+                    pending: optional_wasted(kept.pending)?,
+                })
             })
-            .collect();
+            .collect::<Option<_>>()?;
         agent.last_real_at = self.last_real_at;
         agent.last_stop = self.last_stop;
         agent.last_presence_at = self.last_presence_at;
@@ -541,6 +591,8 @@ impl PersistedObservation {
             prior,
             poisoned: false,
             dispatched_ms: row.dispatched_ms,
+            kind: optional_kind(self.kind)?,
+            in_overage: self.in_overage,
         })
     }
 }
@@ -898,8 +950,8 @@ impl Inner {
     /// The rows the store answered, restored within the limits the file sets now rather than the ones the save ran
     /// under: sessions newest first, each with its main agent and then its other agents newest first, and the recipes
     /// of what was restored newest first while the retained bytes allow. What does not fit is disposed, its rows
-    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows this build cannot read
-    /// and agents without a session row go too.
+    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows of an older version,
+    /// rows this build cannot read and agents without a session row go too.
     fn restore_persisted(
         &mut self,
         (sessions, agents, counters): Loaded,
@@ -940,6 +992,7 @@ impl Inner {
         let mut by_sessions = Disposed::default();
         let mut by_agents = Disposed::default();
         let mut by_bytes = 0usize;
+        let mut dropped = 0usize;
         let mut unopened: Vec<(SessionKey, String)> = Vec::new();
         let mut held: Vec<(i64, SessionKey, String, Observation)> = Vec::new();
         for row in sessions {
@@ -949,6 +1002,15 @@ impl Inner {
                 row.session_id.clone(),
             );
             let agent_rows = by_session.remove(&stored).unwrap_or_default();
+            // Counted for one line after the loop rather than one per row: every row an upgrade finds is one of them.
+            if row.record_version < RECORD_VERSION {
+                dropped += 1;
+                for agent_row in agent_rows {
+                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
+                }
+                self.file_removed_session(stored);
+                continue;
+            }
             let payload = (row.record_version == RECORD_VERSION)
                 .then(|| serde_json::from_str::<PersistedSession>(&row.payload).ok())
                 .flatten();
@@ -1084,6 +1146,12 @@ impl Inner {
                 by_bytes += 1;
                 self.discard_at_load(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
             }
+        }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "saved keepalive sessions of an older record version are dropped, since their probes carry no funding"
+            );
         }
         if by_sessions.sessions > 0 {
             tracing::info!(
@@ -1316,6 +1384,11 @@ mod tests {
                 fast: false,
                 cost,
                 entry_expires: 0,
+                kind: None,
+                in_overage: false,
+                covered: false,
+                unit: None,
+                pending: None,
             };
             let back: PersistedKept =
                 serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();

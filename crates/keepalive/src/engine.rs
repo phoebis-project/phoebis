@@ -417,6 +417,24 @@ impl Funding {
     }
 }
 
+/// The word an account kind is spelled with on the bus's `AccountSelected` and in the persisted payloads, whose
+/// spelling the store keeps to itself.
+pub(crate) fn kind_word(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::ApiKey => "api_key",
+        AccountKind::Oauth => "oauth",
+    }
+}
+
+/// `kind_word` read back, `None` for a word no kind is spelled with.
+pub(crate) fn kind_of_word(word: &str) -> Option<AccountKind> {
+    match word {
+        "api_key" => Some(AccountKind::ApiKey),
+        "oauth" => Some(AccountKind::Oauth),
+        _ => None,
+    }
+}
+
 pub struct EngineParts {
     pub bus: Bus,
     pub clock: Clock,
@@ -572,7 +590,8 @@ pub(crate) struct Agent {
     pub unanswered: Vec<UnansweredProbe>,
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
-    /// probe sent while it is open lands on `unanswered`, for the request after it.
+    /// probe sent while it is open lands on `unanswered`, for the request after it. The idle limit moves its probes
+    /// here too, pending under its label until their entry lapses or a turn reads them.
     pub kept: Vec<Kept>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
@@ -809,9 +828,14 @@ pub(crate) struct Observation {
     /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`; `None` when
     /// the relay left the markers as sent, in which case the cap falls back to the recipe's own received TTL.
     pub dispatched_ms: Option<i64>,
+    /// The kind of the account the current attempt was placed on, read off `AccountSelected`, so a skip and a kept-warm
+    /// credit file under the funding this request ran under whatever the registry holds by then.
+    pub kind: Option<AccountKind>,
+    /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
+    pub in_overage: bool,
 }
 
-/// Unanswered probes with the label that settles them as wasted. Queued under the lock and written to the ledger by
+/// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
 /// the engine once the lock is released.
 pub(crate) struct Settlement {
     pub key: SessionKey,
@@ -820,9 +844,14 @@ pub(crate) struct Settlement {
     pub canonical_model: String,
     pub account: Option<String>,
     pub label: Wasted,
-    pub costs: Vec<f64>,
+    /// One probe's cost: a settlement is one wasted probe, so the rollup files it under its own funding.
+    pub cost: f64,
     /// The stopped recipe carried `speed: "fast"`, so the settlement files under speed `fast`.
     pub fast: bool,
+    /// The kind the probe was served under and whether its answer reported overage, as the probe's own cost row
+    /// took them, so the waste files under the same funding word whatever the registry holds now.
+    pub kind: Option<AccountKind>,
+    pub in_overage: bool,
 }
 
 /// A due probe a gate or a lapsed entry withheld, with the keys its skip row files under, read while the recipe still
@@ -835,6 +864,10 @@ pub(crate) struct Skipped {
     pub canonical_model: String,
     pub fast: bool,
     pub state: RecipeState,
+    /// The kind and the overage of the request the recipe came from, off its observation, so the skip files under the
+    /// funding that request ran under.
+    pub kind: Option<AccountKind>,
+    pub in_overage: bool,
 }
 
 impl Skipped {
@@ -847,6 +880,8 @@ impl Skipped {
             canonical_model: agent.canonical_model.clone(),
             fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
             state,
+            kind: agent.current.as_ref().and_then(|o| o.kind),
+            in_overage: agent.current.as_ref().is_some_and(|o| o.in_overage),
         }
     }
 }
@@ -871,6 +906,10 @@ pub(crate) struct UnansweredProbe {
     /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
     /// settled, so the cost record and the coverage record never merge.
     pub covered: bool,
+    /// The kind the probe was served under and whether its answer reported overage, off its `ProbeRecord`, so its
+    /// settlement files under the funding its cost row took.
+    pub kind: Option<AccountKind>,
+    pub in_overage: bool,
 }
 
 /// One unanswered probe with the rollup keys it was paid under, which its settlement files under.
@@ -884,6 +923,15 @@ pub(crate) struct Kept {
     pub cost: f64,
     /// When the entry this probe wrote expires: a read arriving at or past it found the entry gone.
     pub entry_expires: i64,
+    pub kind: Option<AccountKind>,
+    pub in_overage: bool,
+    /// What the probe proved, carried from its `UnansweredProbe` by `Kept::of`, so a turn that arrives after the
+    /// ceiling moved the probe here reads the evidence the unanswered list held.
+    pub covered: bool,
+    pub unit: Option<SavingsUnit>,
+    /// The label a probe written off at a ceiling settles under when its entry lapses with no turn: `idle_limit`
+    /// today. `None` for a probe a real request superseded or adopted, which waits for that request's completion.
+    pub pending: Option<Wasted>,
 }
 
 impl Kept {
@@ -896,6 +944,11 @@ impl Kept {
             fast: probe.fast,
             cost: probe.cost,
             entry_expires: probe.expires,
+            kind: probe.kind,
+            in_overage: probe.in_overage,
+            covered: probe.covered,
+            unit: probe.unit,
+            pending: None,
         }
     }
 
@@ -907,8 +960,10 @@ impl Kept {
             canonical_model: self.canonical_model,
             account: self.account,
             label,
-            costs: vec![self.cost],
+            cost: self.cost,
             fast: self.fast,
+            kind: self.kind,
+            in_overage: self.in_overage,
         }
     }
 }
@@ -919,7 +974,8 @@ pub(crate) enum Unanswered {
     /// A labeled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
     /// the kept ones for whatever decides them.
     Settle,
-    /// A real request supersedes the recipe and keeps them until its completion decides them.
+    /// A real request supersedes the recipe and keeps them until its completion decides them, or the idle limit
+    /// keeps them pending under its label until their entry lapses or a turn reads them.
     Keep,
     /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
     /// wait where they are, with the recipe's speed, for the next request.
@@ -1273,8 +1329,15 @@ impl Inner {
         let probes = std::mem::take(&mut agent.unanswered);
         if unanswered == Unanswered::Keep {
             // A row apiece: a request whose completion never came leaves its probes for the next one, which may
-            // keep probes paid under other keys, and each settles by the entry it wrote.
-            let kept: Vec<Kept> = probes.iter().map(|probe| Kept::of(agent, probe)).collect();
+            // keep probes paid under other keys, and each settles by the entry it wrote. A ceiling's label rides
+            // along, for the lapse sweep to settle under when no turn reads them first.
+            let kept: Vec<Kept> = probes
+                .iter()
+                .map(|probe| Kept {
+                    pending: wasted,
+                    ..Kept::of(agent, probe)
+                })
+                .collect();
             agent.kept.extend(kept);
             return;
         }
@@ -1288,6 +1351,34 @@ impl Inner {
         for kept in std::mem::take(&mut agent.kept) {
             self.settlements.push(kept.settle(key, label));
         }
+    }
+
+    /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, and
+    /// touches each agent it settled for the next save. True when it queued a settlement.
+    pub(crate) fn settle_lapsed_pending(&mut self, now: i64) -> bool {
+        let lapsed = |kept: &Kept| kept.pending.is_some() && kept.entry_expires <= now;
+        let mut settled: Vec<(SessionKey, String)> = Vec::new();
+        for (key, session) in self.sessions.iter_mut() {
+            for (agent_id, agent) in session.agents.iter_mut() {
+                if !agent.kept.iter().any(lapsed) {
+                    continue;
+                }
+                let (due, waiting): (Vec<Kept>, Vec<Kept>) = std::mem::take(&mut agent.kept)
+                    .into_iter()
+                    .partition(lapsed);
+                agent.kept = waiting;
+                for kept in due {
+                    if let Some(label) = kept.pending {
+                        self.settlements.push(kept.settle(key, label));
+                    }
+                }
+                settled.push((key.clone(), agent_id.clone()));
+            }
+        }
+        for (key, agent_id) in &settled {
+            self.touch_agent(key, agent_id);
+        }
+        !settled.is_empty()
     }
 
     /// A gate's hold on a retained recipe. One hold withholds one probe, whatever number of ticks it spans: the
@@ -2006,22 +2097,49 @@ impl Engine {
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
         // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe wrote
         // the entry this request can read, a rewrite included, so its coverage is the one taken, and it leaves with
-        // the probes this request keeps.
+        // the probes this request keeps. A recipe the idle limit ended left its probes kept and pending, so the
+        // newest of those whose entry still lives stands in for it.
         let prior = {
             let agent = &inner.sessions[&key].agents[&agent_id];
-            let newest = agent.unanswered.last();
-            agent.last_real_at.map(|real_at| PriorCoverage {
-                account: newest.and_then(|probe| probe.account.clone()),
-                covered: newest.is_some_and(|probe| probe.covered),
-                unit: newest.and_then(|probe| probe.unit),
-                model: newest.map_or_else(
-                    || agent.canonical_model.clone(),
-                    |probe| probe.model.clone(),
-                ),
-                fast: newest.is_some_and(|probe| probe.fast),
-                real_at,
-                ttl_ms: agent.ttl_ms,
-                until: newest.map(|probe| probe.expires),
+            let newest_kept = agent
+                .kept
+                .iter()
+                .rev()
+                .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
+            agent.last_real_at.map(|real_at| {
+                let ttl_ms = agent.ttl_ms;
+                match (agent.unanswered.last(), newest_kept) {
+                    (Some(probe), _) => PriorCoverage {
+                        account: probe.account.clone(),
+                        covered: probe.covered,
+                        unit: probe.unit,
+                        model: probe.model.clone(),
+                        fast: probe.fast,
+                        real_at,
+                        ttl_ms,
+                        until: Some(probe.expires),
+                    },
+                    (None, Some(kept)) => PriorCoverage {
+                        account: kept.account.clone(),
+                        covered: kept.covered,
+                        unit: kept.unit,
+                        model: kept.canonical_model.clone(),
+                        fast: kept.fast,
+                        real_at,
+                        ttl_ms,
+                        until: Some(kept.entry_expires),
+                    },
+                    (None, None) => PriorCoverage {
+                        account: None,
+                        covered: false,
+                        unit: None,
+                        model: agent.canonical_model.clone(),
+                        fast: false,
+                        real_at,
+                        ttl_ms,
+                        until: None,
+                    },
+                }
             })
         };
         let poisoned = inner.gap_backlog > 0;
@@ -2098,7 +2216,14 @@ impl Engine {
             prior,
             poisoned,
             dispatched_ms: None,
+            kind: None,
+            in_overage: false,
         });
+        // The kept probes wait for this request's completion to decide them, so the lapse sweep leaves them. A request
+        // that returned above with no observation has no completion to wait for, and leaves them pending.
+        for kept in &mut agent.kept {
+            kept.pending = None;
+        }
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
         inner.touch_agent(&key, &agent_id);
@@ -2134,6 +2259,8 @@ impl Engine {
         observation.expected = 0;
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
+        observation.kind = kind_of_word(&selected.account_kind);
+        observation.in_overage = false;
         agent.cache_started = observation.started;
         agent.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
@@ -2205,10 +2332,20 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap();
         if let Some(observation) = agent.current.as_mut() {
-            // A failed attempt is not evidence about the cache; the next selection re-arms the attempt.
-            if observation.attempt == head.attempt && !(200..300).contains(&head.status) {
-                observation.ready = false;
-                inner.touch_agent(&key, &agent_id);
+            if observation.attempt == head.attempt {
+                let in_overage = head.headers.iter().any(|(name, value)| {
+                    name.eq_ignore_ascii_case("anthropic-ratelimit-unified-overage-in-use")
+                        && value.trim().eq_ignore_ascii_case("true")
+                });
+                let moved = observation.in_overage != in_overage;
+                observation.in_overage = in_overage;
+                // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
+                if !(200..300).contains(&head.status) {
+                    observation.ready = false;
+                    inner.touch_agent(&key, &agent_id);
+                } else if moved {
+                    inner.touch_agent(&key, &agent_id);
+                }
             }
         }
     }
@@ -2320,6 +2457,7 @@ impl Engine {
                         && read > 0
                         && unit.is_some())
                     .then(|| {
+                        let served = agent.current.as_ref();
                         (
                             read,
                             agent.key_generation,
@@ -2327,6 +2465,8 @@ impl Engine {
                             agent.account.clone(),
                             agent.canonical_model.clone(),
                             fast,
+                            served.and_then(|o| o.kind),
+                            served.is_some_and(|o| o.in_overage),
                         )
                     })
                 })
@@ -2385,7 +2525,9 @@ impl Engine {
             }
         }
         drop(inner);
-        if let Some((read, key_generation, pool_id, account, model, fast)) = credited {
+        if let Some((read, key_generation, pool_id, account, model, fast, kind, in_overage)) =
+            credited
+        {
             self.record_kept_warm(
                 now,
                 &key,
@@ -2396,6 +2538,8 @@ impl Engine {
                 &complete.request_id,
                 read,
                 fast,
+                kind,
+                in_overage,
             );
         }
     }
@@ -2500,7 +2644,7 @@ impl Engine {
         // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let retained_models = {
+        let (retained_models, swept) = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
@@ -2509,9 +2653,18 @@ impl Engine {
             let snapshot = self.parts.router.snapshot();
             inner.drop_sessions_of_dead_keys(&snapshot);
             inner.advance_idle_episodes(&snapshot, now);
-            inner.anything_retained().then(|| inner.retained_models())
+            // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
+            // waits for the entry's own end, whether or not any recipe is still retained.
+            let swept = inner.settle_lapsed_pending(now);
+            (
+                inner.anything_retained().then(|| inner.retained_models()),
+                swept,
+            )
         };
         let Some(retained_models) = retained_models else {
+            if swept {
+                self.flush();
+            }
             return;
         };
         let view = self.router_view(now, retained_models).await;
@@ -2615,6 +2768,16 @@ impl Engine {
                     )
                 };
                 match verdict {
+                    Verdict::End(Reason::IdleLimit) => {
+                        inner.end_observation(
+                            &key,
+                            &agent_id,
+                            Some(Wasted::IdleLimit),
+                            Unanswered::Keep,
+                        );
+                        inner.set_reason(&key, &agent_id, Reason::IdleLimit);
+                        continue;
+                    }
                     Verdict::End(reason) => {
                         inner.discard(&key, &agent_id, reason, wasted_label(reason));
                         continue;
@@ -3251,6 +3414,8 @@ mod tests {
             prior: None,
             poisoned: false,
             dispatched_ms: None,
+            kind: None,
+            in_overage: false,
         }
     }
 
