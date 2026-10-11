@@ -119,9 +119,9 @@ Every report is one `POST /v0/keepalive/events` on the proxy listener, a JSON bo
 for model traffic. A session is scoped to the key that reports it, and to the generation that key was created under: an
 id deleted and created again reads and drives none of the previous holder's sessions. Each acknowledgment names the
 session, the instance, the sequence and the lease's end, and an agent event's also names the agent and its
-`request_generation`. A session acknowledgment, the answer to a `session_start` or a `heartbeat`, names main's
-`request_generation`, as an agent event's names its agent's. A registration's acknowledgment carries every agent the
-router holds for the session, so the mod reconciles from that answer after a lapse or a router restart. A report the
+`request_generation`. A session acknowledgment, the answer to a `session_start`, a `heartbeat` or a `session_end`, names
+main's `request_generation`, as an agent event's names its agent's. A registration's acknowledgment carries every agent
+the router holds for the session, so the mod reconciles from that answer after a lapse or a router restart. A report the
 route refuses is answered `{"code": "<code>"}` rather than with an Anthropic-shaped error body, and a key it refuses is
 answered as `/v1/messages` answers it. The mod's README describes
 [the protocol](https://github.com/daystrom-labs/phoebis-keepalive/blob/main/README.md#the-protocol): the six events,

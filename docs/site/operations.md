@@ -138,9 +138,9 @@ service layout, as root:
    `--owner` user, and prints the file's path. A key file already in place is read as the new key.
 4. Read its summary: how many OAuth credential bundles, API-key secrets and keepalive recipe bodies it discards, and how
    many oauth accounts, api_key accounts and open refresh attempts it marks.
-5. Answer `yes`. Any other answer exits 2, and a declined run writes no key and discards nothing: the registry stays as
-   it was, and the run removes a key file it generated, with any directory it created for it, and names the file in its
-   last line. `--yes` skips the question for a script.
+5. Answer `yes`. Any other answer exits 2, and a declined run leaves no key it generated and discards nothing: the
+   registry stays as it was, and the run removes a key file it generated, with any directory it created for it, and
+   names the file in its last line. `--yes` skips the question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with
 `the storage key matches the registry, nothing to recover` when the key file still opens the registry's canary (or,

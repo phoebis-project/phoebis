@@ -115,11 +115,11 @@ lands. Every header is optional; a request without one is relayed the same way. 
 
 Optional. Set to `1`, it switches off the client's event logger, which otherwise posts telemetry batches to
 `api.anthropic.com` with the credential it was given, behind the router the key secret.
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and also stops update checks and the bootstrap lookup. The
-settings lookup the client makes at start still goes to `api.anthropic.com` with the secret under either setting, fails
-there, and the client tolerates that. The policy lookup goes out only under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`,
-[`CLAUDE_CODE_SUBSCRIPTION_TYPE=max`](#claude_code_subscription_type) skips it, and without that line its failure makes
-the client refuse every fetch a plugin makes.
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and also stops update checks and the bootstrap lookup. With a
+null subscription type the settings lookup the client makes at start still goes to `api.anthropic.com` with the secret
+under either setting, fails there, and the client tolerates that, and `max` skips it. The policy lookup goes out only
+under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`, [`CLAUDE_CODE_SUBSCRIPTION_TYPE=max`](#claude_code_subscription_type)
+skips it, and without that line its failure makes the client refuse every fetch a plugin makes.
 
 ### CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK
 

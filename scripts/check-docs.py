@@ -115,17 +115,17 @@ def resolves(site, page, raw):
     return target_of(site, page, raw) is not None
 
 
-def fragment_resolves(site, page, raw):
-    """A link's fragment is among the ids of the page it points at: the page itself for a bare `#x`, the resolved
-    target for `page/#x`. A link without a fragment resolves."""
+def fragment_missing_from(site, page, raw):
+    """The page whose ids lack a link's fragment: the page itself for a bare `#x`, the resolved target for
+    `page/#x`. None when the fragment is among them or there is none to check."""
     fragment = urllib.parse.unquote(urllib.parse.urlsplit(raw).fragment)
     if not fragment or raw == SKIP_LINK:
-        return True
+        return None
     target = target_of(site, page, raw)
     # A link that lands nowhere is the path check's finding, and an image or a file other than a page has no ids.
     if target is None or target.suffix != ".html":
-        return True
-    return fragment in ids_of(target)
+        return None
+    return None if fragment in ids_of(target) else target
 
 
 def check_links(site):
@@ -146,11 +146,12 @@ def check_links(site):
                 print(f"{page.relative_to(site)}: {raw} resolves to nothing")
                 dangling += 1
         for raw in parser.hrefs:
-            if raw.startswith(SKIPPED) or fragment_resolves(site, page, raw):
+            if raw.startswith(SKIPPED):
                 continue
-            target = target_of(site, page, raw)
-            print(f"{page.relative_to(site)}: {raw} names no heading or anchor in {target.relative_to(site)}")
-            dangling += 1
+            target = fragment_missing_from(site, page, raw)
+            if target is not None:
+                print(f"{page.relative_to(site)}: {raw} names no heading or anchor in {target.relative_to(site)}")
+                dangling += 1
     return 1 if dangling else 0
 
 

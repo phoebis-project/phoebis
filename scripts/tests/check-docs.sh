@@ -75,6 +75,18 @@ out=$(python3 "$check" links "$tmp/bare-fragment-site" 2>&1) && fail "a bare fra
 echo "$out" | grep -q "index.html: #nowhere names no heading or anchor in index.html" \
   || fail "wrong finding for a bare fragment its own page lacks: $out"
 
+# A file that is not a page carries no ids, and a binary one would not decode, so the checker skips its fragment.
+mkdir -p "$tmp/asset-fragment-site/assets"
+printf '\x89PNG\r\n\x1a\n' > "$tmp/asset-fragment-site/assets/a.png"
+echo '<h1 id="top">top</h1><a href="assets/a.png#x">ok</a>' > "$tmp/asset-fragment-site/index.html"
+out=$(python3 "$check" links "$tmp/asset-fragment-site" 2>&1) \
+  || fail "a fragment on a link to a file that is not a page was read: $out"
+
+# The theme writes its skip link as `#__skip` on a page with no heading to point at, so the checker exempts it.
+mkdir -p "$tmp/skip-link-site"
+echo '<a href="#__skip">skip</a><p>not found</p>' > "$tmp/skip-link-site/404.html"
+out=$(python3 "$check" links "$tmp/skip-link-site" 2>&1) || fail "the theme's skip link was refused: $out"
+
 cat > "$tmp/routes.rs" <<'RS'
     Router::new()
         .route("/admin/a", get(a).post(b))
