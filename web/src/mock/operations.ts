@@ -3,7 +3,7 @@ import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
-import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
+import { DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { MINUTE, NOW, ago, ahead } from './time';
@@ -24,7 +24,8 @@ const rng = createRng(2_024);
 // use, and their account has been at its daily budget since its last served
 // request.
 // `released` marks a session whose every
-// agent, main included, the mod released.
+// agent, main included, the mod released. `sessionId` writes out the id of a
+// session past the story's ids whose story row names it.
 const sessionSpec: {
   accountId: string;
   agents: number;
@@ -34,6 +35,7 @@ const sessionSpec: {
   lastUseFromRows?: boolean;
   model: string;
   released?: true;
+  sessionId?: string;
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
 }[] = [
@@ -57,7 +59,7 @@ const sessionSpec: {
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
 ];
 
@@ -81,10 +83,11 @@ for (const r of REQUESTS) {
 const sharePrices = (model: string): boolean => ratesOf(TABLES, 'five_hour', anchorTier(TABLES), model) !== null;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
-  // An entry past the story's session ids draws one the ledger never saw.
+  // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
+  // out as well, so the rows after this one keep their rolls.
   const drawnId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
-  const sessionId = drawnId;
+  const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
   // Both rolls are drawn whatever the spec says, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
@@ -197,6 +200,8 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   null,
   null,
+  // One row for each session past the story's ids, so the modulo leaves them scheduled rather than wrapping them onto
+  // the first two causes.
   null,
   null,
 ];
@@ -327,8 +332,10 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
-  // The session's own summary reads the main agent's guard note and cause, the way the admin route does.
+  // The session's own summary reads the main agent's lifecycle word, guard note and cause, the way the admin route
+  // does, so a session the mod released whole reads released.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
+  pin.keepalive.state = main?.agentState ?? null;
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
   pin.keepalive.cause = main?.cause ?? null;
 }
@@ -374,14 +381,18 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 }
 
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
-// another account where they run there. A released agent holds none. The pool view reads each member's pins and sums
-// them, so the pool's figure, its members' pins and the dashboard's sum read one count.
+// another account where they run there. A pin is a routed request's, and the mod's release ends the keepalive record
+// alone, so a released agent holds the pin its routed request wrote where the ledger holds that request, and none
+// otherwise. The pool view reads each member's pins and sums them, so the pool's figure, its members' pins and the
+// dashboard's sum read one count.
+const ROUTED_PINS = new Set(REQUESTS.filter((r) => r.kind !== 'probe' && r.sessionId !== null).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`));
 const PINS = new Map<string, Set<string>>();
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
-  if (poolId === undefined || r.agentState === 'released') continue;
+  const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
+  if (poolId === undefined || (r.agentState === 'released' && !ROUTED_PINS.has(pin))) continue;
   const member = `${poolId}|${r.accountId}`;
-  PINS.set(member, (PINS.get(member) ?? new Set()).add(`${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`));
+  PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
 }
 /** The pins under a pool's keys on one member's account. */
 export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;

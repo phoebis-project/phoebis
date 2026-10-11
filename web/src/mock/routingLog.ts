@@ -1064,6 +1064,7 @@ function storySpecs(): Spec[] {
       prefix: { primary: { static: mainStatic(t(14, 2, 11), t(13, 58, 2)), staticMatch: mainStatic(t(14, 2, 11), t(13, 58, 2)) }, secondary: { content: message('bcc805b6', 8, 58_900, t(14, 2, 11), t(14, 0, 24), ONE_HOUR), contentMatch: null } },
       rung: placedStatic,
     }),
+    at('req_7a2d4c18-e95', 1, 1, t(14, 3), 'placed', 'primary'),
     // Secondary reads its 5-hour window spent from 14:02:11 and cools for its retry-after alone, so the session's next
     // request finds it spent and free: the spent rule moves the pin to primary.
     at('req_da52d141-a5a', 1, 1, t(14, 5, 12), 'moved', 'primary', {

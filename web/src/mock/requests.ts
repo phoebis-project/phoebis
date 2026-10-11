@@ -389,8 +389,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
-      // An answer names the tier it ran on. Every drawn one ran on the standard tier.
-      serviceTier: upstreamStatus === 200 ? 'standard' : null,
+      // An answer's usage names the tier it ran on, and a token count's answer carries no usage. Every drawn answer ran
+      // on the standard tier.
+      serviceTier: upstreamStatus === 200 && !count ? 'standard' : null,
       startedAt: iso(cursor),
       // The upstream names its request on every answer, an error document included, and a message on a 200 alone.
       upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
@@ -813,10 +814,10 @@ interface StorySeed {
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1',
   'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_5e2f7a19-b03', 'req_69e30548-32e',
-  'req_6c3a9e27-5b1', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_a1f04c2e-7b3', 'req_a6c19e73-5d2',
-  'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200', 'req_c90d3f61-a28', 'req_d4e8a7b2-916',
-  'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7', 'req_ef099b34-453', 'req_f3b6d218-85a',
-  'req_f8085653-422',
+  'req_6c3a9e27-5b1', 'req_7a2d4c18-e95', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_a1f04c2e-7b3',
+  'req_a6c19e73-5d2', 'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200', 'req_c90d3f61-a28',
+  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7', 'req_ef099b34-453',
+  'req_f3b6d218-85a', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
@@ -824,6 +825,8 @@ export const REJECTION_STORY_ID = 'req_7015b657-290';
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
 /** The session a laptop client sent. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
+/** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
+export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
@@ -851,7 +854,8 @@ function storyRow(seed: StorySeed): RequestLog {
       response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
-      serviceTier: a.status === 200 ? (seed.tier ?? 'standard') : null,
+      // The tier is read off the answer's usage, which a token count's answer carries none of.
+      serviceTier: a.status === 200 && kind !== 'count_tokens' ? (seed.tier ?? 'standard') : null,
       startedAt: iso(a.at),
       upstreamMessageId: a.status === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
@@ -1056,6 +1060,9 @@ function storyRequests(): RequestLog[] {
     },
     // A Fable turn on primary's plan whose bodies were captured, so the drawer reads a plan-funded answer of the model.
     { agentId: 'main', at: t(14, 23, 30), attempts: [{ accountId: 'primary', at: t(14, 23, 30), ms: 8_200, status: 200 }], capturedBodies: true, id: 'req_a6c19e73-5d2', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 52_300, cacheWrite1h: 3_400, input: 2_100, output: 1_650, thinking: 640 } },
+    // The one turn of the session the mod released whole later. The release ends the keepalive record alone, so the
+    // pin this turn wrote stays.
+    { agentId: 'main', at: t(14, 3), attempts: [{ accountId: 'primary', at: t(14, 3), ms: 5_600, status: 200 }], id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1670,6 +1677,8 @@ function hourShares(accountId: string, model: string, priced: { at: number; usag
   return out;
 }
 
+const upstreamFailed = (r: RequestLog) => r.status !== 200 && r.status !== 429 && r.status !== 529;
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -1716,9 +1725,10 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         rate_limited: list.filter((r) => r.status === 429).length,
         // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
         overloaded: list.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
-        // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error`.
-        undecodable: list.filter((r) => r.errorCode === 'stream_undecodable').length,
-        upstream_error: list.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
+        // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
+        // the same status filter, so the error split that subtracts it never reads negative.
+        undecodable: list.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+        upstream_error: list.filter(upstreamFailed).length,
       },
       // Every attempt but the last one moved the request to another member.
       failovers: list.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),

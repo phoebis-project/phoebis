@@ -18,6 +18,19 @@ const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.c
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 
+/** The engine's pin key, so a session's subagents on another model, or on another account, hold pins of their own. */
+const pinOf = (r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
+/** The pins the story's routed requests wrote, each under the session the router routed it by. */
+const routedPinsOf = (s) => new Set(s.requests.filter((r) => r.kind !== 'probe' && r.sessionId !== null).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`));
+/**
+ * The recipes whose pins the router holds: every live one, and a released one whose routed request the ledger holds,
+ * since the mod's release ends the keepalive record and leaves the pin that request wrote.
+ */
+const pinnedRecipesOf = (s, recipes) => {
+  const routed = routedPinsOf(s);
+  return recipes.filter((r) => r.agentState !== 'released' || routed.has(pinOf(r)));
+};
+
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
@@ -415,9 +428,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`each pool's active pins count one pin per key, session, agent and model under its keys, its members' sum to it, and the dashboard's are their sum, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
-    const live = (await s.api.listKeepaliveRecipes()).filter((r) => r.agentState !== 'released');
-    // The engine's pin key, so a session's subagents on another model, or on another account, hold pins of their own.
-    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`)).size;
+    const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes());
+    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size;
     for (const p of s.pools) {
       assert.equal(p.activePins, pins(p.id), `${p.id}'s active pins`);
       for (const m of p.members) assert.equal(m.activePins, pins(p.id, m.accountId), `${p.id}'s ${m.accountId}`);
@@ -430,13 +442,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`two sessions on one account and one model hold two pins, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
-    const live = (await s.api.listKeepaliveRecipes()).filter((r) => r.agentState !== 'released' && poolOf.get(r.keyId) === 'all' && r.accountId === 'primary');
+    const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes()).filter((r) => poolOf.get(r.keyId) === 'all' && r.accountId === 'primary');
     // The desktop sessions on primary whose main runs Fable share the account, the agent id and the model.
     const pair = new Set(live.filter((r) => r.keyId === 'desktop' && r.agentId === 'main' && r.model === 'claude-fable-5-1').map((r) => r.sessionId));
     assert.ok(pair.size >= 2, `${pair.size} such sessions`);
     const pool = s.pools.find((p) => p.id === 'all');
     const member = pool.members.find((m) => m.accountId === 'primary');
-    const perSession = new Set(live.map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`)).size;
+    const perSession = new Set(live.map(pinOf)).size;
     const merged = new Set(live.map((r) => `${r.keyId}|${r.agentId}|${r.model}`)).size;
     assert.ok(merged <= perSession - (pair.size - 1), 'merged across sessions the count would lose a pin per session past the first');
     assert.equal(member.activePins, perSession, "primary's figure holds one pin per session of them");
@@ -474,19 +486,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
   });
 
-  test(`the all-released session lists every record released and keeps its row, at ${at}`, async () => {
+  test(`the all-released session lists every record released, keeps its row and the pin its one request wrote, at ${at}`, async () => {
     const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
     const bySession = new Map();
-    for (const r of await s.api.listKeepaliveRecipes()) bySession.set(`${r.keyId}|${r.sessionId}`, [...(bySession.get(`${r.keyId}|${r.sessionId}`) ?? []), r]);
+    for (const r of recipes) bySession.set(`${r.keyId}|${r.sessionId}`, [...(bySession.get(`${r.keyId}|${r.sessionId}`) ?? []), r]);
     const whole = [...bySession.values()].filter((rows) => rows.every((r) => r.agentState === 'released'));
     assert.equal(whole.length, 1, 'one session the mod released whole');
     const [rows] = whole;
-    assert.ok(rows.some((r) => r.agentId === 'main'), 'main among them');
+    const main = rows.find((r) => r.agentId === 'main');
+    assert.ok(main !== undefined, 'main among them');
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
     assert.equal(row.agents, rows.length, 'the row counts every record');
-    assert.notEqual(row.keepalive.state, null, 'the session still holds its recipe state');
+    // The engine's session view takes the state off main's record, which the release moved to released.
+    assert.deepEqual([row.keepalive.state, row.keepalive.cause], ['released', 'agent_released'], "the row reads main's lifecycle word and cause");
+    const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
+    assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
+    assert.deepEqual([row.pinned, row.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
+    assert.ok(routedPinsOf(s).has(pinOf(main)), "main's pin is the one its request wrote");
+    const poolId = s.keys.find((k) => k.id === row.keyId).poolId;
+    const counted = new Set(pinnedRecipesOf(s, recipes).filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === main.accountId).map(pinOf));
+    const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === main.accountId);
+    assert.ok(counted.has(pinOf(main)), 'the release left the pin in place');
+    assert.equal(member.activePins, counted.size, `${main.accountId}'s figure counts it`);
   });
 
   test(`no sample of legacy is newer than its last clean poll, at ${at}`, async () => {
@@ -1036,6 +1060,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const fable = requests.filter((r) => r.canonicalModel === 'claude-fable-5-1' && r.capturedBodies && s.lib.fundingOf(r.attempts.at(-1) ?? null) === 'plan');
     assert.ok(fable.length > 0, 'the first page holds one');
     assert.ok((await s.api.getCapturedBodies(fable[0].id)) !== null, 'its bodies were captured');
+  });
+
+  test(`an answered attempt names its service tier on an inference and none on a token count, whose answer carries no usage, at ${at}`, async () => {
+    const s = await story;
+    const answered = s.requests.flatMap((r) => r.attempts.filter((a) => a.upstreamStatus === 200).map((a) => ({ id: r.id, kind: r.kind, tier: a.serviceTier })));
+    const counts = answered.filter((a) => a.kind === 'count_tokens');
+    assert.ok(counts.length > 0, 'the story holds an answered token count');
+    assert.deepEqual(counts.filter((a) => a.tier !== null).map((a) => a.id), [], 'a token count reads no tier');
+    assert.deepEqual(answered.filter((a) => a.kind === 'inference' && a.tier === null).map((a) => a.id), [], 'an answered inference names its tier');
   });
 
   test(`every rollup's funding reads the answer that served its requests, an API key account's answer filing under billed and a request no attempt served under plan, at ${at}`, async () => {

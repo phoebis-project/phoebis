@@ -486,11 +486,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 19, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
-  // nightly, and the sessions route answers 19 rows, so a hero counting rows or a note counting every row's account
-  // reads otherwise.
+  // The story's pools hold 20, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
+  // nightly, over 12 pinned rows, so a hero counting the pinned rows or a note counting every row's account reads
+  // otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '19' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '20' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -2963,7 +2963,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -5539,7 +5539,7 @@ localStorage.removeItem('phoebis.expertView');
 // As on the pools, the key dialog checks below read the expert fields too.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
-expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a1c4e', 'phoebis-c41d7b09', 'phoebis-19e7f6d4', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 columnsMarked('/keys every header cell is fit or fill, and Name, Models and Status are the fill columns', m.container.querySelector('.card--table table'), ['Name', 'Models', 'Status']);
 {
   // A fill column cuts its lines with an ellipsis, so each line under a name, the Models summary of a key without
@@ -8094,7 +8094,7 @@ m.unmount();
       name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
-        hour.rows.length === 49 && hour.nextCursor === null && drawn.length === 25 &&
+        hour.rows.length === 51 && hour.nextCursor === null && drawn.length === 25 &&
         JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
@@ -8376,7 +8376,7 @@ m.unmount();
   const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
   {
     // The list ends an hour back, so the first poll, whose range ends now, finds the whole last hour arrived: more
-    // rows than one page holds.
+    // rows than two pages hold.
     const from = CLOCK_ORIGIN - 2 * HOUR;
     const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(CLOCK_ORIGIN - HOUR)}`, { now: CLOCK_ORIGIN });
     const listed = trs(page).length;
@@ -8394,7 +8394,7 @@ m.unmount();
     results.push({
       name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
       ok:
-        listed > 0 && arrived > 25 && sent.length === 2 && sent[0].cursor === undefined && typeof sent[1].cursor === 'string' && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        listed > 0 && arrived > 50 && sent.length === 3 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
         JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
       missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
     });
@@ -9668,8 +9668,8 @@ m.unmount();
       ok: opened === 1 && shut === 0 && paged === 0 && back === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
       missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, back on the first page ${back}, chevrons ${chevrons}`],
     });
-    // Every decision and every event of the default hour opens, the second page's rows and then the first's, and the
-    // cards and details join the scan.
+    // Every decision and every event of the default hour opens, the second and third pages' rows and then the first's,
+    // and the cards and details join the scan.
     const openAll = async () => {
       const rows = trs(page).filter((tr) => tr.classList.contains('routing-log__row'));
       for (const tr of rows) tr.querySelector('td.routing-log__kind')?.click();
@@ -9679,13 +9679,16 @@ m.unmount();
       return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-strip, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
     };
     const second = await openAll();
+    pager('Next page')?.click();
+    await page.settle(300);
+    const third = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
     await page.settle(300);
     const firstPage = await openAll();
     results.push({
       name: '/routing-log every row of a page opens to its card or its detail',
-      ok: [second, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + firstPage.rows === hour.rows.length,
-      missing: [JSON.stringify({ firstPage, second }), `${hour.rows.length} rows in the hour`],
+      ok: [second, third, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, second, third }), `${hour.rows.length} rows in the hour`],
     });
     page.unmount();
   }
@@ -12091,13 +12094,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   });
   results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 19, missing: [String(rows().length)] });
   {
-    // The session the mod released whole keeps its row and its recipe state, though its expanded detail draws no line.
+    // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
+    // draws no line.
     const whole = new Map();
     for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
     const released = [...whole].filter(([, all]) => all).map(([id]) => id);
     const row = rows().find((r) => released.includes(cell(r, 'Session')?.getAttribute('title') ?? ''));
     const badge = row ? cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined;
-    results.push({ name: '/sessions lists the session the mod released whole with its state badge', ok: released.length === 1 && badge === 'idle', missing: [released.join(',') || 'no such session', String(badge)] });
+    results.push({ name: '/sessions lists the session the mod released whole with its released badge', ok: released.length === 1 && badge === 'released', missing: [released.join(',') || 'no such session', String(badge)] });
   }
   await showColumn(m, 'Next probe');
   const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');

@@ -309,6 +309,17 @@ test('an hour of two requests in different bands sums the per-request shares at 
   }
 });
 
+test('a rollup counts an undecodable stream inside the upstream errors it is part of, so the error split never reads negative', () => {
+  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1);
+  assert.ok(template, 'the story holds a single-attempt answer');
+  const rowOf = (status, id) => ({ ...template, errorCode: 'stream_undecodable', id, outcome: status === 200 ? 'succeeded' : 'failed', status });
+  // The relay's 502 is the undecodable stream the ledger files. The same code under a 200 is not an upstream error.
+  const hours = d.rollups([rowOf(502, 'req_cut'), rowOf(200, 'req_whole')]);
+  const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
+  assert.deepEqual([total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 1], 'the 502 alone counts, once under each');
+  for (const h of hours) assert.ok(h.requests.undecodable <= h.requests.upstream_error, `${h.hour} reads ${h.requests.undecodable} undecodable of ${h.requests.upstream_error} upstream errors`);
+});
+
 const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
 const SIZED_ACCOUNTS = [sizedAccount('stored', 'default_claude_max_20x'), sizedAccount('bare', 'claude_max_20x'), sizedAccount('team', 'claude_team'), sizedAccount('key', null)];
 const SIZED_COSTS = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
