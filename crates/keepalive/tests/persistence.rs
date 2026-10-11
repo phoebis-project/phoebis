@@ -6,7 +6,7 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
 use fake_upstream::Respond;
@@ -125,7 +125,8 @@ fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
 /// Runs `work` to its end on a thread of its own. A save held in the store's busy wait keeps the store's connection,
 /// and a runtime task that reads the store (the relay's catalog refresh does every few milliseconds) blocks the
 /// worker it runs on behind it, so a flush or a shutdown left to the workers might never get to run while the test
-/// holds the registry.
+/// holds the registry. The blocked worker can leave tokio's timer undriven too, so the test's own waits inside the hold
+/// sleep on its thread's clock rather than on a tokio timer.
 fn on_own_thread(
     work: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
@@ -1290,6 +1291,47 @@ async fn settle_ledger(r: &Rig, marks: &mut u64) {
     .await;
 }
 
+/// `settle_ledger` on the test thread's own clock, for a wait inside the held registry, and kept going until at least
+/// `hold` has passed. The case calling it runs `multi_thread`, so its body runs on the thread that called `block_on`
+/// while the ledger writer runs on the workers, and a tokio timer inside the hold can stall while a worker blocks on
+/// the store's mutex.
+fn settle_ledger_in_hold(r: &Rig, marks: &mut u64, hold: Duration) {
+    let since = Instant::now();
+    *marks += 1;
+    r.ledger.record(Record::Keepalive(KeepaliveDelta {
+        at: NOW,
+        key_id: "desktop".into(),
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        canonical_model: "marker".into(),
+        kind: "marker".into(),
+        probes_skipped: 1,
+        ..Default::default()
+    }));
+    let want = *marks;
+    let deadline = Duration::from_secs(30);
+    loop {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let landed: u64 = rows
+            .iter()
+            .filter(|row| row.kind == "marker")
+            .map(|row| row.probes_skipped)
+            .sum();
+        if landed == want && since.elapsed() >= hold {
+            return;
+        }
+        assert!(
+            since.elapsed() < deadline,
+            "the marker never landed within {deadline:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The wasted probes the ledger holds right now, by reason, read once.
 fn wasted_now(r: &Rig) -> BTreeMap<String, u64> {
     let rows =
@@ -1418,14 +1460,22 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     // The load's save has read its batch and waits on the held registry.
     second.persist_reached(1, 1).await;
     let mut marks = 0;
-    settle_ledger(&r, &mut marks).await;
+    settle_ledger_in_hold(&r, &mut marks, Duration::ZERO);
     assert_eq!(
         wasted_now(&r),
         BTreeMap::new(),
         "nothing reaches the ledger while the registry still holds the probe"
     );
+    // The pause is the hold across one catalog refresh tick (every 20 ms in the rig), so a wait in the hold that runs
+    // on tokio's timer fails the case on every run rather than by chance.
+    settle_ledger_in_hold(&r, &mut marks, Duration::from_millis(60));
     held.execute_batch("COMMIT").unwrap();
     load.join().unwrap();
+    assert_eq!(
+        saved_field(&r, "session", "main", "unanswered"),
+        serde_json::json!([]),
+        "the load's save landed once the registry was free"
+    );
     assert_eq!(
         wasted(&r, 1).await,
         BTreeMap::from([("expired".to_string(), 1)]),
