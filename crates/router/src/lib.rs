@@ -7,6 +7,7 @@ pub mod config;
 pub mod health;
 pub mod init;
 pub mod listen;
+pub mod recover_key;
 pub mod status;
 pub mod tls;
 pub mod tls_reload;

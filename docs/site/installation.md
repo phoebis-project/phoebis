@@ -53,9 +53,11 @@ target/release/phoebis
 ```
 
 `init` writes the bootstrap file, the storage key beside it and an empty `data/` directory, and prints the admin secret
-once as `PHOEBIS_ADMIN_SECRET=<secret>` ([commands](#commands)). The key is created once and never replaced: every
-stored credential is sealed under it and there is no re-key. `PHOEBIS_CONFIG` names the file for every `phoebis` call in
-that shell. `init` refuses to replace a key, and refuses a data directory that already holds a registry.
+once as `PHOEBIS_ADMIN_SECRET=<secret>` ([commands](#commands)). The key is created once and every stored credential is
+sealed under it. There is no re-key: after a lost key, `phoebis recover-key` discards what the old key sealed and seals
+the registry under a new one ([the storage key](operations.md#the-storage-key)). `PHOEBIS_CONFIG` names the file for
+every `phoebis` call in that shell. `init` refuses to replace a key, and refuses a data directory that already holds a
+registry.
 
 ## Install as a service
 
@@ -79,7 +81,7 @@ credential in `router.sqlite`, so it stays out of any backup that carries the da
 
 `deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`;
 `phoebis` never reads the environment file itself, systemd hands the values over. `TimeoutStopSec=40` covers the
-30-second drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
+35-second shutdown budget, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
 
 The file `init` wrote names your listeners. To reach the console or the proxy from another machine, pass
 `--admin-listen` or `--proxy-listen`, with `--admin-cert` and `--admin-key` or `--proxy-cert` and `--proxy-key` for TLS,
@@ -134,7 +136,7 @@ mode, and that uid is the one the process runs as. Set `image:` in `compose.yaml
 docker compose up -d
 docker compose ps            # "healthy" once phoebis health reads the router as ready
 docker compose logs -f phoebis
-docker compose down          # SIGTERM, then up to 40 seconds for the 30-second drain
+docker compose down          # SIGTERM, then up to 40 seconds for the 35-second shutdown budget
 ```
 
 The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
@@ -174,8 +176,9 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 
 | Command | Effect |
 | --- | --- |
-| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
+| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
+| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary: exit 0 once the accounts are marked. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
@@ -227,11 +230,14 @@ spaces)`.
 An unreadable, mismatched, expired or not-yet-valid certificate pair fails the check with exit 1 and the line the start
 prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listeners)).
 
-On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever is
-still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
-listeners whatever is left of the one budget rather than a fresh 30 seconds of their own. After the listeners drain, a
-credential refresh still in flight is waited for up to its own 30-second timeout, so a token the upstream already
-rotated is stored rather than lost to the next start's quarantine.
+On shutdown, Ctrl-C or SIGTERM, the router stops under one budget of 35 seconds, which its phases share in order: the
+keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still running, the catalog's
+retries, a credential refresh still in flight, the ledger's last writes and then the routing state's. Each phase takes
+what the ones before it left, so a slow keepalive shutdown leaves the listeners less rather than a fresh budget of their
+own, and a phase still running when the budget is spent is ended. A credential refresh still in flight is waited for up
+to its own 30-second timeout or what is left of the budget, whichever is shorter, so a token the upstream already
+rotated is stored rather than lost to the next start's quarantine. The session memory's last flush and the store's close
+run whatever the budget reads.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
 the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
@@ -805,13 +811,13 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
-| Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
 | Header read timeout | 30 seconds for a request head on all three listeners, after the TLS handshake's own 30. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
+| Shutdown budget | 35 seconds for the whole stop, shared by its phases in order. A phase still running when it is spent is ended. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |

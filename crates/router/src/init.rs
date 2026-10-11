@@ -863,7 +863,8 @@ fn admin_secret() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn owner_ids(user: &str) -> Result<(u32, u32), InitError> {
+/// `--owner`'s uid and primary gid, refused off root, for `init` and `recover-key` alike.
+pub(crate) fn owner_ids(user: &str) -> Result<(u32, u32), InitError> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(InitError::OwnerNeedsRoot);
     }

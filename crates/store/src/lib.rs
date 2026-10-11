@@ -208,6 +208,17 @@ pub struct PurgedHistory {
     pub changes: u64,
 }
 
+/// What a key recovery discards, printed as counts before the operator confirms and after the transaction lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SealedCounts {
+    pub api_key_accounts: u64,
+    pub api_key_secrets: u64,
+    pub credentials: u64,
+    pub oauth_accounts: u64,
+    pub open_refresh_attempts: u64,
+    pub recipe_bodies: u64,
+}
+
 /// What `check-config` learns about a registry file without opening it as the router does.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CanaryRead {
@@ -900,6 +911,113 @@ impl HoldGate {
         *self.released.lock().expect(HOLD_POISONED) = true;
         self.opened.notify_all();
     }
+}
+
+/// The registry opened for a key recovery: the process lock taken (so a running router refuses the open with
+/// `Locked`), the schema prepared, and no canary proof, since the key is the one thing being replaced.
+pub struct RecoveryStore {
+    conn: Connection,
+    _lock: lock::ProcessLock,
+}
+
+impl Store {
+    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is
+    /// refused rather than created, since a recovery has nothing to discard in it and SQLite would create it at the
+    /// umask's mode.
+    pub fn open_for_recovery(db_path: &Path) -> Result<RecoveryStore, StoreError> {
+        let process_lock = lock::acquire(permissions::data_dir_of(db_path))?;
+        let mut conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        prepare(&mut conn, true)?;
+        Ok(RecoveryStore {
+            conn,
+            _lock: process_lock,
+        })
+    }
+}
+
+impl RecoveryStore {
+    /// Whether `key` opens the stored canary. Without a canary the sealed rows answer, as the open's one-time proof
+    /// reads them: true when one opens, and false when none does or nothing is sealed, so a recovery over a registry
+    /// holding nothing sealed discards nothing and seals its canary.
+    pub fn key_matches(&self, key: &StorageKey) -> Result<bool, StoreError> {
+        if let Some(value) = stored_canary(&self.conn)? {
+            return Ok(canary_matches(key, &value));
+        }
+        Ok(sealed_rows_open_under(&self.conn, key)? == Some(true))
+    }
+
+    pub fn sealed_counts(&self) -> Result<SealedCounts, StoreError> {
+        sealed_counts_on(&self.conn)
+    }
+
+    /// One transaction: the canary, the credentials, the API-key secrets and the recipe bodies go, every oauth
+    /// account reads `disconnected` and every api_key account `unpaired` under `cause` with its lifecycle
+    /// generation and revision stepped, open and uncertain refresh attempts settle `failed` with the detail
+    /// `disconnected`, and a canary is sealed under `key`.
+    ///
+    /// The operations page prints these statements as the sequence an operator runs by hand, so the two change
+    /// together.
+    pub fn discard_sealed(
+        &mut self,
+        key: &StorageKey,
+        cause: StateCause,
+    ) -> Result<SealedCounts, StoreError> {
+        let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+        // No `Store` clock exists here: the wall clock stamps the rows, as it does every write outside a test rig.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counts = sealed_counts_on(&tx)?;
+        tx.execute("DELETE FROM meta WHERE key = 'storage_key_canary'", [])?;
+        tx.execute("DELETE FROM credentials", [])?;
+        tx.execute("DELETE FROM api_key_secrets", [])?;
+        tx.execute(
+            "UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END, \
+             state_cause = ?1, lifecycle_generation = lifecycle_generation + 1, revision = revision + 1, \
+             updated_at = ?2",
+            params![cause, now],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE refresh_attempts SET resolved_at = ?1, outcome = 'failed', detail = 'disconnected' \
+                 WHERE {PENDING_WHERE}"
+            ),
+            params![now],
+        )?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1)",
+            params![encode_canary(&nonce, &sealed)],
+        )?;
+        tx.commit()?;
+        Ok(counts)
+    }
+}
+
+fn sealed_counts_on(conn: &Connection) -> Result<SealedCounts, StoreError> {
+    let count = |sql: &str| -> Result<u64, StoreError> {
+        let n: i64 = conn.query_row(sql, [], |row| row.get(0))?;
+        Ok(n.max(0) as u64)
+    };
+    Ok(SealedCounts {
+        api_key_accounts: count("SELECT COUNT(*) FROM accounts WHERE kind = 'api_key'")?,
+        api_key_secrets: count("SELECT COUNT(*) FROM api_key_secrets")?,
+        credentials: count("SELECT COUNT(*) FROM credentials")?,
+        oauth_accounts: count("SELECT COUNT(*) FROM accounts WHERE kind = 'oauth'")?,
+        open_refresh_attempts: count(&format!(
+            "SELECT COUNT(*) FROM refresh_attempts WHERE {PENDING_WHERE}"
+        ))?,
+        recipe_bodies: count(
+            "SELECT COUNT(*) FROM keepalive_agents WHERE body_sealed IS NOT NULL",
+        )?,
+    })
 }
 
 /// Proves the key against the registry before any sealed row is read, so a wrong key refuses the open

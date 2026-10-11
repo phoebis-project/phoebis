@@ -1,6 +1,7 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! have it re-read its listeners' certificate pairs, or copy both databases into a backup.
+//! have it re-read its listeners' certificate pairs, copy both databases into a backup, or discard a stopped
+//! registry's secrets after a lost storage key.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient, ClientError};
 use phoebis_router::backup::{self, BackupArgs};
+use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls_reload::{self, TlsReloadArgs};
 use phoebis_router::{init, tls};
@@ -48,6 +50,8 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
+    /// Discard the registry's secrets after a lost storage key and seal a new canary, on a stopped registry.
+    RecoverKey(RecoverKeyArgs),
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.
     Status(StatusArgs),
@@ -299,6 +303,7 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        Some(Command::RecoverKey(args)) => run_recover_key(&cli.config, &args),
         Some(Command::Status(args)) => run_status(&cli.config, &args),
         Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
@@ -369,6 +374,17 @@ fn run_backup(config_path: &Path, args: &BackupArgs) -> ! {
             std::process::exit(1)
         }
     }
+}
+
+/// `phoebis recover-key`. It never returns: it exits with the run's answer as `backup` does.
+fn run_recover_key(config_path: &Path, args: &RecoverKeyArgs) -> ! {
+    let code = recover_key::run(
+        config_path,
+        args,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout().lock(),
+    );
+    std::process::exit(code)
 }
 
 /// `phoebis status`. It never returns: the result is printed and the process exits while the runtime is still alive,

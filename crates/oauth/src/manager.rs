@@ -532,6 +532,11 @@ impl CredentialManager {
     /// and its log line, as an unjoined refresh does. The flag is set under the `inflight` lock before the set is
     /// taken, so a caller that asks afterwards joins a refresh in the set or is refused with `ShuttingDown`.
     pub async fn drain(&self) {
+        self.drain_within(REFRESH_TIMEOUT).await;
+    }
+
+    /// `drain` bounded by the shorter of `within` and `REFRESH_TIMEOUT`, for a shutdown whose budget has less left.
+    pub async fn drain_within(&self, within: Duration) {
         let mut running: FuturesUnordered<RefreshFuture> = {
             let inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
             self.inner.closing.store(true, Ordering::SeqCst);
@@ -540,7 +545,7 @@ impl CredentialManager {
         if running.is_empty() {
             return;
         }
-        let joined = tokio::time::timeout(REFRESH_TIMEOUT, async {
+        let joined = tokio::time::timeout(within.min(REFRESH_TIMEOUT), async {
             while running.next().await.is_some() {}
         })
         .await;

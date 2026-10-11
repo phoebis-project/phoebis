@@ -28,9 +28,10 @@ use tokio::task::JoinHandle;
 use crate::config::{Config, RoutingConfig, UpstreamConfig};
 use crate::{listen, tls};
 
-/// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
-/// going to end sooner because the process keeps waiting.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole shutdown's budget: every bounded phase takes what remains of it in order, so a phase that overran
+/// leaves the next less and the process ends inside the unit's stop grace whatever stalled. The session memory's
+/// flush and the store close run whatever the clock reads.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(35);
 
 /// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -314,6 +315,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let memory_flush = relay
         .clone()
         .spawn_memory_flush(phoebis_relay::MEMORY_FLUSH_INTERVAL);
+    // Read at the start beside the keepalive's timing, so a test's variable has to outlive the start alone.
+    let budget_total = shutdown_budget();
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
@@ -515,7 +518,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )),
         proxy_stop,
         ListenLimits {
-            drain_timeout: DRAIN_TIMEOUT,
+            drain_timeout: SHUTDOWN_BUDGET,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
@@ -526,7 +529,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         admin_app,
         stop_rx.clone(),
         ListenLimits {
-            drain_timeout: DRAIN_TIMEOUT,
+            drain_timeout: SHUTDOWN_BUDGET,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
@@ -547,7 +550,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ),
         stop_rx,
         ListenLimits {
-            drain_timeout: DRAIN_TIMEOUT,
+            drain_timeout: SHUTDOWN_BUDGET,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
         },
@@ -583,11 +586,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         anyhow!("the {listener} listener ended on its own: {result:?}")
     });
     tracing::info!("shutting down");
+    let budget = ShutdownBudget::start(budget_total);
     let _ = stop.send(true);
     // The attention arm's state dies with the process, so nothing the drain completes is worth reading into it. The
     // stop is synchronous and sits outside the timed block, so it has run whatever the block does.
     attention_handles.stop();
-    let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
+    let listeners = async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
         // which the drain is about to drop. The engine quiesces first, so no update lands after the state it saves,
         // then drains its probes, saves, and clears last, so the clear takes nothing unsaved. The flusher is joined
@@ -597,26 +601,23 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         if let Err(error) = keepalive_flush.await {
             tracing::warn!(%error, "the keepalive's flush task did not end cleanly");
         }
+        tracing::info!("the keepalive's last flush ran");
         join_remaining(
             &mut ended,
             [&mut proxy, &mut admin_server, &mut metrics_server],
         )
         .await;
-    })
-    .await
-    {
-        Ok(()) => drained(ended[0].take().expect("every slot is filled by now"))
+    };
+    let served = match budget.bound("listeners", listeners).await {
+        Some(()) => drained(ended[0].take().expect("every slot is filled by now"))
             .and(drained(
                 ended[1].take().expect("every slot is filled by now"),
             ))
             .and(drained(
                 ended[2].take().expect("every slot is filled by now"),
             )),
-        Err(_) => {
-            tracing::warn!(
-                seconds = DRAIN_TIMEOUT.as_secs(),
-                "requests were still in flight when the drain window closed"
-            );
+        None => {
+            tracing::warn!("requests were still in flight when the drain window closed");
             proxy.abort();
             admin_server.abort();
             metrics_server.abort();
@@ -639,14 +640,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // The listeners are done, while a relayed body runs on its own task. A cut connection drops its body channel's
     // receiver, so the body task ends at its next send and publishes its completion, which the ledger and the
     // memory below are still alive to take. A body task blocked on an upstream read waits for the relay's idle
-    // timeout, and the margin is what a shutdown gives it.
-    let margin = DRAIN_TIMEOUT + Duration::from_secs(5);
-    if tokio::time::timeout(margin, relay.drain_bodies())
-        .await
-        .is_err()
-    {
-        tracing::warn!("body tasks were still running past the drain margin");
-    }
+    // timeout, and what the listeners left of the budget is what a shutdown gives it.
+    budget.bound("bodies", relay.drain_bodies()).await;
     // The periodic flusher is aborted and joined, and a flush it had in flight runs to its end on the
     // blocking pool under the memory's flush lock, so the last flush queues behind it and an older batch
     // never follows a newer one to the store. The last flush lands after the listeners drained, so every
@@ -660,30 +655,31 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         }
     }
     relay.flush_memory().await;
+    tracing::info!("the session memory's last flush ran");
     // Idle upstream connections live in the pool, so nothing closes them until the last holder lets go.
     drop(relay);
     // Stopped ahead of the tracked fills and retries below, so no tick still due starts a fill after they join.
     refresh.abort();
     // A retry sleeping its backoff would otherwise hold the store past this function's return.
-    catalog.shutdown().await;
+    budget.bound("catalog", catalog.shutdown()).await;
     drop(catalog);
     // A refresh the usage service or the catalog started dies with the runtime otherwise, and the next start
     // quarantines the account for a lost answer that was only unjoined. The drain closes the manager before it
     // takes its set, so a refresh asked for later, as the ledger's quota poll may until the ledger stops below, is
-    // refused rather than started outside the set.
-    refreshes.drain().await;
+    // refused rather than started outside the set. Its own bound counts inside what the budget has left.
+    refreshes.drain_within(budget.remaining()).await;
     // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
     // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its
     // stop watch before the router task, the last writer of the registry, shuts down.
     drop(bus);
     // The ledger's event mirror reads routing state, so it stops before the task that answers it.
-    if let Err(error) = ledger.shutdown().await {
+    if let Some(Err(error)) = budget.bound("ledger", ledger.shutdown()).await {
         tracing::warn!(%error, "the ledger task had already stopped");
     }
     drop(ledger_db);
     // The router task is the last writer: a pin or a cooldown the relay acknowledged reaches the store while
     // this waits, rather than dying with the process.
-    if let Err(error) = router_task.shutdown().await {
+    if let Some(Err(error)) = budget.bound("router", router_task.shutdown()).await {
         tracing::warn!(%error, "the router task had already stopped");
     }
     drop(pool);
@@ -792,6 +788,56 @@ async fn join_remaining(
             *slot = Some(handle.await);
         }
     }
+}
+
+/// The shutdown's one deadline, which every bounded phase reads from the same start.
+struct ShutdownBudget {
+    deadline: tokio::time::Instant,
+}
+
+impl ShutdownBudget {
+    fn start(total: Duration) -> ShutdownBudget {
+        ShutdownBudget {
+            deadline: tokio::time::Instant::now() + total,
+        }
+    }
+
+    /// What is left, zero once the deadline passed.
+    fn remaining(&self) -> Duration {
+        self.deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+    }
+
+    /// `phase` bounded by the deadline: `None` when it ran out, with one warn line naming the phase and the seconds
+    /// it was given. The future is polled once before the deadline is read, so a phase that is done at its first poll
+    /// still answers once nothing remains, and a stop it starts there is at least asked for.
+    async fn bound<F: Future>(&self, phase: &'static str, future: F) -> Option<F::Output> {
+        let given = self.remaining();
+        match tokio::time::timeout_at(self.deadline, future).await {
+            Ok(output) => Some(output),
+            Err(_) => {
+                tracing::warn!(
+                    phase,
+                    seconds = given.as_secs(),
+                    "the shutdown budget ran out before this phase ended, so it was cut"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// The budget a shutdown starts with. Under the `debug-hooks` feature, which only the router's own test build turns
+/// on, `PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS` replaces it, so an end-to-end case sees a stalled stop end in seconds.
+fn shutdown_budget() -> Duration {
+    #[cfg(feature = "debug-hooks")]
+    if let Some(seconds) = std::env::var("PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_secs(seconds);
+    }
+    SHUTDOWN_BUDGET
 }
 
 fn resolver_for(upstream: &UpstreamConfig) -> Resolver {
@@ -1254,5 +1300,53 @@ models:
         let _ = tx_metrics.send(());
         join_remaining(&mut ended, [&mut proxy, &mut admin, &mut metrics]).await;
         assert!(ended.iter().all(Option::is_some), "{ended:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_shutdown_phase_takes_what_remains_of_one_budget_from_its_start() {
+        let start = tokio::time::Instant::now();
+        let budget = ShutdownBudget::start(Duration::from_secs(10));
+        let phase = |seconds| tokio::time::sleep(Duration::from_secs(seconds));
+        assert_eq!(budget.bound("listeners", phase(3)).await, Some(()));
+        assert_eq!(budget.remaining(), Duration::from_secs(7));
+        assert_eq!(budget.bound("bodies", phase(3)).await, Some(()));
+        assert_eq!(budget.remaining(), Duration::from_secs(4));
+        assert_eq!(
+            budget.bound("catalog", phase(5)).await,
+            None,
+            "the third phase gets the four seconds the first two left, not a five of its own"
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(10));
+        assert_eq!(budget.remaining(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shutdown_phase_that_overruns_leaves_the_next_less_down_to_zero() {
+        let start = tokio::time::Instant::now();
+        let budget = ShutdownBudget::start(Duration::from_secs(10));
+        let phase = |seconds| tokio::time::sleep(Duration::from_secs(seconds));
+        assert_eq!(budget.bound("listeners", phase(7)).await, Some(()));
+        assert_eq!(
+            budget.bound("bodies", phase(5)).await,
+            None,
+            "the overrunning phase is cut where the budget ends"
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(10));
+        assert_eq!(budget.remaining(), Duration::ZERO);
+        assert_eq!(
+            budget.bound("catalog", std::future::ready(7)).await,
+            Some(7),
+            "a phase done at its first poll still answers once nothing remains"
+        );
+        assert_eq!(
+            budget.bound("ledger", phase(1)).await,
+            None,
+            "a phase still pending gets nothing once the budget is spent"
+        );
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(10),
+            "a spent budget waits for nothing"
+        );
     }
 }
