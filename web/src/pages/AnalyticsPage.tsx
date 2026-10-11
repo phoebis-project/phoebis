@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { windowId } from '@/api/decode';
+import { iso, windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -16,14 +17,15 @@ import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
-import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
+import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
+import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -36,7 +38,6 @@ type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
-const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
@@ -47,6 +48,8 @@ const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Account', key: '
 // Account first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Account', keyId: 'Key', model: 'Model', poolId: 'Pool' };
+/** The address key each filter dimension travels under. */
+const DIM_KEY: Record<QueryDim, 'accounts' | 'keys' | 'models' | 'pools'> = { accountId: 'accounts', keyId: 'keys', model: 'models', poolId: 'pools' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the account.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
@@ -169,16 +172,21 @@ export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
   // Try again bumps it with the end, so every read keyed on the window runs again even while the clock stands still.
   const [generation, setGeneration] = useState(0);
-  const moveEnd = () => setNow(clock.now());
-  const [range, setRange] = useState<Range>('24h');
-  const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
-  const [groupBy, setGroupBy] = useState<GroupBy>('key');
-  const [userAgentPattern, setUserAgentPattern] = useState('');
-  const [classPattern, setClassPattern] = useState('');
-  const [clientGroups, setClientGroups] = useState('');
+  // Every filter lives in the address, so a link or a reload lands on the same view.
+  const { filters: a, update } = useQueryFilters(ANALYTICS_CODEC);
+  const range = a.range.preset as Range;
+  // The custom inputs edit a draft of the address's pair, kept while it does not end after it starts, which the
+  // address would read as the preset.
+  const pair = `${a.range.from} ${a.range.to}`;
+  const [draft, setDraft] = useState<{ for: string; from: string; to: string } | null>(null);
+  const custom = draft !== null && draft.for === pair ? draft : { from: toLocalInput(Date.parse(a.range.from)), to: toLocalInput(Date.parse(a.range.to)) };
+  const groupBy = a.by as GroupBy;
+  const userAgentPattern = a.agent;
+  const classPattern = a.class;
+  const clientGroups = a.groups;
   const [groupsCut, setGroupsCut] = useState(false);
-  const [includeProbes, setIncludeProbes] = useState(false);
-  const [burnGroup, setBurnGroup] = useState<BurnGroup>('account');
+  const includeProbes = a.probes;
+  const burnGroup = a.burn as BurnGroup;
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
   const location = useLocation();
@@ -193,97 +201,87 @@ export function AnalyticsPage() {
     navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
     scroller()?.scrollTo?.({ top: 0 });
   };
-  const [searchParams] = useSearchParams();
-  const sessionParam = searchParams.get('session');
-  // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too.
-  const sessionKey = sessionParam === null ? null : searchParams.get('key');
+  // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
+  // without one reads unscoped.
+  const sessionKey = a.session && a.key ? a.key : null;
   // The unit is a view control of the three cost-bearing sections, kept in the address beside the session so a link
   // or a reload lands on the position.
-  const unit = unitOf(searchParams);
+  const unit = a.unit as AnalyticsUnit;
   const funding = UNIT_FUNDING[unit];
-  const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
-  const [sessionText, setSessionText] = useState(sessionParam ?? '');
+  const filters = useMemo<Record<Dim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools, sessionId: a.session ? [a.session] : [] }), [a]);
+  const [sessionText, setSessionText] = useState(a.session);
+  // The field follows the address, so a link or the bare Analytics entry replaces what it shows.
+  useEffect(() => setSessionText(a.session), [a.session]);
   const ink = useChartInk();
-  // A committed filter reads the window up to the instant it changed, as a range change does.
-  const commitClass = (next: string) => {
-    setClassPattern(next);
-    moveEnd();
-  };
-  const commitAgent = (next: string) => {
-    setUserAgentPattern(next);
-    moveEnd();
-  };
-  const commitGroups = (next: string) => {
-    setClientGroups(next);
-    moveEnd();
-  };
+  // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
+  // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
+  // a timer, where the end alone would otherwise render apart.
+  const commit = (patch: Partial<AnalyticsAddress>, at = clock.now()) =>
+    flushSync(() => {
+      setNow(at);
+      update(patch);
+    });
+  const commitClass = (next: string) => commit({ class: next });
+  const commitAgent = (next: string) => commit({ agent: next });
+  const commitGroups = (next: string) => commit({ groups: next });
+  // Custom opens on the three days up to now, so the choice holds.
   const changeRange = (next: Range) => {
     if (next === range) return;
-    setRange(next);
-    moveEnd();
+    const at = clock.now();
+    commit({ range: next === 'custom' ? { from: iso(at - 3 * 24 * HOUR), preset: 'custom', to: iso(at) } : { from: '', preset: next, to: '' } }, at);
   };
+  // An edit is the minute the operator typed.
   const changeCustom = (next: { from: string; to: string }) => {
-    setCustom(next);
-    moveEnd();
+    const from = Date.parse(next.from);
+    const to = Date.parse(next.to);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) {
+      setDraft({ ...next, for: pair });
+      return;
+    }
+    setDraft(null);
+    commit({ range: { from: iso(from), preset: 'custom', to: iso(to) } });
   };
-  const changeGroupBy = (next: GroupBy) => {
-    setGroupBy(next);
-    moveEnd();
-  };
+  const changeGroupBy = (next: GroupBy) => commit({ by: next });
   const changeFilter = (dim: QueryDim, next: string[]) => {
-    setFilters({ ...filters, [dim]: next });
-    moveEnd();
+    const patch: Partial<AnalyticsAddress> = {};
+    patch[DIM_KEY[dim]] = next;
+    commit(patch);
   };
-  const changeProbes = (on: boolean) => {
-    setIncludeProbes(on);
-    moveEnd();
-  };
+  const changeProbes = (on: boolean) => commit({ probes: on });
   const changeBurnGroup = (next: BurnGroup) => {
     if (next === burnGroup) return;
-    setBurnGroup(next);
-    moveEnd();
+    commit({ burn: next });
   };
   // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
   const groupsText = useCommittedText(clientGroups, commitGroups);
 
-  // Arriving from a session row carries the session in the query; dropping the
-  // filter clears the parameter too so this does not put it straight back.
-  useEffect(() => {
-    if (sessionParam === null) return;
-    setFilters((f) => (f.sessionId.includes(sessionParam) ? f : { ...f, sessionId: [sessionParam] }));
-    setSessionText(sessionParam);
-  }, [sessionParam]);
-  /** The one writer for the session filter, so the field, the chip, and the query parameter cannot disagree. */
+  /**
+   * The one writer for the session filter, so the field, the chip and the address cannot disagree. A key lifetime
+   * belongs to the session it arrived with, so a new session drops it.
+   */
   const selectSession = (id: string) => {
-    if ((filters.sessionId[0] ?? '') !== id) moveEnd();
-    setFilters((f) => ((f.sessionId[0] ?? '') === id ? f : { ...f, sessionId: id ? [id] : [] }));
     setSessionText(id);
-    if (sessionParam === null || sessionParam === id) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('key');
-    next.delete('session');
-    const search = next.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    if (id === a.session) return;
+    commit({ key: '', session: id });
   };
   /** The one writer for the unit: the default leaves the address clean, and every other parameter stays. */
   const chooseUnit = (next: AnalyticsUnit) => {
     if (next === unit) return;
-    const params = new URLSearchParams(searchParams);
-    if (next === 'all') params.delete('unit');
-    else params.set('unit', next);
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    update({ unit: next });
   };
 
+  // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const span = useMemo(() => {
-    if (range === 'custom') {
-      const from = Date.parse(custom.from);
-      const to = Date.parse(custom.to);
-      if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return { fromMs: now - 24 * HOUR, toMs: now, invalid: true };
-      return { fromMs: from, toMs: Math.min(to, now), invalid: false };
+    if (range !== 'custom') {
+      const { from, to } = addressWindow(a.range, ANALYTICS_RANGES, '24h', now);
+      return { fromMs: from, toMs: to, invalid: false };
     }
-    return { fromMs: now - RANGE_MS[range], toMs: now, invalid: false };
-  }, [range, custom, now]);
+    const from = Date.parse(a.range.from);
+    const to = Date.parse(a.range.to);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return { fromMs: now - 24 * HOUR, toMs: now, invalid: true };
+    return { fromMs: from, toMs: Math.min(to, now), invalid: false };
+  }, [range, a.range, now]);
+  const draftInvalid = draft !== null && draft.for === pair;
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
   const sessionId = filters.sessionId[0] ?? null;
@@ -498,20 +496,14 @@ export function AnalyticsPage() {
           title={`Window ends ${fmtAbsolute(toIso)}`}
           value={range}
           onChange={changeRange}
-          options={[
-            { value: '1h', label: '1h' },
-            { value: '24h', label: '24h' },
-            { value: '7d', label: '7d' },
-            { value: '30d', label: '30d' },
-            { value: 'custom', label: 'Custom' },
-          ]}
+          options={[...ANALYTICS_RANGES.map((r) => ({ value: r.name, label: r.label })), { value: 'custom', label: 'Custom' }]}
         />
         {range === 'custom' && (
           <span className="filters__range">
             <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
             <span className="muted">to</span>
             <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
-            {span.invalid && <span className="pairing__expired">End must be after start. Showing the last 24h.</span>}
+            {span.invalid ? <span className="pairing__expired">End must be after start. Showing the last 24h.</span> : draftInvalid && <span className="pairing__expired">End must be after start.</span>}
           </span>
         )}
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}

@@ -105,7 +105,6 @@ const VIEWS = [
   { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
-  // Last, so every view before it draws the instant it drew without the log in the pass.
   { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
 ];
 
@@ -1756,7 +1755,9 @@ async function keysPageMenus(theme) {
       if (mock && first?.room && first.room.below < first.room.need) say(`at ${width} px the first row's room below, ${first.room.below} px, holds no list`);
       await read(`the last row of ${full}`, 'last');
       const name = ((await rows.last().locator('td').first().locator('b').textContent()) ?? '').trim();
+      // The search lives in the address, written on Enter rather than after the pause the paused clock never reaches.
       await search.fill(name);
+      await search.press('Enter');
       await settle();
       const filtered = await rows.count();
       if (filtered !== 1) say(`at ${width} px the search for ${JSON.stringify(name)} leaves ${filtered} rows, not one`);
@@ -1767,6 +1768,7 @@ async function keysPageMenus(theme) {
       say(`at ${width} px: ${error instanceof Error ? error.message : String(error)}`);
     }
     await search.fill('').catch(() => {});
+    await search.press('Enter').catch(() => {});
     await settle();
   }
   await page.setViewportSize({ height: 800, width: 1280 });
@@ -3211,6 +3213,9 @@ async function requestDrawerCompact(theme) {
       await booted();
     }
     await advance(LOAD_MS);
+    // Another plan-funded Fable answer's drawer would draw the same three chips, so the address names the one measured.
+    const opened = new URL(page.url()).pathname;
+    if (opened !== `/requests/${fable}`) say(`the Fable read opened ${opened}, not /requests/${fable}`);
     for (const { height, width } of [
       { height: 800, width: 1280 },
       { height: 900, width: 1440 },
@@ -5243,7 +5248,7 @@ async function copiedByCommand(button, expected, label, say) {
 
 /**
  * The Settings view's Copy snippet without a clipboard copies the client block beside it. A reload after it brings
- * the accessor back, and the clock stands, so the views after it draw the instants they drew without the measure.
+ * the accessor back for the views after it.
  */
 async function copyFallback(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);

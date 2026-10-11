@@ -6,13 +6,13 @@ import { useSession } from '@/app/session';
 import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDown';
 import { IconInfo } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton } from '@/components/ui/primitives';
+import { MODELS_CODEC } from '@/lib/address';
 import { fmtAbsolute } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
 import { logHref } from '@/lib/routingLog';
 
 const RULE_COLUMNS = 4;
-const DAY = 24 * 3_600_000;
 
 /** Account links separated by commas, each titled when a title is given. */
 function accountLinks(ids: string[], titleOf?: (id: string) => string): ReactNode {
@@ -43,8 +43,9 @@ export function ModelsPage() {
   const tick = useNow(15_000);
   const now = useNow(5_000);
   const keys = useAsync(() => api.listKeys(), []);
-  const [chosen, setChosen] = useState<string | null>(null);
-  const keyId = chosen ?? keys.data?.[0]?.id ?? null;
+  const { filters, update } = useQueryFilters(MODELS_CODEC);
+  const firstKey = keys.data?.[0]?.id;
+  const keyId = (filters.key || firstKey) ?? null;
   const key = keys.data?.find((k) => k.id === keyId) ?? null;
   const models = useAsync(() => (keyId === null ? Promise.resolve(null) : api.getKeyModels(keyId)), [keyId, tick]);
   const state = useAsync(() => api.getModelsState(), [tick]);
@@ -111,7 +112,7 @@ export function ModelsPage() {
         </p>
         {/* The select's wrapper may shrink to nothing, and a two-line description beside it would squeeze it there. */}
         <div style={{ flex: 'none' }}>
-          <Select aria-label="Key" value={keyId ?? ''} disabled={!keys.data?.length} onChange={(e) => setChosen(e.target.value)}>
+          <Select aria-label="Key" value={keyId ?? ''} disabled={!keys.data?.length} onChange={(e) => update({ key: e.target.value === firstKey ? '' : e.target.value })}>
             {(keys.data ?? []).map((k) => (
               <option key={k.id} value={k.id}>
                 {k.name === k.id ? k.id : `${k.name} (${k.id})`}
@@ -162,7 +163,7 @@ export function ModelsPage() {
       )}
       {/* The link reads none of the state above, so a failed read keeps it. */}
       <div className="models__log">
-        <Link className="btn btn--secondary btn--md" to={logHref({ kinds: ['model_rejected', 'model_permitted'], from: now - DAY, to: now })}>
+        <Link className="btn btn--secondary btn--md" to={logHref({ kinds: ['model_rejected', 'model_permitted'], range: '24h' })}>
           View rejections and permits in the routing log
         </Link>
       </div>

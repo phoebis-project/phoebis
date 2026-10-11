@@ -376,7 +376,8 @@ a chip while the account's fast lane cools, naming the reason (rate limited, or 
 
 The Models view lists a key's processed rules with their level and the accounts cooling for a matching model, every
 model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model rejected and
-model permitted rows ([routing](routing.md#model-rules)).
+model permitted rows ([routing](routing.md#model-rules)). The chosen key lives in the page's address as `key`, and the
+first key leaves it out.
 
 ### Requests
 
@@ -411,9 +412,9 @@ then any other name the rows or the address carry, the effort filter picks a lev
 class filter picks a class as the rollups fold it (`unattributed` for a request that sent none, `other` for a value
 outside the identifier charset or past 64 bytes). The search and the two pattern fields apply 400 milliseconds after
 the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the
-page's address, so a reload or a shared link keeps them. An address carrying `from` and `to` as instants lists
-that window under a Custom range entry of the range control, which Refresh reads again and which a preset or Reset
-drops. A filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
+page's address, so a reload or a shared link keeps them: a preset range by its name, a custom range as `from` and `to`.
+The range control offers Custom range with two instant inputs, which Refresh reads again and a preset or Reset drops. A
+filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
 detail, which shows the outcome beneath the status, the user agent,
 the model as the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing
 (asked for a server-side check under an on setting; carried the safeguards member under an off setting, which the
@@ -469,11 +470,13 @@ column with nothing to say shows a dash. Below a window width of 1420 pixels the
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
-page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`
-as ISO instants (`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and
-`session` and `request`. A `kinds` value replaces the default set, so `kinds=probe` lists probe decisions alone. A
-kind this build does not know stays in the address, and the route's refusal shows where the rows would be. A filter
-change returns to the first page, and Refresh reads up to now.
+page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: a preset range
+as its name (`range=3h`, nothing for the last hour), a custom range as `from` and `to`, two UTC instants
+(`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and `session` and
+`request`. A reload under a preset reads the window back from the reload. A `kinds` value replaces the default set, so
+`kinds=probe` lists probe decisions alone. A kind this build does not know stays in the address, and the route's refusal
+shows where the rows would be. A filter change returns to the first page, and Refresh reads a preset up to now and a
+custom range again as it stands.
 
 A request filter opens a line above the table that counts the request's decisions and events and offers three
 widenings: this session (an hour either side of the request's time), this account (a quarter hour either side) and this
@@ -609,7 +612,9 @@ folded token while the request log's matches the raw header, so a pattern over t
 selects nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
 `claude-cli/2.0.*` as two groups, every other agent under `other`. The charts' day ticks print the date in your zone,
 with the time beside a tick where a bucket boundary is not midnight there, and the axis says that days start at 00:00
-UTC.
+UTC. The range, the group-by, every filter, the client groups, the probes switch and the burn grouping live in the
+page's address, a preset range by its name (`range=7d`) and a custom span as its two instants `from` and `to`, so a
+reload or a shared link keeps them. The custom inputs take a pair only while its end is after its start.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside

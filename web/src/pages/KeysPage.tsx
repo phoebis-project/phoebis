@@ -9,11 +9,12 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
-import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { useAsync, useCommittedText, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -41,8 +42,15 @@ export function KeysPage() {
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<'all' | KeyStatus>('all');
+  const { filters, update } = useQueryFilters(KEYS_CODEC);
+  const status = filters.status as 'all' | KeyStatus;
+  const search = useCommittedText(filters.search, (next) => update({ search: next }));
+  // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
+  // the router's usual way.
+  const replaceFromEffect = (patch: Partial<KeysAddress>) => {
+    const next = KEYS_CODEC.toParams({ ...filters, ...patch }).toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { replace: true });
+  };
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
@@ -76,38 +84,29 @@ export function KeysPage() {
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
-  // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
+  // The pool filter is the address: the select reads `?pools=<id>` and writes it back, so a reload keeps the filter and
   // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
   // match it during the read and after a failed one, and the select holds an option for the id: without one it would
   // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
   // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
   // own effect goes first. All pools is the empty string, which no pool id can be, since a pool may be named `all`.
-  const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
-  const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
-  const writePool = (id: string) => {
-    const params = new URLSearchParams(location.search);
-    if (id === '') params.delete('pool');
-    else params.set('pool', id);
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-  };
+  const poolIds = useMemo(() => filters.pools.filter((id) => pools.data === null || poolById.has(id)), [filters.pools, poolById, pools.data]);
+  const poolFilter = poolIds[0] ?? '';
   useEffect(() => {
-    if (poolParam === null || !pools.data || poolById.has(poolParam)) return;
-    const params = new URLSearchParams(location.search);
-    if (params.has('edit')) return;
-    params.delete('pool');
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-  }, [location, navigate, poolById, poolParam, pools.data]);
+    if (filters.pools.length === 0 || !pools.data || poolIds.length > 0) return;
+    if (new URLSearchParams(location.search).has('edit')) return;
+    replaceFromEffect({ pools: [] });
+    // The writer changes on every render, and the address it writes from reruns the effect.
+  }, [filters.pools, location.search, poolIds, pools.data]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
-        if (poolFilter !== '' && k.poolId !== poolFilter) return false;
+        if (poolIds.length > 0 && !poolIds.includes(k.poolId)) return false;
         if (status !== 'all' && k.status !== status) return false;
-        const q = query.trim().toLowerCase();
+        const q = filters.search.trim().toLowerCase();
         return !q || k.name.toLowerCase().includes(q) || k.prefix.includes(q) || k.poolId.includes(q);
       }),
-    [keys.data, poolFilter, query, status],
+    [keys.data, poolIds, filters.search, status],
   );
 
   // `/keys#<key id>` lands on the row once the keys have drawn it, whenever the list arrives after the mount, and once
@@ -123,14 +122,7 @@ export function KeysPage() {
     }
     if (!keys.data?.some((k) => k.id === id)) return;
     if (!rows.some((k) => k.id === id)) {
-      setQuery('');
-      setStatus('all');
-      if (poolParam !== null) {
-        const params = new URLSearchParams(location.search);
-        params.delete('pool');
-        const search = params.toString();
-        navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-      }
+      replaceFromEffect({ pools: [], search: '', status: 'all' });
       return;
     }
     const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
@@ -138,7 +130,8 @@ export function KeysPage() {
     landed.current = location.hash;
     scrollToElement(row);
     row.focus({ preventScroll: true });
-  }, [keys.data, location.hash, location.pathname, location.search, navigate, poolParam, rows]);
+    // The writer changes on every render, and the rows follow every filter it clears, so they rerun the effect.
+  }, [keys.data, location.hash, rows]);
 
   const totals = keys.data
     ? {
@@ -199,15 +192,15 @@ export function KeysPage() {
 
         <Card padded={false} className="card--table">
           <div className="table-toolbar">
-            <SearchInput placeholder="Search keys" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <Select value={status} onChange={(e) => setStatus(e.target.value as 'all' | KeyStatus)} aria-label="Status">
+            <SearchInput placeholder="Search keys" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} />
+            <Select value={status} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
               <option value="all">All statuses</option>
               <option value="active">Active</option>
               <option value="disabled">Disabled</option>
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
             </Select>
-            <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
+            <Select value={poolFilter} onChange={(e) => update({ pools: e.target.value ? [e.target.value] : [] })} aria-label="Pool">
               <option value="">All pools</option>
               {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
               {poolList.map((p) => (

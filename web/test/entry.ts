@@ -2,6 +2,7 @@ export * from '@/api/decode';
 export * from '@/api/fold';
 export * from '@/api/http';
 export { accountColor, accountSlots } from '@/components/charts/theme';
+export * from '@/lib/address';
 export * from '@/lib/analytics';
 export * from '@/lib/attention';
 export * from '@/lib/autoMode';

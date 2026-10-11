@@ -316,11 +316,12 @@ test('PIN_RELEASE_LABEL words every release reason and releaseLabel keeps an unk
 test('each entity links to the route of its kind', () => {
   assert.equal(d.entityHref('account', 'primary'), '/accounts/primary');
   assert.equal(d.entityHref('request', 'req_1d9c3e55-0b2'), '/requests/req_1d9c3e55-0b2');
-  assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions?session=407dd39b-dd60');
+  // The Sessions and Models pages read no key for the entity, so the link opens the view itself.
+  assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions');
   assert.equal(d.entityHref('pool', 'all'), '/pools#all');
   assert.equal(d.entityHref('key', 'laptop'), '/keys#laptop');
   assert.equal(d.entityHref('key', 'ci key/2'), '/keys#ci%20key%2F2');
-  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models?model=claude-sonnet-5');
+  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models');
 });
 
 test('each link in builds its URL with its range', () => {
@@ -331,7 +332,7 @@ test('each link in builds its URL with its range', () => {
   // `to` stops at now.
   assert.deepEqual(d.aroundRequest(ms(14, 25), null, NOW), { from: ms(14, 10), to: NOW });
   assert.deepEqual(d.requestLink('req_1d9c3e55-0b2', at, finished, NOW), { from: at - 15 * MINUTE, request: 'req_1d9c3e55-0b2', to: finished + 15 * MINUTE });
-  assert.deepEqual(d.aroundSubject(null, NOW), { from: NOW - HOUR, to: NOW });
+  assert.deepEqual(d.aroundSubject(null, NOW), { range: '1h' });
   assert.deepEqual(d.aroundSubject(ms(11, 0), NOW), { from: ms(10, 0), to: ms(12, 0) });
   assert.deepEqual(d.aroundSubject(ms(14, 10), NOW), { from: ms(13, 10), to: NOW });
   assert.deepEqual(d.sinceCondition(ms(12, 41), NOW), { from: ms(12, 41), to: NOW });
@@ -348,6 +349,14 @@ test('each link in builds its URL with its range', () => {
   assert.deepEqual(Object.fromEntries(request), { from: '2026-09-16T13:47:10.000Z', request: 'req_1d9c3e55-0b2', to: '2026-09-16T14:17:40.000Z' });
   const session = new URL(d.logHref({ session: '407dd39b', ...d.aroundSubject(ms(11, 0), NOW) }), 'http://phoebis.test').searchParams;
   assert.deepEqual(Object.fromEntries(session), { from: '2026-09-16T10:00:00.000Z', session: '407dd39b', to: '2026-09-16T12:00:00.000Z' });
+});
+
+test('logHref writes a preset by name and a window as two instants', () => {
+  assert.equal(d.logHref({ range: '24h' }), '/routing-log?range=24h');
+  assert.equal(d.logHref({ range: '1h' }), '/routing-log?');
+  assert.equal(d.logHref({ kinds: ['held'], range: '3h' }), '/routing-log?kinds=held&range=3h');
+  const instants = new URL(d.logHref({ from: ms(13, 30) + 123, to: ms(14, 29, 59) + 999 }), 'http://phoebis.test').searchParams;
+  assert.deepEqual(Object.fromEntries(instants), { from: '2026-09-16T13:30:00.123Z', to: '2026-09-16T14:29:59.999Z' });
 });
 
 test("the log's address keeps a kind this build does not know, so the route's refusal reaches the page", () => {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
 import { Chips } from '@/components/DecisionCard';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
@@ -11,15 +11,16 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { addressWindow, REQUEST_RANGES, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyText, highlightJson } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
+import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
@@ -45,13 +46,7 @@ const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
 /** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
-const RANGES = [
-  { label: 'Last hour', value: '1h', ms: 3_600_000 },
-  { label: 'Last 6 hours', value: '6h', ms: 6 * 3_600_000 },
-  { label: 'Last 24 hours', value: '24h', ms: 24 * 3_600_000 },
-];
 const PAGE_SIZES = [10, 25, 50, 100];
-const KINDS: readonly RequestKind[] = ['count_tokens', 'inference', 'probe'];
 /** The codes the router and Anthropic answer; any other code a page or the address holds is offered by its number. */
 const STATUS_CODES: readonly (readonly [number, string])[] = [
   [200, 'OK'],
@@ -93,113 +88,13 @@ const requestClassOptions = (rows: RequestLog[], selected: string[]) => {
   return [...[...classes].sort().map((c) => ({ label: c, value: c })), { label: 'unattributed', value: NO_CLASS }, { label: OTHER_DIMENSION, value: OTHER_DIMENSION }];
 };
 
-/** Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them. */
-interface Filters {
-  accounts: string[];
-  /** The user agent pattern. */
-  agent: string;
-  agentTypes: string[];
-  client: string;
-  efforts: string[];
-  /** The custom range as two ISO instants, both empty while the preset applies. */
-  from: string;
-  held: boolean;
-  keys: string[];
-  kind: '' | RequestKind;
-  missReasons: string[];
-  models: string[];
-  outcomes: RequestOutcome[];
-  pools: string[];
-  range: string;
-  requestClasses: string[];
-  rows: number;
-  search: string;
-  speeds: string[];
-  statuses: string[];
-  to: string;
-  turnOrigins: string[];
-}
-
-const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', efforts: [], from: '', held: false, keys: [], kind: '', missReasons: [], models: [], outcomes: [], pools: [], range: '24h', requestClasses: [], rows: 25, search: '', speeds: [], statuses: [], to: '', turnOrigins: [] };
-
 /**
- * An instant as the routing log's address spells one, else empty: a bare integer is Unix milliseconds. One past the
- * dates a `Date` holds reads as empty too, since its ISO form would throw.
+ * Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them,
+ * with the page size as a number and the outcomes and status codes the page could have written.
  */
-const instantOf = (value: string | null): string => {
-  if (!value) return '';
-  const at = new Date(/^\d+$/.test(value) ? Number(value) : Date.parse(value));
-  return Number.isFinite(at.getTime()) ? at.toISOString() : '';
-};
-/** Both instants of the custom range while both read and `from` precedes `to`, else neither, so the preset applies. */
-function linkedWindow(from: string | null, to: string | null): { from: string; to: string } {
-  const start = instantOf(from);
-  const end = instantOf(to);
-  return start !== '' && end !== '' && Date.parse(start) < Date.parse(end) ? { from: start, to: end } : { from: '', to: '' };
-}
+type Filters = Omit<RequestsAddress, 'outcomes' | 'rows'> & { outcomes: RequestOutcome[]; rows: number };
 
-/** Absent keys read as the defaults, and so does a kind, range, page size or status the page could not have written. */
-function filtersFromParams(params: URLSearchParams): Filters {
-  const text = (name: string) => params.get(name) ?? '';
-  const list = (name: string) => text(name).split(',').filter(Boolean);
-  const kind = KINDS.find((k) => k === params.get('kind'));
-  const range = RANGES.find((r) => r.value === params.get('range'));
-  const rows = Number(params.get('rows'));
-  const linked = linkedWindow(params.get('from'), params.get('to'));
-  return {
-    accounts: list('accounts'),
-    agent: text('agent'),
-    agentTypes: list('agent_types'),
-    client: text('client'),
-    efforts: list('efforts'),
-    from: linked.from,
-    held: params.get('held') === '1',
-    keys: list('keys'),
-    kind: kind ?? DEFAULTS.kind,
-    missReasons: list('cache_miss_reasons'),
-    models: list('models'),
-    outcomes: outcomesOf(list('outcomes')),
-    pools: list('pools'),
-    range: range?.value ?? DEFAULTS.range,
-    requestClasses: list('request_classes'),
-    rows: PAGE_SIZES.includes(rows) ? rows : DEFAULTS.rows,
-    search: text('search'),
-    speeds: list('speeds'),
-    statuses: list('statuses').filter((code) => /^\d+$/.test(code)),
-    to: linked.to,
-    turnOrigins: list('turn_origins'),
-  };
-}
-
-/** A filter at its default is left out, so an unfiltered page has a bare address. */
-function paramsFromFilters(f: Filters): URLSearchParams {
-  const params = new URLSearchParams();
-  const put = (name: string, value: string) => {
-    if (value) params.set(name, value);
-  };
-  put('search', f.search);
-  put('client', f.client);
-  put('agent', f.agent);
-  put('agent_types', f.agentTypes.join(','));
-  put('turn_origins', f.turnOrigins.join(','));
-  put('efforts', f.efforts.join(','));
-  put('request_classes', f.requestClasses.join(','));
-  put('speeds', f.speeds.join(','));
-  put('held', f.held ? '1' : '');
-  put('keys', f.keys.join(','));
-  put('pools', f.pools.join(','));
-  put('accounts', f.accounts.join(','));
-  put('models', f.models.join(','));
-  put('statuses', f.statuses.join(','));
-  put('outcomes', f.outcomes.join(','));
-  put('cache_miss_reasons', f.missReasons.join(','));
-  put('kind', f.kind);
-  put('range', f.range === DEFAULTS.range ? '' : f.range);
-  put('from', f.from);
-  put('to', f.to);
-  put('rows', f.rows === DEFAULTS.rows ? '' : String(f.rows));
-  return params;
-}
+const DEFAULTS = REQUESTS_CODEC.fromParams(new URLSearchParams());
 
 /** Keyed by every outcome the ledger records, so one it gains is a type error until it is named here. */
 const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
@@ -273,9 +168,8 @@ export function RequestsPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
-  const address = searchParams.toString();
+  const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
+  const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   // The cursor and the pages before it belong to the address they were read under, so any change of the address (a
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
@@ -288,18 +182,31 @@ export function RequestsPage() {
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  // Written at once rather than in the router's transition: a click that follows typing blurs the search first, and its
-  // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
-  const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { flushSync: true, replace: true });
+  const update = (patch: Partial<Filters>) => {
+    const next = { ...filters, ...patch };
+    replace({ ...next, rows: String(next.rows) });
+  };
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
-  const linked = filters.from !== '' && filters.to !== '';
-  const query = useMemo<RequestQuery>(() => {
-    const r = RANGES.find((x) => x.value === filters.range) ?? RANGES[2];
+  const custom = filters.range.preset === 'custom';
+  const span = useMemo(() => addressWindow(filters.range, REQUEST_RANGES, '24h', loadedAt), [filters.range, loadedAt]);
+  const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.missReasons, client: filters.client, cursor, efforts: filters.efforts, from: linked ? filters.from : new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: linked ? filters.to : new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
-  }, [filters, cursor, linked, loadedAt]);
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, span],
+  );
+  // Custom starts from the window the list shows, so the choice holds.
+  const chooseRange = (value: string) => update({ range: value === 'custom' ? { from: iso(span.from), preset: 'custom', to: iso(span.to) } : { from: '', preset: value, to: '' } });
+  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
+  // preset.
+  const setBound = (bound: 'from' | 'to', local: string) => {
+    const ms = Date.parse(local);
+    if (Number.isNaN(ms)) return;
+    const next = bound === 'from' ? { from: ms, to: span.to } : { from: span.from, to: Math.min(ms, clock.now()) };
+    if (next.from >= next.to) return;
+    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
+  };
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
@@ -320,8 +227,8 @@ export function RequestsPage() {
     setPaging({ for: address, cursor: previous, stack: copy });
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
-  const active = paramsFromFilters({ ...filters, rows: DEFAULTS.rows }).toString() !== '';
-  const reset = () => setSearchParams(paramsFromFilters({ ...DEFAULTS, rows: filters.rows }), { replace: true });
+  const active = REQUESTS_CODEC.toParams({ ...read, rows: DEFAULTS.rows }).toString() !== '';
+  const reset = () => replace({ ...DEFAULTS, rows: read.rows });
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
 
@@ -330,18 +237,22 @@ export function RequestsPage() {
       <div className="stack">
         <div className="filters">
           <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
-          <Select value={linked ? 'linked' : filters.range} onChange={(e) => update({ range: e.target.value, from: '', to: '' })} aria-label="Date range">
-            {RANGES.map((r) => (
-              <option key={r.value} value={r.value}>
+          <Select value={filters.range.preset} onChange={(e) => chooseRange(e.target.value)} aria-label="Date range">
+            {REQUEST_RANGES.map((r) => (
+              <option key={r.name} value={r.name}>
                 {r.label}
               </option>
             ))}
-            {linked && (
-              <option value="linked" title={`${filters.from} to ${filters.to}`}>
-                {`Custom range: ${fmtTime(filters.from)} to ${fmtTime(filters.to)}`}
-              </option>
-            )}
+            <option value="custom" title={custom ? `${filters.range.from} to ${filters.range.to}` : undefined}>
+              {custom ? `Custom range: ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}` : 'Custom range'}
+            </option>
           </Select>
+          {custom && (
+            <>
+              <Input type="datetime-local" aria-label="From" value={toLocalInput(span.from)} onChange={(e) => setBound('from', e.target.value)} />
+              <Input type="datetime-local" aria-label="To" value={toLocalInput(span.to)} onChange={(e) => setBound('to', e.target.value)} />
+            </>
+          )}
           <MultiSelect
             label="Keys"
             options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))}
@@ -387,7 +298,7 @@ export function RequestsPage() {
             value={filters.outcomes}
             onChange={(v) => update({ outcomes: outcomesOf(v) })}
           />
-          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.missReasons)} value={filters.missReasons} onChange={(v) => update({ missReasons: v })} />
+          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.cacheMissReasons)} value={filters.cacheMissReasons} onChange={(v) => update({ cacheMissReasons: v })} />
           <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
           <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
           <MultiSelect label="Effort" options={[...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v }))} value={filters.efforts} onChange={(v) => update({ efforts: v })} mono />
@@ -418,7 +329,7 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
-            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={linked ? `Rows from ${fmtTime(filters.from)} to ${fmtTime(filters.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(new Date(loadedAt).toISOString())}. Refresh reads up to now`}>
+            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`}>
               Refresh
             </Button>
             <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />

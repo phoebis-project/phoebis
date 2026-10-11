@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
+import { iso } from '@/api/decode';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { DecisionCard } from '@/components/DecisionCard';
@@ -8,22 +9,14 @@ import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
+import { addressWindow, type LogFilters, ROUTING_LOG_CODEC, ROUTING_LOG_RANGES } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, FOLLOW_OVERRUN, type LogFilters, type LogLink, ROUTING_LOG_CODEC, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, followPages, formatFact, identityOf, logHref, merged } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, FOLLOW_OVERRUN, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, followPages, formatFact, identityOf, logHref, merged } from '@/lib/routingLog';
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
 const PAGE_SIZE = 25;
 const FOLLOW_MS = 5_000;
-
-const RANGES = [
-  { label: 'Last hour', value: '1h', ms: HOUR },
-  { label: 'Last 3 hours', value: '3h', ms: 3 * HOUR },
-  { label: 'Last 6 hours', value: '6h', ms: 6 * HOUR },
-  { label: 'Last 24 hours', value: '24h', ms: 24 * HOUR },
-];
 
 const DECISION_KINDS = Object.keys(DECISION_KIND_LABEL).sort() as DecisionKind[];
 const HIDDEN_EVENT = 'warm_prefix_expired';
@@ -38,9 +31,8 @@ const KIND_OPTIONS: Option[] = [
 ];
 const kindWords = (kind: string) => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
 
-const DEFAULTS: LogFilters = { accounts: [], from: '', keys: [], kinds: [], models: [], pools: [], request: '', session: '', to: '' };
+const DEFAULTS: LogFilters = { accounts: [], keys: [], kinds: [], models: [], pools: [], range: { from: '', preset: '1h', to: '' }, request: '', session: '' };
 
-const iso = (ms: number) => new Date(ms).toISOString();
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
 /** Where Follow stopped short of the rows the list held: the cursor past its last row and the end of the range it read. */
@@ -96,11 +88,8 @@ export function RoutingLogPage() {
   const session = useCommittedText(filters.session, (next) => update({ session: next.trim() }));
   const request = useCommittedText(filters.request, (next) => update({ request: next.trim() }));
 
-  const range = useMemo(() => {
-    // A `to` the address carries past now is read up to now.
-    const to = filters.to ? Math.min(Date.parse(filters.to), clock.now()) : loadedAt;
-    return { from: filters.from ? Date.parse(filters.from) : to - HOUR, to };
-  }, [filters, loadedAt]);
+  // A preset ends where the list was loaded, and a custom span reads its own instants.
+  const range = useMemo(() => addressWindow(filters.range, ROUTING_LOG_RANGES, '1h', loadedAt), [filters.range, loadedAt]);
   const query = useMemo<RoutingLogQuery>(
     () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(pagedTo ?? range.to) }),
     [filters, range, cursor, pagedTo],
@@ -169,30 +158,26 @@ export function RoutingLogPage() {
     };
   }, [follow, cursor]);
 
-  const preset = !filters.from && !filters.to ? '1h' : RANGES.find((r) => r.value !== '1h' && filters.from && filters.to && Date.parse(filters.to) - Date.parse(filters.from) === r.ms)?.value;
-  const rangeValue = customOpen || preset === undefined ? 'custom' : preset;
+  const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
+  // Custom starts from the window the list shows, so the choice holds.
   const chooseRange = (value: string) => {
     setCustomOpen(value === 'custom');
-    if (value === 'custom') update({ from: iso(range.from), to: iso(range.to) });
-    else if (value === '1h') update({ from: '', to: '' });
-    else {
-      const now = clock.now();
-      update({ from: iso(now - (RANGES.find((r) => r.value === value)?.ms ?? HOUR)), to: iso(now) });
-    }
+    update({ range: value === 'custom' ? { from: iso(range.from), preset: 'custom', to: iso(range.to) } : { from: '', preset: value, to: '' } });
   };
+  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
+  // preset.
   const setBound = (bound: 'from' | 'to', local: string) => {
     const ms = Date.parse(local);
     if (Number.isNaN(ms)) return;
-    update(bound === 'from' ? { from: iso(ms) } : { to: iso(Math.min(ms, clock.now())) });
+    const next = bound === 'from' ? { from: ms, to: range.to } : { from: range.from, to: Math.min(ms, clock.now()) };
+    if (next.from >= next.to) return;
+    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
+  // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
-    const now = clock.now();
     setPaging({ for: address, stack: [] });
     setFollowed(null);
-    setLoadedAt(now);
-    // A preset range keeps its span and ends now. A custom one is read again as it stands.
-    const span = RANGES.find((r) => r.value === rangeValue && r.value !== '1h');
-    if (span) update({ from: iso(now - span.ms), to: iso(now) });
+    setLoadedAt(clock.now());
     log.reload();
   };
   // The tint marks what the last poll brought, and no poll follows to take it away.
@@ -227,8 +212,8 @@ export function RoutingLogPage() {
     <div className="routing-log stack">
       <div className="filters">
         <Select value={rangeValue} onChange={(e) => chooseRange(e.target.value)} aria-label="Range">
-          {RANGES.map((r) => (
-            <option key={r.value} value={r.value}>
+          {ROUTING_LOG_RANGES.map((r) => (
+            <option key={r.name} value={r.name}>
               {r.label}
             </option>
           ))}

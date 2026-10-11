@@ -20,6 +20,7 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
@@ -551,7 +552,7 @@ function PoolCard({
             {pool.status}
           </Badge>
           {keysRead === 'loaded' ? (
-            <Link to={`/keys?pool=${pool.id}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
+            <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [pool.id], search: '', status: 'all' })}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
               {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
             </Link>
           ) : (

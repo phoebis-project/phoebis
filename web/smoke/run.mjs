@@ -2527,7 +2527,7 @@ m.unmount();
 }
 {
   // The Requests card counts the account's traffic, so its action opens the routing log on the account for the last
-  // hour, read on the frozen clock so the range is the one the page computed.
+  // hour, the log's default preset, which the address leaves out.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests');
   const actions = [...(card?.querySelectorAll('.card__actions a') ?? [])];
@@ -2540,7 +2540,7 @@ m.unmount();
     ok:
       actions.length === 1 &&
       actions[0].textContent?.trim() === 'Routing log' &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary', from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary' }) &&
       `${landed.pathname}${landed.search}` === href,
     missing: [`${actions.length} actions`, href ?? 'no link', JSON.stringify(landed)],
   });
@@ -2590,7 +2590,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
   const keyLink = (name) => card(name)?.querySelector('.pool__keys');
   const links = ['all', 'jobs', 'work'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
-  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
+  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pools=${id}`]);
   const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
   results.push({
     name: '/pools each card links its key count to the Keys page filtered to the pool',
@@ -2766,12 +2766,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
 {
-  // The pool card's links into the routing log, read on the frozen clock so each range is the one the page computed.
+  // The pool card's links into the routing log, read on the frozen clock so a condition's range is the one the page
+  // computed. The last hour is the log's default preset, which the address leaves out.
   const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
   const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
-  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool, from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) });
+  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool });
   const read = ['all', 'jobs'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
   results.push({
     name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
@@ -2935,7 +2936,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/keys#<key id> under reduced motion brings the row into view without the smooth scroll', ok: reduced.scrolled === JSON.stringify([['TR', 'laptop', 'auto']]) && reduced.focused, missing: [reduced.scrolled, `focused ${reduced.focused}`] });
   reduced.page.unmount();
   // laptop is all's key, so a filter to jobs would hide its row.
-  const filtered = await arrive('/keys?pool=jobs#laptop', null, row);
+  const filtered = await arrive('/keys?pools=jobs#laptop', null, row);
   const cleared = filtered.page.location();
   results.push({
     name: '/keys#<key id> clears a pool filter that hides the row, then lands on it',
@@ -5765,7 +5766,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
 }
-// The Pool select is the address: `?pool=<id>` filters the rows, All pools clears it, and an unknown id reads as All
+// The Pool select is the address: `?pools=<id>` filters the rows, All pools clears it, and an unknown id reads as All
 // pools and leaves the address.
 {
   // The /pools checks above move a key into jobs and create one in all, so every count is the store's at this point.
@@ -5775,8 +5776,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
   const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
   const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
-  let k = await mount('/keys?pool=jobs');
-  results.push({ name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
+  let k = await mount('/keys?pools=jobs');
+  results.push({ name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   const choosePool = async (page, id) => {
     const target = select(page);
@@ -5788,13 +5789,13 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   await choosePool(k, '');
   results.push({ name: '/keys All pools lists every key and leaves /keys', ok: !!select(k) && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, JSON.stringify(k.location())] });
   await choosePool(k, 'all');
-  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
   k.unmount();
-  k = await mount('/keys?pool=all');
-  results.push({ name: "/keys?pool=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k = await mount('/keys?pools=all');
+  results.push({ name: "/keys?pools=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
   k.unmount();
-  k = await mount('/keys?pool=nope');
-  results.push({ name: '/keys?pool=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  k = await mount('/keys?pools=nope');
+  results.push({ name: '/keys?pools=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
   k.unmount();
   // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
   // key count link lands on the pool's rows from the first render, never on every key.
@@ -5802,7 +5803,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
   const jobsName = (await api.listPools()).find((p) => p.id === 'jobs')?.name;
   const heldPools = deferNextCall('listPools');
-  k = await mount('/keys?pool=jobs');
+  k = await mount('/keys?pools=jobs');
   const waiting = poolCells(k);
   const waitingSearch = k.location().search;
   const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
@@ -5810,38 +5811,38 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   heldPools.restore();
   await k.settle(300);
   results.push({
-    name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
+    name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
     ok:
       narrows('jobs') &&
       heldPools.calls.length > 0 &&
       waiting.length === inPool('jobs') &&
       waiting.every((c) => c === 'jobs') &&
-      waitingSearch === '?pool=jobs' &&
+      waitingSearch === '?pools=jobs' &&
       JSON.stringify(waitingSelect) === JSON.stringify(['jobs', [['', 'All pools'], ['jobs', 'jobs']]]) &&
       poolCells(k).length === inPool('jobs') &&
       select(k)?.value === 'jobs' &&
       JSON.stringify(options(k).filter(([value]) => value === 'jobs')) === JSON.stringify([['jobs', jobsName]]) &&
-      k.location().search === '?pool=jobs',
+      k.location().search === '?pools=jobs',
     missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
   });
   k.unmount();
   failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
-  k = await mount('/keys?pool=jobs');
+  k = await mount('/keys?pools=jobs');
   const failed = poolCells(k);
   const failedValue = select(k)?.value ?? 'no select';
   await choosePool(k, '');
   results.push({
-    name: '/keys?pool=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
+    name: '/keys?pools=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
     ok: narrows('jobs') && failed.length === inPool('jobs') && failed.every((c) => c === 'jobs') && failedValue === 'jobs' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
     missing: [`expected ${inPool('jobs')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
   });
   k.unmount();
-  k = await mount('/keys?pool=jobs&edit=batch&group=models');
+  k = await mount('/keys?pools=jobs&edit=batch&group=models');
   await k.settle(200);
   const dlg = k.container.querySelector('dialog[open]');
   results.push({
     name: '/keys the pool filter survives the dialog query',
-    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=jobs' && narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs'),
+    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pools=jobs' && narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs'),
     missing: [k.location().search, `expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k)],
   });
   k.unmount();
@@ -6672,7 +6673,7 @@ m = await mount('/models');
 m.unmount();
 {
   // The rejections and permits are read in the routing log, so one link below the cooling-down blocks opens it on the
-  // two model kinds over the last 24 hours, read on the frozen clock so the range is the one the page computed.
+  // two model kinds over the last 24 hours, a preset the log reads from its own load.
   const page = await mount('/models', { now: CLOCK_ORIGIN });
   const links = [...page.container.querySelectorAll('a')].filter((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
   const link = links[0];
@@ -6689,7 +6690,7 @@ m.unmount();
       link.classList.contains('btn--secondary') &&
       cards.length > 1 &&
       cards.every((c) => c.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING) &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', range: '24h' }) &&
       `${landed.pathname}${landed.search}` === href,
     missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
   });
@@ -8167,7 +8168,9 @@ m.unmount();
   const FROM = '2026-09-16T12:00:00.000Z';
   const TO = '2026-09-16T13:00:00.000Z';
   const inside = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
-  const windowCheck = '/requests mounts with from and to under Custom range and lists that window alone';
+  const windowCheck = '/requests mounts with from and to under Custom range, draws its two instant inputs on the window and lists that window alone';
+  // The two instant inputs, read in the smoke run's zone, UTC.
+  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
   const windowSpy = countCalls('listRequests');
   const linked = await mount(`/requests?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
   windowSpy.restore();
@@ -8179,15 +8182,17 @@ m.unmount();
     name: windowCheck,
     ok:
       range?.options.length === 4 &&
+      range.value === 'custom' &&
       (option?.textContent ?? '').startsWith('Custom range') &&
       (option?.getAttribute('title') ?? '').includes(FROM) &&
       (option?.getAttribute('title') ?? '').includes(TO) &&
+      JSON.stringify(bounds(linked)) === JSON.stringify(['2026-09-16T12:00', '2026-09-16T13:00']) &&
       inside.length > 0 &&
       windowed.length === Math.min(25, inside.length) &&
       windowed.every((r) => r !== null && inside.includes(r)) &&
       sent.length > 0 &&
       sent.every((s) => s === `${FROM} ${TO}`),
-    missing: [`${range?.options.length} options`, option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', `${windowed.length} rows of ${inside.length}`, ...sent],
+    missing: [`${range?.options.length} options`, range?.value ?? 'no select', option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', JSON.stringify(bounds(linked)), `${windowed.length} rows of ${inside.length}`, ...sent],
   });
 
   const refreshCheck = '/requests Refresh reads the custom range again and says so';
@@ -8209,7 +8214,7 @@ m.unmount();
   const presetCheck = '/requests choosing a preset drops the custom range';
   if (range) choose(range, '6h');
   await linked.settle();
-  results.push({ name: presetCheck, ok: param(linked, 'range') === '6h' && param(linked, 'from') === null && param(linked, 'to') === null && rangeOf(linked)?.options.length === 3, missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`] });
+  results.push({ name: presetCheck, ok: linked.location().search === '?range=6h' && rangeOf(linked)?.options.length === 4 && JSON.stringify(bounds(linked)) === JSON.stringify([null, null]), missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`, JSON.stringify(bounds(linked))] });
   linked.unmount();
 
   // A half window, one that runs backwards, and an instant past the date range each read as the preset, quietly.
@@ -8224,7 +8229,38 @@ m.unmount();
     half.unmount();
   }
   const thrown = problems.slice(seen);
-  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 3 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 4 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+
+  // Choosing Custom range writes the window the list shows as its two instants, so the choice holds. An edited bound
+  // writes its own instant, and one that would end the window before it starts writes nothing.
+  const chooseCheck = '/requests choosing Custom range writes the shown window as from and to, and an edited bound writes its instant';
+  const typeInto = (input, text) => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const chosen = await mount('/requests', { now: CLOCK_ORIGIN });
+  if (!rangeOf(chosen)) controlMissing(chooseCheck, 'Date range');
+  else {
+    choose(rangeOf(chosen), 'custom');
+    await chosen.settle();
+    const opened = { bounds: bounds(chosen), from: param(chosen, 'from'), range: param(chosen, 'range'), select: rangeOf(chosen)?.value ?? null, to: param(chosen, 'to') };
+    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T10:00');
+    await chosen.settle();
+    const edited = { from: param(chosen, 'from'), to: param(chosen, 'to') };
+    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T15:00');
+    await chosen.settle();
+    const backward = { from: param(chosen, 'from'), select: rangeOf(chosen)?.value ?? null };
+    results.push({
+      name: chooseCheck,
+      ok:
+        JSON.stringify(opened) === JSON.stringify({ bounds: ['2026-09-15T14:30', '2026-09-16T14:30'], from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), range: null, select: 'custom', to: isoAt(CLOCK_ORIGIN) }) &&
+        JSON.stringify(edited) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', to: isoAt(CLOCK_ORIGIN) }) &&
+        JSON.stringify(backward) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', select: 'custom' }),
+      missing: [JSON.stringify(opened), JSON.stringify(edited), JSON.stringify(backward)],
+    });
+  }
+  chosen.unmount();
 
   const effortCheck = '/requests the Effort filter offers the levels, none and other, and choosing none lists the rows without an effort and writes efforts';
   const efforts = await mount('/requests', { now: CLOCK_ORIGIN });
@@ -8928,7 +8964,7 @@ m.unmount();
     });
   }
   {
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
@@ -8937,7 +8973,8 @@ m.unmount();
       const say = (what) => wrong.push(`${time}: ${what}`);
       if (!all(cell(tr, 'time'), ['request'])) say(`time ${hrefs(cell(tr, 'time'))}`);
       const session = cell(tr, 'session')?.querySelector('a');
-      if (session && params(session.getAttribute('href')).session !== session.getAttribute('title')) say(`session ${session.getAttribute('href')}`);
+      // The Sessions page reads no session key, so the link opens the view and its title names the session.
+      if (session && (session.getAttribute('href') !== '/sessions' || !session.getAttribute('title'))) say(`session ${session.getAttribute('href')}`);
       if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
       if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
       const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
@@ -9254,7 +9291,6 @@ m.unmount();
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
-          JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
           JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
@@ -9397,7 +9433,7 @@ m.unmount();
       ok:
         record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
         ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
-        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+        marks.every((c) => c.querySelector('a')?.getAttribute('href') === '/sessions') && JSON.stringify(marks.map((c) => c.getAttribute('title')?.split('/')[1])) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
       missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station'],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
@@ -10038,7 +10074,8 @@ m.unmount();
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;
     const permitted = modelLinks.model_permitted;
-    const model = (id) => `/models?model=${id}`;
+    // The Models page reads no model key, so each model's link opens the view itself.
+    const model = () => '/models';
     results.push({
       name: '/routing-log the model rejected and permitted details link each account and model they name',
       ok:
@@ -11927,13 +11964,18 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
     m = await mount('/analytics');
-    // The range is the page's own state, so a fresh mount opens on the day; the session checks below read the three
-    // days the Custom range opens on, as they did before the remount.
+    // A fresh mount opens on the day, and the session checks below read the three days Custom opens on, which the
+    // choice writes into the address as two instants.
     [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
     await m.settle(300);
     const range = [...m.container.querySelectorAll('[aria-label="Range"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim()).join();
     const pickers = m.container.querySelectorAll('.filters input[type="datetime-local"]').length;
-    results.push({ name: '/analytics the session checks after the remount read the Custom range', ok: range === 'Custom' && pickers === 2 && m.location().search === '', missing: [`range ${range}`, `pickers ${pickers}`, m.location().search] });
+    const custom = new URLSearchParams(m.location().search);
+    results.push({
+      name: '/analytics the session checks after the remount read the Custom range',
+      ok: range === 'Custom' && pickers === 2 && custom.get('to') !== null && custom.get('from') === isoAt(Date.parse(custom.get('to')) - 3 * 24 * 3_600_000) && custom.get('range') === null,
+      missing: [`range ${range}`, `pickers ${pickers}`, m.location().search],
+    });
   }
   {
     const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
@@ -12309,8 +12351,9 @@ m.unmount();
   };
   const expected = (s) => {
     const last = s.lastRequestAt === null ? null : Date.parse(s.lastRequestAt);
-    const range = last === null ? { from: CLOCK_ORIGIN - HOUR, to: CLOCK_ORIGIN } : { from: last - HOUR, to: Math.min(last + HOUR, CLOCK_ORIGIN) };
-    return { path: '/routing-log', session: s.sessionId, from: isoAt(range.from), to: isoAt(range.to) };
+    // A session without a request opens on the log's default last hour, which the address leaves out.
+    if (last === null) return { path: '/routing-log', session: s.sessionId };
+    return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
   };
   const entryOf = async (tr) => {
     tr?.querySelector('.menu__trigger')?.click();
@@ -12510,7 +12553,7 @@ m.unmount();
       off.disabled &&
       (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === (f.want === '24h' ? null : f.want) && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClick.path === '/requests' &&
       atClick.keys === lifetime(moved) &&
@@ -12529,6 +12572,173 @@ m.unmount();
       `the shared pair ${pair.length === 0 ? 'not found' : pair.map((p) => JSON.stringify(p)).join(' ')}`,
     ],
   });
+}
+
+// Every filtered view reads its filters from the address under one grammar: a link sets the controls, a preset reads
+// from the load, and a control's change rewrites the address with every other key and the hash kept.
+{
+  const HOUR = 3_600_000;
+  const chooseIn = async (page, select, value) => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await page.settle(300);
+  };
+  const typeIn = (input, text) => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
+  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
+  const pressed = (page) => page.container.querySelector('.segmented[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? null;
+  const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
+
+  {
+    const name = '/analytics reads the group-by, range, probes switch, agent pattern and Account picker from the address, and a unit change keeps every key and the tab';
+    const page = await mount('/analytics?by=account&range=7d&probes=1&agent=claude&accounts=primary#cost', { now: CLOCK_ORIGIN });
+    const read = {
+      account: [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Account'))?.textContent?.trim() ?? null,
+      agent: page.container.querySelector('input[aria-label="User agent pattern"]')?.value ?? null,
+      groupBy: page.container.querySelector('.filters select.groupby-select')?.value ?? null,
+      probes: page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.getAttribute('aria-checked') ?? null,
+      range: pressed(page),
+    };
+    const unit = page.container.querySelector('select[aria-label="Cost unit"]');
+    if (!unit) controlMissing(name, 'Cost unit');
+    else {
+      await chooseIn(page, unit, 'usd');
+      const after = { hash: page.location().hash, query: query(page) };
+      results.push({
+        name,
+        ok: JSON.stringify(read) === JSON.stringify({ account: 'Account (1)', agent: 'claude', groupBy: 'account', probes: 'true', range: '7d' }) && after.hash === '#cost' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude', by: 'account', probes: '1', range: '7d', unit: 'usd' }).sort()),
+        missing: [JSON.stringify(read), JSON.stringify(after)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // The day before the pinned origin, so the end stands under now and the reads carry it to the millisecond.
+    const name = "/analytics sends a custom address's millisecond bounds to the API unchanged";
+    const spy = countCalls('getAnalyticsSeries');
+    const page = await mount('/analytics?from=2026-09-15T14:00:00.123Z&to=2026-09-15T15:59:59.999Z', { now: CLOCK_ORIGIN });
+    spy.restore();
+    const sent = [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))];
+    results.push({
+      name,
+      ok: pressed(page) === 'Custom' && JSON.stringify(sent) === JSON.stringify(['2026-09-15T14:00:00.123Z 2026-09-15T15:59:59.999Z']) && JSON.stringify(bounds(page)) === JSON.stringify(['2026-09-15T14:00', '2026-09-15T15:59']),
+      missing: [`range ${pressed(page)}`, ...sent, JSON.stringify(bounds(page))],
+    });
+    page.unmount();
+  }
+  // Two story sessions with requests in the default day under two keys, so each lifetime is its own.
+  const inDay = (r) => r.sessionId !== null && r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 23 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN;
+  const first = requests.find((r) => inDay(r) && r.keyId === 'desktop');
+  const second = requests.find((r) => inDay(r) && first !== undefined && r.keyId !== first.keyId && r.sessionId !== first.sessionId);
+  const lifetime = (r) => `${r.keyId}@${r.keyGeneration}`;
+  {
+    const name = '/analytics a session address without a key reads the session\'s traffic unscoped';
+    if (first === undefined) results.push({ name, ok: false, missing: ['no desktop session in the default range'] });
+    else {
+      const spy = countCalls('listRequests');
+      const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}`, { now: CLOCK_ORIGIN });
+      spy.restore();
+      const keyed = spy.calls.filter(([q]) => q?.search === first.sessionId).map(([q]) => q?.keyIds ?? []);
+      results.push({ name, ok: keyed.length > 0 && keyed.every((ids) => ids.every((id) => !id.includes('@'))) && total(page) > 0, missing: [JSON.stringify(keyed), `total ${total(page)}`] });
+      page.unmount();
+    }
+  }
+  {
+    const name = '/analytics a new session drops the earlier lifetime';
+    if (first === undefined || second === undefined) results.push({ name, ok: false, missing: ['no two sessions under two keys in the default range'] });
+    else {
+      const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}&key=${encodeURIComponent(lifetime(first))}`, { now: CLOCK_ORIGIN });
+      const spy = countCalls('listRequests');
+      const field = page.container.querySelector('input[aria-label="Session id"]');
+      typeIn(field, second.sessionId);
+      field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      await page.settle(900);
+      spy.restore();
+      const keyed = spy.calls.filter(([q]) => q?.search === second.sessionId).map(([q]) => q?.keyIds ?? []);
+      results.push({
+        name,
+        ok: JSON.stringify(query(page)) === JSON.stringify({ session: second.sessionId }) && keyed.length > 0 && keyed.every((ids) => !ids.includes(lifetime(first))) && total(page) > 0,
+        missing: [page.location().search, JSON.stringify(keyed), `total ${total(page)}`],
+      });
+      page.unmount();
+    }
+  }
+  {
+    // A reload reads the preset from its own load, so the label and the window agree an hour on.
+    const name = '/routing-log reads range=3h as Last 3 hours over the three hours before the load, and Custom writes the window as from and to';
+    const windowsOf = (spy) => [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to} ${(q?.kinds ?? []).join(',')}`))];
+    const reads = [];
+    const labels = [];
+    for (const at of [CLOCK_ORIGIN, CLOCK_ORIGIN + HOUR]) {
+      const spy = countCalls('listRoutingLog');
+      const page = await mount('/routing-log?range=3h&kinds=held', { now: at });
+      spy.restore();
+      const select = page.container.querySelector('select[aria-label="Range"]');
+      labels.push(select?.selectedOptions[0]?.textContent?.trim() ?? null);
+      reads.push(windowsOf(spy));
+      if (at === CLOCK_ORIGIN) {
+        if (select) await chooseIn(page, select, 'custom');
+        reads.push(query(page));
+      }
+      page.unmount();
+    }
+    const want = (at) => [`${isoAt(at - 3 * HOUR)} ${isoAt(at)} held`];
+    results.push({
+      name,
+      ok: JSON.stringify(labels) === JSON.stringify(['Last 3 hours', 'Last 3 hours']) && JSON.stringify(reads) === JSON.stringify([want(CLOCK_ORIGIN), { kinds: 'held', from: isoAt(CLOCK_ORIGIN - 3 * HOUR), to: isoAt(CLOCK_ORIGIN) }, want(CLOCK_ORIGIN + HOUR)]),
+      missing: [JSON.stringify(labels), JSON.stringify(reads)],
+    });
+  }
+  {
+    const name = '/keys reads the pool, search and status from the address, and a status change keeps the others and the hash';
+    const page = await mount('/keys?pools=all&search=lap&status=active#laptop');
+    const status = page.container.querySelector('.table-toolbar select[aria-label="Status"]');
+    const read = {
+      pool: page.container.querySelector('.table-toolbar select[aria-label="Pool"]')?.value ?? null,
+      rows: [...page.container.querySelectorAll('.card--table tbody tr')].map((tr) => tr.id),
+      search: page.container.querySelector('.table-toolbar input[type="search"]')?.value ?? null,
+      status: status?.value ?? null,
+    };
+    if (status) await chooseIn(page, status, 'all');
+    const after = page.location();
+    results.push({
+      name,
+      ok: read.pool === 'all' && read.search === 'lap' && read.status === 'active' && read.rows.includes('laptop') && after.search === '?pools=all&search=lap' && after.hash === '#laptop',
+      missing: [JSON.stringify(read), JSON.stringify(after)],
+    });
+    page.unmount();
+  }
+  {
+    // The Pools, Quota and Sessions views carry no filter, so their addresses keep the hash and nothing else.
+    const name = '/pools#jobs, /quota#quota-windows and /sessions land on their hash with no key in the address';
+    const landed = [];
+    for (const path of ['/pools#jobs', '/quota#quota-windows', '/sessions']) {
+      const page = await mount(path);
+      landed.push({ ...page.location(), card: path === '/pools#jobs' ? page.container.querySelector('.pool#jobs') !== null : undefined, timeline: path === '/quota#quota-windows' ? page.container.querySelector('.timeline') !== null : undefined });
+      page.unmount();
+    }
+    results.push({
+      name,
+      ok: JSON.stringify(landed) === JSON.stringify([{ hash: '#jobs', pathname: '/pools', search: '', card: true }, { hash: '#quota-windows', pathname: '/quota', search: '', timeline: true }, { hash: '', pathname: '/sessions', search: '' }]),
+      missing: landed.map((l) => JSON.stringify(l)),
+    });
+  }
+  {
+    const name = '/models reads the key from the address, and the first key writes nothing';
+    const firstKey = (await api.listKeys())[0]?.id;
+    const page = await mount('/models?key=laptop');
+    const select = page.container.querySelector('select[aria-label="Key"]');
+    const read = select?.value ?? null;
+    if (select && firstKey !== undefined) await chooseIn(page, select, firstKey);
+    const cleared = page.location().search;
+    if (select) await chooseIn(page, select, 'laptop');
+    results.push({ name, ok: firstKey !== 'laptop' && read === 'laptop' && cleared === '' && page.location().search === '?key=laptop' && select?.value === 'laptop', missing: [`first ${firstKey}`, `read ${read}`, `cleared ${cleared}`, page.location().search] });
+    page.unmount();
+  }
 }
 
 m = await mount('/sessions');

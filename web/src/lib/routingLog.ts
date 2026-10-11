@@ -1,5 +1,6 @@
-import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
+import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogPage, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
@@ -617,80 +618,18 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
     case 'key':
     case 'pool':
       return `/${kind}s#${encodeURIComponent(id)}`;
-    default:
-      return `/${kind === 'session' ? 'sessions' : `${kind}s`}?${new URLSearchParams({ [kind]: id })}`;
+    // Neither page has a filter for the entity, so the link opens the view.
+    case 'model':
+      return '/models';
+    case 'session':
+      return '/sessions';
   }
 }
 
-export interface LogLink {
-  accounts?: string[];
-  from: number;
-  kinds?: string[];
-  models?: string[];
-  pools?: string[];
-  request?: string;
-  session?: string;
-  to: number;
-}
+/** A fixed window as two instants, or a preset ending now by name. */
+export type LogWindow = { from: number; to: number } | { range: string };
 
-/** The view's filters as the URL holds them. `from` and `to` are ISO instants, empty for the last hour. */
-export interface LogFilters {
-  accounts: string[];
-  from: string;
-  keys: string[];
-  kinds: string[];
-  models: string[];
-  pools: string[];
-  request: string;
-  session: string;
-  to: string;
-}
-
-/** An instant as the route reads one, else empty: a bare integer is Unix milliseconds. */
-const instantOf = (value: string | null) => {
-  if (!value) return '';
-  const ms = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  return Number.isNaN(ms) ? '' : new Date(ms).toISOString();
-};
-
-/**
- * The view's filters to and from its address. Absent keys read as the defaults, and a kind this build does not know
- * stays, so the route's refusal reaches the page where a link from a newer router would otherwise read as the default
- * set.
- */
-export const ROUTING_LOG_CODEC = {
-  fromParams(params: URLSearchParams): LogFilters {
-    const list = (name: string) => (params.get(name) ?? '').split(',').filter(Boolean);
-    return {
-      accounts: list('accounts'),
-      from: instantOf(params.get('from')),
-      keys: list('keys'),
-      kinds: list('kinds'),
-      models: list('models'),
-      pools: list('pools'),
-      request: params.get('request') ?? '',
-      session: params.get('session') ?? '',
-      to: instantOf(params.get('to')),
-    };
-  },
-  /** A filter at its default is left out, so the unfiltered view has a bare address. */
-  toParams(f: LogFilters): URLSearchParams {
-    const params = new URLSearchParams();
-    const put = (name: string, value: string) => {
-      if (value) params.set(name, value);
-    };
-    put('accounts', f.accounts.join(','));
-    put('keys', f.keys.join(','));
-    put('kinds', f.kinds.join(','));
-    put('models', f.models.join(','));
-    put('pools', f.pools.join(','));
-    put('request', f.request);
-    put('session', f.session);
-    put('from', f.from);
-    put('to', f.to);
-    return params;
-  },
-};
+export type LogLink = { accounts?: string[]; kinds?: string[]; models?: string[]; pools?: string[]; request?: string; session?: string } & LogWindow;
 
 export const identityOf = (row: RoutingLogRow) => (row.type === 'decision' ? `${row.requestId}/${row.seq}` : `event/${row.id}`);
 
@@ -731,21 +670,10 @@ export async function followPages(read: (cursor: string | undefined) => Promise<
   return { overrun: cursor ?? null, rows };
 }
 
-/** The log's address for `link`: the plural keys comma-joined, the range as two ISO instants after the filters. */
+/** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */
 export function logHref(link: LogLink): string {
-  const params = new URLSearchParams();
-  const put = (name: string, value: string | undefined) => {
-    if (value) params.set(name, value);
-  };
-  put('accounts', link.accounts?.join(','));
-  put('kinds', link.kinds?.join(','));
-  put('models', link.models?.join(','));
-  put('pools', link.pools?.join(','));
-  put('request', link.request);
-  put('session', link.session);
-  put('from', new Date(link.from).toISOString());
-  put('to', new Date(link.to).toISOString());
-  return `/routing-log?${params}`;
+  const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
+  return `/routing-log?${ROUTING_LOG_CODEC.toParams({ accounts: link.accounts ?? [], keys: [], kinds: link.kinds ?? [], models: link.models ?? [], pools: link.pools ?? [], range, request: link.request ?? '', session: link.session ?? '' })}`;
 }
 
 const QUARTER_HOUR = 15 * MINUTE;
@@ -759,8 +687,11 @@ export const aroundRequest = (at: number, finishedAt: number | null, now: number
  */
 export const requestLink = (id: string, at: number, finishedAt: number | null, now: number): LogLink => ({ request: id, ...aroundRequest(at, finishedAt, now) });
 
-/** A subject that lives on: the last hour, or the hour either side of its last activity, `to` at most now. */
-export const aroundSubject = (lastActivity: number | null, now: number): LogLink => (lastActivity === null ? { from: now - HOUR, to: now } : { from: lastActivity - HOUR, to: Math.min(lastActivity + HOUR, now) });
+/**
+ * A subject that lives on: the last hour as the log's preset, which reads from the reader's load, or the hour either
+ * side of its last activity, `to` at most now.
+ */
+export const aroundSubject = (lastActivity: number | null, now: number): LogLink => (lastActivity === null ? { range: '1h' } : { from: lastActivity - HOUR, to: Math.min(lastActivity + HOUR, now) });
 
 /** A condition: from its start to now. */
 export const sinceCondition = (since: number, now: number): LogLink => ({ from: since, to: now });

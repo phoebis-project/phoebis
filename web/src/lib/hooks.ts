@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
+import type { Codec } from './address';
 import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
 
@@ -207,14 +208,19 @@ export function useCommittedText(value: string, onCommit: (next: string) => void
 
 /** A view's filters in the URL's query string: read on every address, written whole with `replace`, so a link sets
  * them, a reload keeps them and Back returns to the view before. A filter change makes a new address, which a caller
- * keys its cursor on. */
-export function useQueryFilters<F>(codec: { fromParams(params: URLSearchParams): F; toParams(filters: F): URLSearchParams }): { address: string; filters: F; update(patch: Partial<F>): void; replace(filters: F): void } {
-  const [searchParams, setSearchParams] = useSearchParams();
+ * keys its cursor on. The hash stays on every write, since a tab, a section or an anchor lives there. */
+export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters: F; update(patch: Partial<F>): void; replace(filters: F): void } {
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   // The codec is the caller's constant, so the address alone decides when the filters are read again.
   const filters = useMemo(() => codec.fromParams(searchParams), [searchParams]);
   // Written at once rather than in the router's transition: a click that follows typing blurs a field first, and its
   // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
-  const replace = (next: F) => setSearchParams(codec.toParams(next), { flushSync: true, replace: true });
+  const replace = (next: F) => {
+    const search = codec.toParams(next).toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { flushSync: true, replace: true });
+  };
   return { address: searchParams.toString(), filters, replace, update: (patch) => replace({ ...filters, ...patch }) };
 }
 

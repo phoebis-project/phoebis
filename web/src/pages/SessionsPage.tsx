@@ -9,6 +9,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
+import { ANALYTICS_CODEC, REQUESTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
@@ -92,10 +93,13 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
  * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load.
  */
 const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>) => {
+  const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
   const range = requestsRange(session.lastRequestAt, clock.now());
-  const keys = encodeURIComponent(`${session.keyId}@${session.keyGeneration}`);
-  return `/requests?search=${encodeURIComponent(trafficSession)}&keys=${keys}${range === null ? '' : `&range=${range}`}`;
+  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, search: trafficSession })}`;
 };
+/** The analytics on the session the client sent under the row's key lifetime. */
+const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
+  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.fromParams(new URLSearchParams()), key: `${session.keyId}@${session.keyGeneration}`, session: trafficSession })}`;
 
 /**
  * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it
@@ -649,7 +653,7 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
+              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
               { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session)) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },

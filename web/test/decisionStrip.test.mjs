@@ -691,7 +691,8 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.deepEqual(groupsOf(ran), expected(round));
   const marks = ran.block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'marks');
   assert.equal(marks.chips.length, round.outcome.shedMarks.length);
-  assert.deepEqual(marks.chips.map((c) => [c.label, new URLSearchParams(c.href.split('?')[1]).get('session')]), round.outcome.shedMarks.map((mk) => ['mark', mk.sessionId]));
+  // The Sessions page reads no session key, so a mark links the view and its title names the session.
+  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', '/sessions', mk.sessionId]));
 });
 
 test("the rung's entry rows read the matched entry and never the deeper refused one", async () => {
