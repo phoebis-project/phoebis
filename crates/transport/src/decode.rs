@@ -26,7 +26,7 @@ pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
         "deflate" => Ok(Encoding::Deflate),
         "br" => Ok(Encoding::Brotli),
         "zstd" => Ok(Encoding::Zstd),
-        _ => Err(TransportError::Response(format!(
+        _ => Err(TransportError::Decode(format!(
             "unsupported content-encoding: {raw}"
         ))),
     }
@@ -97,13 +97,13 @@ impl BoundedSink {
         }
     }
 
-    /// Ends one decoder call: the refused write answers as the bound, any other failure as it came, and a
-    /// clean call hands over what it decoded.
+    /// Ends one decoder call: the refused write answers as the bound, any other failure as the payload the
+    /// decoder refused, and a clean call hands over what it decoded.
     fn collect(&mut self, budget: usize, wrote: io::Result<()>) -> Result<Vec<u8>, TransportError> {
         if self.tripped {
             return Err(TransportError::TooLarge(budget));
         }
-        wrote?;
+        wrote.map_err(|error| TransportError::Decode(error.to_string()))?;
         Ok(std::mem::take(&mut self.buf))
     }
 }
@@ -303,7 +303,10 @@ mod tests {
 
     #[test]
     fn unknown_token_is_rejected() {
-        assert!(encoding(&head(vec![("Content-Encoding", "gzip, br")])).is_err());
+        assert!(matches!(
+            encoding(&head(vec![("Content-Encoding", "gzip, br")])),
+            Err(TransportError::Decode(_))
+        ));
     }
 
     #[test]
@@ -410,6 +413,20 @@ mod tests {
             (Encoding::Brotli, brotli),
             (Encoding::Zstd, zstd),
         ]
+    }
+
+    #[test]
+    fn a_gzip_payload_that_does_not_inflate_is_refused_as_undecodable() {
+        let mut corrupt = gzip(&sample_bytes());
+        // The first byte past the ten-byte header opens a final block of the reserved type 3, which no inflater
+        // reads.
+        corrupt[10] = 0xff;
+        let mut d = decoder(Encoding::Gzip);
+        let error = d
+            .feed_bounded(&corrupt, 1 << 20)
+            .and_then(|_| d.finish_bounded(1 << 20))
+            .unwrap_err();
+        assert!(matches!(error, TransportError::Decode(_)), "{error:?}");
     }
 
     #[test]

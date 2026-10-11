@@ -983,6 +983,90 @@ async fn the_startup_step_counts_an_account_the_endpoint_refused_as_failed() {
     up.shutdown().await;
 }
 
+/// The token endpoint's answer to a refresh token it no longer honors.
+fn invalid_grant() -> Rule {
+    Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    }
+}
+
+/// Commits a bundle for `id` that sits inside its refresh margin at `NOW`, so the next acquisition goes to the token
+/// endpoint rather than answering the cached token.
+fn due_for_refresh(store: &Store, id: &str) {
+    let stored = store.credentials(id).unwrap().unwrap();
+    store
+        .commit_credentials(
+            id,
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(Secret::new("sk-ant-oat01-SHORT-refresh")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+}
+
+/// Waits for the router's snapshot to read `id` as `reauth_required`. The manager's mark is a store write alone, which
+/// starts no registry reload, so only a report reaches the snapshot.
+async fn routing_reads_reauth_required(h: &Harness, id: &str) {
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account(id)
+            .filter(|row| row.state == AccountState::ReauthRequired)
+            .map(|_| ())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule(), invalid_grant()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    due_for_refresh(&h.store, "a");
+    let row = h.store.account("a").unwrap().unwrap();
+    let answer =
+        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
+            .await
+            .unwrap();
+    assert!(answer.error.is_some(), "the poll read nothing");
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
+    );
+    routing_reads_reauth_required(&h, "a").await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule(), invalid_grant()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    due_for_refresh(&h.store, "a");
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
+    );
+    routing_reads_reauth_required(&h, "a").await;
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_scheduled_poll_reads_the_endpoint_inside_a_long_cache_ttl() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;

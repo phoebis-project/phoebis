@@ -15,6 +15,10 @@ pub use tls::{connect_tls, connector, connector_builder, trust_extra_ca, Plane};
 pub enum TransportError {
     #[error("tls configuration: {0}")]
     Boring(#[from] boring::error::ErrorStack),
+    /// The upstream's answer could not be decoded: a content coding the decoders do not read, or a payload a
+    /// decoder refused. `Io` and `Response` name the connection and its framing.
+    #[error("undecodable response: {0}")]
+    Decode(String),
     #[error("tls handshake: {0}")]
     Handshake(String),
     #[error("io: {0}")]

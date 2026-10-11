@@ -1948,7 +1948,7 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
     assert!(
         matches!(
             h.manager.acquire_for(&row_before, generation_before).await,
-            Err(AcquireError::ReauthRequired)
+            Err(AcquireError::ReauthRequired(..))
         ),
         "the pre-mark row is refused by the cache"
     );
@@ -1980,6 +1980,68 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
         token_posts(&up),
         1,
         "the marked account is not refreshed again"
+    );
+    up.shutdown().await;
+}
+
+/// A replay the upstream refuses too marks the account, and the credential cache refuses the replayed lineage from
+/// that answer on: a leg that still carries the pre-mark row is not handed the token the upstream just refused.
+#[tokio::test]
+async fn a_refused_replay_refuses_the_replayed_lineage_in_the_credential_cache() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: token_answer(),
+        },
+    ])
+    .await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[paired("a", A), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let before = h.router.snapshot();
+    let (row_before, generation_before) = (
+        before.account("a").unwrap().clone(),
+        before.credential_generation("a"),
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the request fails over to b");
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(token_posts(&up), 1, "one refresh, then the replay");
+    let replayed = h.store.credentials("a").unwrap().unwrap().generation;
+    assert!(generation_before.is_some_and(|before| replayed > before));
+    let seen = credentials_seen(&up);
+    assert_eq!(
+        (seen.len(), seen[0].as_str(), seen[2].as_str()),
+        (3, A, B),
+        "a's token, the replayed token, then b's"
+    );
+    let reads = h.store.debug_credential_reads();
+    for expected in [generation_before, Some(replayed)] {
+        assert!(
+            matches!(
+                h.manager.acquire_for(&row_before, expected).await,
+                Err(AcquireError::ReauthRequired(..))
+            ),
+            "the pre-mark row is refused at {expected:?}, the replayed token with it"
+        );
+    }
+    assert_eq!(
+        h.store.debug_credential_reads(),
+        reads,
+        "the refusal reads nothing from the store"
     );
     up.shutdown().await;
 }
@@ -2615,8 +2677,8 @@ async fn a_fast_answers_renewal_folds_its_usage_into_the_fast_copy_and_leaves_bo
             phoebis_store::PinBurn::default(),
             phoebis_store::PinBurn::default()
         ),
-        "an answer reporting usage.speed fast prices at the fast cells and draws no plan window, so both of the \
-         row's copies fold nothing"
+        "an answer reporting usage.speed fast prices at the fast cells, and the row's separate fast copy is why it \
+         draws no plan window, so both of the row's plan copies fold nothing"
     );
     up.shutdown().await;
 }

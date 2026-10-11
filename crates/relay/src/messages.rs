@@ -59,7 +59,7 @@ use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
     relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
     MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
-    UPSTREAM_STALLED, UPSTREAM_UNREACHABLE,
+    UPSTREAM_STALLED, UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
@@ -75,9 +75,9 @@ use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, is_stalled, relay_body, AffinityFacts, Checkin, Drained, HeldText, OnError,
-    Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY, STREAM_CUT,
-    STREAM_STALLED,
+    drain_bounded, is_stalled, is_undecodable, relay_body, AffinityFacts, Checkin, Drained,
+    HeldText, OnError, Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
+    STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftGuard,
@@ -2656,12 +2656,17 @@ impl Relay {
         };
 
         let (cooldown, mark, moves_pin) = match verdict {
-            // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (
-                None,
-                Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
-                false,
-            ),
+            // A rejected replay is conclusive: the refreshed token was refused too. The cache refuses that token's
+            // lineage at once, so no leg dials it again while the report below reaches the snapshot.
+            Verdict::Refresh if ctx.replayed => {
+                self.manager
+                    .refuse_rejected(ctx.account, ctx.credential_generation);
+                (
+                    None,
+                    Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
+                    false,
+                )
+            }
             Verdict::Refresh => {
                 // Nothing of the rejection goes back, so a body cut at the bound gives up its connection before
                 // the ladder's waits rather than hold the rest unread through them.
@@ -2686,7 +2691,7 @@ impl Relay {
                             let marked = matches!(
                                 error,
                                 AcquireError::Disconnected
-                                    | AcquireError::ReauthRequired
+                                    | AcquireError::ReauthRequired(..)
                                     | AcquireError::Unpaired
                             );
                             if marked || tries == 2 {
@@ -2696,9 +2701,11 @@ impl Relay {
                                 // row off `ready`, and until that reload the manager's cache refuses the marked
                                 // credential, so no leg dials the account in between. The word is the manager's,
                                 // so the re-report stores what its own write stored.
-                                let mark = matches!(error, AcquireError::ReauthRequired).then_some(
-                                    (AccountState::ReauthRequired, StateCause::RefreshFailed),
-                                );
+                                let mark = matches!(error, AcquireError::ReauthRequired(..))
+                                    .then_some((
+                                        AccountState::ReauthRequired,
+                                        StateCause::RefreshFailed,
+                                    ));
                                 break (None, mark, !marked);
                             }
                             // One wait on the same account, bounded by the manager's own rule: a short refusal
@@ -3474,8 +3481,9 @@ impl Relay {
     }
 
     /// The relay's own 502 for an upstream response it could not read after the head: `upstream_stalled` when the
-    /// upstream went silent past the idle bound, filed `stream_stalled`, and `upstream_cut` for any other failure (a
-    /// cut connection, a coding the relay cannot read, a payload that does not decode), filed `stream_cut`.
+    /// upstream went silent past the idle bound, filed `stream_stalled`, `upstream_undecodable` for a coding the
+    /// relay cannot read or a payload that does not decode, filed `stream_undecodable`, and `upstream_cut` for a cut
+    /// connection, filed `stream_cut`.
     async fn unreadable(
         &self,
         trace: &Trace,
@@ -3484,6 +3492,8 @@ impl Relay {
     ) -> Response {
         let (failure, code) = if is_stalled(error) {
             (UPSTREAM_STALLED, STREAM_STALLED)
+        } else if is_undecodable(error) {
+            (UPSTREAM_UNDECODABLE, STREAM_UNDECODABLE)
         } else {
             (UPSTREAM_CUT, STREAM_CUT)
         };

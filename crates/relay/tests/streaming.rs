@@ -1272,6 +1272,165 @@ async fn a_connection_cut_after_the_head_answers_502_upstream_cut_and_files_stre
     up.shutdown().await;
 }
 
+/// `payload` gzipped with its first deflate byte replaced, so the head reads as gzip and the body does not inflate:
+/// the byte opens a final block of the reserved type 3.
+fn corrupt_gzip(payload: &[u8]) -> Vec<u8> {
+    let mut body = gzip(payload);
+    body[10] = 0xff;
+    body
+}
+
+/// The stream request from a caller that takes no content coding, so the relay decodes the answer for it.
+fn identity_request() -> Request<Body> {
+    let mut request = common::stream_request(common::KEY);
+    common::set_header(&mut request, "accept-encoding", "identity");
+    request
+}
+
+/// One answer to `request`: its status, its error code header, the message its body names, and the completion the bus
+/// carried.
+async fn one_refusal(
+    respond: Respond,
+    request: Request<Body>,
+) -> (
+    u16,
+    Option<String>,
+    Option<String>,
+    phoebis_bus::RequestComplete,
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond,
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    let status = resp.status().as_u16();
+    let code = resp
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let message = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value["error"]["message"].as_str().map(str::to_string));
+    let complete = completion(&mut sub).await;
+    up.shutdown().await;
+    (status, code, message, complete)
+}
+
+const UNDECODABLE: &str = "the upstream response could not be decoded after its head";
+
+#[tokio::test]
+async fn an_answer_in_a_coding_the_relay_cannot_read_answers_502_upstream_undecodable_and_files_stream_undecodable(
+) {
+    // `compress` is a registered coding outside the five the relay decodes.
+    let (status, code, message, complete) = one_refusal(
+        Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), "compress".into())],
+            body: COMPRESSIBLE.to_vec(),
+        },
+        common::stream_request(common::KEY),
+    )
+    .await;
+    assert_eq!(
+        (status, code.as_deref(), message.as_deref()),
+        (502, Some("upstream_undecodable"), Some(UNDECODABLE))
+    );
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_undecodable"))
+    );
+}
+
+#[tokio::test]
+async fn a_rejection_whose_gzip_body_does_not_inflate_answers_502_upstream_undecodable_and_files_stream_undecodable(
+) {
+    // The 400 is drained whole and forwarded, so the relay decodes it for this caller before a byte goes out.
+    let (status, code, message, complete) = one_refusal(
+        Respond::Json {
+            status: 400,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: corrupt_gzip(
+                br#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#,
+            ),
+        },
+        identity_request(),
+    )
+    .await;
+    assert_eq!(
+        (status, code.as_deref(), message.as_deref()),
+        (502, Some("upstream_undecodable"), Some(UNDECODABLE))
+    );
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_undecodable"))
+    );
+}
+
+#[tokio::test]
+async fn a_streamed_answer_whose_gzip_does_not_inflate_ends_incomplete_with_stream_undecodable() {
+    // The hold's copy does not decode either, so the stream commits as received with the head, and the body the
+    // relay decodes for this caller ends at its first piece.
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Chunked {
+            status: 200,
+            headers: vec![
+                ("Content-Type".into(), "text/event-stream".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+            ],
+            body: corrupt_gzip(rendered(&events).as_bytes()),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(identity_request()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error at the piece that does not decode"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_undecodable"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_rejection_cut_inside_its_body_answers_502_upstream_cut_and_files_stream_cut() {
+    // The drain fails on the body reader's framing, a cut connection rather than a payload that does not decode.
+    let (status, code, message, complete) = one_refusal(
+        Respond::SseCut {
+            status: 400,
+            headers: vec![],
+            events: vec![ping_event()],
+        },
+        common::stream_request(common::KEY),
+    )
+    .await;
+    assert_eq!(
+        (status, code.as_deref(), message.as_deref()),
+        (
+            502,
+            Some("upstream_cut"),
+            Some("the upstream response could not be read after its head")
+        )
+    );
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_cut"))
+    );
+}
+
 #[tokio::test]
 async fn a_stall_after_the_head_answers_502_upstream_stalled() {
     // A 429 whose body never comes is drained under the idle bound before any client byte; the stall is the fake's.

@@ -370,8 +370,7 @@ pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
     retry_after: None,
 };
 
-/// The upstream sent a head and then its response could not be read: the connection was cut before the body
-/// ended, or the body's coding or payload could not be decoded.
+/// The upstream sent a head and then the connection was cut before the body ended.
 pub(crate) const UPSTREAM_CUT: Failure = Failure {
     status: StatusCode::BAD_GATEWAY,
     error_type: "api_error",
@@ -386,6 +385,16 @@ pub(crate) const UPSTREAM_STALLED: Failure = Failure {
     error_type: "api_error",
     code: "upstream_stalled",
     message: "the upstream stalled after its head",
+    retry_after: None,
+};
+
+/// The upstream sent a head and then an answer the relay could not decode: a content coding it cannot read, or a
+/// payload that does not decode. Nothing of it is forwarded.
+pub(crate) const UPSTREAM_UNDECODABLE: Failure = Failure {
+    status: StatusCode::BAD_GATEWAY,
+    error_type: "api_error",
+    code: "upstream_undecodable",
+    message: "the upstream response could not be decoded after its head",
     retry_after: None,
 };
 

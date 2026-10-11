@@ -333,11 +333,11 @@ async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert_eq!(
         up.requests().len(),
@@ -368,7 +368,7 @@ async fn a_definitive_refresh_failure_and_the_quarantine_store_refresh_failed() 
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     let row = store.account("a").unwrap().unwrap();
     assert_eq!(
@@ -555,7 +555,7 @@ async fn a_second_lost_response_leaves_the_attempt_pending_and_a_restart_quarant
     assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     up.shutdown().await;
 }
@@ -683,7 +683,7 @@ async fn a_refreshed_bundle_with_a_foreign_account_uuid_is_rejected() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert_eq!(
         store
@@ -1155,7 +1155,7 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     up.release();
     assert!(matches!(
         refreshing.await.unwrap(),
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
 
     assert!(
@@ -1268,7 +1268,7 @@ async fn a_reauth_verdict_from_a_previous_incarnation_is_dropped() {
         .await
         .expect("the refresh finished")
         .unwrap();
-    assert!(matches!(outcome, Err(AcquireError::ReauthRequired)));
+    assert!(matches!(outcome, Err(AcquireError::ReauthRequired(..))));
 
     assert_eq!(
         store.account("a").unwrap().unwrap().state,
@@ -1345,7 +1345,7 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
     up.release();
     assert!(matches!(
         refreshing.await.unwrap(),
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
 
     assert!(
@@ -1643,7 +1643,7 @@ async fn a_refresh_traces_its_steps() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     up.shutdown().await;
 

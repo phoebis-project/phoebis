@@ -10,7 +10,7 @@ use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
 pub use phoebis_routing::listing::CatalogRow;
 use phoebis_routing::listing::{snapshot_date, undated};
-use phoebis_routing::RouterHandle;
+use phoebis_routing::{Report, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding};
@@ -844,18 +844,32 @@ impl CatalogService {
     ) -> Result<Vec<(String, String)>, DiscoveryError> {
         let credential = match (account.kind, secret) {
             (AccountKind::Oauth, _) => {
-                let token = self
-                    .manager
-                    .acquire_for(account, None)
-                    .await
-                    .map_err(|error| {
+                let token = match self.manager.acquire_for(account, None).await {
+                    Ok(token) => token,
+                    Err(error) => {
                         tracing::warn!(
                             account = %account.id,
                             %error,
                             "the catalog discovery could not obtain the account's credential"
                         );
-                        DiscoveryError::NoCredential
-                    })?;
+                        // The manager's store write starts no reload, so the mark reaches the routing through
+                        // the report the relay sends for its own.
+                        if let Some(mark) = error.landed_mark() {
+                            self.router
+                                .report(Report::AccountState {
+                                    account_id: mark.account_id.clone(),
+                                    state: mark.state,
+                                    incarnation: mark.incarnation,
+                                    lifecycle_generation: mark.lifecycle_generation,
+                                    credential_generation: mark.credential_generation,
+                                    cause: mark.cause,
+                                    detail: None,
+                                })
+                                .await;
+                        }
+                        return Err(DiscoveryError::NoCredential);
+                    }
+                };
                 (
                     "Authorization".to_string(),
                     format!("Bearer {}", token.secret.expose()),

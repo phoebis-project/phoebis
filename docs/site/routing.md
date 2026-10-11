@@ -569,6 +569,7 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head at all | None | No; 502 `upstream_unreachable`, client retries |
 | Transport failure after the head, before any byte reached the client | None | No; 502 `upstream_cut` |
+| A coding or a payload the router cannot decode, before any byte reached the client | None | No; 502 `upstream_undecodable` |
 | Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
@@ -577,15 +578,19 @@ The router classifies a rejection whose body runs past 64 KiB from its first 64 
 body the verdict forwards reaches the client whole, the prefix first.
 
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
-client: `upstream_stalled` when a rejection body went silent past the idle bound, and `upstream_cut` for any other
-answer it cannot read, a connection cut while a rejection body or a held stream was being read, or a content coding or a
-payload it cannot decode. The request reads `failed` with `stream_stalled` or `stream_cut`. `upstream_unreachable` names
-a request that got no head at all.
+client: `upstream_stalled` when a rejection body went silent past the idle bound, `upstream_undecodable` when the answer
+names a content coding the router cannot read or carries a payload that does not decode, and `upstream_cut` when the
+connection was cut while a rejection body or a held stream was being read. The request reads `failed` with
+`stream_stalled`, `stream_undecodable` or `stream_cut`. `upstream_unreachable` names a request that got no head at all.
 
-An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
-mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
-upstream went silent past the idle bound. A forwarded answer with any other status stays `failed`, and its error code
-reads `stream_cut` or `stream_stalled` when its body was cut or went silent.
+An `incomplete` request's error code says how its body ended: `stream_cut` when the connection was cut mid-body,
+`stream_incomplete` when an event stream closed without its `message_stop`, `stream_stalled` when the upstream went
+silent past the idle bound, and `stream_undecodable` when the body did not decode. A forwarded answer with any other
+status stays `failed`, and its error code reads `stream_cut`, `stream_stalled` or `stream_undecodable` when its body was
+cut, went silent or did not decode.
+
+Every new upstream connection, on the inference and the control plane alike, logs one line at debug level naming the
+host and two durations: `dial_ms` for the TCP connect and `handshake_ms` for the TLS handshake.
 
 `Retry-After` parsing is case-insensitive and accepts integer seconds or an HTTP date, rounding fractional
 seconds up; anything non-finite, negative, malformed, or absent is invalid, and an api_key row then takes the
@@ -646,10 +651,12 @@ fresh one; any other failover moves the pin. The failover, its waits included, s
 deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
 another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
 after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a rejected replay,
-which the Accounts view and the `reauth_required` attention condition show. The refresh's mark reaches the routing
-snapshot at the reload that follows the routing writer's fenced write, and until that reload the credential cache
-refuses the marked credential, so no request dials the account on the token it still held; a rejected replay's mark
-takes the same write and reload.
+which the Accounts view and the `reauth_required` attention condition show. Whoever lands the mark reports it at once:
+the relay for a failover or a rejected replay, and the usage poll, its profile read and the catalog refresh when their
+own token refresh lands it. The routing writer's fenced write and the reload after it then take the account out of
+selection. Until that reload the credential cache refuses the marked credential, so no request dials the account on the
+token it still held. A rejected replay's mark refuses the replayed token's lineage in the credential cache the same way,
+so the token the upstream just refused is not handed to another request.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

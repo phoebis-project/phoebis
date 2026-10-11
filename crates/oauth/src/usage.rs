@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 
 use crate::exchange::{control_request, parse_profile, ControlKind, OauthError, ProfileResponse};
-use crate::manager::{retry_after_ms, Clock, CredentialManager};
+use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
 // bookkeeping can no longer be trusted.
@@ -364,6 +364,9 @@ type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
 struct Inner {
     cache: Mutex<HashMap<String, CachedEntry>>,
     inflight: Mutex<HashMap<String, SharedFetch>>,
+    /// The reauth mark an account's last failed acquisition landed, until a caller takes it: a fetch answers a
+    /// snapshot or a profile, neither of which carries the mark, and the routing hears of it only from a report.
+    landed_marks: Mutex<HashMap<String, LandedMark>>,
     on_backoff: Mutex<Option<BackoffHook>>,
     semaphore: Semaphore,
     manager: Arc<CredentialManager>,
@@ -407,6 +410,7 @@ impl UsageService {
             inner: Arc::new(Inner {
                 cache: Mutex::new(HashMap::new()),
                 inflight: Mutex::new(HashMap::new()),
+                landed_marks: Mutex::new(HashMap::new()),
                 on_backoff: Mutex::new(None),
                 semaphore: Semaphore::new(concurrency),
                 manager,
@@ -480,6 +484,16 @@ impl UsageService {
         })
     }
 
+    /// The reauth mark the account's last failed acquisition landed, once: the poll and the profile refresh take it
+    /// after their call to report it to the routing.
+    pub fn take_landed_mark(&self, account_id: &str) -> Option<LandedMark> {
+        self.inner
+            .landed_marks
+            .lock()
+            .expect(LOCK_POISONED)
+            .remove(account_id)
+    }
+
     /// Replaces the hook every backoff edge is handed to. No edge reaches a hook before one is set.
     pub fn set_on_backoff(&self, hook: BackoffHook) {
         *self.inner.on_backoff.lock().expect(LOCK_POISONED) = Some(hook);
@@ -549,7 +563,10 @@ impl UsageService {
             .manager
             .acquire(account_id)
             .await
-            .map_err(|error| UsageError::Unavailable(format!("acquire: {error}")))?;
+            .map_err(|error| {
+                self.inner.keep_landed_mark(account_id, &error);
+                UsageError::Unavailable(format!("acquire: {error}"))
+            })?;
         let permit = self
             .inner
             .semaphore
@@ -633,6 +650,15 @@ impl Inner {
         (now < entry.not_before).then(|| entry.held_answer())
     }
 
+    fn keep_landed_mark(&self, account_id: &str, error: &AcquireError) {
+        if let Some(mark) = error.landed_mark() {
+            self.landed_marks
+                .lock()
+                .expect(LOCK_POISONED)
+                .insert(account_id.to_string(), mark.clone());
+        }
+    }
+
     fn next_attempt_at(&self, account_id: &str, now: i64) -> Option<i64> {
         let cache = self.cache.lock().expect(LOCK_POISONED);
         let entry = cache.get(account_id)?;
@@ -657,10 +683,11 @@ impl Inner {
         let token = match self.manager.acquire(account_id).await {
             Ok(token) => token,
             Err(error) => {
+                self.keep_landed_mark(account_id, &error);
                 return (
                     (self.clock)(),
                     Err(FetchFailure::Message(format!("acquire: {error}"))),
-                )
+                );
             }
         };
         let permit = self

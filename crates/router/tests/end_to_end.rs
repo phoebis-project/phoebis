@@ -495,6 +495,143 @@ usage:
     up.shutdown().await;
 }
 
+/// The formatter's output kept in memory, so a case reads back the lines the binary logged on its thread.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_durations_at_debug()
+{
+    // This thread's subscriber, set before the binary starts: `app::run` installs a global one at INFO, and a
+    // `#[tokio::test]` polls the binary's tasks on this thread, where the thread's own default outranks it.
+    let captured = Captured::default();
+    let _capture = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(captured.clone())
+            .finish(),
+    );
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    let account_secret = "sk-ant-api03-CONNECTIONLINE";
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": account_secret })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let resp = fixture_request(&client, proxy_port, &secret, "e2e-connection")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), "{\"ok\":true}");
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("a new upstream connection"))
+        .collect();
+    assert!(
+        lines.iter().any(|line| line.contains("DEBUG")
+            && line.contains(&format!("host=\"{}\"", phoebis_store::INFERENCE_HOST))
+            && line.contains("dial_ms=")
+            && line.contains("handshake_ms=")),
+        "a connection line for the inference host with both durations: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains(account_secret) && !line.contains(&secret)),
+        "a connection line names no credential: {lines:#?}"
+    );
+}
+
 #[tokio::test]
 async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_back_on_passes_it_through(
 ) {

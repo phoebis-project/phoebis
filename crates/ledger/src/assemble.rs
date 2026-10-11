@@ -1333,6 +1333,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_body_that_did_not_decode_files_stream_undecodable_on_the_request_and_fails_the_serving_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r10", Some("k")));
+        a.observe(selected("r10", 1, "a", 1_010));
+        a.observe(head("r10", 1, 200, AttemptOutcome::Succeeded, 1_060));
+        let Some(Record::Request {
+            request, attempts, ..
+        }) = a
+            .observe(complete(
+                "r10",
+                1,
+                Some("a"),
+                Outcome::Incomplete,
+                200,
+                Some("stream_undecodable"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.error_code.as_deref(),
+                attempts[0].outcome.as_str()
+            ),
+            ("incomplete", Some("stream_undecodable"), "upstream_error")
+        );
+        a.observe(observed("r11", Some("k")));
+        a.observe(selected("r11", 1, "a", 1_010));
+        a.observe(head("r11", 1, 400, AttemptOutcome::UpstreamError, 1_060));
+        let Some(Record::Request { request, .. }) = a
+            .observe(complete(
+                "r11",
+                1,
+                Some("a"),
+                Outcome::Failed,
+                502,
+                Some("stream_undecodable"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.status,
+                request.error_code.as_deref()
+            ),
+            ("failed", Some(502), Some("stream_undecodable")),
+            "the relay's own 502 for a rejection it could not decode"
+        );
+    }
+
     /// A selection lost from the middle of a trail leaves the serving attempt present, so the trail looked
     /// complete while the attempt count and the failovers behind it were short by one.
     #[test]

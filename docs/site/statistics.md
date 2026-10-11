@@ -33,9 +33,10 @@ A `ledger_gap` event names one of these reasons:
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
 status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 answer whose body ended before its end,
-`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under `incomplete`, and
-`stream_cut` or `stream_stalled` under `failed` for a forwarded answer of another status whose body was cut or went
-silent); the time to first byte and to first token; the duration; the bytes sent and received; whether the response was
+`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete`, `stream_stalled` or `stream_undecodable`
+under `incomplete`, and `stream_cut`, `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of
+another status whose body was cut, went silent or did not decode); the time to first byte and to first token; the
+duration; the bytes sent and received; whether the response was
 served kept warm; whether its body was captured; and the client's user agent and class (`claude-code/<entrypoint>`
 or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and
 the summed tool durations of the turn before), the turn origin off its attribution line, its auto-mode standing (as
@@ -383,8 +384,9 @@ The table offers thirteen columns, ten shown by default (pool, kind and transpor
 names all three, and the Columns control turns any on): time, key, pool, account, model, client, kind,
 transport, status, attempts, TTFB, tokens, and cost (window shares for a request a subscription window paid, dollars for
 an overage, fast mode or API key request). A request whose 200 answer ended short reads `incomplete` with the code that
-says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream closed
-without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The model column reads
+says how: `stream_cut` when the connection was cut mid-body, `stream_incomplete` when the stream closed without its
+`message_stop`, `stream_stalled` when the upstream went silent past the idle bound, `stream_undecodable` when the router
+could not decode the body. The model column reads
 the family and version, with the whole id on hover. The client column shows the class the router derived from the user
 agent (`claude-code/<entrypoint>` or `other`), whole where the window has the room and cut with an
 ellipsis where it has not, whole on hover, and the agent type beneath it on a subagent's turn.

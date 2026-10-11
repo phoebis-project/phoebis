@@ -89,11 +89,11 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     })
 }
 
-/// Walks the conversation climb: fixes
-/// `forked_from` and `fork_depth`, where the deepest own-key match has another conversation's root
-/// at depth 2 or deeper, unless `request_class` is auxiliary. `message_boundaries` are the request's own, from
-/// `BodyFacts.chains` (empty for a body without a chain): the fork detection's input, which `RequestIdentity` does
-/// not retain.
+/// The conversation climb: for a request with a session id, reads the fork facts, `forked_from` and `fork_depth`,
+/// where the deepest own-key match under `canonical_model` has another conversation's root at depth 2 or deeper,
+/// unless `request_class` is auxiliary.
+/// `message_boundaries` are the request's own, from `BodyFacts.chains` (empty for a body without a chain): the fork
+/// detection's input, which `RequestIdentity` does not retain.
 pub fn climb(
     identity: &mut RequestIdentity,
     key: &ApiKeyRow,
