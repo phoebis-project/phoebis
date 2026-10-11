@@ -463,9 +463,10 @@ what decided the row in one chip: the rule that fired (`spent rule`), the rung t
 strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited (`cohort`, `session
 pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no
 rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one
-labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a
-time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
-column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+labeled value, two stacked, or the three the exhausted row after a run-out carries (`held`, the wait and `answer`): a
+muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's own time already
+gives. Every account, key, pool, model, session and request a row names is a link, and a column with nothing to say
+shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
 
 After a held request's bound runs out, the log reads one held row per member at its cap, each with its `in flight`
 count, then the exhausted row with `held`, `retry none` and `answer`, the wait and the status the client got: `answer

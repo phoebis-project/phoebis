@@ -605,9 +605,9 @@ async fn a_retry_after_is_honoured_and_capped_by_the_poll() {
 }
 
 /// A scheduler that wakes several slots late, after a stall or a suspended process, reads once and takes the
-/// cadence up at the next slot on the account's own phase: a poll ignores the cache TTL, so replaying each
-/// missed slot would ask an endpoint that rate-limits per account several times back to back, and a cadence
-/// counted from the late read would move the account off its phase for good.
+/// cadence up at the next slot on the account's own phase: replaying each missed slot would ask an endpoint that
+/// rate-limits per account several times back to back, and a cadence counted from the late read would move the
+/// account off its phase for good.
 #[tokio::test]
 async fn a_wake_several_slots_late_reads_once_and_the_next_read_keeps_the_phase() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;

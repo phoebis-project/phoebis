@@ -2,43 +2,14 @@
 //! naming its method, matched route, status, entity and session, and nothing a log must not hold.
 mod common;
 
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-
 use axum::body::Body;
 use axum::http::Response;
 use common::{
     admin_app, admin_parts, delete, exchanged_session_for_new, get, json, login, patch, post, put,
+    Captured,
 };
 
-/// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-
     /// The fields of every mutation line, in the order the lines were written.
     fn mutations(&self) -> Vec<String> {
         const MARK: &str = " INFO phoebis_admin::routes: admin mutation ";

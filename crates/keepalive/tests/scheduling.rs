@@ -1816,6 +1816,18 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
 #[tokio::test]
 async fn an_account_deleted_during_a_failing_tier_streak_leaves_it_and_a_later_account_warns_again()
 {
+    deleted_during_a_failing_tier_streak(false).await;
+}
+
+/// A tick with no recipe retained skips the router's view, so the streak has to leave at that tick's first read of
+/// the registry for a later account under the same id to warn again.
+#[tokio::test]
+async fn an_account_deleted_while_nothing_is_retained_leaves_its_tier_streak_too() {
+    deleted_during_a_failing_tier_streak(true).await;
+}
+
+/// With `session_ended` the rig's session ends before the deletion, so no recipe is retained at the deletion's tick.
+async fn deleted_during_a_failing_tier_streak(session_ended: bool) {
     const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
     let captured = Captured::default();
     let _guard = captured.install();
@@ -1862,6 +1874,12 @@ async fn an_account_deleted_during_a_failing_tier_streak_leaves_it_and_a_later_a
     );
 
     unreadable(false);
+    if session_ended {
+        // The lease lapsed during the wait, and only a start takes the session back for its end to land.
+        r.reregister();
+        r.event(session_end("session")).unwrap();
+        assert_eq!(r.status("main").reason, Reason::SessionEnded);
+    }
     r.h.store.delete_account("o", "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
@@ -1904,6 +1922,9 @@ async fn an_account_deleted_during_a_failing_tier_streak_leaves_it_and_a_later_a
         .unwrap();
     r.h.router.reload().await.unwrap();
     unreadable(true);
+    if session_ended {
+        r.event(session_start("session")).unwrap();
+    }
 
     r.observe("main").await;
     r.advance(270_000);

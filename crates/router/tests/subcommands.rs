@@ -397,6 +397,32 @@ async fn the_help_lists_every_command_and_no_other() {
     );
 }
 
+/// Clap prints each flag's doc comment as its help line, so a doc comment that joins two clauses with a semicolon
+/// reaches the terminal as one.
+#[tokio::test]
+async fn no_help_screen_joins_two_clauses_with_a_semicolon() {
+    let dir = tempfile::tempdir().unwrap();
+    let absent = dir.path().join("absent.yaml");
+    for command in [
+        &[][..],
+        &["backup"],
+        &["check-config"],
+        &["health"],
+        &["init"],
+        &["recover-key"],
+        &["status"],
+        &["tls"],
+        &["tls", "reload"],
+    ] {
+        let args: Vec<&str> = command.iter().copied().chain(["--help"]).collect();
+        let help = phoebis(&args, &absent, &[], &[], None).await;
+        assert_exit(&help, 0);
+        let (stdout, _) = text(&help);
+        let joined: Vec<&str> = stdout.lines().filter(|line| line.contains(';')).collect();
+        assert!(joined.is_empty(), "{command:?} --help: {joined:#?}");
+    }
+}
+
 /// The console is the one place a registry row is created or edited, so the binary knows no registry command: clap
 /// refuses each as an unknown subcommand before any file is read.
 #[tokio::test]

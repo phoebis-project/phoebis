@@ -507,7 +507,7 @@ impl CatalogService {
         if served == resolved {
             return;
         }
-        // A body completing after `shutdown`'s drain margin ran out must not spawn a refresh that outlives it.
+        // A body completing after `cancel`, which `shutdown` runs first, must not spawn a refresh that outlives it.
         if self.stop.is_cancelled() {
             return;
         }

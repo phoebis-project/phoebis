@@ -2657,6 +2657,11 @@ impl Engine {
             inner.expire(now, expiry);
             let snapshot = self.parts.router.snapshot();
             inner.drop_sessions_of_dead_keys(&snapshot);
+            // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
+            // Pruned on every tick, since a probe orphaned while nothing is retained still writes the set.
+            inner
+                .unreadable_tiers
+                .retain(|id| snapshot.account(id).is_some());
             inner.advance_idle_episodes(&snapshot, now);
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
@@ -2682,10 +2687,6 @@ impl Engine {
                 return;
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
-            // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
-            inner
-                .unreadable_tiers
-                .retain(|id| view.snapshot.account(id).is_some());
             inner.follow_resolutions(&view.canonical);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner

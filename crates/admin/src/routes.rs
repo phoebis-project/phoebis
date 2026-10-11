@@ -1465,7 +1465,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 tracing::warn!(
                     account = %row.id,
                     %error,
-                    "the account's tier could not be read, so the view answers without it"
+                    "the account's tier could not be read, so the view answers as if no subscription were stored"
                 );
                 Default::default()
             }

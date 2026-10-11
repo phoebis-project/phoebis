@@ -23,7 +23,7 @@ use phoebis_router::{init, tls};
     about = "Relays Claude Code traffic to Anthropic"
 )]
 struct Cli {
-    /// The bootstrap file; `PHOEBIS_CONFIG` names it when the flag is absent.
+    /// The bootstrap file. `PHOEBIS_CONFIG` names it when the flag is absent.
     #[arg(
         long,
         global = true,

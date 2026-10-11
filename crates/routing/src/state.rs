@@ -292,7 +292,7 @@ pub struct MemberSpend {
 }
 
 /// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; otherwise 1 for
-/// a candidate kept on extra usage with its model week spent (0 for every other), priority, and the overage bit.
+/// a candidate kept on extra usage with a spent window (0 for every other), priority, and the overage bit.
 pub type Tier = (u8, u32, u8);
 
 /// One usage report's token counts, the shape the relay reads off `Usage`.

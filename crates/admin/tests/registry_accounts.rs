@@ -1,38 +1,10 @@
 mod common;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use common::{backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests};
+use common::{
+    backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests, Captured,
+};
 use fake_upstream::Respond;
-
-/// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Captured {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-}
 
 #[tokio::test]
 async fn creating_an_api_key_account_verifies_it_and_a_rejected_key_is_refused() {
@@ -2137,7 +2109,9 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_without_it(
     let warned: Vec<&str> = text
         .lines()
         .filter(|line| {
-            line.contains("the account's tier could not be read, so the view answers without it")
+            line.contains(
+                "the account's tier could not be read, so the view answers as if no subscription were stored",
+            )
         })
         .collect();
     assert_eq!(warned.len(), 1, "{text}");

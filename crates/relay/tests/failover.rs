@@ -3250,7 +3250,7 @@ async fn a_fast_answers_renewal_folds_its_usage_into_the_fast_copy_and_leaves_bo
         .unwrap_or_default();
     assert!(
         fast.input > 0.0 && fast.output > 0.0,
-        "the answer's usage folds into the pin's fast copy, which the router holds beside the row: {fast:?}"
+        "the answer's usage folds into the pin's fast copy, saved on the row beside its plan copies: {fast:?}"
     );
     assert_eq!(
         (pin.burn, pin.burn_banded),

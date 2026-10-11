@@ -18,7 +18,7 @@ pub struct BackupArgs {
     /// Print the manifest on stdout.
     #[arg(long)]
     pub json: bool,
-    /// The destination directory; `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z` by default.
+    /// The destination directory. `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z` by default.
     #[arg(long, value_name = "DIR")]
     pub to: Option<PathBuf>,
 }
