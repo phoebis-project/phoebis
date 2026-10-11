@@ -146,7 +146,9 @@ pub struct ConversationMatch {
     pub depth: Option<u32>,
 }
 
-/// What the relay's climb asks: implemented by the map and by the handle.
+/// What the relay asks of the map: its conversation climb asks `conversation`, and the leg's body build asks
+/// `predecessor` for the answer the request continues on the selected account. Implemented by the map and by the
+/// handle.
 pub trait ConversationLookup {
     fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch>;
     /// The id of the deepest boundary of `query` that holds an answer on the selected account, under the

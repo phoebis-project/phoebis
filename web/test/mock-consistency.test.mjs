@@ -743,8 +743,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
   });
 
-  // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the breakdown
-  // route reads them: every hour that starts inside the range.
+  // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the mock's
+  // `inQuery` reads them: every hour that starts inside the range.
   const defaultRange = (s) => s.allRollups.filter((r) => Date.parse(r.hour) >= s.now - DAY && Date.parse(r.hour) <= s.now);
 
   test(`every reason the default range's totals count lists a request under it in the window its link writes, at ${at}`, async () => {

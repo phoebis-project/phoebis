@@ -291,7 +291,7 @@ const selectsKey = (selector: string, r: RequestLog, live: Map<string, number>) 
   r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
 
 function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>): boolean {
-  // A request the router never attributed matches no filter on that field.
+  // A request the router never attributed to a key or a pool matches no filter on that field.
   if (q.keyIds?.length && !q.keyIds.some((k) => selectsKey(k, r, live))) return false;
   if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
   // The route files a request no attempt served under the unattributed id, as the rollups do.

@@ -3491,6 +3491,7 @@ mod tests {
         let (bound, past) = ("x".repeat(64), "x".repeat(65));
         for sample in [
             None,
+            Some(""),
             Some("main"),
             Some("a/b:c.d_e-f"),
             Some("bad class"),

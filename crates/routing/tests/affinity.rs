@@ -540,6 +540,14 @@ fn the_predecessor_steps_over_an_entry_without_an_id_another_account_another_key
     );
     assert_eq!(
         map.predecessor(&PredecessorQuery {
+            key_generation: 1,
+            ..predecessor_query(&all)
+        }),
+        None,
+        "a later lifetime of the key never reads an earlier lifetime's answers"
+    );
+    assert_eq!(
+        map.predecessor(&PredecessorQuery {
             roots: &["s2"],
             ..predecessor_query(&all)
         }),

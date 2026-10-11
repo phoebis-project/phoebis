@@ -708,14 +708,14 @@ async fn the_completion_event_names_the_members_source_and_the_writers_follow_it
         .header("User-Agent", CLAUDE_CLI_USER_AGENT)
         .header("x-claude-code-session-id", "s-count")
         .body(Body::from(
-            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#,
+            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"diagnostics":{"previous_message_id":null}}"#,
         ))
         .unwrap();
     let (status, complete) = completion_of(&h, &mut sub, count).await;
     assert_eq!(status, 200);
     assert_eq!(
         complete.diagnostics, None,
-        "a token count carries no member"
+        "a token count records no source, a member of the client's included"
     );
 
     // Under the client-member turn's session: the first pass names that turn's answer, the 400 strips the member,

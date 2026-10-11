@@ -5,8 +5,8 @@ export interface RequestsLinkInput {
   /** The reason the count is under, any name the beta sent. */
   reason: string;
   count: number;
-  /** The panel's window in milliseconds and the page's now; `exact` for a session view, whose log read the exact
-   * window, else the rollups' whole hours apply. */
+  /** The panel's window in milliseconds and the page's now. A session view, whose log read the exact window, sets
+   * `exact`, and otherwise the rollups' whole hours apply. */
   window: { fromMs: number; toMs: number; nowMs: number; exact: boolean };
   /** The Analytics page's filters the Requests page reads the same way. */
   filters: {
@@ -20,7 +20,7 @@ export interface RequestsLinkInput {
     sessionId: string | null;
     userAgentPattern: string;
   };
-  /** The breakdown row's own group; absent for a totals bar. */
+  /** The breakdown row's own group. A totals bar has none. */
   group?: { by: AnalyticsGroupBy; key: string };
 }
 
@@ -43,7 +43,7 @@ const hourWindow = ({ fromMs, toMs, nowMs, exact }: RequestsLinkInput['window'])
  * request class, beside the clients the relay labels `other` itself, while the request log matches the raw class. */
 const unlistableClient = (key: string) => key === OTHER_DIMENSION || foldRequestClass(key) !== key;
 
-/** The Requests filter each grouping's row writes; the user agent grouping's counts stay plain. */
+/** The Requests filter each grouping's row writes. The user agent grouping's counts stay plain. */
 const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, string> = {
   account: 'accounts',
   client: 'client',

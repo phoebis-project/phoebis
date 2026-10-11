@@ -4157,8 +4157,10 @@ struct RestoreContext {
 struct Admitted<'a> {
     /// The key's override else the pool's, read once at admission.
     auto_mode_server: bool,
-    /// The request's class is auxiliary (a class header outside the refreshing classes): the cache TTL policy's
-    /// `inject_when_absent` leaves such a body as sent, since a one-off helper's write is a write nothing reads.
+    /// The request's class is auxiliary (a class header outside the refreshing classes). The cache TTL policy's
+    /// `inject_when_absent` choice leaves such a body as sent, since a one-off helper's write is a write nothing
+    /// reads, and the selection's `marker` fact reads the same flag, so the cache gate never counts on a member the
+    /// body will not get.
     auxiliary: bool,
     /// The pool's own policy, off by default; read once at admission since a migrated attempt still prices the
     /// same request against the same policy, only the account's overage state changes per destination.

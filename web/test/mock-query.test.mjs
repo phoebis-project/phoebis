@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-// The mock skips its draws by the local hour, so the file runs in UTC whatever the host's zone; `node --test` gives each
+// The mock skips its draws by the local hour, so the file runs in UTC whatever the host's zone. `node --test` gives each
 // file a process of its own.
 process.env.TZ = 'UTC';
 
