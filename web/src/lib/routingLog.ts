@@ -1332,7 +1332,8 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     const on = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
     const held = c?.heldMs ?? h.heldMs;
     rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
-  } else if (o.exhaustion !== null && last !== undefined) {
+  } else if (o.exhaustion !== null && last !== undefined && last.attempt === record.request.attempt) {
+    // The relay keeps every hold across a failover, and an earlier attempt's hold is no part of this decision.
     rows.push({ chips: [accountChip(last.accountId, 'on'), plain(last.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(last.heldMs), 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   }
   if (o.exhaustion !== null) {
@@ -1514,8 +1515,9 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       if (row.kind === 'model_rejected') {
         add('Cooldown scope', plain('the model on this account'));
         add('Attempt', attempt === null ? null : plain(String(attempt)));
-        // The event's own fact is the 404 alone. The until is on the cooldown_set row the same answer wrote.
-        const set = rows.find((r): r is RoutingEvent => r.type === 'event' && r.kind === 'cooldown_set' && r.accountId === row.accountId && atOf(r) === atOf(row) && row.model !== null && str(r.detail.scope) === `model:${row.model}`);
+        // The event's own fact is the 404 alone. The until is on the cooldown_set row the same answer wrote, found by
+        // the client request since the router dates the two rows with separate clock reads.
+        const set = row.requestId !== null && row.model !== null ? rows.find((r): r is RoutingEvent => r.type === 'event' && r.kind === 'cooldown_set' && r.requestId === row.requestId && r.accountId === row.accountId && str(r.detail.scope) === `model:${row.model}`) : undefined;
         add('Until', set === undefined ? null : time(set.detail.until));
       }
       add('Request', request);

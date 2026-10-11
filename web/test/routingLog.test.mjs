@@ -659,6 +659,16 @@ test('an exhausted record after a run-out draws ran out on its hold and 429 on i
   assert.deepEqual(rows(exhausted([])), [['Answer', ['status 404', 'retry none']]], 'a record that held nowhere draws no hold');
 });
 
+test('an exhausted record draws no hold an earlier attempt waited through', () => {
+  const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
+  const exhausted = (attempt, holds) =>
+    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null }, request: { attempt, holds } });
+  const hold = (attempt) => ({ accountId: 'primary', attempt, cohort: null, heldMs: 60_000, ranOut: false });
+  // Held and freed on attempt 1, then failed over: the relay keeps attempt 1's hold on the request that attempt 2 exhausts.
+  assert.deepEqual(rows(exhausted(2, [hold(1)])), [['Answer', ['status 404', 'retry none']]]);
+  assert.deepEqual(rows(exhausted(2, [hold(1), hold(2)])), [['Hold', ['on primary', 'strategy pick', 'held 1 min']], ['Answer', ['status 404', 'retry none']]], "a hold on the record's own attempt still draws");
+});
+
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
   account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
@@ -818,9 +828,20 @@ test("a model rejection reads its until off the page's cooldown row and has no p
   assert.deepEqual(until([decision({ at }), cooldown()]), ['15:24'], 'the decisions beside it are passed over');
   assert.equal(until([]), undefined, 'no cooldown row on the page');
   assert.equal(until([cooldown({ accountId: 'secondary' })]), undefined, "another account's cooldown");
-  assert.equal(until([cooldown({ at: iso(ms(14, 12, 6)) })]), undefined, 'a cooldown set at another instant');
+  assert.equal(until([cooldown({ requestId: 'req_012' }, { source_request_id: 'req_012' })]), undefined, "another request's cooldown");
   assert.equal(until([cooldown({}, { scope: 'model:claude-sonnet-5' })]), undefined, 'a cooldown on another model');
   assert.equal(until([cooldown({}, { scope: 'account' })]), undefined, 'a cooldown on the whole account');
+});
+
+test("a model rejection reads the until off its own request's cooldown row, whatever instant the router dated each", () => {
+  const at = ms(14, 12, 5);
+  const rejection = (o = {}) => event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_011', wire_model: 'claude-haiku-4-5' }, { at: iso(at), model: 'claude-haiku-4-5-20251001', requestId: 'req_011', ...o });
+  const cooldown = (o = {}, detail = {}) => event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', source_request_id: 'req_011', until: ms(15, 24), window: 'model', ...detail }, { at: iso(at + 3), id: 8, requestId: 'req_011', ...o });
+  const until = (row, rows) => d.detailPairs(row, NOW, rows).find((p) => p.label === 'Until')?.chips.map(chipText);
+  assert.deepEqual(until(rejection(), [cooldown()]), ['15:24'], 'the router dated the cooldown 3 ms after the rejection');
+  assert.deepEqual(until(rejection(), [cooldown({ at: iso(at - 2) })]), ['15:24'], 'and 2 ms before it');
+  assert.equal(until(rejection(), [cooldown({ requestId: 'req_012' }, { source_request_id: 'req_012' })]), undefined, "another request's cooldown a few milliseconds on");
+  assert.equal(until(rejection({ requestId: null }), [cooldown({ requestId: null }, { source_request_id: null })]), undefined, 'a rejection that names no request reads no cooldown');
 });
 
 test('the catalog change lists its models fable, opus, sonnet, haiku, newest first', () => {
