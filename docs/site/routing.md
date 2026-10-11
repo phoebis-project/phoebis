@@ -579,15 +579,16 @@ body the verdict forwards reaches the client whole, the prefix first.
 
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
 client: `upstream_stalled` when a rejection body went silent past the idle bound, `upstream_undecodable` when the answer
-names a content coding the router cannot read or carries a payload that does not decode, and `upstream_cut` when the
-connection was cut while a rejection body or a held stream was being read. The request reads `failed` with
-`stream_stalled`, `stream_undecodable` or `stream_cut`. `upstream_unreachable` names a request that got no head at all.
+names a content coding the router cannot read or carries a payload that does not decode, and `upstream_cut` for a
+connection cut while a rejection body or a held stream was being read, or a body past its bound. The request reads
+`failed` with `stream_stalled`, `stream_undecodable` or `stream_cut`. `upstream_unreachable` names a request that got no
+head at all.
 
-An `incomplete` request's error code says how its body ended: `stream_cut` when the connection was cut mid-body,
-`stream_incomplete` when an event stream closed without its `message_stop`, `stream_stalled` when the upstream went
-silent past the idle bound, and `stream_undecodable` when the body did not decode. A forwarded answer with any other
-status stays `failed`, and its error code reads `stream_cut`, `stream_stalled` or `stream_undecodable` when its body was
-cut, went silent or did not decode.
+An `incomplete` request's error code says how its body ended: `stream_cut` for a connection cut mid-body or a body past
+its bound, `stream_incomplete` when an event stream closed without its `message_stop`, `stream_stalled` when the
+upstream went silent past the idle bound, and `stream_undecodable` when the body did not decode. A forwarded answer with
+any other status stays `failed`, and its error code reads `stream_cut`, `stream_stalled` or `stream_undecodable` when
+its body was cut, went silent or did not decode.
 
 Every new upstream connection, on the inference and the control plane alike, logs one line at debug level naming the
 host and two durations: `dial_ms` for the TCP connect and `handshake_ms` for the TLS handshake.

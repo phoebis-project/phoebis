@@ -1405,6 +1405,63 @@ async fn a_streamed_answer_whose_gzip_does_not_inflate_ends_incomplete_with_stre
     up.shutdown().await;
 }
 
+/// A JSON answer gzipped into `body`, which the relay reads as it arrives with no held prefix, so its first piece is
+/// a body chunk.
+fn gzipped_json(body: Vec<u8>) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![("Content-Encoding".into(), "gzip".into())],
+        body,
+    }
+}
+
+#[tokio::test]
+async fn a_json_answer_whose_gzip_breaks_inside_a_chunk_ends_incomplete_with_stream_undecodable() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_json(corrupt_gzip(COMPRESSIBLE)),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(identity_request()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error at the chunk that does not decode"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_undecodable"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_json_answer_whose_gzip_tail_does_not_finish_ends_incomplete_with_stream_undecodable() {
+    // Without its eight-byte trailer every chunk decodes, and the decoder's finish is what refuses the body.
+    let mut body = gzip(COMPRESSIBLE);
+    body.truncate(body.len() - 8);
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_json(body),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(identity_request()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error at the tail that does not finish"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_undecodable"))
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_rejection_cut_inside_its_body_answers_502_upstream_cut_and_files_stream_cut() {
     // The drain fails on the body reader's framing, a cut connection rather than a payload that does not decode.

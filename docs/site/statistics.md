@@ -36,24 +36,23 @@ status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 an
 `rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete`, `stream_stalled` or `stream_undecodable`
 under `incomplete`, and `stream_cut`, `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of
 another status whose body was cut, went silent or did not decode); the time to first byte and to first token; the
-duration; the bytes sent and received; whether the response was
-served kept warm; whether its body was captured; and the client's user agent and class (`claude-code/<entrypoint>`
-or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and
-the summed tool durations of the turn before), the turn origin off its attribution line, its auto-mode standing (as
-admission read it, a server-side check asked for under an on setting or the `safeguards` member carried under an off
-setting, which the dispatch drops; or a refusal for the body's shape before any upstream saw it), and the request's
-shape: the effort, the thinking mode and budget, the output limit, the tool, system-block, and message counts, the
-context edits, the temperature, and the requested speed and service tier.
-A session that
-branched from another conversation carries that conversation's root and the matched depth as well. The session it names
-is the client's own,
-and the Sessions view groups a row by it. The attempt row names
-the account and its kind; the upstream status, request id and message id; the outcome; the cooldown the attempt set; the
-stop reason, the model the answer names when it differs from the one the router resolved, the speed, the region
-inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model; the five token
-counts, with the thinking share of the output and the web search and fetch calls the answer made; the cache miss reason
-the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across input, cache read,
-cache write, and output; and the pricing version the estimate used.
+duration; the bytes sent and received; whether the response was served kept warm; whether its body was captured; and the
+client's user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the
+agent type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn
+origin off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
+setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
+shape before any upstream saw it), and the request's shape: the effort, the thinking mode and budget, the output limit,
+the tool, system-block, and message counts, the context edits, the temperature, and the requested speed and service
+tier.
+A session that branched from another conversation carries that conversation's root and
+the matched depth as well. The session it names is the client's own,
+and the Sessions view groups a row by it.
+The attempt row names the account and its kind; the upstream status, request id and message id;
+the outcome; the cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the
+router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
+recommended model; the five token counts, with the thinking share of the output and the web search and fetch calls the
+answer made; the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the
+cost split across input, cache read, cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -384,53 +383,53 @@ The table offers thirteen columns, ten shown by default (pool, kind and transpor
 names all three, and the Columns control turns any on): time, key, pool, account, model, client, kind,
 transport, status, attempts, TTFB, tokens, and cost (window shares for a request a subscription window paid, dollars for
 an overage, fast mode or API key request). A request whose 200 answer ended short reads `incomplete` with the code that
-says how: `stream_cut` when the connection was cut mid-body, `stream_incomplete` when the stream closed without its
-`message_stop`, `stream_stalled` when the upstream went silent past the idle bound, `stream_undecodable` when the router
-could not decode the body. The model column reads
-the family and version, with the whole id on hover. The client column shows the class the router derived from the user
-agent (`claude-code/<entrypoint>` or `other`), whole where the window has the room and cut with an
-ellipsis where it has not, whole on hover, and the agent type beneath it on a subagent's turn.
-One row is one client request however many
-attempts it took: a request of one attempt shows nothing under Attempts, and a failover reads "2 attempts" with the
-trail of account and status on hover, "secondary 429, primary 200" when a 429 on the first account failed over to a 200
-on the second. A request that did not succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`,
-`incomplete`, or `rejected`. A request that waited for a slot while every account was at its cap carries a held marker
-after its attempt count with the time it waited. The search matches the request id, the session, the key, the model, the
-error code, and an attempt's account, upstream request id or upstream message id, literally: `_` and `%` are characters,
-not wildcards. Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for
-any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the
-client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
-values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
-the answer reported, else by whether the request asked for `fast`, the status filter offers the codes the router and
-Anthropic answer and any other code the page holds, the outcome filter picks how the request ended (`canceled`,
-`exhausted`, `failed`, `incomplete`, `rejected`, or `succeeded`), and the held toggle keeps the requests that waited for
-a slot. The search and the two pattern fields apply 400 milliseconds after the last keystroke, on Enter, or when the
-field loses focus. Every filter, the range and the page size live in the page's address, so a reload or a shared link
-keeps them. A filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
-detail, which shows the outcome beneath the status, the user agent,
-the model as the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing
-(asked for a server-side check under an on setting; carried the safeguards member under an off setting, which the
-dispatch drops; refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn. The drawer's Request section names the
-upstream's request id for each attempt and, on the answer that served, the message id a Claude Code transcript's
-assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a per-turn control
-entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
-still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
-it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the answer's facts:
-the status, the outcome, the serving account and model, the answer's stop reason and geography (global, us, or not
-available for a model that takes no geography), and the cache miss reason. The phases follow as a waterfall from
-received to finished, each phase with its offset and a phase the ledger holds no instant for marked not measured, then
-the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table, then the request's identity
-with the upstream request and message ids under it, its shape, the client hints and the captured bodies. The usage ends
-with the request's estimated cost in its native unit: a request a subscription window paid reads its share of the
-account's 5-hour, 7-day and model-week windows with the dollar equivalent after them, an overage, fast mode or API key
-request reads dollars with why, and a subscription request the cost model prices no share for reads the dollar
-equivalent alone. Its head carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
-[routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
-compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
-the captured request and response bodies highlighted, a streamed answer as its events with each `event:` line over its
-data, each with Copy, which copies the text as shown, and an "Open wide" link that opens the body in a wide dialog. A
-body past 256 KiB shows compact until Pretty-print is pressed.
+says how: `stream_cut` for a connection cut mid-body or a body past its bound, `stream_incomplete` when the stream
+closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound,
+`stream_undecodable` when the router could not decode the body. The model column reads the family and version, with the
+whole id on hover. The client column shows the class the router derived from the user agent (`claude-code/<entrypoint>`
+or `other`), whole where the window has the room and cut with an ellipsis where it has not, whole on
+hover, and the agent type beneath it on a subagent's turn.
+One row is one client request however many attempts it took: a request of one
+attempt shows nothing under Attempts, and a failover reads "2 attempts" with the trail of account and status on hover,
+"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
+that waited for a slot while every account was at its cap carries a held marker after its attempt count with the time it
+waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
+upstream request id or upstream message id, literally: `_` and `%` are characters, not wildcards. Filters narrow the
+table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for
+one, a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
+the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers and
+attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, else by whether
+the request asked for `fast`, the status filter offers the codes the router and Anthropic answer and any other code the
+page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`,
+or `succeeded`), and the held toggle keeps the requests that waited for a slot. The search and the two pattern fields
+apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and
+the page size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load is
+disabled and says why. Selecting a row opens a drawer with the request's detail, which shows the outcome beneath the
+status, the user agent, the model as the client spelled it and, when
+it differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
+setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
+not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
+the tool time before the turn. The drawer's Request section names the upstream's request id for each attempt and, on the
+answer that served, the message id a Claude Code transcript's assistant entry carries. The drawer's effort is the level
+the upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's
+top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
+own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. The drawer opens on the answer's facts: the status, the outcome, the serving account and
+model, the answer's stop reason and geography (global, us, or not available for a model that takes no geography), and
+the cache miss reason. The phases follow as a waterfall from received to finished, each phase with its offset and a
+phase the ledger holds no instant for marked not measured, then the usage, opened by a bar of the token kinds in the
+Tokens chart's colors over the table, then the request's identity with the upstream request and message ids under it,
+its shape, the client hints and the captured bodies. The usage ends with the request's estimated cost in its native
+unit: a request a subscription window paid reads its share of the account's 5-hour, 7-day and model-week windows with
+the dollar equivalent after them, an overage, fast mode or API key request reads dollars with why, and a subscription
+request the cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and
+each row a "Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter
+hour either side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts),
+and the chosen set returns when it closes. The drawer shows the captured request and response bodies highlighted, a
+streamed answer as its events with each `event:` line over its data, each with Copy, which copies the text as shown, and
+an "Open wide" link that opens the body in a wide dialog. A body past 256 KiB shows compact until Pretty-print is
+pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

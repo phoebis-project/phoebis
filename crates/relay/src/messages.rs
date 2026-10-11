@@ -2033,7 +2033,10 @@ impl Relay {
         // at most once per request.
         let mut credential = match self.credential(account).await {
             Ok(credential) => credential,
-            Err(_) => return Leg::FailOver { auth_marked: false },
+            Err(NoCredential::Marked) => return Leg::FailOver { auth_marked: true },
+            Err(NoCredential::Stale | NoCredential::Unavailable) => {
+                return Leg::FailOver { auth_marked: false }
+            }
         };
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
@@ -3210,6 +3213,22 @@ impl Relay {
                 Ok(token) => Credential::from(token),
                 Err(error) => {
                     tracing::warn!(account = %account.id, %error, "no credential for the selected account");
+                    // The manager's store write starts no reload, so a mark this acquisition's refresh landed
+                    // reaches routing through the report the ladder sends for its own.
+                    if let Some(mark) = error.landed_mark() {
+                        self.router
+                            .report(Report::AccountState {
+                                account_id: mark.account_id.clone(),
+                                state: mark.state,
+                                incarnation: mark.incarnation,
+                                lifecycle_generation: mark.lifecycle_generation,
+                                credential_generation: mark.credential_generation,
+                                cause: mark.cause,
+                                detail: None,
+                            })
+                            .await;
+                        return Err(NoCredential::Marked);
+                    }
                     return Err(NoCredential::Unavailable);
                 }
             },
@@ -3483,7 +3502,7 @@ impl Relay {
     /// The relay's own 502 for an upstream response it could not read after the head: `upstream_stalled` when the
     /// upstream went silent past the idle bound, filed `stream_stalled`, `upstream_undecodable` for a coding the
     /// relay cannot read or a payload that does not decode, filed `stream_undecodable`, and `upstream_cut` for a cut
-    /// connection, filed `stream_cut`.
+    /// connection or a body past its bound, filed `stream_cut`.
     async fn unreadable(
         &self,
         trace: &Trace,
@@ -3963,9 +3982,11 @@ struct Forward<'a, C> {
     trace: &'a Trace,
 }
 
-/// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
-/// is already in `attempted`, so both send the loop back to select without a wire submission.
+/// Why a selected account produced nothing to dispatch with. No answer reaches the caller: the account is
+/// already in `attempted`, so each sends the loop back to select without a wire submission.
 enum NoCredential {
+    /// The acquisition's refresh landed the account's `reauth_required` mark, which is already reported.
+    Marked,
     /// The account row moved between the selection and the acquisition.
     Stale,
     /// The manager or the store has no credential to hand out.

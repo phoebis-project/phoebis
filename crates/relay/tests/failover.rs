@@ -1602,6 +1602,39 @@ fn paired(id: &'static str, secret: &'static str) -> TestAccount {
     }
 }
 
+/// The token endpoint's conclusive refusal of a refresh, which lands the reauth mark.
+fn invalid_grant() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+    }
+}
+
+/// Commits a bundle for `id` inside its refresh margin and drops the manager's cached one, as a pairing does, so the
+/// account's next acquisition goes to the token endpoint.
+fn due_for_refresh(h: &Harness, id: &str) {
+    let stored = h.store.credentials(id).unwrap().unwrap();
+    h.store
+        .commit_credentials(
+            id,
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-oat01-SHORT-refresh")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.manager.invalidate(id);
+}
+
 /// The request in the background, so the test can move the clock while the relay holds it.
 fn spawned(
     h: &Harness,
@@ -2046,6 +2079,91 @@ async fn a_refused_replay_refuses_the_replayed_lineage_in_the_credential_cache()
     up.shutdown().await;
 }
 
+/// The relay's own refresh at dispatch lands the reauth mark as the ladder's does, and reports it as the ladder's is
+/// reported: routing reads the account `reauth_required` without a reload, and nothing dials it again.
+#[tokio::test]
+async fn a_dispatch_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: invalid_grant(),
+        },
+    ])
+    .await;
+    let h = two_accounts(&up).await;
+    due_for_refresh(&h, "a");
+    // The row and generation a leg selected before the mark carries into its acquisition.
+    let before = h.router.snapshot();
+    let (row_before, generation_before) = (
+        before.account("a").unwrap().clone(),
+        before.credential_generation("a"),
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b"),
+        "the request fails over to b"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the dispatch's refresh landed the mark"
+    );
+    // The manager's mark is a store write alone, which starts no registry reload, so only a report reaches the
+    // snapshot.
+    wait_for(Duration::from_secs(5), || {
+        (h.router.snapshot().account("a").unwrap().state == AccountState::ReauthRequired)
+            .then_some(())
+    })
+    .await;
+    let reads = h.store.debug_credential_reads();
+    assert!(
+        matches!(
+            h.manager.acquire_for(&row_before, generation_before).await,
+            Err(AcquireError::ReauthRequired(..))
+        ),
+        "the pre-mark row is refused by the cache"
+    );
+    assert_eq!(
+        h.store.debug_credential_reads(),
+        reads,
+        "the refusal reads nothing from the store"
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the marked account is not selected"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [B, B],
+        "nothing dials the marked account"
+    );
+    assert_eq!(
+        token_posts(&up),
+        1,
+        "the marked account is not refreshed again"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn six_accounts_with_lost_refresh_answers_hold_once_and_answer_within_the_deadline() {
     const D: &str = "sk-ant-oat01-DDDD";
@@ -2419,6 +2537,45 @@ async fn a_probe_whose_refresh_answers_invalid_grant_names_the_mark() {
         (503, "accounts_unavailable".into(), Some("reauth_required")),
         "the refresh's own mark reaches the probe's answer"
     );
+    up.shutdown().await;
+}
+
+/// A probe whose dispatch refresh lands its pinned account's reauth mark names the mark on its answer, as a probe whose
+/// leg's rejection marked the account does.
+#[tokio::test]
+async fn a_probe_whose_dispatch_refresh_answers_invalid_grant_names_the_mark() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: invalid_grant(),
+        },
+    ])
+    .await;
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "a");
+    resp.into_body().collect().await.unwrap();
+    due_for_refresh(&h, "a");
+    let probed = h
+        .relay
+        .probe(probe_of(&h), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(
+        probe_answer(&probed),
+        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        "the dispatch's own mark reaches the probe's answer"
+    );
+    assert_eq!(token_posts(&up), 1);
+    assert_eq!(credentials_seen(&up), [A], "the probe dials nothing");
     up.shutdown().await;
 }
 

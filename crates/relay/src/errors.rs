@@ -370,7 +370,7 @@ pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
     retry_after: None,
 };
 
-/// The upstream sent a head and then the connection was cut before the body ended.
+/// The upstream sent a head and then the connection was cut before the body ended, or the body ran past its bound.
 pub(crate) const UPSTREAM_CUT: Failure = Failure {
     status: StatusCode::BAD_GATEWAY,
     error_type: "api_error",
