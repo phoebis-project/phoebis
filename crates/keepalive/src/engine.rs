@@ -930,7 +930,9 @@ pub(crate) struct Kept {
     pub covered: bool,
     pub unit: Option<SavingsUnit>,
     /// The label a probe written off at a ceiling settles under when its entry lapses with no turn: `idle_limit`
-    /// today. `None` for a probe a real request superseded or adopted, which waits for that request's completion.
+    /// today. A turn that reads the probe leaves the label in place, so one that ends without deciding the probe
+    /// hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
+    /// request's completion.
     pub pending: Option<Wasted>,
 }
 
@@ -1353,14 +1355,22 @@ impl Inner {
         }
     }
 
-    /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, and
-    /// touches each agent it settled for the next save. True when it queued a settlement.
+    /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, on
+    /// each agent with no turn open, and touches each agent it settled for the next save. True when it queued a
+    /// settlement.
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) -> bool {
         let lapsed = |kept: &Kept| kept.pending.is_some() && kept.entry_expires <= now;
+        let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
             for (agent_id, agent) in session.agents.iter_mut() {
-                if !agent.kept.iter().any(lapsed) {
+                // An open turn's completion decides the probes, as `lapse` waits for it. A turn that ends with no
+                // answer or at a bus gap decides nothing and leaves them here.
+                let turn_open = agent
+                    .current
+                    .as_ref()
+                    .is_some_and(|o| open.contains_key(&o.id));
+                if turn_open || !agent.kept.iter().any(lapsed) {
                     continue;
                 }
                 let (due, waiting): (Vec<Kept>, Vec<Kept>) = std::mem::take(&mut agent.kept)
@@ -2219,11 +2229,6 @@ impl Engine {
             kind: None,
             in_overage: false,
         });
-        // The kept probes wait for this request's completion to decide them, so the lapse sweep leaves them. A request
-        // that returned above with no observation has no completion to wait for, and leaves them pending.
-        for kept in &mut agent.kept {
-            kept.pending = None;
-        }
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
         inner.touch_agent(&key, &agent_id);

@@ -1763,6 +1763,48 @@ async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without
     );
 }
 
+/// A turn that ends with no answer from the upstream decides nothing about the pending probe it found: one cancelled
+/// before its head and one a bus gap ended both hand the probe back to the lapse, which settles it under `idle_limit`
+/// at its entry's end.
+#[tokio::test]
+async fn a_turn_ended_before_its_head_or_by_a_bus_gap_leaves_the_pending_probe_to_its_lapse() {
+    for gap in [false, true] {
+        let mut r = ended_by_the_idle_limit().await;
+        r.advance(10_000);
+        r.engine.observe(r.observed("second", "main", BODY));
+        r.engine.observe(r.selected("second", "a"));
+        if gap {
+            r.engine.bus_gap(1, 0);
+        } else {
+            r.engine
+                .observe(r.complete("second", phoebis_bus::Outcome::Canceled, None));
+        }
+        r.advance(19_999);
+        r.step().await;
+        assert_eq!(
+            r.status("main").unanswered,
+            1,
+            "pending a millisecond before its entry ends (bus gap: {gap})"
+        );
+        r.advance(1);
+        r.step().await;
+        assert_eq!(
+            r.status("main").unanswered,
+            0,
+            "the lapse settled the probe (bus gap: {gap})"
+        );
+        let rows = final_rollups(&r).await;
+        assert_eq!(
+            (
+                inference_rows(&rows).kept_warm_requests,
+                probe_rows(&rows).wasted_probe_reasons
+            ),
+            (0, BTreeMap::from([("idle_limit".to_string(), 1)])),
+            "the entry lapsed after a turn that read nothing (bus gap: {gap})"
+        );
+    }
+}
+
 /// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.
 async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
     r.ledger.clone().shutdown().await.unwrap();
