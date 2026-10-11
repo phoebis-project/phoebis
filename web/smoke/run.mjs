@@ -8415,6 +8415,126 @@ m.unmount();
   classes.unmount();
 }
 
+// Follow reads the list again every 5 seconds over the page's filters with the range ending at the poll, and lands
+// what arrived at the top in the accent tint. The open drawer pauses it, an older page stops it, and the address never
+// holds it.
+{
+  const HOUR = 3_600_000;
+  const followSwitch = (page) => page.container.querySelector('.filters__cols button[role="switch"][aria-label="Follow"]');
+  const requestRows = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
+  // The time cell carries the whole id on its title, the one place a row names its request.
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const nextPage = (page) => page.container.querySelector('button[aria-label="Next page"]');
+  {
+    // Mounted two seconds before the newest row the page's filters list, so the first poll's range is the first to
+    // reach it. The row reaches the table through the poll's read alone.
+    const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
+    const t = Date.parse(newest.at);
+    const page = await mount('/requests', { now: t - 2_000 });
+    const before = idOf(requestRows(page)[0]);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const first = requestRows(page)[0];
+    const sent = polls.calls[0]?.[0] ?? {};
+    const landed = { calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, to: sent.to };
+    first?.click();
+    await page.settle();
+    const paused = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    paused.restore();
+    const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null };
+    page.container.querySelector('button[aria-label="Close details"]')?.click();
+    await page.settle();
+    // The poll arms again at the close, so its next read ends a full period later and finds nothing new to tint.
+    const resumed = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    resumed.restore();
+    const after = { calls: resumed.calls.length, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[0]?.[0]?.to };
+    nextPage(page)?.click();
+    await page.settle();
+    const stopped = { checked: followSwitch(page)?.getAttribute('aria-checked') ?? null, rows: requestRows(page).length };
+    results.push({
+      name: '/requests Follow merges a new row under the fresh tint, keeps it under the drawer and stops on Next',
+      ok:
+        before !== newest.id &&
+        landed.calls === 1 && landed.cursor === undefined && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
+        drawer.open && drawer.calls === 0 && drawer.id === newest.id &&
+        after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
+        stopped.checked === 'false' && stopped.rows > 0,
+      missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(stopped)],
+    });
+    page.unmount();
+  }
+  {
+    // A day back, the list holds the window's first hour, and the first poll, whose range ends now, finds more arrived
+    // than its eight pages of ten read. Next reads on from the last row the poll read, up to the poll's end.
+    const from = CLOCK_ORIGIN - 24 * HOUR;
+    const page = await mount(`/requests?from=${isoAt(from)}&to=${isoAt(from + HOUR)}&rows=10`, { now: CLOCK_ORIGIN });
+    const listed = requestRows(page).map(idOf);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle(2_000);
+    polls.restore();
+    const sent = polls.calls.map((c) => c[0]);
+    const end = isoAt(CLOCK_ORIGIN + 5_000);
+    // Every row under the poll's bounds, newest first.
+    const all = [];
+    for (let cursor; ; ) {
+      const answer = await api.listRequests({ cursor, from: isoAt(from), limit: 100, to: end });
+      all.push(...answer.requests.map((r) => r.id));
+      if (answer.nextCursor === null) break;
+      cursor = answer.nextCursor;
+    }
+    const arrived = listed.length > 0 ? all.indexOf(listed[0]) : all.length;
+    const overrun = sent.length === 8 ? (await api.listRequests(sent[7])).nextCursor : null;
+    const line = page.container.querySelector('.requests__overrun')?.textContent ?? null;
+    const drawn = requestRows(page).map(idOf);
+    const next = countCalls('listRequests');
+    nextPage(page)?.click();
+    await page.settle();
+    next.restore();
+    const read = next.calls.map((c) => c[0]);
+    const after = requestRows(page).map(idOf);
+    results.push({
+      name: '/requests Next past a Follow overrun reads the rows the poll left up to its end',
+      ok:
+        arrived > 90 && sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than Follow could fetch. Reload to read them.' &&
+        drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
+        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
+      missing: [`${arrived} arrived over ${listed.length} listed`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const on = page.location().search;
+    const range = page.container.querySelector('select[aria-label="Date range"]');
+    if (range) {
+      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(range, '6h');
+      range.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    await page.settle();
+    const changed = page.location().search;
+    const checked = followSwitch(page)?.getAttribute('aria-checked') ?? null;
+    results.push({
+      name: '/requests the Follow switch is never in the address',
+      ok: on === '' && changed === '?range=6h' && checked === 'true',
+      missing: [JSON.stringify(on), JSON.stringify(changed), String(checked)],
+    });
+    page.unmount();
+  }
+}
+
 // A filter fed by a list that did not load offers nothing to pick, so it is disabled and says why where a pointer and a
 // screen reader both find it; the filters beside it stay as they are.
 {

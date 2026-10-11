@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
+import { useFollow } from '@/app/useFollow';
 import { Chips } from '@/components/DecisionCard';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
@@ -19,6 +20,7 @@ import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
+import { FOLLOW_OVERRUN } from '@/lib/follow';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
@@ -159,6 +161,9 @@ function costRowValue(unit: CostUnit) {
   }
 }
 
+/** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
+const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+
 export function RequestsPage() {
   const { requestId } = useParams();
   const navigate = useNavigate();
@@ -176,13 +181,16 @@ export function RequestsPage() {
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
-  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[] }>({ for: address, stack: [] });
+  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[]; to?: number }>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
+  const pagedTo = paging.for === address ? paging.to : undefined;
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
+  const [follow, setFollow] = useState(false);
   const update = (patch: Partial<Filters>) => {
     const next = { ...filters, ...patch };
     replace({ ...next, rows: String(next.rows) });
@@ -194,8 +202,8 @@ export function RequestsPage() {
   const span = useMemo(() => addressWindow(filters.range, REQUEST_RANGES, '24h', loadedAt), [filters.range, loadedAt]);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
-    [filters, cursor, span],
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(pagedTo ?? span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, span, pagedTo],
   );
   // Custom starts from the window the list shows, so the choice holds.
   const chooseRange = (value: string) => update({ range: value === 'custom' ? { from: iso(span.from), preset: 'custom', to: iso(span.to) } : { from: '', preset: value, to: '' } });
@@ -209,23 +217,40 @@ export function RequestsPage() {
     update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
   const requests = useAsync(() => api.listRequests(query), [query]);
+  // The open drawer reads one of the rows, so the poll waits for it to close. The route answers its rows as `requests`.
+  const { following, setFollowed } = useFollow<RequestLog>({ address, base: requests.stale ? null : (requests.data?.requests ?? null), compare: newestFirst, identity: (r) => r.id, on: follow && cursor === undefined && !requestId, paged: cursor !== undefined, read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then((page) => ({ nextCursor: page.nextCursor, rows: page.requests })) });
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {
     resetPaging();
+    setFollowed(null);
     setLoadedAt(clock.now());
   };
 
-  const rows = requests.data?.requests ?? [];
-  const nextCursor = requests.data?.nextCursor ?? null;
+  const rows = following?.rows ?? requests.data?.requests ?? [];
+  const fresh = following?.fresh ?? new Set<string>();
+  const overrun = following?.overrun ?? null;
+  // Past an overrun, Next walks on from the last row Follow read, so the rows it left are the next page.
+  const nextCursor = overrun?.cursor ?? requests.data?.nextCursor ?? null;
+  // The tint marks what the last poll brought, and no poll follows to take it away.
+  const stopFollowing = () => {
+    setFollow(false);
+    setFollowed((f) => f && { ...f, fresh: new Set() });
+  };
   const goNext = () => {
     if (!nextCursor) return;
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor] });
+    // The rows under the reader would move, so an older page stops the poll.
+    stopFollowing();
+    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: overrun?.to ?? pagedTo });
   };
   const goPrevious = () => {
     const copy = [...stack];
     const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy });
+    setPaging({ for: address, cursor: previous, stack: copy, to: pagedTo });
+  };
+  const toggleFollow = (on: boolean) => {
+    if (on) setFollow(true);
+    else stopFollowing();
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
   const active = REQUESTS_CODEC.toParams({ ...read, rows: DEFAULTS.rows }).toString() !== '';
@@ -331,12 +356,22 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
+            <label className="row">
+              <Toggle checked={follow} onChange={toggleFollow} label="Follow" />
+              <span className="secondary">Follow</span>
+            </label>
             <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`}>
               Refresh
             </Button>
             <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
           </div>
         </div>
+
+        {overrun !== null && (
+          <div className="callout callout--warning requests__overrun" role="status">
+            {FOLLOW_OVERRUN}
+          </div>
+        )}
 
         <Card padded={false} className="card--table">
           <div className="table-wrap">
@@ -375,7 +410,7 @@ export function RequestsPage() {
                   : rows.map((r) => (
                       <tr
                         key={r.id}
-                        className={r.id === requestId ? 'is-selected' : ''}
+                        className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
                         onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                         tabIndex={0}
                         // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log alone.

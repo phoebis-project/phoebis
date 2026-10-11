@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
+import { useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
@@ -11,12 +11,12 @@ import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from
 import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
 import { addressWindow, type LogFilters, ROUTING_LOG_CODEC, ROUTING_LOG_RANGES } from '@/lib/address';
 import { clock } from '@/lib/clock';
+import { FOLLOW_OVERRUN } from '@/lib/follow';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, FOLLOW_OVERRUN, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, followPages, formatFact, identityOf, logHref, merged } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, compareRows, entityHref, eventTone, factsOf, formatFact, identityOf, logHref } from '@/lib/routingLog';
 
 const PAGE_SIZE = 25;
-const FOLLOW_MS = 5_000;
 
 const DECISION_KINDS = Object.keys(DECISION_KIND_LABEL).sort() as DecisionKind[];
 const HIDDEN_EVENT = 'warm_prefix_expired';
@@ -34,12 +34,6 @@ const kindWords = (kind: string) => (kind === 'probe' ? 'probe decisions' : (DEC
 const DEFAULTS: LogFilters = { accounts: [], keys: [], kinds: [], models: [], pools: [], range: { from: '', preset: '1h', to: '' }, request: '', session: '' };
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
-
-/** Where Follow stopped short of the rows the list held: the cursor past its last row and the end of the range it read. */
-interface Overrun {
-  cursor: string;
-  to: number;
-}
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -84,7 +78,6 @@ export function RoutingLogPage() {
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   const [customOpen, setCustomOpen] = useState(false);
   const [follow, setFollow] = useState(false);
-  const [followed, setFollowed] = useState<{ for: string; fresh: Set<string>; overrun: Overrun | null; rows: RoutingLogRow[] } | null>(null);
   const session = useCommittedText(filters.session, (next) => update({ session: next.trim() }));
   const request = useCommittedText(filters.request, (next) => update({ request: next.trim() }));
 
@@ -96,67 +89,12 @@ export function RoutingLogPage() {
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const following = followed !== null && followed.for === address && cursor === undefined ? followed : null;
+  const { following, setFollowed } = useFollow<RoutingLogRow>({ address, base: log.stale ? null : (log.data?.rows ?? null), compare: compareRows, identity: identityOf, on: follow && cursor === undefined, paged: cursor !== undefined, read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }) });
   const rows = following?.rows ?? log.data?.rows ?? [];
   const fresh = following?.fresh ?? new Set<string>();
   const overrun = following?.overrun ?? null;
   // Past an overrun, Next walks on from the last row Follow read, so the rows it left are the next page.
   const nextCursor = overrun?.cursor ?? log.data?.nextCursor ?? null;
-
-  // The rows the poll merges into: those followed under this address, else the list's once it answers this query. While
-  // the list still answers an earlier filter, its rows belong to that filter, so there is nothing to merge into yet.
-  const addressRows = following?.rows ?? (log.stale ? null : (log.data?.rows ?? null));
-  // The poll outlives renders, so it reads the current address, query and rows through a ref.
-  const latest = useRef({ address, addressRows, overrun, query });
-  latest.current = { address, addressRows, overrun, query };
-  // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
-  // notice down, as `useAsync`'s refresh does.
-  const streak = useRef({ failing: false, paths: new Set<string>() });
-  useEffect(() => {
-    if (!follow || cursor !== undefined) return;
-    // An answer that lands once the poll has stopped would tint rows no later poll clears.
-    const armed = { alive: true };
-    const failures = streak.current;
-    // Each Follow run toasts its own streak once, so a run armed while the route still fails says so again.
-    failures.failing = false;
-    const id = clock.setInterval(() => {
-      const { address: polled, addressRows: start, query: q } = latest.current;
-      // Every page of one poll reads up to the same instant, so its cursors walk one fixed range.
-      const to = clock.now();
-      const page = (cursor: string | undefined) => {
-        const read = () => api.listRoutingLog({ ...q, cursor, to: iso(to) });
-        return failures.failing ? quietly(read) : read();
-      };
-      // Before the list answers there is no row to stop at, so the poll reads the newest page alone.
-      const read: Promise<{ overrun: string | null; rows: RoutingLogRow[] }> = start === null ? page(undefined).then((p) => ({ overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identityOf)));
-      read.then(
-        (polledPages) => {
-          if (!armed.alive) return;
-          for (const path of failures.paths) reportRecovery(path);
-          failures.paths.clear();
-          failures.failing = false;
-          // An answer for filters the reader has left since, or for an address the list has not answered yet, lands
-          // nowhere.
-          const shown = latest.current.addressRows;
-          if (latest.current.address !== polled || shown === null) return;
-          const known = new Set(shown.map(identityOf));
-          // A gap an earlier poll left stays until a reload, and Next walks on from the newest one, which reaches the
-          // older ones too.
-          const next = polledPages.overrun === null ? (latest.current.overrun ?? null) : { cursor: polledPages.overrun, to };
-          setFollowed({ for: polled, fresh: new Set(polledPages.rows.map(identityOf).filter((k) => !known.has(k))), overrun: next, rows: merged(shown, polledPages.rows) });
-        },
-        (err: unknown) => {
-          if (!armed.alive) return;
-          failures.failing = true;
-          if (err instanceof ApiError && err.path !== null) failures.paths.add(err.path);
-        },
-      );
-    }, FOLLOW_MS);
-    return () => {
-      armed.alive = false;
-      clock.clearInterval(id);
-    };
-  }, [follow, cursor]);
 
   const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
   // Custom starts from the window the list shows, so the choice holds.

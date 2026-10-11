@@ -426,21 +426,28 @@ upstream's request id for each attempt and, on the answer that served, the messa
 assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a per-turn control
 entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
 still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
-it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the answer's facts:
-the status, the outcome, the serving account and model, the answer's stop reason, tier and geography (global, us, or not
-available for a model that takes no geography), and the cache miss reason, with a Diagnostics row below it that
-names the cache diagnostics member's source: sent by the client, added by the router, or none. The phases follow
-as a waterfall from received to finished, each phase with its offset and a phase the ledger holds no instant for
-marked not measured, then the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table,
-then the request's identity with the upstream request and message ids under it, its shape, the client hints and the
-captured bodies. The usage ends with the request's estimated cost in its native unit: a request a subscription window
-paid reads its share of the account's 5-hour, 7-day and model-week windows with the dollar equivalent after them,
-an overage, fast mode or API key request reads dollars with why, and a subscription request the cost model prices
-no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and each row a "Routing" link
-beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either side. While
-the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the chosen set
-returns when it closes. The drawer shows the captured request and response bodies highlighted, a streamed answer
-as its events with each `event:` line over its data, each with Copy, which copies the text as shown, and an "Open
+it, so paging does not shift as new ones arrive; Refresh brings it up to now.
+
+Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes every row that arrived
+since the read before, up to eight pages of them. When more arrived than that, a line above the table reads "More rows
+arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched. A new row
+lands at the top in the accent tint until the next read, a filter change keeps Follow on, paging to an older page turns
+it off, and the open drawer pauses it until it closes.
+
+The drawer opens on the answer's facts: the status, the outcome, the serving account and model, the answer's stop
+reason, tier and geography (global, us, or not available for a model that takes no geography), and the cache miss
+reason, with a Diagnostics row below it that names the cache diagnostics member's source: sent by the client, added by
+the router, or none. The phases follow as a waterfall from received to finished, each phase with its offset and a phase
+the ledger holds no instant for marked not measured, then the usage, opened by a bar of the token kinds in the Tokens
+chart's colors over the table, then the request's identity with the upstream request and message ids under it, its
+shape, the client hints and the captured bodies. The usage ends with the request's estimated cost in its native unit: a
+request a subscription window paid reads its share of the account's 5-hour, 7-day and model-week windows with the dollar
+equivalent after them, an overage, fast mode or API key request reads dollars with why, and a subscription request the
+cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and each row a
+"Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either
+side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the
+chosen set returns when it closes. The drawer shows the captured request and response bodies highlighted, a streamed
+answer as its events with each `event:` line over its data, each with Copy, which copies the text as shown, and an "Open
 wide" link that opens the body in a wide dialog. A body past 256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)

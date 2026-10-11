@@ -1,5 +1,5 @@
 import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogPage, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
@@ -640,34 +640,6 @@ export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
   if (a.type !== b.type) return a.type === 'decision' ? -1 : 1;
   if (a.type === 'decision' && b.type === 'decision') return a.requestId === b.requestId ? b.seq - a.seq : a.requestId < b.requestId ? 1 : -1;
   return (b as RoutingEvent).id - (a as RoutingEvent).id;
-}
-
-/** A poll's answer over the rows shown, one row per identity, so a row the poll reads again never lands twice. */
-export function merged(shown: RoutingLogRow[], polled: RoutingLogRow[]): RoutingLogRow[] {
-  const byIdentity = new Map(shown.map((r) => [identityOf(r), r]));
-  for (const r of polled) byIdentity.set(identityOf(r), r);
-  return [...byIdentity.values()].sort(compareRows);
-}
-
-/** The pages one Follow poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
-export const FOLLOW_PAGES = 8;
-export const FOLLOW_OVERRUN = 'More rows arrived than Follow could fetch. Reload to read them.';
-
-/**
- * One Follow poll: the newest page and each one after it until a page holds a row the list already shows, or the
- * route has no more. `overrun` is the cursor past the last row read when `FOLLOW_PAGES` pages ran out first, so the
- * rows between it and the list stay reachable.
- */
-export async function followPages(read: (cursor: string | undefined) => Promise<RoutingLogPage>, known: ReadonlySet<string>): Promise<{ overrun: string | null; rows: RoutingLogRow[] }> {
-  const rows: RoutingLogRow[] = [];
-  let cursor: string | undefined;
-  for (let n = 0; n < FOLLOW_PAGES; n += 1) {
-    const page = await read(cursor);
-    rows.push(...page.rows);
-    if (page.nextCursor === null || page.rows.some((r) => known.has(identityOf(r)))) return { overrun: null, rows };
-    cursor = page.nextCursor;
-  }
-  return { overrun: cursor ?? null, rows };
 }
 
 /** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */

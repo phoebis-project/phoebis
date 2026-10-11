@@ -2035,6 +2035,7 @@
 }
 
 /* A row the last poll brought in reads in the accent tint until the next one. */
+.requests__table tbody tr.is-new td,
 .routing-log__table tbody tr.is-new td {
   background: var(--accent-soft);
 }
