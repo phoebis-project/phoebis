@@ -25,7 +25,7 @@ async function recordOf(id) {
   return record;
 }
 
-const modelOf = (record) => d.stationModel(record, undefined, NOW);
+const modelOf = (record) => d.stationModel(record, NOW);
 
 /**
  * The strip as one entry per station: its word, its badge and its state, a track station marked with a caret. A

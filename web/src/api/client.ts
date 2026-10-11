@@ -201,7 +201,7 @@ export interface Api {
   startPairing(start: PairingStart): Promise<PairingSession>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
-  /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
+  /** `revision` is the one the row was read at. A save over a row that moved since answers 409 `stale_edit`. */
   updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;

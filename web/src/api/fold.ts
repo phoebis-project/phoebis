@@ -139,6 +139,12 @@ const fundingOfRow = (r: RequestLog) => fundingOf(r.attempts[r.attempts.length -
  */
 const onSide = (r: RequestLog, side: FundingFilter) => (r.attempts.length === 0 || fundingOfRow(r) === 'plan') === (side === 'plan');
 
+/**
+ * A probe the router refused with `503 ledger_behind` while its ledger caught up. No account was asked, so the ledger
+ * files it under its held count alone, outside the requests, their outcomes and the error codes.
+ */
+const heldProbe = (r: RequestLog) => r.kind === 'probe' && r.status === 503 && r.errorCode === 'ledger_behind';
+
 /** The five token counts a share is priced from, as the ledger sums them before it prices a row. */
 const tokensOf = (r: RequestLog) => r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
 
@@ -191,6 +197,10 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     const key = keyOf(r, by, options.agentGroups ?? []);
     const g = groups.get(key) ?? emptyFolded(key, labelOf(r, key, by, latest));
     groups.set(key, g);
+    if (heldProbe(r)) {
+      g.probes.held += 1;
+      continue;
+    }
     const list = lists.get(key) ?? [];
     list.push(r);
     lists.set(key, list);

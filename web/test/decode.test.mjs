@@ -1201,6 +1201,19 @@ test('an error code named like an object member keeps its count under its code, 
   assert.equal(Object.getPrototypeOf(mocked.errors), null, 'the mock sums into a map with no inherited members too');
 });
 
+test('a session fold reads a probe the router held while its ledger caught up under its held count alone', () => {
+  const served = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
+  const held = { ...served, accountId: null, attempts: [], costUsd: 0, errorCode: 'ledger_behind', kind: 'probe', outcome: 'rejected', status: 503 };
+  const [both] = d.foldGroups([served, held], 'all');
+  assert.deepEqual([both.requests, both.rejected, both.attempts, both.uncached + both.cacheHits + both.cacheMisses, Object.keys(both.errors), both.probes.held], [1, 0, served.attempts.length, 1, [], 1]);
+  assert.equal(both.histograms.durationMs.reduce((a, b) => a + b, 0), 1, 'nor does it join a timing');
+  const [alone] = d.foldGroups([held], 'all');
+  assert.deepEqual([alone.requests, alone.rejected, Object.keys(alone.errors), alone.probes.held], [0, 0, [], 1], 'a group of held probes alone holds no request, as its rollup row does');
+  const [refused] = d.foldGroups([{ ...held, errorCode: 'accounts_unavailable' }], 'all');
+  assert.deepEqual([refused.requests, refused.rejected, Object.keys(refused.errors), refused.probes.held], [1, 1, ['accounts_unavailable'], 0], 'a probe refused for another reason stays a request');
+  assert.equal(d.foldRequests([served, held], 3_600_000, served.at, served.at)[0].groups[0].probes.held, 1, 'the bucketed fold reads it the same');
+});
+
 test('a session fold groups on the client class and narrows to a class pattern the way the rollups do', () => {
   const row = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
   const rows = [row, { ...row, id: 'r-second' }, { ...row, client: null, id: 'r-unclassed' }];
@@ -1777,10 +1790,11 @@ test("an attention item of a state writer or a parked record decodes under its o
   assert.deepEqual([writer.kind, writer.link, writer.pools, writer.subject], ['writer_degraded', null, [], { id: 'routing', label: 'routing', type: 'router' }], "the router's own component opens nothing and belongs to no pool");
 });
 
-test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and the pools page', () => {
-  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'requests' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
+test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and no link', () => {
+  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'settings' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
   assert.deepEqual(
     [odd.kind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
-    ['pool_exhausted', 'pool', { id: 'r1', page: 'pools' }, ['all'], '1970-01-01T00:00:00.000Z', {}],
+    ['pool_exhausted', 'pool', null, ['all'], '1970-01-01T00:00:00.000Z', {}],
   );
+  assert.equal(d.decodeAttention({ ...fixture('attention').items[0], link: { id: 'main' } }).link, null, 'a link that names no page opens nothing');
 });

@@ -344,7 +344,7 @@ export function RoutingLogPage() {
                         <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} striped={i % 2 === 1} onToggle={() => toggle(id)} />
                         {open.has(id) && (
                           <tr className="routing-log__panel">
-                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} />}</td>
+                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} />}</td>
                           </tr>
                         )}
                       </Fragment>

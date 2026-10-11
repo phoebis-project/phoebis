@@ -335,6 +335,19 @@ test('under never an overage window holds a member past its cooldown or budget',
   assert.equal(read(at(pool('pace', 'allow', both), 'exhausted'), pair), `Exhausted: no member can take a request until held's cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`, 'under allow the overage window holds nobody');
 });
 
+test("an overage member returns at its overage window's reset", () => {
+  const overage = (reset) => ({ inUse: true, observedAt: hoursFromNow(-1), reset, since: hoursFromNow(-2) });
+  const over = [member('held', 0, 'overage')];
+  assert.equal(read(at(pool('pace', 'never', over), 'exhausted'), [account('held', { overage: overage(hoursFromNow(3)) })]), `Exhausted: no member can take a request until held's overage window resets ${fmtRelative(hoursFromNow(3), NOW)}.`);
+  assert.equal(read(at(pool('pace', 'never', over), 'exhausted'), [account('held', { overage: overage(null) })]), 'Exhausted: no member can take a request, and none reports when it returns.', 'an overage window without a reset gives no return');
+  const budgeted = { ...member('plan', 0, 'budget'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
+  assert.equal(
+    read(at(pool('pace', 'never', [...over, budgeted]), 'exhausted'), [account('held', { overage: overage(hoursFromNow(3)) }), account('plan')]),
+    `Exhausted: no member can take a request until held's overage window resets ${fmtRelative(hoursFromNow(3), NOW)}.`,
+    'the earliest return among the members',
+  );
+});
+
 test('while the accounts are unread the status sentence says only what the verdicts carry', () => {
   const degraded = at(pool('priority', 'allow', [member('plan', 0), member('over', 0, 'cooldown')]), 'degraded');
   const active = at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'active');

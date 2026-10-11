@@ -71,7 +71,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
       cancel();
     };
   }, []);
-  const model = useMemo(() => stationModel(record, row, now), [record, row, now]);
+  const model = useMemo(() => stationModel(record, now), [record, now]);
   const counted = useMemo(() => layoutStrip(model, width), [model, width]);
   const [measured, setMeasured] = useState<LabelHeights>({});
   const layout = useMemo(() => (Object.keys(measured).length > 0 ? layoutStrip(model, width, measured) : counted), [counted, measured, model, width]);

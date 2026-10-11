@@ -45,7 +45,7 @@ export function readChartInk(): ChartInk {
 }
 
 /** The series slots an account can take: every entry of SERIES_VARS but the muted ninth. */
-const ACCOUNT_SLOTS = SERIES_VARS.length - 1;
+const ACCOUNT_SLOT_COUNT = SERIES_VARS.length - 1;
 
 /**
  * Color follows the entity: an account's slot is its index in the registry's order (every account sorted by id, as
@@ -53,7 +53,7 @@ const ACCOUNT_SLOTS = SERIES_VARS.length - 1;
  * Dashboard, the Quota view and the Analytics whatever each view filters. An id outside the list answers `null`.
  */
 export function accountSlots(ids: readonly string[]): (id: string) => number | null {
-  const slots = new Map([...ids].sort().map((id, index) => [id, index % ACCOUNT_SLOTS] as const));
+  const slots = new Map([...ids].sort().map((id, index) => [id, index % ACCOUNT_SLOT_COUNT] as const));
   return (id) => slots.get(id) ?? null;
 }
 

@@ -176,7 +176,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "at": 900000,
               "utilization": 0.41,
               "resets_at": 87400000,
-              "source": "header"
+              "source": "head"
             }
           ]
         },

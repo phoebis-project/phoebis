@@ -187,9 +187,9 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
  * a budget holds the member, and under a pool's `never` overage policy the account's overage holds it until its window
  * resets. So a member in cooldown can sit at its budget and in overage too, and it returns at the latest of its
  * budget's period end (daily, monthly, or plain "budget" when no spend report names the period), its latest
- * account-scope cooldown end and its overage window's reset. A blocker without an end (unavailable, overage, a cooldown
- * without an account-scope row, an overage window without a reset) gives no return, and so does a budget verdict
- * without an end.
+ * account-scope cooldown end and its overage window's reset, which an overage verdict returns at too. A blocker
+ * without an end (unavailable, a cooldown without an account-scope row, an overage window without a reset) gives no
+ * return, and so does a budget verdict without an end.
  */
 function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
   const ends: { at: number; parts: StatusPart[] }[] = [];
@@ -206,6 +206,10 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
       .pop();
     if (!until) return null;
     ends.push({ at: Date.parse(until), parts: [name, { text: `'s cooldown ends ${fmtRelative(until, now)}` }] });
+  } else if (member.eligible === 'overage') {
+    const reset = account?.overage?.reset ?? null;
+    if (reset === null) return null;
+    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
   } else if (member.eligible !== 'budget') {
     return null;
   }

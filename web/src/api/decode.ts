@@ -10,7 +10,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } 
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
-import { isFastScope } from '@/lib/quota';
+import { isFastScope, planLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
@@ -174,15 +174,6 @@ export function planName(sub: Subscription | null): string | null {
   return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
 }
 
-/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
- *  anything else is shown as sent. */
-export function planLabel(tier: string): string {
-  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
-  if (!m) return tier;
-  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
-  return m[2] ? `${name} ${m[2]}x` : name;
-}
-
 export function decodeCatalogModel(v: unknown): CatalogModel {
   const m = rec(v);
   return { createdAt: str(m.created_at), displayName: str(m.display_name), effortLevels: strings(m.effort_levels), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
@@ -242,11 +233,13 @@ export function decodeAttention(v: unknown): AttentionItem {
   const a = rec(v);
   const subject = rec(a.subject);
   const link = a.link ? rec(a.link) : null;
+  // A page this build does not know has no place to open the subject on, so the item draws no link.
+  const page = link ? ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) : undefined;
   return {
     detail: rec(a.detail),
     // A kind this build does not know reads as the worst one, so it is never drawn quieter than it may be.
     kind: ATTENTION_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'pool_exhausted',
-    link: link && { id: str(link.id), page: ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) ?? 'pools' },
+    link: link && page !== undefined ? { id: str(link.id), page } : null,
     pools: strings(a.pools),
     since: isoOr(a.since, epoch),
     subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },

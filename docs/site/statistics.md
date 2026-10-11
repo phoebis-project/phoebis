@@ -312,8 +312,8 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
 pool or key where it is fixed, or nothing for an item with no such place (a drift refusal that named no key, a parked
-record without a pool, a pool deleted since, one of the router's own writers); it reads the same conditions the
-[`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
+record without a pool, a pool deleted since, one of the router's own writers, a page unknown to the console); it reads
+the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
 [routing log](#routing-log) instead, on the pool's exhausted decisions from the moment the condition began. Four tiles
 report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them says when the
 figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled 5-hour and 7-day
@@ -415,7 +415,7 @@ assistant entry carries. The drawer's effort is the level the upstream applies: 
 entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
 still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
 it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the answer's facts:
-the status, the outcome, the serving account and model, the answer's stop reason and geography (global, us, or not
+the status, the outcome, the serving account and model, the answer's stop reason, tier and geography (global, us, or not
 available for a model that takes no geography), and the cache miss reason. The phases follow as a waterfall from
 received to finished, each phase with its offset and a phase the ledger holds no instant for marked not measured, then
 the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table, then the request's identity
@@ -546,7 +546,6 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 | pin released | An operator released a session's pin by hand. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
-| re-auth required | An account's refresh was refused, and routing to it stays off until it is paired again. |
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |

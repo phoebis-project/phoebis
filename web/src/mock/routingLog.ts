@@ -1349,6 +1349,10 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'nightly', actor: 'admin', agentId: 'e90b', at: iso(t(12, 40, 5)), detail: { agent_id: 'e90b' }, keyId: 'desktop', kind: 'pin_released', model: 'claude-sonnet-5-5', sessionId: sessionId('407dd39b') },
     { accountId: 'primary', at: iso(Date.parse('2026-09-12T20:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW), detail: { since: Date.parse('2026-09-11T16:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW }, kind: 'overage_ended' },
     { accountId: 'legacy', at: iso(NOW - 2 * DAY - 2 * HOUR), detail: { cause: 'refresh_failed', detail: 'refresh_token rejected: invalid_grant', from: 'ready', to: 'reauth_required' }, kind: 'account_state_changed' },
+    // The Overflow workspace's balance ran out once before, three days back, and the router's own retry past its
+    // five minutes found it funded again.
+    { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
+    { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR + 5 * MINUTE + 40_000), detail: { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' }, kind: 'account_state_changed' },
     { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.

@@ -549,7 +549,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   }, [onClose]);
   // The last attempt is the one whose answer the request ended on.
   const serving = r && r.attempts.length > 0 ? r.attempts[r.attempts.length - 1] : null;
-  const answer = serving ? answerChips(serving.response) : [];
+  const answer = serving ? answerChips(serving.response, serving.serviceTier) : [];
 
   return (
     <aside className="drawer" aria-label="Request details">
@@ -747,7 +747,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
  * The answer's facts as the serving attempt's response named them, each its own chip, so no value has to be read out
  * of a joined line.
  */
-function answerChips(response: AttemptResponse): Chip[] {
+function answerChips(response: AttemptResponse, serviceTier: string | null): Chip[] {
   const chips: Chip[] = [];
   if (response.stopReason) chips.push({ value: `stopped: ${response.stopReason}` });
   if (response.speed) chips.push({ title: "The answer's speed", value: response.speed });
@@ -756,6 +756,7 @@ function answerChips(response: AttemptResponse): Chip[] {
   if (response.clearedInputTokens !== null && response.clearedInputTokens > 0) chips.push({ value: `${fmtInt(response.clearedInputTokens)} tokens cleared by context edits` });
   if (response.refusalCategory) chips.push({ value: `category: ${response.refusalCategory}` });
   if (response.refusalRecommendedModel) chips.push({ mono: true, value: `try ${response.refusalRecommendedModel}` });
+  if (serviceTier) chips.push({ title: "The answer's service tier", value: `tier ${serviceTier}` });
   return chips;
 }
 

@@ -1,4 +1,4 @@
-import type { DecisionKind, DecisionRecord, DecisionSummary, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { candidateCells, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
@@ -376,7 +376,7 @@ function terminiOf(kind: DecisionKind, shape: StripShape): Terminus[] {
 }
 
 /** The strip's stations, brackets, branch, host, decisive station, leaves and termini for one record. */
-export function stationModel(record: DecisionRecord, row: DecisionSummary | undefined, now: number): StripModel {
+export function stationModel(record: DecisionRecord, now: number): StripModel {
   const walk = record.walk;
   const kind = record.outcome.kind;
   const shape = shapeOf(walk);

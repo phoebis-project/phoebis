@@ -6848,6 +6848,33 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
       results.push({ name, ok: chip !== undefined && chip.value === 'not available' && (chip.title ?? '').includes('Not available means the model does not take the inference geography parameter'), missing: [unavailable.id, JSON.stringify(chip ?? null)] });
     }
   }
+  {
+    // The Answer row ends with the tier the serving attempt answered under: the story's priority row, a drawn row's
+    // standard, and nothing on a token count, whose answer names no tier.
+    const name = "/requests the drawer's Answer row ends with the answer's service tier, priority on the tier seed and standard on a drawn row, and a token count draws none";
+    const drawn = requests.find((r) => r.kind === 'inference' && r.id !== 'req_f8085653-422' && servedBy(r)?.serviceTier === 'standard');
+    const count = requests.find((r) => r.kind === 'count_tokens' && servedBy(r) !== null);
+    const answerOf = async (id) => {
+      await m.navigate(`/requests/${id}`);
+      await m.settle(300);
+      // A drawer with no Answer row reads null, so a token count that drew none cannot pass for one without a tier.
+      const row = drawerRowOf(m, 'Answer');
+      return row === undefined ? null : drawerChips(row);
+    };
+    const seed = (await answerOf('req_f8085653-422')) ?? [];
+    const standard = (drawn ? await answerOf(drawn.id) : null) ?? [];
+    const counted = count ? await answerOf(count.id) : null;
+    const tier = (chips) => chips.filter((c) => c.value.startsWith('tier '));
+    const last = (chips) => chips[chips.length - 1] ?? null;
+    results.push({
+      name,
+      ok:
+        last(seed)?.value === 'tier priority' && last(seed)?.title === "The answer's service tier" && tier(seed).length === 1 &&
+        last(standard)?.value === 'tier standard' && tier(standard).length === 1 &&
+        counted !== null && tier(counted).length === 0,
+      missing: [JSON.stringify(last(seed)), drawn?.id ?? 'no drawn standard row', JSON.stringify(last(standard)), count?.id ?? 'no token count', JSON.stringify(counted)],
+    });
+  }
   await m.navigate('/requests');
   await m.settle(300);
   const heldCheck = '/requests the Held only switch keeps the requests that waited for a slot';
@@ -8661,7 +8688,7 @@ m.unmount();
   const pairsOf = (card) => stationsOf(card).map((s) => [s.step, s.verdict]);
   /** The pairs the model gives, the line's before the track's, for a record whose sequence a check does not spell. */
   const modelPairs = (record, row) => {
-    const { stations } = stationModel(record, row, CLOCK_ORIGIN);
+    const { stations } = stationModel(record, CLOCK_ORIGIN);
     return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
   };
   const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed']];
@@ -8741,7 +8768,7 @@ m.unmount();
    * boxes floor at 0.
    */
   const popoversOpen = async (what, page, card, record, row) => {
-    const model = stationModel(record, row, CLOCK_ORIGIN);
+    const model = stationModel(record, CLOCK_ORIGIN);
     const buttons = [...(card?.querySelectorAll('.decision-strip .strip-station, .decision-strip .strip-candidate, .decision-strip .strip-terminus') ?? [])];
     const wrong = [];
     for (const button of buttons) {
@@ -9044,16 +9071,20 @@ m.unmount();
     page.unmount();
   }
   {
-    // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
+    // A request held until its bound ran out answers 429 without a dispatch, whatever the exhaustion after the hold
+    // names: the Hold row reads that it ran out, and the Answer row reads the status the request row carries.
     const [id, seq] = ['req_77634945-72b', 2];
     const { card, page, record, row } = await story(id, seq);
     scan('exhaustion after a hold', card);
     stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
     await popoversOpen('exhaustion after a hold', page, card, record, row);
+    const answered = requests.find((r) => r.id === id)?.status;
     results.push({
-      name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
-      ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
-      missing: [JSON.stringify(outcomeOf(card))],
+      name: '/routing-log a hold whose bound ran out reads ran out on its hold and 429 on the exhaustion after it, with nothing dispatched',
+      ok:
+        record.outcome.kind === 'exhausted' && record.request.holds.at(-1)?.ranOut === true && record.outcome.completion === null && answered === 429 &&
+        outcomeOf(card).Hold?.at(-1) === 'ran out' && outcomeOf(card).Answer?.[0] === 'status 429' && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
+      missing: [JSON.stringify(outcomeOf(card)), `the request row answered ${answered}`],
     });
     page.unmount();
   }
@@ -9226,7 +9257,7 @@ m.unmount();
     ]) {
       const { card, page, record, row } = await story(id);
       const strip = card?.querySelector('.decision-strip') ?? null;
-      const model = stationModel(record, row, CLOCK_ORIGIN);
+      const model = stationModel(record, CLOCK_ORIGIN);
       const names = [...(strip?.querySelectorAll('.strip-station, .strip-candidate, .strip-terminus') ?? [])].map((b) => b.getAttribute('aria-label'));
       const expected = [
         ...[...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')].map(stationName),
@@ -9620,6 +9651,29 @@ m.unmount();
         JSON.stringify(permitted.links['Model sent']) === JSON.stringify([model(permitted.event.detail.wire_model)]) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
       missing: [JSON.stringify(rejected?.links), JSON.stringify(permitted?.links)],
     });
+  }
+  {
+    // A model rejection's until is on the cooldown row its answer wrote at the same instant, so the detail reads it
+    // where the page lists that row beside it, and the rejection listed alone reads none.
+    const name = '/routing-log a model rejection listed beside its cooldown reads the until off that row, and none alone';
+    const range = { from: iso(CLOCK_ORIGIN - 7 * DAY), limit: 25, to: iso(CLOCK_ORIGIN) };
+    const [rejected] = (await api.listRoutingLog({ ...range, kinds: ['model_rejected'] })).rows;
+    const set = rejected && (await api.listRoutingLog({ ...range, kinds: ['cooldown_set'] })).rows.find((r) => r.accountId === rejected.accountId && r.at === rejected.at && r.detail.scope === `model:${rejected.model}`);
+    if (!rejected || !set) results.push({ name, ok: false, missing: ['no model rejection beside its cooldown in the story'] });
+    else {
+      const at = Date.parse(rejected.at);
+      const untilOf = async (kinds) => {
+        const page = await mount(`/routing-log?kinds=${kinds}&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+        const panel = await openRow(page, `event/${rejected.id}`);
+        const pair = kvRows(panel?.querySelector('.event-detail > .kv')).find((p) => p.label === 'Until');
+        page.unmount();
+        return pair === undefined ? null : ddWords(pair.dd);
+      };
+      const beside = await untilOf('cooldown_set,model_rejected');
+      const alone = await untilOf('model_rejected');
+      const want = new Date(set.detail.until).toISOString().slice(11, 16);
+      results.push({ name, ok: JSON.stringify(beside) === JSON.stringify([want]) && alone === null, missing: [JSON.stringify(beside), JSON.stringify(alone), want] });
+    }
   }
   {
     // Source request opens the log on the event's request alone, a quarter hour either side of the event.

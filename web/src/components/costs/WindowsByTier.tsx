@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { planLabel } from '@/api/decode';
 import type { SubscriptionCosts } from '@/api/types';
 import { Card, Segmented } from '@/components/ui/primitives';
 import { fullWindowsAWeek, smallestTier, tierCapacity, windowMultiple, type CostWindow } from '@/lib/costs';
 import { fmtShare } from '@/lib/format';
+import { planLabel } from '@/lib/quota';
 
 const WINDOWS: { factor: 'fiveHour' | 'sevenDay'; key: CostWindow; short: string }[] = [
   { factor: 'fiveHour', key: 'five_hour', short: '5-hour' },

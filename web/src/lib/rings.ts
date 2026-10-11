@@ -1,7 +1,6 @@
-import { planLabel } from '@/api/decode';
 import type { Account, SubscriptionCosts, WindowId } from '@/api/types';
 import { anchorTier, tierCapacity, tierRow } from '@/lib/costs';
-import { isExpired, isSubscription, remainingOf, windowOf } from '@/lib/quota';
+import { isExpired, isSubscription, planLabel, remainingOf, windowOf } from '@/lib/quota';
 
 /** An account on a quota ring: its own remaining share of the window, 1 for an expired window, and its tier's capacity in windows of the anchor tier. */
 export interface RingRow { color?: never; id: string; label: string; remaining: number; weight: number }
