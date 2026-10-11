@@ -21,6 +21,24 @@ const hasOwn = (o: object, key: string) => Object.prototype.hasOwnProperty.call(
 /** A reason the console has no label for reads under the name the beta gave it. */
 export const missLabel = (reason: CacheMissReason): string => (hasOwn(CACHE_MISS_LABEL, reason) ? CACHE_MISS_LABEL[reason] : reason);
 
+/**
+ * The misses-by-reason table's header words, one per reason so nine columns fit beside the group column. The
+ * header's title carries `missLabel`, and the panel keeps the full labels.
+ */
+export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
+  messages_changed: 'History',
+  model_changed: 'Model',
+  none: 'None',
+  not_requested: 'Not asked',
+  previous_message_not_found: 'No previous',
+  system_changed: 'System',
+  tools_changed: 'Tools',
+  unavailable: 'Unavailable',
+};
+
+/** A reason the console has no word for reads under the name the beta gave it. */
+export const missShort = (reason: CacheMissReason): string => (hasOwn(CACHE_MISS_SHORT, reason) ? CACHE_MISS_SHORT[reason] : reason);
+
 export const missCount = (reasons: Record<CacheMissReason, number>, reason: CacheMissReason): number => (hasOwn(reasons, reason) ? reasons[reason] : 0);
 
 /** The columns a breakdown draws: the known reasons in reading order, then every other name the groups carry, alphabetically. */

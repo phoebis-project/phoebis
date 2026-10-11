@@ -1138,10 +1138,10 @@ function paceTitle(c: RecordCandidate, now: number): string | null {
   const id = p.window ?? null;
   const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
   // Whole hours would read a deadline under half an hour away as "0 h".
-  const over = p.hours === null ? '' : ` over ${p.hours < 1 ? p.hours.toFixed(1) : Math.round(p.hours)} h`;
+  const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
   const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
-  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. The highest wins.`;
+  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. Inside its tier, the highest above the pace floor wins.`;
 }
 
 /**

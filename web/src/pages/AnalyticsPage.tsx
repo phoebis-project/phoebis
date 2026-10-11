@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, windowId } from '@/api/decode';
@@ -20,7 +20,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
 import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
+import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
@@ -1352,6 +1352,9 @@ function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number
   );
 }
 
+/** A raw reason name with a break opportunity after each underscore, so a header holding one wraps at its words. */
+const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
+
 function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean }) {
   const order = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
@@ -1364,7 +1367,14 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { gr
       className="misses-table"
       loading={loading}
       groupLabel={groupLabel}
-      columns={[...order.map(missLabel), 'Expired between turns']}
+      columns={[
+        ...order.map((r) => (
+          <span key={r} title={missLabel(r)}>
+            {breakable(missShort(r))}
+          </span>
+        )),
+        'Expired between turns',
+      ]}
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1682,8 +1692,6 @@ const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size,
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
-/** A partial bucket's bars draw at this share of their series' opacity. */
-const PARTIAL_TONE = 0.5;
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -1696,7 +1704,7 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * The burn route's three views of one grouping. A line's color follows its group within the answer rather than
+ * The burn route's two views of one grouping. A line's color follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
  * page-wide color.
  */
@@ -1732,7 +1740,6 @@ function BurnCharts({
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
   const axis = timeAxis((answer?.bucketSeconds ?? 3_600) * 1_000, ink);
-  const label = BURN_GROUP_LABEL[groupBy].toLowerCase();
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
@@ -1748,7 +1755,6 @@ function BurnCharts({
   // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
   // the band's edges, so shading whole buckets would mark the wrong hours.
   const band = useMemo(() => (costs === null || !byAccount || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [byAccount, costs, rows]);
-  const partialCells = (opacity: number) => rows.map((r) => <Cell key={r.at} {...(r.partial ? { className: 'is-partial', fillOpacity: opacity * PARTIAL_TONE } : {})} />);
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
   const scaled = rows.filter((r) => r.setsScale);
@@ -1756,7 +1762,6 @@ function BurnCharts({
     const top = Math.max(0, ...values);
     return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
   };
-  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
   const spentValues = scaled.flatMap((r) => spent.map(({ i }) => r.usd[i]));
   const spentScale = scaleTo(spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
@@ -1764,38 +1769,8 @@ function BurnCharts({
   return (
     <div className="grid-2">
       <ChartCard
-        title="Tokens per minute"
-        subtitle={`Uncached input and cache reads per minute, stacked by ${label}. The fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
-        error={error}
-        loading={loading}
-        empty={empty}
-        legend={lines.map((l) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: fmtCompact(l.tokensPerMinute) }))}
-      >
-        <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-          <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} {...scaleTo(scaled.map((r) => sum(r.uncached) + sum(r.cached)))} />
-          <Tooltip
-            cursor={{ fill: ink.grid, opacity: 0.6 }}
-            content={timeTip<BurnRow>((r) => [
-              ...lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: `${fmtCompact(r.uncached[i])} uncached, ${fmtCompact(r.cached[i])} cached` })),
-              { label: 'total', value: fmtCompact(r.uncached.reduce((n, v) => n + v, 0) + r.cached.reduce((n, v) => n + v, 0)) },
-            ])}
-          />
-          {lines.flatMap((l, i) => [
-            <Bar key={`${i}-uncached`} dataKey={(r: BurnRow) => r.uncached[i]} stackId="a" fill={colorOf(l)} stroke={ink.surface} strokeWidth={1} maxBarSize={22} isAnimationActive={false}>
-              {partialCells(1)}
-            </Bar>,
-            <Bar key={`${i}-cached`} dataKey={(r: BurnRow) => r.cached[i]} stackId="a" fill={colorOf(l)} fillOpacity={0.45} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === lines.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false}>
-              {partialCells(0.45)}
-            </Bar>,
-          ])}
-        </BarChart>
-      </ChartCard>
-
-      <ChartCard
         title="Spend per minute"
-        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
+        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
         error={error}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}

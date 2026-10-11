@@ -100,7 +100,6 @@ const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
 export function selectionOrder(pool: Pool, accounts: Account[], sessions: Session[], now: number = Date.now()): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
   const grouped = kindOrdered(pool);
   const groupFor = (accountId: string) => (grouped ? groupOf(byId.get(accountId)) : 0);
   const tiers = [...new Map(pool.members.map((m) => [`${groupFor(m.accountId)}:${m.priority}`, { group: groupFor(m.accountId), priority: m.priority }])).values()].sort(
@@ -124,7 +123,9 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse),
             ineligible,
             lastResort: ineligible === null ? lastResort : null,
-            pins: pinsOf(m.accountId),
+            // The engine's count, one pin per agent and model, so a session whose subagents run on another model
+            // counts more than once, as the pool's Active pins does.
+            pins: m.activePins,
             rank: null,
           },
         ];

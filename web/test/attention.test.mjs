@@ -103,6 +103,18 @@ test("a listener's certificate items read the listener, the file, the date and w
   );
 });
 
+test("a certificate item reads its last day and its first day past the end as today, and the floored days elsewhere", () => {
+  const words = (left) => {
+    const expires = NOW + left * 86_400_000;
+    const line = attentionDetail(item('certificate_expiring', { detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: left, expires }, subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' } }), NOW);
+    return line.replace(`The proxy listener's certificate /etc/phoebis/proxy.pem `, '').replace(/ \(.*$/, '');
+  };
+  assert.equal(words(0), 'expires today', 'a leaf that ends within a day floors to 0');
+  assert.equal(words(-1), 'expired today', 'a leaf that ended within the last day floors to -1');
+  assert.equal(words(1), 'expires in 1 day');
+  assert.equal(words(-2), 'expired 2 days ago');
+});
+
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
   const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, pools: ['all'], since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));

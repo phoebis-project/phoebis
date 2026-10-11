@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
@@ -229,6 +229,13 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
     onBusyChange(held);
     return () => onBusyChange(false);
   }, [held, onBusyChange]);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
@@ -240,7 +247,10 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
-  /** The router's answer once it took the change, null once it refused. An editor's refusal reaches its own callout. */
+  /**
+   * The router's answer once it took the change, null once it refused. An editor's refusal reaches its own callout, or
+   * the shell's toast naming the account once the operator left it, since the callout left with the detail.
+   */
   const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string), onRefused?: (refusal: EditorRefusal) => void): Promise<{ answer: T } | null> => {
     setBusy(true);
     try {
@@ -252,7 +262,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
       const message = e instanceof Error ? e.message : String(e);
       // A stale refusal says the row moved under the editor: the edit is about values that are gone, so the operator
       // reloads and re-applies it rather than saving over what someone else wrote.
-      if (onRefused) onRefused({ message, stale: e instanceof ApiError && e.status === 409 && e.code === 'stale_edit' });
+      if (onRefused && !mounted.current) onToast(`Save on ${account.label} refused: ${message}`);
+      else if (onRefused) onRefused({ message, stale: e instanceof ApiError && e.status === 409 && e.code === 'stale_edit' });
       else onToast(message);
       return null;
     } finally {

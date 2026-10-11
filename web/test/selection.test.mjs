@@ -134,21 +134,26 @@ test("the router's verdict decides eligibility and an obstacle trails its tier",
   );
 });
 
-test('a pin counts only while the session holds it', () => {
+test("a member's pins are the engine's count on the member, one per agent and model, whatever the session list holds", () => {
   const pair = [account('held'), account('free')];
+  // One pinned session whose subagents run on a second model: the engine counts two pins where the list holds one
+  // pinned row, and a row whose pin expired counts nothing either way.
   const sessions = [
     { accountId: 'held', pinned: true },
     { accountId: 'held', pinned: false },
     { accountId: 'free', pinned: false },
   ];
-  const tiers = selectionOrder(pool('priority', 'allow', [member('free', 0), member('held', 0)]), pair, sessions, NOW);
+  const members = [
+    { ...member('free', 0), activePins: 0 },
+    { ...member('held', 0), activePins: 2 },
+  ];
+  const tiers = selectionOrder(pool('priority', 'allow', members), pair, sessions, NOW);
   assert.deepEqual(
     tiers[0].placements.map((p) => [p.account.id, p.pins]),
     [
       ['free', 0],
-      ['held', 1],
+      ['held', 2],
     ],
-    'an expired session still sits in the list but no longer pins its account',
   );
 });
 

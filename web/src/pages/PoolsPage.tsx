@@ -521,7 +521,6 @@ function PoolCard({
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
-  const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
   // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
   // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
   // probe decisions chosen. The title names the failovers apart, which the log draws as a later attempt's placement,
@@ -657,7 +656,7 @@ function PoolCard({
                       {`${m.accountId}: not a known account`}
                     </span>
                   </td>
-                  <td className="right num col-fit">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                  <td className="right num col-fit">{m.activePins === 0 ? <span className="muted">0</span> : m.activePins}</td>
                 </tr>
               );
             })}

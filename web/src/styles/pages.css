@@ -278,25 +278,6 @@
   white-space: nowrap;
 }
 
-/* Eight columns in the narrower of the two cards: at the table's usual padding they need more than the card holds at
-   1280px once the Model cell stops wrapping. */
-.dash__recent th,
-.dash__recent td {
-  padding-left: 8px;
-  padding-right: 8px;
-}
-
-/* The outer cells keep the table's usual inset, so the columns line up with the card's head. */
-.dash__recent th:first-child,
-.dash__recent td:first-child {
-  padding-left: 12px;
-}
-
-.dash__recent th:last-child,
-.dash__recent td:last-child {
-  padding-right: 12px;
-}
-
 /* The cap sits on the text's own box: Firefox applies no max-width to a table cell. */
 .dash__model {
   display: inline-block;
@@ -987,8 +968,9 @@
   border-radius: var(--radius-pill);
 }
 
+/* A neutral tint, so the used fill's tone reads against it and the label keeps its contrast over both. */
 .lane__bar--live {
-  background: color-mix(in srgb, var(--lane-color) 30%, var(--surface));
+  background: var(--surface-3);
 }
 
 .lane__bar--next {
@@ -1096,7 +1078,7 @@
 }
 
 .lane__swatch--live {
-  background: color-mix(in srgb, var(--series-1) 30%, var(--surface));
+  background: var(--surface-3);
 }
 
 .lane__swatch--next {
@@ -1641,6 +1623,13 @@
   align-items: start;
 }
 
+/* Beside the lifetime cost card the key table cuts its pills at 1280 px, so it takes the page's width until 1440 px. */
+@media (max-width: 1439px) {
+  .keys-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .hbars {
   display: flex;
   flex-direction: column;
@@ -1751,11 +1740,12 @@
   border-radius: 1px;
 }
 
+/* Taller than the ticks and standing past the track on both sides, so the margin reads apart from a reading. */
 .ubar__margin {
   position: absolute;
-  top: -5px;
+  top: -9px;
   width: 2px;
-  height: 18px;
+  height: 26px;
   margin-left: -1px;
   background: var(--serious);
   border-radius: 1px;
@@ -2208,12 +2198,12 @@
 }
 
 .strip-path.is-idle {
-  stroke: var(--hairline);
+  stroke: var(--strip-idle);
   stroke-width: 1.5;
 }
 
 .strip-bracket {
-  stroke: var(--hairline);
+  stroke: var(--strip-idle);
   stroke-width: 1;
 }
 
@@ -2232,7 +2222,7 @@
 }
 
 .strip-node.is-idle {
-  stroke: var(--hairline);
+  stroke: var(--strip-idle);
 }
 
 .strip-node.is-decisive {
@@ -3063,7 +3053,6 @@
 
 @media (max-width: 1100px) {
   .accounts,
-  .keys-layout,
   .dash-bottom,
   .requests.has-drawer {
     grid-template-columns: 1fr;
@@ -3540,6 +3529,14 @@
   align-items: center;
   padding: 8px 12px;
   color: var(--ink-2);
+  border-left: 2px solid var(--hairline-strong);
+}
+
+/* The session table keeps its cells on one line, which this sentence would run past the card on. */
+.agents__released {
+  padding: 8px 12px;
+  color: var(--ink-2);
+  white-space: normal;
   border-left: 2px solid var(--hairline-strong);
 }
 
@@ -4045,8 +4042,8 @@
   color: var(--ink-2);
 }
 
-/* Nine reason headers on one line each leave the group column its padding alone at 1280, so they wrap and each fit
-   column sizes to its widest word or figure. The class outranks the fit rule's nowrap. */
+/* The reason headers wrap, a raw reason name after each underscore, so each fit column sizes to its widest word or
+   figure and the group column keeps its room at 1280. The class outranks the fit rule's nowrap. */
 .misses-table th.col-fit {
   white-space: normal;
 }

@@ -113,7 +113,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'certificate_expiring': {
       const left = count(d.days_left);
       const file = text(d.cert_file);
-      const end = left < 0 ? `expired ${days(-left)} ago` : `expires in ${days(left)}`;
+      // The route floors the days left, so a leaf at 0 ends within a day and one at -1 ended within the last day.
+      const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${days(-left)} ago` : `expires in ${days(left)}`;
       return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(instant(d.expires))}). Replace the pair and run phoebis tls reload.`;
     }
     case 'certificate_reload_failed':

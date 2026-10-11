@@ -2405,6 +2405,40 @@ m.unmount();
   page.unmount();
 }
 {
+  // An end save held while the operator selects another account, then refused as stale: its callout left with the
+  // detail, so the shell's toast names the account the save was for and the router's reason.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const identity = () => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  identity()?.querySelector('label.row input[type="checkbox"]')?.click();
+  await page.settle(100);
+  const field = identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  setter.call(field, '2027-03-01T10:00');
+  field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await page.settle(100);
+  const held = deferNextCall('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(100);
+  // Another operator's write moves the row past the token the held save carries.
+  await api.renameAccount('primary', 'primary');
+  page.container.querySelector('a.account-row[href="/accounts/secondary"]')?.click();
+  await page.settle(400);
+  const left = page.location().pathname;
+  held.release();
+  await page.settle(600);
+  held.restore();
+  const read = { path: left, stored: (await api.listAccounts()).find((a) => a.id === 'primary')?.cancelled, toast: page.container.querySelector('.toast')?.textContent ?? '' };
+  results.push({
+    name: '/accounts a save refused after the operator left the account raises the toast',
+    ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,
+    missing: [`path ${read.path}`, read.toast || 'no toast', `stored cancelled ${read.stored}`],
+  });
+  page.unmount();
+}
+{
   // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
   // callout and raises no toast.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -2597,6 +2631,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'jobs', 'work'].filter((id) => !keyCount.get(id))),
     missing: [...links.flat().map(String), ...wanted.flat(), ...none],
   });
+  {
+    // The member column reads the engine's count on each member, one pin per agent and model, so a session whose
+    // subagents run on a second model counts twice there, and the card's Active pins is the column's sum.
+    const listedPools = await api.listPools();
+    const wrong = [];
+    for (const pool of listedPools) {
+      const table = [...(card(pool.name)?.querySelectorAll('table') ?? [])].find((t) => [...t.querySelectorAll('thead th')].some((th) => th.textContent?.trim() === 'Pins'));
+      const at = [...(table?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === 'Pins');
+      // A listed member links to its account, and an unlisted one names its id on the Account cell's title.
+      const memberOf = (tr) => tr.querySelector('a[href^="/accounts/"]')?.getAttribute('href')?.split('/').pop() ?? tr.children[1]?.getAttribute('title') ?? '';
+      const drawn = new Map([...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [memberOf(tr), Number(tr.children[at]?.textContent?.trim())]));
+      const sum = [...drawn.values()].reduce((n, v) => n + v, 0);
+      const active = Number([...(card(pool.name)?.querySelectorAll('dt') ?? [])].find((dt) => dt.textContent?.trim() === 'Active pins')?.nextElementSibling?.textContent?.trim());
+      for (const member of pool.members) if (drawn.get(member.accountId) !== member.activePins) wrong.push(`${pool.name} ${member.accountId}: ${drawn.get(member.accountId)} drawn, ${member.activePins} on the member`);
+      if (sum !== active || active !== pool.activePins) wrong.push(`${pool.name}: the column sums ${sum}, Active pins reads ${active}, the route ${pool.activePins}`);
+    }
+    const twice = listedPools.some((pool) => pool.members.some((member) => member.activePins > 1));
+    results.push({ name: '/pools the member column reads one pin per agent and model against the mock', ok: listedPools.length > 0 && twice && wrong.length === 0, missing: [`a member over one pin ${twice}`, ...wrong] });
+  }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   results.push({
     name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
@@ -6797,6 +6850,19 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await turn('Kind');
   await turn('Pool');
   await turn('Transport');
+  // A table whose drawn columns hold no fill takes its content width. jsdom lays nothing out, so the class is read
+  // here and the browser pass reads the width.
+  const noFill = () => m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') ?? null;
+  const fillReads = [noFill()];
+  await turn('Client');
+  fillReads.push(noFill());
+  await turn('Client');
+  fillReads.push(noFill());
+  results.push({
+    name: '/requests the table takes its content width when no visible column is a fill',
+    ok: JSON.stringify(fillReads) === JSON.stringify([false, true, false]),
+    missing: [`no-fill with Client, none, Client again: ${JSON.stringify(fillReads)}`],
+  });
   colsButton()?.click();
   await m.settle(100);
   results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: m.container.querySelector('.cols-popover') === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
@@ -6995,7 +7061,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
   }
   // A subscription request the story prices reads its shares: the model week's or the 7-day share over the 5-hour
-  // one, every share and the dollar equivalent on the title. An overage row of nightly and a fast row read dollars.
+  // one in their windows' short words, every share in full and the dollar equivalent on the title. An overage row of
+  // nightly and a fast row read dollars.
   const sharedRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'shares' && u.shares.length >= 2; });
   const overageRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
   const fastRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'fast'; });
@@ -7004,9 +7071,23 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const sharedCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   if (sharedRow) {
     const shared = sharedCell;
+    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': '7-day Fable' };
+    const full = (short) => {
+      const read = /^(\d[\d.]*%) (5h|7d|Fable week)$/.exec(short ?? '');
+      return read ? `${read[1]} of ${FULL[read[2]]}` : null;
+    };
+    const parts = (shared.title ?? '').split(', ');
+    const named = parts.slice(0, -1);
     results.push({
-      name: '/requests a subscription row\'s Cost cell reads a share with "of", its sub line the 5-hour share and its title the dollar equivalent',
-      ok: /^\d[\d.]*% of 7-day( Fable)?$/.test(shared.main) && /^\d[\d.]*% of 5-hour$/.test(shared.sub ?? '') && /, \$[\d,.]+ equivalent$/.test(shared.title ?? '') && (shared.title ?? '').includes(shared.main) && (shared.title ?? '').includes(shared.sub ?? ''),
+      name: "/requests a subscription row's Cost cell reads its shares in their windows' short words, its sub line the 5-hour share, and its title every share in full with the dollar equivalent",
+      ok:
+        /^\d[\d.]*% (7d|Fable week)$/.test(shared.main) &&
+        /^\d[\d.]*% 5h$/.test(shared.sub ?? '') &&
+        /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
+        named.length === costUnitOf(sharedRow).shares.length &&
+        named.every((n) => /^\d[\d.]*% of (5-hour|7-day|7-day Fable)$/.test(n)) &&
+        named.includes(full(shared.main)) &&
+        named.includes(full(shared.sub)),
       missing: [sharedRow.id, JSON.stringify(shared)],
     });
   }
@@ -7279,6 +7360,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
+results.push({
+  name: "/requests the drawer's compact set holds no fill, so the table takes its content width beside the drawer",
+  ok: m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') === true,
+  missing: [m.container.querySelector('.requests__table')?.className ?? 'no table'],
+});
 {
   // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
   const titles = [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
@@ -9701,6 +9787,35 @@ m.unmount();
     page.unmount();
   }
   {
+    // One popover is open on the page across the cards: a pin in the second card's strip replaces the first card's
+    // pinned popover, and a hover in the first replaces that one in turn, pinned as it is.
+    const { card, page } = await story('req_69e30548-32e', 1);
+    const placed = (await openRow(page, 'req_69e30548-32e/2'))?.querySelector('.decision-card') ?? null;
+    const open = () => [...document.querySelectorAll('.strip-popover')];
+    const selected = (c) => c?.querySelectorAll('.decision-strip .is-selected').length ?? null;
+    const firstStation = (c) => c?.querySelector('.decision-strip .strip-station') ?? null;
+    const seen = [];
+    const read = (what) => seen.push(`${what}: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned') ?? null}, selected ${selected(card)} and ${selected(placed)}`);
+    firstStation(card)?.click();
+    await page.settle(150);
+    read('a pin in the first card');
+    firstStation(placed)?.click();
+    await page.settle(150);
+    read('a pin in the second card');
+    firstStation(card)?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+    await page.settle(150);
+    read('a hover in the first card');
+    results.push({
+      name: "/routing-log one popover is open across two cards, a pin or a hover in one replacing the other's",
+      ok:
+        placed !== null &&
+        JSON.stringify(seen) ===
+          JSON.stringify(['a pin in the first card: 1 open, pinned true, selected 1 and 0', 'a pin in the second card: 1 open, pinned true, selected 0 and 1', 'a hover in the first card: 1 open, pinned false, selected 0 and 0']),
+      missing: seen,
+    });
+    page.unmount();
+  }
+  {
     // The strip by keyboard and by ear on the fresh placement and the shed move: the buttons' names in the record's
     // order, Enter or Space into the pick's popover, Escape and Shift+Tab back to the station, a pinned popover closing
     // once focus leaves it and its station or Tab passes its last link, and a drawing that says nothing.
@@ -9855,9 +9970,12 @@ m.unmount();
     const chip = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip');
     const hint = chip?.getAttribute('title') ?? '';
     results.push({
-      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover and the By chip its hint",
+      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover in minutes or whole hours and the tier sentence, and the By chip its hint",
       ok:
-        header === paceWord(record) && header !== 'Pace' && oauth.length > 0 && oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ h/.test(t.title)) &&
+        header === paceWord(record) &&
+        header !== 'Pace' &&
+        oauth.length > 0 &&
+        oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ (min|h) /.test(t.title) && t.title.endsWith('. Inside its tier, the highest above the pace floor wins.')) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
     });
@@ -10488,12 +10606,12 @@ m.unmount();
   });
   ended.unmount();
 
-  // One bucket at 14:00 holding 18,000 tokens: its rate is 18,000 over the minutes the read saw of it.
+  // One bucket at 14:00 holding $18: its rate is $18 over the minutes the read saw of it.
   const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 0 }] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 }] });
   const burnPage = await mount('/analytics#burn', { now: at14 + 20 * 60_000 });
   const rate = () => {
-    const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+    const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
     return card?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
   };
   const regroup = async (value) => {
@@ -10515,54 +10633,42 @@ m.unmount();
   // Past 15:00 the page's instant moves, the custom window and its answer stay.
   const pastBoundary = rate();
   delete api.getAnalyticsBurn;
-  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['900', '600', '600']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
+  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['$0.90', '$0.60', '$0.60']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
   burnPage.unmount();
 }
 
-// The running burn bucket keeps its rate but draws lighter and says so, and until it covers a tenth of its width it
-// does not set the axis. jsdom lays nothing out, so the chart containers read a browser's size here.
+// The running burn bucket keeps its rate, and until it covers a tenth of its width it does not set the axis. jsdom lays
+// nothing out, so the chart containers read a browser's size here.
 {
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const burnAt = (tokens) => async () => ({
+  const burnAt = (usd) => async () => ({
     bucketSeconds: 3_600,
-    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: tokens[i], uncachedTokens: tokens[i], unit: 'usd', usd: 0 })),
+    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: 'usd', usd: usd[i] })),
   });
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
   };
-  const tokensCard = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+  const spendCard = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
+  // A tick's dollars in whole cents, so two steps compare without a float's error.
+  const centsOf = (label) => Math.round(Number.parseFloat(label.replace('$', '')) * 100);
+  const ticksOf = (page) => [...(spendCard(page)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
 
-  const partialCheck = '/analytics the running burn bucket draws in the partial tone and the note names it';
-  api.getAnalyticsBurn = burnAt([60_000, 30_000]);
-  const running = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
-  const card = tokensCard(running);
-  const bars = [...(card?.querySelectorAll('.recharts-bar-rectangle path') ?? [])];
-  const partial = bars.filter((b) => b.classList.contains('is-partial'));
-  const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
-  results.push({
-    name: partialCheck,
-    ok: bars.length === 2 && partial.length === 1 && partial[0] === bars[1] && subtitle.includes('The last bucket is partial'),
-    missing: [`${bars.length} bars, ${partial.length} partial`, subtitle],
-  });
-  running.unmount();
-
-  // 20 seconds into 14:00, 1,000 tokens read as 3,000 a minute against the full hour's 1,000.
+  // 20 seconds into 14:00, $1 reads as $3 a minute against the full hour's $1.
   const floorCheck = '/analytics a running bucket under a tenth of its width does not set the axis';
-  api.getAnalyticsBurn = burnAt([60_000, 1_000]);
+  api.getAnalyticsBurn = burnAt([60, 1]);
   const early = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const ticks = [...(tokensCard(early)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
-  const valueOf = (label) => Number.parseFloat(label) * (label.endsWith('K') ? 1_000 : 1);
-  results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(valueOf)) <= 1_000, missing: ticks });
+  const ticks = ticksOf(early);
+  results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(centsOf)) <= 100, missing: ticks });
   early.unmount();
 
-  // 61,380 tokens over the full hour are 1,023 a minute, a top no tick step of five reaches evenly.
+  // $61.38 over the full hour is $1.023 a minute, a top no tick step of five reaches evenly.
   const evenCheck = '/analytics a capped burn axis ends on a round tick and steps evenly to it';
-  api.getAnalyticsBurn = burnAt([61_380, 1_000]);
+  api.getAnalyticsBurn = burnAt([61.38, 1]);
   const capped = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const cappedTicks = [...(tokensCard(capped)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? '')).sort((a, b) => a - b);
+  const cappedTicks = ticksOf(capped).map(centsOf).sort((a, b) => a - b);
   const steps = cappedTicks.slice(1).map((v, i) => v - cappedTicks[i]);
-  results.push({ name: evenCheck, ok: cappedTicks.length === 5 && cappedTicks[4] >= 1_023 && steps.every((s) => s === steps[0]), missing: cappedTicks.map(String) });
+  results.push({ name: evenCheck, ok: cappedTicks.length === 5 && cappedTicks[4] >= 102.3 && steps.every((s) => s === steps[0]), missing: cappedTicks.map(String) });
   capped.unmount();
 
   // A lone bucket 20 seconds old sets no scale, so recharts spans its $0.004 a minute alone, and the labels have to
@@ -10570,24 +10676,23 @@ m.unmount();
   const precisionCheck = "/analytics a spend axis recharts spans on its own labels its ticks at the drawn rows' precision";
   api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at13 + 3_600_000).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 }] });
   const lone = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const spendCard = [...lone.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
-  const labels = [...(spendCard?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
+  const labels = ticksOf(lone);
   results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
   lone.unmount();
 
   // Opened on Traffic at 14:05 and switched to Burn at 14:30, inside the same hour, with the page's range clock still
-  // at the mount. The read's own instant rates the running hour over its 30 minutes, 600 a minute, half its width and
-  // so enough to set the axis over the full 13:00 hour's 200; the legend reads the 30,000 tokens over the 90 minutes
-  // the two buckets cover, 333 a minute.
+  // at the mount. The read's own instant rates the running hour over its 30 minutes, $0.60 a minute, half its width and
+  // so enough to set the axis over the full 13:00 hour's $0.20; the legend reads the $30 over the 90 minutes the two
+  // buckets cover, $0.33 a minute.
   const instantCheck = "/analytics a burn read opened on a later tab rates the running hour up to the read's own instant";
-  api.getAnalyticsBurn = burnAt([12_000, 18_000]);
+  api.getAnalyticsBurn = burnAt([12, 18]);
   const opened = await mount('/analytics', { now: at13 + 3_600_000 + 5 * 60_000 });
   tick(25 * 60_000);
   await opened.settle();
   await tab(opened, 'Burn');
-  const legend = tokensCard(opened)?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
-  const axis = [...(tokensCard(opened)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? ''));
-  results.push({ name: instantCheck, ok: legend === '333' && axis.length > 1 && Math.max(...axis) >= 600, missing: [`legend ${legend}`, `axis ${axis.join(', ')}`] });
+  const legend = spendCard(opened)?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
+  const axis = ticksOf(opened).map(centsOf);
+  results.push({ name: instantCheck, ok: legend === '$0.33' && axis.length > 1 && Math.max(...axis) >= 60, missing: [`legend ${legend}`, `axis ${axis.join(', ')}`] });
   opened.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
@@ -10662,7 +10767,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await m.settle(700);
   };
   await tab(m, 'Burn');
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour']);
+  expect('/analytics burn section', m.text(), ['Burn', 'Spend per minute', 'Plan per hour']);
+  results.push({ name: '/analytics the Burn tab draws Spend per minute and Plan per hour and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
   expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers."]);
   await tab(m, 'Traffic');
   {
@@ -11139,9 +11245,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
 
   await burnGroup('request_class');
-  const classes = legendOf('Tokens per minute');
+  const classes = legendOf('Spend per minute');
   results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
-  expect('/analytics burn by request class', m.text(), ['conversation', 'overhead', 'compaction, main, subagent']);
+  expect('/analytics burn by request class glosses the two classes under Spend per minute', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ['Conversation is compaction, main, subagent', 'Overhead is every other class']);
   await burnGroup('key');
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
@@ -11259,17 +11365,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Cache');
     await tab(m, 'Burn');
     await burnGroup('key');
-    const keyed = card('Tokens per minute')?.textContent ?? '';
-    const keyedLegend = legendOf('Tokens per minute');
+    const keyed = card('Spend per minute')?.textContent ?? '';
+    const keyedLegend = legendOf('Spend per minute');
     await burnGroup('account');
-    const accounted = card('Tokens per minute')?.textContent ?? '';
+    const accounted = card('Spend per minute')?.textContent ?? '';
     api.getSettings = getSettings;
     await tab(m, 'Cache');
     await tab(m, 'Burn');
     results.push({
       name: '/analytics a failed settings read leaves the burn charts of a grouping that reads no tier',
-      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load tokens per minute'),
-      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load tokens per minute') ? 'the error drawn' : 'no error'}`],
+      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load spend per minute'),
+      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load spend per minute') ? 'the error drawn' : 'no error'}`],
     });
   }
 
@@ -11502,14 +11608,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Key');
   }
   await tab(m, 'Cache');
+  // The table heads each reason with a short word and the panel's full label on the word's title.
+  const shortWords = ['History', 'Model', 'None', 'Not asked', 'No previous', 'System', 'Tools', 'Unavailable'];
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
-  results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
+  results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
-    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns']), missing: heads });
+    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked'];
+    const ths = [...(table?.querySelectorAll('thead th') ?? [])];
+    const heads = ths.map((th) => th.textContent?.trim());
+    const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
+    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...shortOrder, 'Expired between turns']), missing: heads });
+    results.push({ name: '/analytics the misses headers read their short words with the full label on the title', ok: JSON.stringify(titles) === JSON.stringify(order), missing: titles.map(String) });
     const panel = Object.fromEntries([...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
@@ -11527,10 +11639,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       select?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(800);
     };
-    // Each reason cell of the table, under its column's label, read with the link it draws.
+    // Each reason cell of the table, under its column's label, read with the link it draws. A reason header's label is
+    // its word's title, the full label the panel names it by.
     const cellsOf = (dimension) => {
       const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Misses by reason by ${dimension}`));
-      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? th.textContent?.trim() ?? '');
       return [...(table?.querySelectorAll('tbody tr') ?? [])].flatMap((tr) =>
         [...tr.children].slice(1).map((td, i) => ({ column: heads[i + 1], count: countOf(td), link: td.querySelector('a'), row: tr.children[0]?.textContent?.trim() ?? '', title: td.querySelector('[title]')?.getAttribute('title') ?? '' })),
       );
@@ -11763,14 +11876,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({ name: "/analytics the key grouping's total equals the ungrouped total", ok: unfiltered.size > 1 && meta.endsWith('errors') && grouped === shown, missing: [meta, String(grouped)] });
     }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
-    // after the eight it knows, and the panel draws a bar for it.
+    // after the eight it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
     await tab(m, 'Cache');
-    const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    const reasonThs = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])];
+    const reasonHeads = reasonThs.map((th) => th.textContent?.trim());
+    const unknownHead = reasonThs.find((th) => th.textContent?.trim() === 'future_reason')?.querySelector('span[title]');
+    const unknownParts = [...(unknownHead?.childNodes ?? [])].map((n) => (n.nodeType === 1 ? `<${n.nodeName.toLowerCase()}>` : n.textContent));
     const monthBars = [...([...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason')?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
     results.push({
       name: '/analytics a miss reason the console does not know keeps its own column and bar',
-      ok: JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not requested', 'future_reason', 'Expired between turns']) && monthBars.length === 9 && monthBars.includes('future_reason'),
-      missing: [...reasonHeads, ...monthBars],
+      ok:
+        JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not asked', 'future_reason', 'Expired between turns']) &&
+        JSON.stringify(unknownParts) === JSON.stringify(['future_', '<wbr>', 'reason']) &&
+        unknownHead?.getAttribute('title') === 'future_reason' &&
+        monthBars.length === 9 &&
+        monthBars.includes('future_reason'),
+      missing: [...reasonHeads, JSON.stringify(unknownParts), ...monthBars],
     });
     await tab(m, 'Traffic');
     const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
@@ -13052,6 +13173,38 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: JSON.stringify(all) === JSON.stringify(['', 'Session', ...COLUMNS, '']) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
       missing: all,
     });
+    {
+      // The session the mod released whole draws no agent line, so its expanded detail says why in one sentence, its
+      // row keeps the released badge, whose title words a released main agent too, and its Agents cell reads 0.
+      const whole = new Map();
+      for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+      const id = [...whole].find(([, all]) => all)?.[0];
+      const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+      row?.click();
+      await m.settle(150);
+      const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
+      const read = {
+        agents: cell(row, 'Agents')?.textContent?.trim() ?? null,
+        badge: cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() ?? null,
+        lines: detail?.querySelectorAll('.agents__row').length ?? null,
+        sentences: m.container.querySelectorAll('.agents__released').length,
+        text: detail?.querySelector('.agents__released')?.textContent?.trim() ?? null,
+        title: cell(row, 'Cache warming')?.querySelector('.badge')?.getAttribute('title') ?? null,
+      };
+      row?.click();
+      await m.settle(150);
+      results.push({
+        name: "/sessions the session the mod released whole reads one sentence in its expanded detail, keeps its released badge with a title that words a released main agent, and counts 0 agents",
+        ok:
+          read.text === 'The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.' &&
+          read.sentences === 1 &&
+          read.lines === 0 &&
+          read.badge === 'released' &&
+          read.title === 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.' &&
+          read.agents === '0',
+        missing: [String(id), JSON.stringify(read)],
+      });
+    }
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a re-created pin says so under the session id',
@@ -13147,16 +13300,23 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
           title: link?.getAttribute('title') ?? '',
         };
       });
-    const badgeWords = (f) => `fork of ${f.session.forkedFrom.slice(0, 13)}… at ${f.session.forkDepth}, ${f.relation}`;
+    const badgeWords = (f) => `fork, ${f.relation}`;
     const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
     // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
     const related = forks.filter((f) => f.session.pinned);
     const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
     const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
     results.push({
-      name: '/sessions each pinned fork\'s badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
+      name: "/sessions each pinned fork's badge reads whether the base is on the same account, the base's whole id, the depth and its account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base's row",
       ok: forks.length === 3 && related.length === 2 && related.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
       missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
+    });
+    // The story's fork with no pin of its own claims no relation, so its badge reads the depth where the two part.
+    const unpinned = forks.filter((f) => !f.session.pinned);
+    results.push({
+      name: '/sessions the unpinned fork of the story reads fork at 2 and still links to its base',
+      ok: unpinned.length === 1 && unpinned[0].link?.textContent?.trim() === 'fork at 2' && unpinned[0].target === unpinned[0].baseRow,
+      missing: unpinned.map((f) => f.link?.outerHTML ?? 'no link'),
     });
     const same = forks.find((f) => f.relation === 'same account');
     const target = same?.target ?? null;
@@ -13611,7 +13771,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
   }
   {
-    // A fork whose base is no longer listed names the base and links nowhere.
+    // A fork whose base is no longer listed reads its depth, names the base on its title and links nowhere.
     const forked = (await api.listSessions()).find((s) => s.forkedFrom !== null);
     const base = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.forkedFrom);
     (await openMenu(base)).find((b) => b.textContent?.trim() === 'Release')?.click();
@@ -13624,8 +13784,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const describedBy = badge?.getAttribute('aria-describedby');
     const description = describedBy ? (m.container.querySelector(`[id="${describedBy}"]`)?.textContent ?? null) : null;
     results.push({
-      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link, the unheld base on its title and in its description',
-      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
+      name: '/sessions a fork whose base is not listed reads its depth, with no link, the unheld base on its title and in its description',
+      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork at ${forked.forkDepth}` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
       missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined), String(description)],
     });
   }

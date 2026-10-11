@@ -43,7 +43,7 @@ const PIN_HINT: Record<KeepaliveState, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
   idle: "Stopped and waiting for the user. Probed until the pool's idle window, capped at the recipe's break-even, runs out.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
-  released: 'The subagent finished. Its recipe is gone.',
+  released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
 };
 const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'neutral', not_retained: 'neutral', paused: 'warning', retained: 'good' };
@@ -676,6 +676,9 @@ function SessionRows({
                 <span>Nothing is scheduled because {row.noRecipe}.</span>
               </p>
             )}
+            {!session.historical && !row.noRecipe && row.agents.length > 0 && shown.length === 0 && (
+              <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.</p>
+            )}
             {shown.length > 0 && (
               <div className="agents">
                 <div className="agents__row agents__row--head">
@@ -739,9 +742,9 @@ function SessionRows({
 }
 
 /**
- * A forked session's marker: a link to its base's row where the base is listed, the base's id where it is not. The
- * link stops at the row, whose click and Enter would otherwise open it. The title describes the badge through the
- * card's host, so a reader that never hovers hears the relation.
+ * A forked session's marker: a link to its base's row where the base is listed, plain where it is not, with the base's
+ * whole id and the depth on the title. The link stops at the row, whose click and Enter would otherwise open it. The
+ * title describes the badge through the card's host, so a reader that never hovers hears the relation.
  */
 function ForkBadge({
   base,
@@ -764,7 +767,6 @@ function ForkBadge({
   rowAccountId: string | null;
 }) {
   const at = depth === null ? '' : ` at depth ${depth}`;
-  const short = shortId(from, SESSION_CHARS);
   // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a live pin,
   // is never claimed to be on the same account or another.
   const relation = base !== null && baseAccount !== null && rowAccountId !== null ? (baseAccount.id === rowAccountId ? 'same account' : 'on another account') : null;
@@ -776,7 +778,8 @@ function ForkBadge({
         : `Branched from session ${from}${at} on ${baseAccount?.label}. Follow to its row`;
   const described = useDescription(title);
   const hosted = described && !described.sibling ? described.id : undefined;
-  const words = base === null ? `fork of ${short}` : relation === null ? (depth === null ? 'fork' : `fork at ${depth}`) : `fork of ${short}${depth === null ? '' : ` at ${depth}`}, ${relation}`;
+  // The badge sits under the session id, so it names the relation or the depth alone, and the title the base.
+  const words = relation !== null ? `fork, ${relation}` : depth === null ? 'fork' : `fork at ${depth}`;
   if (base === null)
     return (
       <span className="badge badge--accent srow__fork" title={title} aria-describedby={hosted}>

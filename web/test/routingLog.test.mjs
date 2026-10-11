@@ -889,22 +889,24 @@ test("the Pace cell's title names the share, the hours, the deadline and the rat
   const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
   const reset = Date.UTC(2026, 8, 19, 8, 30);
   const read = { deadline: iso(reset), end: null, hours: 66, remaining: 0.08, reset: iso(reset), score: 0.08 / 66, window: 'seven_day' };
-  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
   const end = ms(16, 44);
   assert.equal(
     title({ deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23, window: 'seven_day_fable' }),
-    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. The highest wins.",
+    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. Inside its tier, the highest above the pace floor wins.",
   );
   assert.equal(
     title({ deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }),
-    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. The highest wins.',
+    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. Inside its tier, the highest above the pace floor wins.',
   );
-  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
-  // Under an hour the hours read one decimal, and from an hour on the whole hours.
-  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 0.4 h to its reset at Sep 19 08:30: 19.05 %/h. The highest wins.');
-  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. The highest wins.');
+  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
+  // Under an hour the span reads in minutes, and from an hour on in whole hours.
+  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 25 min to its reset at Sep 19 08:30: 19.05 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 0.2, score: 0.08 / 0.2 }), '8% of the 7-day window left over 12 min to its reset at Sep 19 08:30: 40.00 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 3.4, score: 0.08 / 3.4 }), '8% of the 7-day window left over 3 h to its reset at Sep 19 08:30: 2.35 %/h. Inside its tier, the highest above the pace floor wins.');
   // A pace written without the field reads as the null window.
-  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. The highest wins.');
+  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.');
   const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
   const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
   assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');

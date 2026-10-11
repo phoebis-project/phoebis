@@ -25,13 +25,14 @@ import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } f
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
 
+// `fill` marks the columns the table draws `col-fill`, so the table takes its content width when none of them shows.
 const COLUMNS = [
   { id: 'time', label: 'Time' },
   { id: 'key', label: 'Key' },
   { id: 'pool', label: 'Pool' },
   { id: 'account', label: 'Account' },
   { id: 'model', label: 'Model' },
-  { id: 'client', label: 'Client' },
+  { fill: true, id: 'client', label: 'Client' },
   { id: 'kind', label: 'Kind' },
   { id: 'transport', label: 'Transport' },
   { id: 'status', label: 'Status' },
@@ -231,6 +232,7 @@ export function RequestsPage() {
   const reset = () => replace({ ...DEFAULTS, rows: read.rows });
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
+  const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
 
   return (
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
@@ -338,7 +340,7 @@ export function RequestsPage() {
 
         <Card padded={false} className="card--table">
           <div className="table-wrap">
-            <table className="table table--hover requests__table">
+            <table className={`table table--hover requests__table${fills ? '' : ' table--no-fill'}`}>
               <thead>
                 <tr>
                   {shown.has('time') && <th className="col-fit">Time</th>}
