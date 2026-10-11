@@ -463,26 +463,25 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
 const tierKey = (t: [number, number, number]) => t.join('/');
 
 /**
- * The pick among the eligible members of the best tier, or among a move's destinations: the chosen account first, the
- * rest by score.
+ * The pick among the members the partitions kept in the chosen account's tier, the set the engine's `choose` orders:
+ * the chosen account first, the rest by score.
  */
-function pickOf(candidates: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined, among?: string[]): { runnerUp: Score | null; score: Score | null; tierSize: number } {
-  const eligible = candidates.filter((c) => c.obstacle === null && c.accountId !== source && (among === undefined || among.includes(c.accountId)));
+function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
-  const tier = eligible.filter((c) => tierKey(c.tier) === tierKey(winner.tier));
   const unit = (c: RecordCandidate) => (c.kind === 'api_key' ? 'percent' : 'percent_per_hour');
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
-  const rest = tier.filter((c) => c !== winner).sort((x, y) => scoreOf(y) - scoreOf(x));
+  const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
   winner.score = strategy === 'pace' ? scoreOf(winner) : null;
   rest.forEach((c, i) => {
     c.rank = i + 2;
     c.score = strategy === 'pace' ? scoreOf(c) : null;
   });
-  if (strategy !== 'pace') return { runnerUp: null, score: null, tierSize: tier.length };
+  const tierSize = rest.length + 1;
+  if (strategy !== 'pace') return { runnerUp: null, score: null, tierSize };
   const best = rest[0];
-  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: scoreOf(winner), unit: unit(winner) }, tierSize: tier.length };
+  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: scoreOf(winner), unit: unit(winner) }, tierSize };
 }
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
@@ -492,37 +491,27 @@ function tierBefore(x: [number, number, number], y: [number, number, number]): b
 }
 
 /**
- * The story names the member each pick chose, drawn or written by hand, so the record's readings are the ones that
- * choice holds under: every member of a better tier is full, so the cap passes it over, and under Pace a tier mate the
- * walk back reads ahead of the chosen member reads its pace window at the least share, in hundredths, that leaves the
- * chosen member on top. A mate that would need more than 0.99 reads 0.99 and drops at the pace floor instead. A token
- * count takes no slot, so no cap passes a member over for it.
+ * The story names the member each pick chose, drawn or written by hand, and the record reads the walk back's windows,
+ * so the pick holds by the slots: every member of a better tier, and under Pace every tier mate scoring above the
+ * chosen member and above the floor, is full, so the cap passes it over. A token count takes no slot, so the request
+ * generator places it on the engine's pick instead.
  */
-function backThePick(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
+function capTheRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
   const winner = candidates.find((c) => c.accountId === spec.accountId);
-  if (!winner) return;
-  const rivals = candidates.filter((c) => c !== winner && c.obstacle === null && c.accountId !== spec.from);
-  if (spec.request.kind !== 'count_tokens') for (const c of rivals) if (tierBefore(c.tier, winner.tier)) c.inFlight = c.inFlightCap;
-  const top = winner.pace?.score;
-  if (pool.strategy !== 'pace' || top === undefined) return;
-  for (const c of rivals) {
-    const pace = c.pace;
-    const name = pace?.window ?? null;
-    const read = name === null ? undefined : c.windows[name];
-    if (!pace || name === null || !read || tierKey(c.tier) !== tierKey(winner.tier) || pace.score <= top || pace.remaining <= pool.paceFloor) continue;
-    const deadline = pace.deadline === null ? null : Date.parse(pace.deadline);
-    const hours = deadline === null ? 168 : Math.max(1, (deadline - spec.at) / HOUR);
-    const utilization = Math.min(0.99, Math.ceil((1 - top * hours) * 100 - 1e-9) / 100);
-    const reset = read.reset === null ? null : Date.parse(read.reset);
-    const elapsed = reset === null ? 0 : Math.min(1, Math.max(0, 1 - (reset - spec.at) / WINDOW_MS[name]));
-    c.windows[name] = { ...read, ahead: read.ahead === null ? null : Math.round((utilization - elapsed) * 1000) / 1000, utilization };
-    const remaining = Math.max(0, 1 - utilization);
-    c.pace = { ...pace, remaining, score: Math.round((remaining / hours) * 100_000) / 100_000 };
+  if (!winner || spec.request.kind === 'count_tokens') return;
+  const top = pool.strategy === 'pace' ? winner.pace?.score : undefined;
+  const outscores = (c: RecordCandidate) => top !== undefined && c.pace !== null && c.pace.score > top && c.pace.remaining > pool.paceFloor;
+  for (const c of candidates) {
+    if (c === winner || c.obstacle !== null || c.accountId === spec.from) continue;
+    if (tierBefore(c.tier, winner.tier) || (tierKey(c.tier) === tierKey(winner.tier) && outscores(c))) c.inFlight = c.inFlightCap;
   }
 }
 
 /** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
 const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+
+/** One reading of whether extra usage funds a spent member, so the partition and a run-out's servable set agree. */
+const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
 
 /**
  * The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads.
@@ -541,7 +530,7 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { fact
     // A spent member is out rather than passed over, so this partition never falls through. An `allow` pool keeps one
     // whose extra usage the record reads as unblocked, and a member without a credits reading is not funded.
     const spent = (c: RecordCandidate) => spentForFable((w) => c.windows[w]?.utilization);
-    const funded = (c: RecordCandidate) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
+    const funded = (c: RecordCandidate) => fundedBy(pool, c.credits);
     const kept = left.filter((c) => !spent(c) || funded(c));
     facts.push(fact('spent', left.length - kept.length));
     left = kept;
@@ -589,7 +578,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const pool = poolById.get(r.poolId ?? '')!;
   const fast = r.shape.requestedSpeed === 'fast';
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'moved') && !spec.rung) backThePick(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'moved') && !spec.rung) capTheRivals(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -696,7 +685,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     else if (!matched) {
       // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
       // the hold rather than a score.
-      const ranked = pickOf(candidates, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, movedAmong);
+      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined);
       if (spec.kind !== 'held') pick = ranked;
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
@@ -866,24 +855,30 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   return [...(expired ? [{ kind: 'pin_expired', reason: reasons[0] ?? null }] : []), ...(created ? [{ kind: 'pin_created', reason: null }] : [])];
 }
 
+/**
+ * A placement's summary fact, by the router's own rules. Exported so a test drives the strategies no pool of the story
+ * contests a tier under.
+ */
+export function placementFactOf(record: DecisionRecord, pick: ReturnType<typeof pickOf>, strategy: string): SummaryFact[] {
+  const rung = record.outcome.rung;
+  if (rung?.rung === 'with_main') return [];
+  if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
+  const others = record.candidates.filter((c) => c.accountId !== record.outcome.accountId);
+  if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
+  if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
+  if (strategy === 'pace' && pick.score && pick.runnerUp) {
+    return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
+  }
+  // A round-robin pick reads its turn as the engine names it. The story keeps no cursor, so the chosen member reads
+  // first, as a rank does.
+  return [summaryFact(strategy === 'round_robin' ? 'turn' : 'rank', `1 of ${pick.tierSize}`, 'text')];
+}
+
 /** The row's By and Fact, by the router's own rules for the summary it writes beside the record. */
 function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof pickOf>, pool: PoolSeed): { by: DecisionSummary['by']; fact: SummaryFact[] } {
   const by = (kind: DecisionSummary['by']['kind'], value: string, tier: [number, number, number] | null = null) => ({ kind, tier, value });
   const r = spec.request;
-  const placementFact = (): SummaryFact[] => {
-    const rung = record.outcome.rung;
-    if (rung?.rung === 'with_main') return [];
-    if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
-    const others = record.candidates.filter((c) => c.accountId !== spec.accountId);
-    if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
-    if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
-    if (pool.strategy === 'pace' && pick.score && pick.runnerUp) {
-      return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
-    }
-    // A round-robin pick reads its turn as the engine names it. The story keeps no cursor, so the chosen member reads
-    // first, as a rank does.
-    return [summaryFact(pool.strategy === 'round_robin' ? 'turn' : 'rank', `1 of ${pick.tierSize}`, 'text')];
-  };
+  const placementFact = () => placementFactOf(record, pick, pool.strategy);
   const inFlight = (): SummaryFact[] => {
     const m = record.candidates.find((c) => c.accountId === spec.accountId);
     return m ? [summaryFact('in_flight', `${m.inFlight}/${m.inFlightCap}`, 'text')] : [];
@@ -933,10 +928,12 @@ function derivedSpecs(r: RequestLog): Spec[] {
   // strategy's pick, and a request the bound ran out on waited so too.
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
   const holds: RecordRequest['holds'] = [];
+  let waitsRecorded = 0;
   // Every member was at its cap until the bound ran out, so the router answered the request without a dispatch.
   const ranOut = (seq: number, attempt: number, onAt: number, attempted: string[]) => {
-    // The row's hold sums every wait, and a wait before the first attempt already has its record.
-    const waitedOn = (r.held?.waitedOn ?? []).slice(holds.length);
+    // The row's hold sums every wait, and a wait before the first attempt already has its one record, however many
+    // accounts it named.
+    const waitedOn = (r.held?.waitedOn ?? []).slice(waitsRecorded);
     const bound = (pool?.retryInPlaceSeconds ?? 60) * 1_000;
     // One held record per re-selection the hold made, each carrying the in-flight facts a held row reads.
     waitedOn.forEach((accountId, i) => {
@@ -951,10 +948,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const fast = r.shape.requestedSpeed === 'fast';
     const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
     // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
-    const funded = (id: string) => {
-      const credits = fast ? creditsAt(id, answeredAt) : null;
-      return pool?.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
-    };
+    const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
     const passedOver = [...new Set([...attempted, ...waitedOn, ...servable])];
     // The builder names the exhaustion off the members' obstacles, which a block among them dates or explains.
@@ -978,6 +972,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
       seq += 1;
       specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
       holds.push({ accountId: heldOn, attempt: i + 1, cohort: hold.cohort, heldMs: hold.heldMs, ranOut: false });
+      waitsRecorded += hold.waitedOn.length;
     }
     seq += 1;
     const moved = s?.moved ?? null;

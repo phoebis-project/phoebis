@@ -3966,10 +3966,11 @@ async function decisionCard(theme) {
   await stripPointer(theme, "the shed move's card at the strip's 640 px floor", true);
   await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
-  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box.
-  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
-  // The shed move's pick scores two members, so its table has a second row to stripe.
-  await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0]] });
+  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box. It holds a row per
+  // destination, primary and overflow, so its second row stripes. The pick ranks primary alone, since nightly, which
+  // scores above it, sits at its cap.
+  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
+  await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0]] });
   // The fresh placement at 14:09:41 opens on its request's page too, so the hour the page shows cannot hide it.
   const fresh = 'req_ef099b34-453';
   const placed = (await page.evaluate(() => Date.now())) - (20 * 60 + 19) * 1_000;

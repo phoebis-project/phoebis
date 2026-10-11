@@ -642,7 +642,9 @@ test("every popover of the story's records takes the inventory's renderer and pl
 
 test("the pick's score column reads the Pace cell under the Pace header", async () => {
   let rows = 0;
-  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1']) {
+  // A tier mate scoring above the chosen member sits at its cap and drops before the pick, so the story's own picks
+  // rank one member each. A hold keeps the whole set, so its pick ranks the tier.
+  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1', 'req_e8b7eb13-060/1']) {
     const record = await recordOf(id);
     const { table } = stationPlan(record, 'pick').block;
     const score = table.columns.find((c) => c.key === 'score');

@@ -535,7 +535,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       if (!r) continue;
       const id = `${row.requestId}/${row.seq}`;
       const winner = r.candidates.find((c) => c.accountId === row.accountId);
-      const tier = r.candidates.filter((c) => c.obstacle === null && sameTier(c, winner));
+      const tier = keptOf(s.lib, r).filter((c) => sameTier(c, winner));
       const others = r.candidates.filter((c) => c !== winner);
       // The branches in the order the summary writer takes them.
       if (others.length > 0 && others.every((c) => r.request.attempted.includes(c.accountId))) {
@@ -555,6 +555,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(row.strategy !== 'pace' || !keys(row).some((k) => k === 'rank' || k === 'turn'), `${id} reads ${keys(row).join(', ')}`);
     }
     assert.ok(seen.has('gap') && seen.has('only candidate'), [...seen].join(', '));
+    // No pool of the story contests a tier under round robin or priority, so a tier of two built here drives the
+    // writer's last branch under each.
+    const tier = ['a', 'b'].map((accountId) => ({ accountId, tier: [0, 0, 0] }));
+    const built = { candidates: tier, outcome: { accountId: 'a', rung: null }, request: { attempted: [] } };
+    for (const [strategy, key] of [['priority', 'rank'], ['round_robin', 'turn']]) {
+      const facts = s.lib.placementFactOf(built, { runnerUp: null, score: null, tierSize: tier.length }, strategy);
+      assert.deepEqual(facts.map((f) => [f.key, f.value]), [[key, '1 of 2']], strategy);
+    }
   });
 
   test(`every model rejection sets a cooldown row and every crossing a spent row, at ${at}`, async () => {
@@ -655,8 +663,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
       const at = Date.parse(r.request.at);
-      // A token count takes no slot, so no cap explains a drawn count below a better tier: those stay as drawn.
-      if (['placed', 'moved'].includes(r.outcome.kind) && r.outcome.rung === null && !r.request.flags.count) {
+      if (['placed', 'moved'].includes(r.outcome.kind) && r.outcome.rung === null) {
         const winner = r.candidates.find((c) => c.accountId === r.outcome.accountId);
         const higher = keptOf(s.lib, r).filter((c) => c.accountId !== r.outcome.fromAccountId && tierBefore(c.tier, winner.tier));
         assert.deepEqual(higher.map((c) => `${c.accountId} ${c.tier.join('/')}`), [], `${id}: ${winner.accountId} sits in tier ${winner.tier.join('/')}`);
@@ -792,12 +799,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const id = `${r.requestId}/${r.seq}`;
       const named = r.candidates.find((c) => c.accountId === r.outcome.accountId);
       assert.ok(named !== undefined, `${id}: ${r.outcome.accountId} is no candidate`);
-      // A member stays through a partition that dropped others only by passing it alone, and through one that fell
-      // through or held the set whole.
-      const alone = d.partitionsOf([{ ...named }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
-      const kept = narrowedSetOf(r).includes(named) && partitions.facts.every((f, i) => typeof f.value !== 'number' || alone[i].value === 0);
       seen += 1;
-      assert.equal(kept, true, `${id}: ${r.outcome.kind} on ${named.accountId} over ${partitions.facts.map((f) => `${f.key} ${f.value}`).join(', ')}`);
+      assert.equal(keptOf(d, r).includes(named), true, `${id}: ${r.outcome.kind} on ${named.accountId} over ${partitions.facts.map((f) => `${f.key} ${f.value}`).join(', ')}`);
     }
     assert.ok(seen > 10);
   });

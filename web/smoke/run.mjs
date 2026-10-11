@@ -8119,7 +8119,7 @@ m.unmount();
       name: '/routing-log the Kinds trigger reads 2 hidden and kinds=probe lists the probe alone',
       ok:
         trigger === 'Kinds (2 hidden)' && entries[0] === '# Decisions' && events > 0 && entries[events - 1] === '- Probe decisions (hidden by default)' && entries[entries.length - 1] === '- Warm prefix expired (hidden by default)' &&
-        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 34 &&
+        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 33 &&
         probes.rows.length === 1 && probes.rows[0].probe && JSON.stringify(listed) === JSON.stringify([probes.rows[0].requestId]) && onlyTrigger === 'Kinds (1)',
       missing: [trigger, ...entries.slice(0, 3), `${probes.rows.length} probes, listed ${listed.join(',')}`, onlyTrigger],
     });

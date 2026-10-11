@@ -141,7 +141,6 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   pin_released: 'pin released',
   poll_backoff_ended: 'poll backoff ended',
   poll_backoff_started: 'poll backoff started',
-  reauth_required: 're-auth required',
   refresh_failed: 'refresh failed',
   refresh_succeeded: 'refresh succeeded',
   refresh_uncertain: 'refresh uncertain',

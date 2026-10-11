@@ -280,6 +280,37 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
 
+/**
+ * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
+ * the walk back. A count takes no slot, so no cap passes a member over for it and a draw cannot stand where the
+ * engine picks another. Nightly reads in overage from its spend cap's raise, the earliest its overage starts. An API
+ * key shares its tier with no other member here, so it keeps the pool's order, and outside Pace the drawn account
+ * leads its tier.
+ */
+function countOrder(ids: string[], poolId: string, atMs: number, model: string, drawn: string): string[] {
+  const pool = poolById.get(poolId);
+  if (!pool) return ids;
+  const tierOf = (id: string): number[] => {
+    const overage = id === 'nightly' && atMs >= clock(11, 30, 12) ? 1 : 0;
+    return [pool.preferSubscription ? (kindOf(id) === 'api_key' ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
+  };
+  const windowId = model.includes('fable') ? '7d_fable' : '7d';
+  const scoreOf = (id: string): number => {
+    if (pool.strategy !== 'pace') return id === drawn ? 1 : 0;
+    if (kindOf(id) === 'api_key') return 0;
+    const reading = oauthWindows(id, atMs, () => SERVED_FACTOR).find((w) => w.id === windowId && w.utilization !== null);
+    const deadlines = [reading?.resetsAt, accountById.get(id)?.subscription?.endsAt].flatMap((x) => (x ? [Date.parse(x)] : []));
+    const hours = deadlines.length ? Math.max(1, (Math.min(...deadlines) - atMs) / HOUR) : 168;
+    return Math.max(0, 1 - (reading?.utilization ?? 0)) / hours;
+  };
+  const ranked = ids.map((id) => ({ id, score: scoreOf(id), tier: tierOf(id) }));
+  ranked.sort((x, y) => {
+    const i = x.tier.findIndex((n, j) => n !== y.tier[j]);
+    return i >= 0 ? x.tier[i] - y.tier[i] : y.score - x.score;
+  });
+  return ranked.map((x) => x.id);
+}
+
 /** The story's one shedding round: secondary's 5-hour window leads its pace by the pool's margin at 11:00. */
 export const SHED_ROUND = { accountId: UNPRICED_ACCOUNT, at: clock(11, 0) };
 
@@ -306,7 +337,7 @@ const CHAIN_FROM = new Map<string, number>();
  * `drawnHead` is where the draws end when secondary is barred from a fast request's earlier attempts alone and every
  * drawn attempt runs. The usage draw is sized by it, so every row keeps the draws the stream gives it.
  */
-function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
+function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean, count: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
   const attempts: Attempt[] = [];
   const trail: string[] = [];
   const drawnTrail: string[] = [];
@@ -322,13 +353,14 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     if (idx >= 0 && pool.length > 1) pool.splice(idx, 1);
     // The stream draws as it always has, so a request handed off an account keeps every later draw where it was: an
     // account it tried already, or one that could not serve then, hands the attempt to the lane's first account that
-    // could and was not tried, and with none left the request ends at the attempt before.
+    // could and was not tried, and with none left the request ends at the attempt before. A token count goes where the
+    // engine's order puts it among the accounts that could take it.
     const upstreamStatus = last ? finalStatus : rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
     const outcome: AttemptOutcome = upstreamStatus === 200 ? 'succeeded' : upstreamStatus === 429 ? 'rate_limited' : 'upstream_error';
     // Secondary serves Sonnet 5 alone, so it takes a request only as its last attempt, where the request is the
     // Sonnet 5 turn it serves rather than the model the lane drew.
     const untried = (id: string) => !trail.includes(id) && servable(id, cursor, model, fast) && !(!last && id === UNPRICED_ACCOUNT);
-    const handedTo = untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
+    const handedTo = count ? countOrder(lane.accountIds.filter(untried), lane.poolId, cursor, model, drawnId)[0] : untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
     if (handedTo === undefined) ended = true;
     // The trail `drawnHead` reads, on the hand-off the usage draw is sized by.
     const drawnUntried = (id: string) => !drawnTrail.includes(id) && servable(id, cursor, model, fast) && !(fast && !last && id === UNPRICED_ACCOUNT);
@@ -371,16 +403,17 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   }
   // A 429 fails over until no member of the pool is left that could serve, so a request that answered one tried each
   // member the draw left, on no draw, in the order the reselect takes them: the pool's tiers, which its order follows
-  // (the plan-funded subscriptions, nightly once in overage, the API key). They answer 429 too, but secondary,
-  // which serves Sonnet 5 alone: it refuses any other model, as the rejection story's account does, and its plan draws
-  // no usage credits for a fast request.
+  // (the plan-funded subscriptions, nightly once in overage, the API key), and a token count's by its Pace score
+  // inside a tier. They answer 429 too, but secondary, which serves Sonnet 5 alone: it refuses any other model, as the
+  // rejection story's account does, and its plan draws no usage credits for a fast request.
   const tail = attempts[attempts.length - 1];
   let added = 0;
   if (tail?.upstreamStatus === 429) {
     const sonnet5 = attempts.some((a) => a.accountId === UNPRICED_ACCOUNT);
     // A request secondary took is the Sonnet 5 turn it serves, which is no fast one.
     const stillFast = fast && !sonnet5;
-    for (const { accountId } of poolById.get(lane.poolId)?.members ?? []) {
+    const members = (poolById.get(lane.poolId)?.members ?? []).map((m) => m.accountId);
+    for (const accountId of count ? countOrder(members, lane.poolId, cursor, model, '') : members) {
       if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
       const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
       const refuses = accountId === UNPRICED_ACCOUNT && !sonnet5;
@@ -429,7 +462,7 @@ function buildRequests(): RequestLog[] {
     const drawn = rng.weighted(lane.models);
     const finalStatus = kind === 'probe' ? (rng.chance(0.97) ? 200 : 502) : rng.weighted([{ value: 200, weight: 88 }, { value: 429, weight: 5 }, { value: 529, weight: 3 }, { value: 502, weight: 2 }]);
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
-    const { attempts: tried, chainFrom, drawnHead, whole } = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind));
+    const { attempts: tried, chainFrom, drawnHead, whole } = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind), kind === 'count_tokens');
     // A request no account could serve still draws its answer below, so every later row keeps its draws.
     const head = tried[tried.length - 1] as Attempt | undefined;
     const model = modelOf(tried, drawn);

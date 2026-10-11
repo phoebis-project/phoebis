@@ -237,14 +237,14 @@ test('every label of the table is used at least once and no fact key lacks a lab
 test('every event kind has its words and its tone', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
-    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'refresh_failed',
+    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
     'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
-  assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', reauth_required: 'critical', window_spent: 'warning' });
+  assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
 });
 
@@ -634,7 +634,6 @@ const DETAIL_EVENTS = {
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
-  reauth_required: [{}, ['Routing']],
   refresh_failed: [{ cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }, ['Error']],
   refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
   refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
