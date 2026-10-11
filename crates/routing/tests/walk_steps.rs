@@ -51,7 +51,7 @@ fn the_fixture_lists_every_step_the_router_records_with_its_verdicts() {
         .unwrap();
     assert_eq!(
         committed, captured,
-        "the committed fixture differs from WALK_STEPS; re-capture and update the console's station table"
+        "the committed fixture differs from WALK_STEPS. Re-capture it and update the console's station table"
     );
 }
 

@@ -1049,14 +1049,14 @@ type SpendKey = (String, String, BudgetPeriod);
 /// The budget edges the writer announces, measured from one refresh to the next.
 #[derive(Default)]
 struct Budgets {
+    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
+    /// takes as this run's own.
+    announced: HashMap<SpendKey, i64>,
     /// The rows the last refresh read.
     last: HashMap<SpendKey, MemberSpend>,
     /// The members this run wrote `budget_reached` for in the period each is in: a period's end is announced only
     /// after its crossing was.
     reached: HashSet<SpendKey>,
-    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
-    /// takes as this run's own.
-    announced: HashMap<SpendKey, i64>,
 }
 
 impl Budgets {

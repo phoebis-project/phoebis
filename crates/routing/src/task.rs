@@ -1325,12 +1325,12 @@ struct Task {
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
+    /// Whether a registry load runs. At most one does.
+    loading: bool,
     /// The first purge waits while set. `Command::ReleasePurge` clears it.
     purge_held: bool,
     /// Whether a purge ran since the start: the first one announces the restored state again.
     purged: bool,
-    /// Whether a registry load runs; at most one does.
-    loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
     #[cfg(any(test, feature = "debug-hooks"))]
     parked: Option<Vec<(Report, u64)>>,
@@ -2729,15 +2729,26 @@ impl Task {
                     return;
                 }
                 // Credits with room lift a refusal only when read after it: an earlier reading says nothing about
-                // the state that refused the request. They lift the credits row alone, since the fast lane's rate
-                // limit beside it is a bucket the reading does not measure.
+                // the state that refused the request. Extra usage funds a request past a spent plan window, so the
+                // reading lifts the credits row and the spent-window rows: an account rate limit naming a plan
+                // window, and a model's rate limit, which on an OAuth account (the only kind the poll reads) is its
+                // week's. The fast lane's rate limit and a model rejection stay, since the reading measures neither.
                 let now = (self.clock)();
-                let refused = self
+                let mut lifted: Vec<String> = self
                     .state
                     .cooldowns_of(&account_id, now)
-                    .any(|row| row.scope == "fast_credits" && observed_at > row.set_at);
-                if refused {
-                    self.release_cooldown(account_id, "fast_credits".to_string(), "recovered");
+                    .filter(|row| observed_at > row.set_at)
+                    .filter(|row| {
+                        row.scope == "fast_credits"
+                            || (row.reason == "rate_limit"
+                                && (row.scope.starts_with("model:")
+                                    || (row.scope == "account" && is_plan_window(&row.window))))
+                    })
+                    .map(|row| row.scope.clone())
+                    .collect();
+                lifted.sort();
+                for scope in lifted {
+                    self.release_cooldown(account_id.clone(), scope, "recovered");
                 }
             }
             Report::Overage {

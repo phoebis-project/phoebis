@@ -3310,6 +3310,62 @@ async fn a_completed_answer_emits_the_cache_map_it_wrote() {
         }
         other => panic!("the cache map, not {other:?}"),
     }
+    let entries_of = |event: RouterEvent| match event {
+        RouterEvent::CacheMapWritten { entries, .. } => entries
+            .iter()
+            .map(|e| (e.tier, e.depth, e.prefix_tokens, e.ttl_ms))
+            .collect::<Vec<_>>(),
+        other => panic!("the cache map, not {other:?}"),
+    };
+    // b1 and b2 refresh in place and answer no row, so the one entry sits first in the list at depth 3.
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: Arc::from(["b1".to_string(), "b2".to_string(), "b3".to_string()]),
+            message_ttl_ms: Some(300_000),
+            cache_touched: true,
+            prefix_tokens: 1_500,
+            request_id: "r-8".into(),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [("message", 3, 1_500, 300_000)]
+    );
+    let with_static = |cache_touched: bool, request_id: &str| {
+        Report::Affinity(AffinityReport {
+            static_boundaries: Arc::from(["s1".to_string()]),
+            static_sizes: vec![800],
+            static_ttl_ms: Some(3_600_000),
+            cache_touched,
+            request_id: request_id.into(),
+            ..affinity_report(&handle, "a", 1_000)
+        })
+    };
+    handle.report(with_static(false, "r-9")).await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [],
+        "an answer that touched no cache records no static boundary"
+    );
+    handle.report(with_static(true, "r-10")).await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [("static", 1, 800, 3_600_000)]
+    );
+    handle
+        .report(Report::Affinity(AffinityReport {
+            incarnation: 0,
+            message_boundaries: Arc::from(["b4".to_string()]),
+            request_id: "r-11".into(),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [],
+        "a report from a holder the account moved past writes no row"
+    );
 }
 
 #[tokio::test]
@@ -4580,6 +4636,70 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
         fast_rows(&handle).await,
         [FAST_RATE_LIMIT_REASON],
         "a credits reading lifts the credits row alone and says nothing about the fast lane's own rate limit"
+    );
+}
+
+#[tokio::test]
+async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_model_rejection() {
+    use phoebis_routing::{RouterEvent, MODEL_REJECTED_REASON};
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    for (scope, reason, window) in [
+        ("account", "rate_limit", FIVE_HOUR),
+        ("model:claude-fable-5-1", "rate_limit", SEVEN_DAY_FABLE),
+        (
+            "model:claude-opus-5",
+            MODEL_REJECTED_REASON,
+            "model_rejection",
+        ),
+    ] {
+        handle
+            .report(cooled("a", scope, 1_000 + 5 * HOUR, reason, window))
+            .await;
+    }
+    let scopes = || async {
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.scope)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        scopes().await,
+        ["account", "model:claude-fable-5-1", "model:claude-opus-5"]
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(credits_at(true, None, Some(20.0), 900)).await;
+    assert_eq!(
+        scopes().await.len(),
+        3,
+        "a reading taken before the rejections says nothing about them"
+    );
+    handle
+        .report(credits_at(true, None, Some(20.0), 3_000))
+        .await;
+    assert_eq!(
+        scopes().await,
+        ["model:claude-opus-5"],
+        "credits with room fund the request past a spent window and say nothing about a model the upstream refused"
+    );
+    let mut cleared = Vec::new();
+    while cleared.len() < 2 {
+        if let RouterEvent::CooldownCleared { scope, cause, .. } = next_event(&mut events).await {
+            cleared.push((scope, cause));
+        }
+    }
+    cleared.sort();
+    assert_eq!(
+        cleared,
+        [
+            ("account".to_string(), "recovered"),
+            ("model:claude-fable-5-1".to_string(), "recovered"),
+        ]
     );
 }
 
@@ -7196,6 +7316,50 @@ async fn a_clock_reset_then_a_new_sample_names_one_row() {
         ))
         .await;
     handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_clock_reset_a_later_poll_names_to_the_millisecond_is_announced_once() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowReset {
+            reset_at: 2_000,
+            observed: "clock",
+            ..
+        }
+    ));
+    // The head named the reset in whole seconds and the poll names it to the millisecond, 400 ms later.
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_100, FIVE_HOUR, 0.1, Some(2_400)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // The ticks past the poll's reset walk a reading whose reset passed, which names the one announced already.
+    now.store(2_400, Ordering::SeqCst);
     no_further_event(&mut events).await;
 }
 

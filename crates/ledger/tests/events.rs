@@ -1361,3 +1361,46 @@ fn the_event_kinds_hold_no_reauth_required_kind() {
         phoebis_ledger::EVENT_KINDS
     );
 }
+
+#[tokio::test]
+async fn the_mirror_counts_the_router_events_a_full_broadcast_dropped_before_it_read_them() {
+    use std::sync::atomic::Ordering;
+    use tokio::sync::broadcast::error::RecvError;
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let overage = || RouterEvent::OverageStarted {
+        account_id: "a".into(),
+        at: NOW,
+    };
+    // Once this row lands, the mirror has read everything the broadcast holds.
+    h.router.emit(overage());
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "overage_started")
+            .then_some(())
+    })
+    .await;
+    let mut witness = h.router.subscribe_events();
+    // No await between the pushes: the test's runtime runs one task at a time, so the mirror reads none of them
+    // before the loop ends and falls exactly as far behind as the receiver subscribed beside it.
+    for _ in 0..4_096 {
+        h.router.emit(overage());
+    }
+    let gap = match witness.recv().await {
+        Err(RecvError::Lagged(gap)) => gap,
+        other => panic!("the witness falls behind the broadcast, not {other:?}"),
+    };
+    let lagged = wait_for(Duration::from_secs(5), || {
+        let lagged = h.ledger.stats().mirror_lagged.load(Ordering::Relaxed);
+        (lagged > 0).then_some(lagged)
+    })
+    .await;
+    assert_eq!(
+        lagged, gap,
+        "the mirror counts every event the broadcast reports it lost"
+    );
+    up.shutdown().await;
+}

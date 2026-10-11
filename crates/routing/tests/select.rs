@@ -352,6 +352,8 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// A select request on `s`'s key `k` for `model` from the main agent, portable or not, with the session the caller
+/// names.
 fn request(
     s: &RegistrySnapshot,
     session: Option<&str>,
@@ -3058,8 +3060,8 @@ fn a_fable_pin_moves_off_an_account_whose_five_hour_window_is_spent_though_its_f
 }
 
 #[test]
-fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extra_usage_is_enabled()
-{
+fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_unless_extra_usage_reads_blocked(
+) {
     for prefer_subscription in [false, true] {
         let s = snapshot(Pool {
             policy: OveragePolicy::Allow,
@@ -3129,11 +3131,78 @@ fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extr
             "five_hour",
             "rate_limit",
         ));
-        assert!(
-            matches!(fable(&mut unread, 3_000), SelectResult::Exhausted(_)),
-            "a credits state the poll has not read is not extra usage enabled, kind order {prefer_subscription}"
+        assert_eq!(
+            picked(&fable(&mut unread, 3_000)),
+            "a",
+            "a credits state the poll has not read is no refusal, kind order {prefer_subscription}"
         );
     }
+}
+
+/// A Fable request under `allow` on a pool of `a` alone, whose sample reads `spent`: with no credits reading the
+/// account goes on in overage, and a reading the poll took as blocked drops it.
+fn spent_under_allow(spent: UtilizationSample, window: &str) {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", spent);
+    let fable = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, None, "claude-fable-5-1", true, &[], now),
+            &mut rng(),
+        )
+        .0
+    };
+    let served = fable(&mut st, 2_000);
+    assert_eq!(
+        picked(&served),
+        "a",
+        "a spent {window} with no credits reading stays a candidate"
+    );
+    let SelectResult::Selected(selection) = &served else {
+        unreachable!("picked above")
+    };
+    assert_eq!(
+        selection.trace.tier.map(|tier| tier.2),
+        Some(1),
+        "the account with a spent {window} bills in overage"
+    );
+    st.record_credits("a", credits(false, Some("out_of_credits"), None, 3_000));
+    assert!(
+        matches!(fable(&mut st, 4_000), SelectResult::Exhausted(_)),
+        "a credits state the poll read as blocked drops the account with a spent {window}"
+    );
+}
+
+#[test]
+fn under_allow_a_spent_five_hour_window_keeps_its_account_on_overage_until_extra_usage_reads_blocked(
+) {
+    spent_under_allow(
+        with_fable(sample(1.0, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        "five-hour window",
+    );
+}
+
+#[test]
+fn under_allow_a_spent_seven_day_window_keeps_its_account_on_overage_until_extra_usage_reads_blocked(
+) {
+    spent_under_allow(
+        with_fable(sample(0.2, 1.0, 1_000), 0.5, Some(9 * HOUR)),
+        "seven-day window",
+    );
+}
+
+#[test]
+fn under_allow_a_spent_model_week_keeps_its_account_on_overage_until_extra_usage_reads_blocked() {
+    spent_under_allow(
+        with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        "model week",
+    );
 }
 
 #[test]
@@ -4631,8 +4700,8 @@ fn an_entry_another_key_wrote_places_the_request() {
 }
 
 /// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding and a
-/// dwell of 900 s set on each pool, so the cases that read 900 s do not rest on the default preset, each key
-/// `(id, pool)` and each member `(pool, account, priority)` as given.
+/// dwell of 900 s on each pool, each key `(id, pool)` and each member `(pool, account, priority)` as given. The dwell
+/// is set on each pool so the cases that read 900 s do not rest on the default preset.
 fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
     let account = |id: &str| AccountRow {
         id: id.into(),
@@ -4760,25 +4829,18 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
     hot_a_cool_b(&mut st, T);
     // Through a pin the round leaves: a request through a marked pin would move it in the same selection, spending
     // the mark read below.
+    let req = select_request(
+        &s,
+        "k1",
+        Some("s0"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        T,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &select_request(
-                    &s,
-                    "k1",
-                    Some("s0"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    T
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
     // Half of the 8.5 burning is 4.25, which k1's s1 and k2's s3 carry the marked burn past.
@@ -4797,25 +4859,18 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
 
     let inside = T + 450_000;
     hot_a_cool_b(&mut st, inside);
+    let req = select_request(
+        &s,
+        "k2",
+        Some("s2"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        inside,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &select_request(
-                    &s,
-                    "k2",
-                    Some("s2"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    inside
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert_eq!(
@@ -4850,25 +4905,18 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
         },
     ]);
     hot_a_cool_b(&mut st, T);
+    let req = select_request(
+        &before,
+        "k1",
+        Some("s0"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        T,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &before,
-                &select_request(
-                    &before,
-                    "k1",
-                    Some("s0"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    T
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &before, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
@@ -4886,25 +4934,18 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     );
     hot_a_cool_b(&mut st, moved);
     st.record_sample("c", sample(0.1, 0.1, moved));
+    let req = select_request(
+        &after,
+        "k2",
+        Some("s2"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        moved,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &after,
-                &select_request(
-                    &after,
-                    "k2",
-                    Some("s2"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    moved
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &after, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert_eq!(st.last_shed("p2", "a"), Some(moved));
@@ -4965,7 +5006,8 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
         "a round ran on each account at T"
     );
 
-    st.purge(&s, T + 900_000);
+    // Inside the 900 s `shedding_pools` sets and past p1's 600 s, so p1's own dwell decides.
+    st.purge(&s, T + 700_000);
     assert_eq!(
         st.newest_shed("a"),
         None,
@@ -4983,6 +5025,88 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
         None,
         "b's stamp leaves with p2's dwell"
     );
+}
+
+#[test]
+fn the_shed_move_takes_exactly_the_siblings_its_cool_line_reads_cool() {
+    let s = shedding_pools(
+        &[("k", "p1")],
+        &[("p1", "a", 0), ("p1", "b", 1), ("p1", "c", 2)],
+    );
+    let cap = s.pool("p1").unwrap().failover.in_flight_cap;
+    // c reads hot on one reading at a time, or on none: the move's filter and the cool line read each the same way.
+    for (hot, destinations) in [
+        ("band", vec!["b"]),
+        ("dwell", vec!["b"]),
+        ("cap", vec!["b"]),
+        ("none", vec!["b", "c"]),
+    ] {
+        let mut st = RoutingState::from_load(RoutingLoad {
+            pins: vec![
+                burning("s1", "a", 4.0, false, T),
+                burning("s0", "a", 1.0, false, T),
+            ],
+            shed_rounds: if hot == "dwell" {
+                vec![ShedRoundRow {
+                    pool_id: "p1".into(),
+                    account_id: "c".into(),
+                    incarnation: 1,
+                    key_id: "k".into(),
+                    session_id: "s9".into(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                    epoch: 1,
+                    round_at: T - 60_000,
+                    marked: false,
+                }]
+            } else {
+                Vec::new()
+            },
+            ..RoutingLoad::default()
+        });
+        st.record_sample("a", sample(0.9, 0.3, T - 500));
+        st.record_sample("b", sample(0.1, 0.1, T - 500));
+        let c_lead = if hot == "band" { 0.8 } else { 0.1 };
+        st.record_sample("c", sample(c_lead, 0.1, T - 500));
+        let _held: Vec<_> = if hot == "cap" {
+            (0..cap)
+                .map(|_| st.in_flight().dispatched("c", T))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+        assert_eq!(
+            landed(d.result.clone()),
+            ("b".into(), Some(MigrateReason::Shed)),
+            "c hot by {hot}"
+        );
+        assert_eq!(
+            fact(line(&d.record, "move:shed"), "destinations"),
+            &FactValue::List(destinations.iter().map(|id| id.to_string()).collect()),
+            "c hot by {hot}"
+        );
+        let cool = line(&d.record, "cool");
+        assert_eq!(cool.verdict, "preferred", "c hot by {hot}");
+        // The cool line reads every sibling the filter admitted, so a hot one the filter let through shows here
+        // even though the preference drops it from the destinations.
+        assert_eq!(
+            cool.facts
+                .iter()
+                .filter(|f| f.key == "cool")
+                .filter_map(|f| f.account_id.as_deref())
+                .collect::<Vec<_>>(),
+            destinations,
+            "c hot by {hot}"
+        );
+        for id in &destinations {
+            assert_eq!(
+                fact_of(cool, "cool", id),
+                &FactValue::Bool(true),
+                "{id} with c hot by {hot}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -12499,6 +12623,23 @@ fn a_refusal_names_its_pin_not_looked_up() {
 }
 
 #[test]
+fn a_selection_whose_pool_the_snapshot_lacks_names_its_pin_not_looked_up() {
+    let s = snapshot(Pool::default());
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let mut load = load_of(Pool::default(), &[]);
+    load.pools.clear();
+    let gone = RegistrySnapshot::from_load(load, [0; 32], 0, 1);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(&mut st, &gone, &req, &mut rng());
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        (d.record.pin.is_none(), d.record.pin_reason),
+        (true, Some("not_looked_up")),
+        "the engine returns before the pin lookup, whatever session the request named"
+    );
+}
+
+#[test]
 fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
     let s = snapshot(Pool::default());
     let req = SelectRequest {
@@ -12574,7 +12715,8 @@ fn the_warmth_cause_and_the_window_source_serialize_as_the_words_they_spell() {
         WarmthCause::StaticRestart,
         WarmthCause::Foreign,
     ] {
-        // Exhaustive, so a variant added later fails to compile here until the list above names it.
+        // Exhaustive, so a variant added later fails to compile here until the match names it, while the array
+        // above would not.
         match cause {
             WarmthCause::Probe
             | WarmthCause::Count

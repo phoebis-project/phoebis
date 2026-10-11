@@ -322,18 +322,18 @@ than its recipe's due time, the cache TTL less the lead (see [Keepalive](keepali
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
-the poll reads the account's extra usage as enabled, in which case it stays and orders behind every plan-funded account;
-an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below; with every
-account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are preferences that
-fall back to the wider set rather than stranding the request: `select_below_utilization` drops every account at or above
-that threshold in 5-hour utilization, and an account winding down toward its subscription end (see **Subscription end**,
-below) is skipped for a fresh placement too.
+the poll has not read the account's extra usage as blocked, in which case it stays and orders behind every plan-funded
+account. An account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below;
+with every account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are
+preferences that fall back to the wider set rather than stranding the request: `select_below_utilization` drops every
+account at or above that threshold in 5-hour utilization, and an account winding down toward its subscription end (see
+**Subscription end**, below) is skipped for a fresh placement too.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key; within a group, or across the whole set with the flag off, tiers order by
 priority ascending, then, under `prefer_plan`, an account not in overage before one in overage. An account kept under
-`allow` with the model's week spent joins the overage group with the flag on, and with it off sorts behind every account
-that is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
+`allow` with a spent window joins the overage group with the flag on, and with it off sorts behind every account that
+is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
 sample as a window map: a subscription account scores by remaining allowance in its own window (the model's own window
 when it has one, else the shared 7-day window) over the hours to the earlier of that window's reset and the account's
 derived end; an api_key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
@@ -578,7 +578,7 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head at all | None | No; 502 `upstream_unreachable`, client retries |
 | Transport failure after the head, before any byte reached the client | None | No; 502 `upstream_cut` |
-| A coding or a payload the router cannot decode, before any byte reached the client | None | No; 502 `upstream_undecodable` |
+| A coding or a payload the router cannot decode, before any byte reached the client | None | No (502 `upstream_undecodable`) |
 | Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
@@ -791,10 +791,15 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
 
-Under `allow`, a subscription account whose model week is spent (for a model with a week of its own, that week or a
-shared window) stays eligible for that model while the poll reads its extra usage as enabled, ordered behind
-plan-funded siblings, since extra usage funds every model; a credits state the poll has not read yet does not count as
-enabled. Under `prefer_plan` and `never` it is passed over until the week resets.
+Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
+on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`
+cools the account. For a model with a week of its own, whose narrowing reads those windows, the account orders behind
+plan-funded siblings and drops only while the poll reads its extra usage as blocked (disabled, a reason named, or the
+spend cap reached). A credits state the poll has not read yet drops nothing. A credits reading with room, taken after
+the `429`, lifts the account's spent-window cooldowns (the account-wide rate limits that name a plan window and the
+model-scoped week rows) as it lifts the fast lane's credits refusal. Otherwise the rows end on their own at the
+window's reset, at `Retry-After` or after the fallback. Under `prefer_plan` and `never`, a model with a week of its own
+passes the account over until its spent window resets.
 
 An account is in overage when its latest quota evidence says so, and only newer evidence, by the upstream's own clock,
 replaces that state. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is true, and clears
