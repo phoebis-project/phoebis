@@ -86,6 +86,7 @@ pub(crate) fn request_summary(
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
         "held": r.held.as_deref().and_then(|h| serde_json::from_str::<Value>(h).ok()),
+        "diagnostics_source": r.diagnostics_source,
     })
 }
 
@@ -259,6 +260,9 @@ pub(crate) async fn list(
         include_probes: q
             .get("include_probes")
             .is_some_and(|v| v == "true" || v == "1"),
+        cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
+        efforts: list_param(&q, "efforts"),
+        request_classes: list_param(&q, "request_classes"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())

@@ -1227,7 +1227,7 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     assert_eq!(
         direct["requests"].as_array().unwrap().len(),
         12,
-        "an account filter matches any attempt"
+        "an account filter matches the serving attempt"
     );
     let text = json(
         get(

@@ -582,6 +582,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fork_depth: Some(2),
             auto_mode: Some("server".into()),
             held: Some(placed_held),
+            diagnostics_source: Some("router".into()),
             ..request(
                 key_generation,
                 "r-failover",
@@ -720,6 +721,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
+            diagnostics_source: Some("client".into()),
             ..request(
                 key_generation,
                 "r-captured",

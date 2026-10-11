@@ -22,7 +22,7 @@ use crate::record::{
 use crate::rollup::read_rollups;
 use crate::rollup::{
     hour_of, read_account_rollups, read_rollups_paged, KeySelector, RollupRow, RollupSelect,
-    PLAN_FUNDING, UNATTRIBUTED,
+    DIMENSION_MAX_BYTES, EFFORTS, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, PLAN_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -103,6 +103,8 @@ pub struct RequestFilter {
     pub text: Option<String>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
+    /// Keep the requests whose serving attempt, the last one, ran on an account in the list: the account the
+    /// rollups file a request under. `UNATTRIBUTED` keeps a request no attempt served.
     pub accounts: Vec<String>,
     pub models: Vec<String>,
     pub kinds: Vec<String>,
@@ -122,6 +124,15 @@ pub struct RequestFilter {
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub include_probes: bool,
+    /// Keep the requests whose serving attempt, the last one, reads a reason in the list. A request with no
+    /// attempt or a null serving reason never matches. Any name, as the route passes any name the beta sent.
+    pub cache_miss_reasons: Vec<String>,
+    /// Keep the requests whose effort, folded as the rollups fold it (`none` for none, `other` past the six),
+    /// is in the list.
+    pub efforts: Vec<String>,
+    /// Keep the requests whose class, folded as the rollups fold it (`-` for none, `other` outside the
+    /// identifier charset or past the bound), is in the list.
+    pub request_classes: Vec<String>,
 }
 
 fn in_list(
@@ -141,6 +152,37 @@ fn in_list(
         })
         .collect();
     clauses.push(format!("{column} IN ({})", marks.join(", ")));
+}
+
+fn bind_all(values: &[String], args: &mut Vec<Box<dyn ToSql>>) -> String {
+    values
+        .iter()
+        .map(|v| {
+            args.push(Box::new(v.clone()));
+            format!("?{}", args.len())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `column` folded as `fold_effort` folds a request's effort, in SQL.
+pub(crate) fn effort_fold_sql(column: &str) -> String {
+    let levels = EFFORTS
+        .iter()
+        .map(|l| format!("'{l}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("CASE WHEN {column} IS NULL THEN '{NO_EFFORT}' WHEN {column} IN ({levels}) THEN {column} ELSE '{OTHER_DIMENSION}' END")
+}
+
+/// `column` folded as `fold_identifier` folds a request's class, in SQL, `NO_CLASS` for NULL.
+pub(crate) fn class_fold_sql(column: &str) -> String {
+    // The charset is `identifier_byte`'s. The GLOB keeps the value to ASCII, so SQLite's character length is its
+    // byte length and the bound reads as the rollups' `DIMENSION_MAX_BYTES`.
+    format!(
+        "CASE WHEN {column} IS NULL THEN '{NO_CLASS}' WHEN length({column}) BETWEEN 1 AND {DIMENSION_MAX_BYTES} \
+         AND {column} NOT GLOB '*[^A-Za-z0-9./:_-]*' THEN {column} ELSE '{OTHER_DIMENSION}' END"
+    )
 }
 
 /// `key_id` and `pool_id` are NULL where the rollups say `-`, so a drill-down from the unattributed analytics
@@ -276,21 +318,13 @@ pub fn list_requests(
         &mut clauses,
     );
     if !filter.accounts.is_empty() {
-        let marks: Vec<String> = filter
-            .accounts
-            .iter()
-            .map(|v| {
-                args.push(Box::new(v.clone()));
-                format!("?{}", args.len())
-            })
-            .collect();
-        let served = format!("EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id IN ({}))", marks.join(", "));
-        // The rollups file a request that never reached an account under the reserved id.
-        if filter.accounts.iter().any(|v| v == UNATTRIBUTED) {
-            clauses.push(format!("({served} OR NOT EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id))"));
-        } else {
-            clauses.push(served);
-        }
+        let marks = bind_all(&filter.accounts, &mut args);
+        // The serving attempt is the last, the account the rollups file a request under, so a request that failed
+        // over lists under the account that answered it. A request no attempt served reads as the reserved id.
+        clauses.push(format!(
+            "COALESCE((SELECT a.account_id FROM attempts a WHERE a.request_id = requests.id \
+             ORDER BY a.attempt DESC LIMIT 1), '{UNATTRIBUTED}') IN ({marks})"
+        ));
     }
     if !filter.speeds.is_empty() {
         let marks: Vec<String> = filter
@@ -306,6 +340,28 @@ pub fn list_requests(
         clauses.push(format!(
             "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({})",
             marks.join(", ")
+        ));
+    }
+    if !filter.cache_miss_reasons.is_empty() {
+        let marks = bind_all(&filter.cache_miss_reasons, &mut args);
+        // The serving attempt is the last, the one the rollups count a request's reason on. A request with no
+        // attempt or a null serving reason matches nothing.
+        clauses.push(format!(
+            "(SELECT a.cache_miss_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) IN ({marks})"
+        ));
+    }
+    if !filter.efforts.is_empty() {
+        let marks = bind_all(&filter.efforts, &mut args);
+        clauses.push(format!(
+            "{} IN ({marks})",
+            effort_fold_sql("requests.effort")
+        ));
+    }
+    if !filter.request_classes.is_empty() {
+        let marks = bind_all(&filter.request_classes, &mut args);
+        clauses.push(format!(
+            "{} IN ({marks})",
+            class_fold_sql("requests.request_class")
         ));
     }
     if filter.held {
@@ -3411,5 +3467,39 @@ mod tests {
             !plan.iter().any(|step| step.starts_with("SCAN")),
             "a poll never walks the whole history: {plan:?}"
         );
+    }
+
+    #[test]
+    fn the_sql_folds_agree_with_the_rust_folds_on_every_branch() {
+        use crate::rollup::{fold_effort, fold_identifier};
+        let conn = Connection::open_in_memory().unwrap();
+        let fold = |expr: &str, sample: Option<&str>| -> String {
+            conn.query_row(&format!("SELECT {expr}"), params![sample], |r| r.get(0))
+                .unwrap()
+        };
+        let effort = effort_fold_sql("?1");
+        for sample in [
+            None,
+            Some("high"),
+            Some("none"),
+            Some("HIGH"),
+            Some("ultra"),
+        ] {
+            assert_eq!(fold(&effort, sample), fold_effort(sample), "{sample:?}");
+        }
+        let class = class_fold_sql("?1");
+        let (bound, past) = ("x".repeat(64), "x".repeat(65));
+        for sample in [
+            None,
+            Some("main"),
+            Some("a/b:c.d_e-f"),
+            Some("bad class"),
+            Some(bound.as_str()),
+            Some(past.as_str()),
+            Some("caf\u{e9}"),
+        ] {
+            let rust = sample.map_or_else(|| NO_CLASS.to_string(), fold_identifier);
+            assert_eq!(fold(&class, sample), rust, "{sample:?}");
+        }
     }
 }

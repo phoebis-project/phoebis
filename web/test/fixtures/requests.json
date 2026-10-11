@@ -7,7 +7,7 @@
         "at": 970000,
         "finished_at": 970900,
         "key_id": "desktop",
-        "key_generation": 1791545605668,
+        "key_generation": 1791677936444,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -124,14 +124,15 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-captured",
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1791545605668,
+        "key_generation": 1791677936444,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -245,14 +246,15 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": "client"
       },
       {
         "id": "r-failed",
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1791545605668,
+        "key_generation": 1791677936444,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -366,14 +368,15 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-incomplete",
         "at": -2599400,
         "finished_at": -2598500,
         "key_id": "desktop",
-        "key_generation": 1791545605668,
+        "key_generation": 1791677936444,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -491,7 +494,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-earlier-holder",
@@ -612,14 +616,15 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-failover",
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791545605668,
+        "key_generation": 1791677936444,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -812,7 +817,8 @@
           ],
           "cohort": "direct",
           "held_ms": 1250
-        }
+        },
+        "diagnostics_source": "router"
       }
     ],
     "next_cursor": null
