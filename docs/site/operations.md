@@ -138,15 +138,17 @@ service layout, as root:
    `--owner` user, and prints the file's path. A key file already in place is read as the new key.
 4. Read its summary: how many OAuth credential bundles, API-key secrets and keepalive recipe bodies it discards, and how
    many oauth accounts, api_key accounts and open refresh attempts it marks.
-5. Answer `yes`. Any other answer exits 2 and leaves the registry as it was, and a key file the run generated stays
-   for the next run to read. `--yes` skips the question for a script.
+5. Answer `yes`. Any other answer exits 2, and a declined run writes nothing: the registry stays as it was, and the run
+   removes a key file it generated, with any directory it created for it, and names the file in its last line. `--yes`
+   skips the question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with
 `the storage key matches the registry, nothing to recover` when the key file still opens the registry's canary (or,
-without one, any of its sealed rows), and with one line when the registry does not exist. Each refusal exits 1. Past
-them it runs the sequence under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key
-in that same transaction, prints the summary again and the steps that remain, and exits 0 once the accounts are marked.
-It prints counts and paths, never a key. Then start the service, and:
+without one, any of its sealed rows), and with one line when the registry does not exist. Each refusal exits 1, and a
+failure after the run generated the key file removes the file as a declined run does. Past them it runs the sequence
+under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
+prints the summary again and the steps that remain, and exits 0 once the accounts are marked. It prints counts and
+paths, never a key. Then start the service, and:
 
 - Re-enter every `api_key` secret in the console.
 - Pair every `oauth` account again in the console.
@@ -295,10 +297,11 @@ container's environment and so the admin secret.
 4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The stop runs under one budget of 35 seconds, which cuts its
-   phases in this order: the keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies
-   still running, the catalog's retries, a credential refresh still in flight, the ledger's last writes, then the
-   routing state's. Each phase takes what the ones before it left, and the session memory's last flush and the store's
-   close run whatever is left. The unit's `TimeoutStopSec=40` leaves five seconds past the budget.
+   phases in this order: the keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still
+   running, the catalog's retries, a credential refresh still in flight, the ledger's last writes, then the routing
+   state's. In-flight requests drain for up to 30 seconds inside the budget, which leaves the phases after them at least
+   five. Each phase takes what the ones before it left, and the session memory's last flush and the store's close run
+   whatever is left. The unit's `TimeoutStopSec=40` leaves five seconds past the budget.
 7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
    `version`, `storage_ok`, `ready`, `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`.
    `router.dropped_reports` counts the reports a closed queue refused at shutdown, zero on a running router; a loop

@@ -1344,6 +1344,38 @@ mod tests {
         )
     }
 
+    /// A refresh that never answers, in the set a drain awaits.
+    fn stalled_refresh(manager: &CredentialManager) {
+        let stalled: RefreshFuture = futures::future::pending().boxed().shared();
+        manager
+            .inner
+            .inflight
+            .lock()
+            .unwrap()
+            .insert("a".into(), stalled);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_within_a_bound_shorter_than_the_refresh_timeout_releases_a_stalled_refresh_at_the_bound(
+    ) {
+        let (manager, _store, up) = manager_at(1_000_000).await;
+        stalled_refresh(&manager);
+        let start = tokio::time::Instant::now();
+        manager.drain_within(Duration::from_secs(4)).await;
+        assert_eq!(start.elapsed(), Duration::from_secs(4));
+        up.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_within_a_bound_past_the_refresh_timeout_is_cut_to_it() {
+        let (manager, _store, up) = manager_at(1_000_000).await;
+        stalled_refresh(&manager);
+        let start = tokio::time::Instant::now();
+        manager.drain_within(Duration::from_secs(300)).await;
+        assert_eq!(start.elapsed(), REFRESH_TIMEOUT);
+        up.shutdown().await;
+    }
+
     fn bundle_at(access_token: &str, issued_at: i64, expires_at: i64) -> NewBundle {
         NewBundle {
             access_token: Secret::new(access_token),

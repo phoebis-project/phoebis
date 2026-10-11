@@ -635,6 +635,25 @@ async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_
 /// removes it once the admin answers, as `probe_soon_on` and `probe_soon_off` do for the keepalive's timing.
 const SHUTDOWN_BUDGET_SECONDS: &str = "PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS";
 
+/// The figure is removed when this drops, a panic's unwinding included, so a case that fails before its admin answers
+/// leaves no short budget to a binary another case starts later.
+struct ShortShutdownBudget;
+
+impl ShortShutdownBudget {
+    fn set(seconds: &str) -> ShortShutdownBudget {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(SHUTDOWN_BUDGET_SECONDS, seconds);
+        ShortShutdownBudget
+    }
+}
+
+impl Drop for ShortShutdownBudget {
+    fn drop(&mut self) {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+    }
+}
+
 #[tokio::test]
 async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes_run() {
     // This thread's subscriber, as in the connection line's case: the binary's own lines are logged on this thread.
@@ -694,10 +713,11 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
     );
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
+    // Set outside the block below: its `ENV` guard drops first on a panic, so the figure's own drop can take the lock.
+    let short_budget = ShortShutdownBudget::set("3");
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        std::env::set_var(SHUTDOWN_BUDGET_SECONDS, "3");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -710,10 +730,7 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
-    {
-        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
-    }
+    drop(short_budget);
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-STALLEDBODY" })).send().await.unwrap().status(), 201);
     assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
@@ -753,6 +770,13 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
             "the budget cut the {phase} phase: {text}"
         );
     }
+    // One deadline leaves the bodies nothing once the listeners spent it, where a budget of their own would give them
+    // three seconds.
+    assert!(
+        text.lines()
+            .any(|line| line.contains("phase=\"bodies\"") && line.contains("seconds=0")),
+        "the bodies got what the listeners left: {text}"
+    );
     for flushed in [
         "the keepalive's last flush ran",
         "the session memory's last flush ran",

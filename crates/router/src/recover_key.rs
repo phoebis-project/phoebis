@@ -4,15 +4,18 @@
 //! canary in one transaction. It prints counts and paths, never a key.
 
 use std::io::{BufRead, ErrorKind, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use phoebis_store::{permissions, SealedCounts, StateCause, StorageKey, Store, StoreError};
+use phoebis_store::{
+    permissions, RecoveryStore, SealedCounts, StateCause, StorageKey, Store, StoreError,
+};
 
 use crate::{config, init};
 
 #[derive(clap::Args, Debug)]
 pub struct RecoverKeyArgs {
-    /// The user that owns a key file this run generates, which needs root.
+    /// The user that receives the key file, its directories and the registry's lock file when this run creates
+    /// them, which needs root.
     #[arg(long, value_name = "USER")]
     pub owner: Option<String>,
     /// Skip the confirmation, for a script.
@@ -30,7 +33,8 @@ const FOLLOW_UPS: [&str; 3] = [
 /// Exit 0 once the accounts are marked, 1 on a refusal or a failure, 2 when the operator answered anything but
 /// `yes`. The lines it prints: the lock refusal "the registry is locked, stop the service first", the matching
 /// key "the storage key matches the registry, nothing to recover", the generated key file's path, the discard
-/// summary (one line per count), the prompt, and the three follow-up steps.
+/// summary (one line per count), the prompt, and the three follow-up steps. A run that exits 1 or 2 after it
+/// generated the key file removes the file again, with the directories it created for it, and says so.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -48,7 +52,7 @@ pub fn run(
     code
 }
 
-/// The run, answering its exit code, or the one line a refusal or a failure before the transaction prints.
+/// The run, answering its exit code, or the lines a refusal or a failure before the transaction prints.
 fn recover(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -87,6 +91,10 @@ fn recover(
             ))
         }
     };
+    // The service's next start opens the lock file, so one a root run created goes to the service's user.
+    if let (Some(owner), Some(lock)) = (owner, store.created_lock()) {
+        hand_over(lock, owner)?;
+    }
     let key_file = &config.storage.encryption_key_file;
     let reading = |error: &dyn std::fmt::Display| {
         format!(
@@ -94,24 +102,60 @@ fn recover(
             key_file.display()
         )
     };
-    let key = match std::fs::symlink_metadata(key_file) {
-        Ok(_) => StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
+    let (key, generated) = match std::fs::symlink_metadata(key_file) {
+        Ok(_) => (
+            StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
+            None,
+        ),
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            let key = generate(key_file, owner)?;
-            say(
-                out,
-                &format!(
-                    "wrote a new storage key to {} (mode 0600)",
-                    key_file.display()
-                ),
-            )?;
-            key
+            let (key, dirs) = generate(key_file, owner)?;
+            (key, Some(dirs))
         }
         Err(error) => return Err(reading(&error)),
     };
+    let outcome = match generated {
+        Some(_) => say(
+            out,
+            &format!(
+                "wrote a new storage key to {} (mode 0600)",
+                key_file.display()
+            ),
+        )
+        .and_then(|()| discard(&mut store, registry, &key, key_file, args, input, out)),
+        None => discard(&mut store, registry, &key, key_file, args, input, out),
+    };
+    let Some(dirs) = generated else {
+        return outcome;
+    };
+    if matches!(outcome, Ok(0)) {
+        return outcome;
+    }
+    // Removed while the lock is held, so no other run reads a key this one leaves unused. A start after a declined or
+    // failed run then reports the missing key file it found rather than a key the registry refuses.
+    let removed = remove_generated(key_file, &dirs);
+    match outcome {
+        Ok(code) => {
+            let _ = say(out, &removed);
+            Ok(code)
+        }
+        Err(line) => Err(format!("{line}\n{removed}")),
+    }
+}
+
+/// The run past the key file: the refusal of a key that opens the registry, the summary, the prompt, and the
+/// transaction.
+fn discard(
+    store: &mut RecoveryStore,
+    registry: &Path,
+    key: &StorageKey,
+    key_file: &Path,
+    args: &RecoverKeyArgs,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<i32, String> {
     let registry_error =
         |error: StoreError| format!("reading the registry at {}: {error}", registry.display());
-    if store.key_matches(&key).map_err(registry_error)? {
+    if store.key_matches(key).map_err(registry_error)? {
         return Err("the storage key matches the registry, nothing to recover".to_string());
     }
     let counts = store.sealed_counts().map_err(registry_error)?;
@@ -139,7 +183,7 @@ fn recover(
         }
     }
     let landed = store
-        .discard_sealed(&key, StateCause::Operator)
+        .discard_sealed(key, StateCause::Operator)
         .map_err(|error| {
             format!(
                 "the recovery did not land, so the registry at {} is unchanged: {error}",
@@ -169,26 +213,83 @@ fn recover(
     Ok(0)
 }
 
-/// Writes a new key as `init` does: 64 hex characters and a newline, in a file created at `0600` in one open and
-/// handed to `owner` through that descriptor. A write that fails removes the file again, so a rerun generates anew.
-fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<StorageKey, String> {
+/// Writes a new key as `init` does: 64 hex characters and a newline, in a file created at `0600` in one open, under
+/// the directories missing on the way to it created at `0700`, all handed to `owner`. Answers the key and the
+/// directories it created, from the top down, the run's own to remove again. A step that fails removes what it
+/// created, so a rerun starts from the same state.
+fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Vec<PathBuf>), String> {
+    let mut dirs: Vec<PathBuf> = permissions::data_dir_of(path)
+        .ancestors()
+        .take_while(|dir| {
+            !dir.as_os_str().is_empty()
+                && matches!(
+                    std::fs::symlink_metadata(dir),
+                    Err(error) if error.kind() == ErrorKind::NotFound
+                )
+        })
+        .map(Path::to_path_buf)
+        .collect();
+    dirs.reverse();
+    let mut file = match permissions::create_private_file(path, 0o600) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = remove_dirs(&dirs);
+            return Err(format!("creating {}: {error}", path.display()));
+        }
+    };
     let key = StorageKey::generate();
-    let hex = key.to_hex();
-    let mut file = permissions::create_private_file(path, 0o600)
-        .map_err(|error| format!("creating {}: {error}", path.display()))?;
     let written = file
-        .write_all(hex.as_bytes())
+        .write_all(key.to_hex().as_bytes())
         .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.sync_all())
+        .map_err(|error| format!("writing {}: {error}", path.display()))
         .and_then(|()| match owner {
-            Some((uid, gid)) => std::os::unix::fs::fchown(&file, Some(uid), Some(gid)),
+            // Through the descriptor `create_new` opened and then `lchown`, as `init` hands its own over, so a link
+            // swapped in as a path's last component cannot carry the change of owner to another file.
+            Some((uid, gid)) => std::os::unix::fs::fchown(&file, Some(uid), Some(gid))
+                .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
+                .and_then(|()| dirs.iter().try_for_each(|dir| hand_over(dir, (uid, gid)))),
             None => Ok(()),
         });
     if let Err(error) = written {
         let _ = std::fs::remove_file(path);
-        return Err(format!("writing {}: {error}", path.display()));
+        let _ = remove_dirs(&dirs);
+        return Err(error);
     }
-    Ok(key)
+    Ok((key, dirs))
+}
+
+fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))
+        .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
+}
+
+/// Removes the key file `generate` wrote and the directories it created, and answers the one line saying so.
+fn remove_generated(path: &Path, dirs: &[PathBuf]) -> String {
+    if let Err(error) = std::fs::remove_file(path) {
+        return format!(
+            "the storage key this run wrote to {} was not removed: {error}",
+            path.display()
+        );
+    }
+    if let Err((dir, error)) = remove_dirs(dirs) {
+        return format!(
+            "removed the storage key this run wrote to {}, but not the directory {}: {error}",
+            path.display(),
+            dir.display()
+        );
+    }
+    format!(
+        "removed the storage key this run wrote to {}",
+        path.display()
+    )
+}
+
+/// The deepest first, so each one is empty by the time it goes.
+fn remove_dirs(dirs: &[PathBuf]) -> Result<(), (&Path, std::io::Error)> {
+    dirs.iter()
+        .rev()
+        .try_for_each(|dir| std::fs::remove_dir(dir).map_err(|error| (dir.as_path(), error)))
 }
 
 /// The counts in the order the transaction runs: what goes, then how the accounts are left.

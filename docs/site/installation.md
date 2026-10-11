@@ -232,12 +232,13 @@ prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listener
 
 On shutdown, Ctrl-C or SIGTERM, the router stops under one budget of 35 seconds, which its phases share in order: the
 keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still running, the catalog's
-retries, a credential refresh still in flight, the ledger's last writes and then the routing state's. Each phase takes
-what the ones before it left, so a slow keepalive shutdown leaves the listeners less rather than a fresh budget of their
-own, and a phase still running when the budget is spent is ended. A credential refresh still in flight is waited for up
-to its own 30-second timeout or what is left of the budget, whichever is shorter, so a token the upstream already
-rotated is stored rather than lost to the next start's quarantine. The session memory's last flush and the store's close
-run whatever the budget reads.
+retries, a credential refresh still in flight, the ledger's last writes and then the routing state's. In-flight requests
+drain for up to 30 seconds inside that budget, so a stream that outlives the drain still leaves the phases after it five
+seconds. Each phase takes what the ones before it left, so a slow keepalive shutdown leaves the listeners less rather
+than a fresh budget of their own, and a phase still running when the budget is spent is ended. A credential refresh
+still in flight is waited for up to its own 30-second timeout or what is left of the budget, whichever is shorter, so a
+token the upstream already rotated is stored rather than lost to the next start's quarantine. The session memory's last
+flush and the store's close run whatever the budget reads.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
 the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
@@ -817,7 +818,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
-| Shutdown budget | 35 seconds for the whole stop, shared by its phases in order. A phase still running when it is spent is ended. |
+| Shutdown budget | 35 seconds for the whole stop, shared by its phases in order, with up to 30 of them for the drain of in-flight requests. A phase still running when it is spent is ended. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |

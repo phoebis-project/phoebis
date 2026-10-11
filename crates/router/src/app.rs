@@ -33,6 +33,11 @@ use crate::{listen, tls};
 /// flush and the store close run whatever the clock reads.
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(35);
 
+/// The listeners' drain of in-flight requests, capped below the budget so a stream that outlives it still leaves the
+/// phases after it the rest: the ledger's queued records and the router task's acknowledged writes land rather than
+/// end with the runtime.
+const LISTENER_DRAIN: Duration = Duration::from_secs(30);
+
 /// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -518,7 +523,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )),
         proxy_stop,
         ListenLimits {
-            drain_timeout: SHUTDOWN_BUDGET,
+            drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
@@ -529,7 +534,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         admin_app,
         stop_rx.clone(),
         ListenLimits {
-            drain_timeout: SHUTDOWN_BUDGET,
+            drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
@@ -550,7 +555,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ),
         stop_rx,
         ListenLimits {
-            drain_timeout: SHUTDOWN_BUDGET,
+            drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
         },
@@ -608,7 +613,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         )
         .await;
     };
-    let served = match budget.bound("listeners", listeners).await {
+    let served = match budget
+        .bound_within("listeners", LISTENER_DRAIN, listeners)
+        .await
+    {
         Some(()) => drained(ended[0].take().expect("every slot is filled by now"))
             .and(drained(
                 ended[1].take().expect("every slot is filled by now"),
@@ -812,8 +820,21 @@ impl ShutdownBudget {
     /// it was given. The future is polled once before the deadline is read, so a phase that is done at its first poll
     /// still answers once nothing remains, and a stop it starts there is at least asked for.
     async fn bound<F: Future>(&self, phase: &'static str, future: F) -> Option<F::Output> {
-        let given = self.remaining();
-        match tokio::time::timeout_at(self.deadline, future).await {
+        self.bound_within(phase, self.remaining(), future).await
+    }
+
+    /// `bound`, with the phase given at most `within` of what remains, so a phase that can run long leaves the phases
+    /// after it the rest of the budget.
+    async fn bound_within<F: Future>(
+        &self,
+        phase: &'static str,
+        within: Duration,
+        future: F,
+    ) -> Option<F::Output> {
+        let now = tokio::time::Instant::now();
+        let deadline = self.deadline.min(now + within);
+        let given = deadline.saturating_duration_since(now);
+        match tokio::time::timeout_at(deadline, future).await {
             Ok(output) => Some(output),
             Err(_) => {
                 tracing::warn!(
@@ -1348,5 +1369,35 @@ models:
             Duration::from_secs(10),
             "a spent budget waits for nothing"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_capped_phase_ends_at_its_cap_and_leaves_the_phases_after_it_the_rest_of_the_budget()
+    {
+        let start = tokio::time::Instant::now();
+        let budget = ShutdownBudget::start(Duration::from_secs(35));
+        let phase = |seconds| tokio::time::sleep(Duration::from_secs(seconds));
+        assert_eq!(
+            budget
+                .bound_within("listeners", Duration::from_secs(30), phase(60))
+                .await,
+            None,
+            "a stream that outlives the drain is cut at the cap"
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(30));
+        assert_eq!(budget.remaining(), Duration::from_secs(5));
+        assert_eq!(
+            budget.bound("ledger", phase(4)).await,
+            Some(()),
+            "the phases after it share what the cap left"
+        );
+        assert_eq!(
+            budget
+                .bound_within("router", Duration::from_secs(30), phase(2))
+                .await,
+            None,
+            "a cap past the deadline is cut to it"
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(35));
     }
 }

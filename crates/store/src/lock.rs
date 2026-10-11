@@ -2,7 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::StoreError;
 
@@ -12,6 +12,10 @@ pub struct ProcessLock {
     _guard: fd_lock::RwLockWriteGuard<'static, File>,
 }
 
+pub fn path(dir: &Path) -> PathBuf {
+    dir.join("lock")
+}
+
 pub fn acquire(dir: &Path) -> Result<ProcessLock, StoreError> {
     let file = OpenOptions::new()
         .create(true)
@@ -19,7 +23,7 @@ pub fn acquire(dir: &Path) -> Result<ProcessLock, StoreError> {
         .read(true)
         .write(true)
         .mode(0o600)
-        .open(dir.join("lock"))?;
+        .open(path(dir))?;
     let lock: &'static mut fd_lock::RwLock<File> = Box::leak(Box::new(fd_lock::RwLock::new(file)));
     let guard = lock.try_write().map_err(|error| match error.kind() {
         std::io::ErrorKind::WouldBlock => StoreError::Locked,

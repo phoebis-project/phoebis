@@ -917,6 +917,7 @@ impl HoldGate {
 /// `Locked`), the schema prepared, and no canary proof, since the key is the one thing being replaced.
 pub struct RecoveryStore {
     conn: Connection,
+    created_lock: Option<PathBuf>,
     _lock: lock::ProcessLock,
 }
 
@@ -925,7 +926,13 @@ impl Store {
     /// refused rather than created, since a recovery has nothing to discard in it and SQLite would create it at the
     /// umask's mode.
     pub fn open_for_recovery(db_path: &Path) -> Result<RecoveryStore, StoreError> {
-        let process_lock = lock::acquire(permissions::data_dir_of(db_path))?;
+        let data_dir = permissions::data_dir_of(db_path);
+        let lock_file = lock::path(data_dir);
+        let lock_missing = matches!(
+            std::fs::symlink_metadata(&lock_file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        let process_lock = lock::acquire(data_dir)?;
         let mut conn = Connection::open_with_flags(
             db_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -933,12 +940,19 @@ impl Store {
         prepare(&mut conn, true)?;
         Ok(RecoveryStore {
             conn,
+            created_lock: lock_missing.then_some(lock_file),
             _lock: process_lock,
         })
     }
 }
 
 impl RecoveryStore {
+    /// The lock file this open created, absent from a data directory no router has opened, such as a registry restored
+    /// onto a new host. A recovery run as root hands it to the service's user, whose next start opens it.
+    pub fn created_lock(&self) -> Option<&Path> {
+        self.created_lock.as_deref()
+    }
+
     /// Whether `key` opens the stored canary. Without a canary the sealed rows answer, as the open's one-time proof
     /// reads them: true when one opens, and false when none does or nothing is sealed, so a recovery over a registry
     /// holding nothing sealed discards nothing and seals its canary.

@@ -29,11 +29,16 @@ const FOLLOW_UPS: [&str; 3] = [
 
 /// The bootstrap file naming `storage.key` and `router.sqlite` in `dir`, neither of which it writes.
 fn config_file(dir: &Path) -> PathBuf {
+    config_naming(dir, &key_file(dir))
+}
+
+/// The bootstrap file naming `key` and `router.sqlite` in `dir`.
+fn config_naming(dir: &Path, key: &Path) -> PathBuf {
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_RECOVER_KEY_ADMIN\n\
          proxy:\n  listen: 127.0.0.1:0\n\
          storage:\n  encryption_key_file: {}\n  path: {}\n",
-        key_file(dir).display(),
+        key.display(),
         registry(dir).display()
     );
     let path = dir.join("config.yaml");
@@ -113,6 +118,7 @@ fn assert_no_key(out: &Output, keys: &[&str]) {
     }
 }
 
+/// Seeded under a cause other than `operator`, so the cause the recovery writes shows in the read-back.
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
         id: id.into(),
@@ -124,7 +130,10 @@ fn account(id: &str, kind: AccountKind) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
-        state_cause: StateCause::Operator,
+        state_cause: match kind {
+            AccountKind::ApiKey => StateCause::AuthFailed,
+            AccountKind::Oauth => StateCause::Paired,
+        },
     }
 }
 
@@ -399,6 +408,7 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
     assert_eq!(agents.len(), 2, "the agent rows stay");
     assert!(agents.iter().all(|agent| agent.body.is_none()));
     for before in seeded {
+        assert_ne!(before.state_cause, StateCause::Operator, "{}", before.id);
         let after = store.account(&before.id).unwrap().unwrap();
         let expected = match before.kind {
             AccountKind::Oauth => AccountState::Disconnected,
@@ -459,5 +469,79 @@ fn the_prompt_takes_yes_alone_and_anything_else_exits_2_with_the_registry_unchan
     assert_eq!(
         Store::read_canary(&registry(dir.path()), &key(NEW_KEY)).unwrap(),
         CanaryRead::Matches
+    );
+}
+
+#[test]
+fn a_declined_run_removes_the_key_file_it_generated_and_the_directory_it_created_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    let generated = keys.join("storage.key");
+    let config = config_naming(dir.path(), &generated);
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    let out = recover_key(&config, &[], b"no\n");
+    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
+    let lines = stdout_lines(&out);
+    assert!(
+        lines.contains(&format!(
+            "wrote a new storage key to {} (mode 0600)",
+            generated.display()
+        )),
+        "{}",
+        printed(&out)
+    );
+    assert_eq!(
+        lines.last(),
+        Some(&format!(
+            "removed the storage key this run wrote to {}",
+            generated.display()
+        )),
+        "{}",
+        printed(&out)
+    );
+    assert!(!generated.exists(), "{}", printed(&out));
+    assert!(!keys.exists(), "{}", printed(&out));
+    assert_no_key(&out, &[OLD_KEY]);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
+/// The uid and the primary gid of `nobody`.
+fn nobody() -> (u32, u32) {
+    let entry = unsafe { libc::getpwnam(c"nobody".as_ptr()) };
+    assert!(!entry.is_null(), "this host has no user nobody");
+    unsafe { ((*entry).pw_uid, (*entry).pw_gid) }
+}
+
+#[test]
+#[ignore = "needs uid 0, so the owner runs it"]
+fn a_root_run_hands_the_owner_the_key_file_the_directory_and_the_lock_it_created() {
+    use std::os::unix::fs::MetadataExt;
+
+    assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+    let (uid, gid) = nobody();
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    let generated = keys.join("storage.key");
+    let lock = dir.path().join("lock");
+    let config = config_naming(dir.path(), &generated);
+    seed(&registry(dir.path()), &key(OLD_KEY));
+    // A registry restored onto a new host comes without the lock file the service's own open leaves beside it.
+    std::fs::remove_file(&lock).unwrap();
+    let out = recover_key(&config, &["--yes", "--owner", "nobody"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    for path in [&keys, &generated, &lock] {
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        assert_eq!(
+            (metadata.uid(), metadata.gid()),
+            (uid, gid),
+            "{}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        std::fs::metadata(registry(dir.path())).unwrap().uid(),
+        0,
+        "the registry keeps the owner it had"
     );
 }
