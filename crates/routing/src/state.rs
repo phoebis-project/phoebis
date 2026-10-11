@@ -862,13 +862,6 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
-    /// Each pin's fast usage as typed tokens per second over the burn window, folded and decayed beside
-    /// `PinRow::burn` from the same `burn_at`. Kept apart so a reader prices this copy through the fast table
-    /// (`BurnRates::fast`, a row's fast cells whatever the prompt where the row has them) and `burn` at the set the
-    /// pin's last prompt selects, and a prompt that crosses the threshold on such a row reprices the ordinary usage
-    /// alone. Memory only, since the pin's row has no column for it, so a restart reads a pin's fast usage as none
-    /// until its next fast renewal.
-    fast_burn: HashMap<PinKey, PinBurn>,
     /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
     /// so a restart starts with none.
     funding_retries: HashMap<String, FundingRetry>,
@@ -955,7 +948,6 @@ impl RoutingState {
                     )
                 })
                 .collect(),
-            fast_burn: HashMap::new(),
             funding_retries: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
@@ -1047,42 +1039,38 @@ impl RoutingState {
             Some(replaced) => {
                 self.spend_mark(&replaced);
                 self.renewed.remove(&key);
-                self.fast_burn.remove(&key);
             }
             None => {
                 self.renewed.remove(&key);
-                self.fast_burn.remove(&key);
             }
         }
     }
 
     /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
-    /// zero for a pin never renewed fast since the router started.
+    /// zero for a pin never renewed fast.
     pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        self.fast_burn.get(&key).copied().unwrap_or_default()
+        self.pin(key).map(|p| p.burn_fast).unwrap_or_default()
     }
 
-    /// Set by the task at each renewal with usage, and by a test that prices a round over fast usage. A copy of
-    /// zeros (a pin whose every renewal was standard) holds no entry, so the map stays as small as the fast pins.
+    /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
+    /// folds its fast usage into the row the task both puts here and writes, so the stored row never lags the state.
     pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
         let key = PinKey {
             model: self.canonical(&key.model).to_string(),
             ..key.clone()
         };
-        if burn == PinBurn::default() {
-            self.fast_burn.remove(&key);
-        } else if self.pins.contains_key(&key) {
-            self.fast_burn.insert(key, burn);
+        if let Some(pin) = self.pins.get_mut(&key) {
+            pin.burn_fast = burn;
         }
     }
 
     /// Every pin with fast usage, by key, for a reader outside the loop that prices the pins beside their rows.
     pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
-        self.fast_burn.clone()
+        self.pins
+            .iter()
+            .filter(|(_, p)| p.burn_fast != PinBurn::default())
+            .map(|(key, p)| (key.clone(), p.burn_fast))
+            .collect()
     }
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
@@ -1119,7 +1107,6 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
-        self.fast_burn.remove(key);
         self.spend_mark(&pin);
         Some(pin)
     }
@@ -1753,9 +1740,8 @@ impl RoutingState {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
-                let fast = self.fast_burn.get(&p.key()).copied().unwrap_or_default();
                 let burn = rates
-                    .price_pin(unit, p, &fast)
+                    .price_pin(unit, p, &p.burn_fast)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -1887,7 +1873,6 @@ impl RoutingState {
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
-            let fast_burn = self.fast_burn.get(&spelled).copied();
             self.take_pin(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
@@ -1911,14 +1896,6 @@ impl RoutingState {
                     self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
-                }
-                match fast_burn {
-                    Some(burn) => {
-                        self.fast_burn.insert(dated_key, burn);
-                    }
-                    None => {
-                        self.fast_burn.remove(&dated_key);
-                    }
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -2214,6 +2191,7 @@ mod tests {
                 input: burn,
                 ..PinBurn::default()
             },
+            burn_fast: PinBurn::default(),
             last_input_tokens: 0,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,

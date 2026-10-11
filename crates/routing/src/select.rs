@@ -1629,6 +1629,7 @@ fn fresh_pin(
         burn: PinBurn::default(),
         burn_at: None,
         burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
         last_input_tokens: 0,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,

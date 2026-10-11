@@ -5527,6 +5527,55 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
     );
 }
 
+#[tokio::test]
+async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usage_as_saved() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (key, saved) = {
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let pin = selected_pin(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap(),
+        );
+        handle.report(speed_renewal(pin, 2_000, true, 600)).await;
+        // The renewal's `burn_at` reaches the store in the same row as its fast copy, so the wait keys on it.
+        wait_for(WRITTEN, || {
+            store
+                .load_routing()
+                .unwrap()
+                .pins
+                .into_iter()
+                .find(|p| p.burn_at == Some(2_000))
+        })
+        .await;
+        let (held, fast) = pin_and_fast_usage(&handle).await;
+        assert!(
+            (fast.input - 1.0).abs() < 1e-9,
+            "the 600 fast tokens over the default 600 s burn window: {fast:?}"
+        );
+        (held.key(), fast)
+    };
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle.fast_burns().await.unwrap().get(&key).copied(),
+        Some(saved),
+        "a restart reads the pin's fast usage as saved"
+    );
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| p.burn_fast)
+            .collect::<Vec<_>>(),
+        vec![saved],
+        "the stored row carries the fast usage the state held, never a fold behind it"
+    );
+}
+
 /// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
 /// over 1,000 prompt tokens.
 fn long_context_rates(rate: f64, long: f64) -> RateTable {
@@ -6662,6 +6711,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn: rates,
         burn_at: Some(AT),
         burn_banded: rates,
+        burn_fast: PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: AT - HOUR,
         cache_ttl_ms: 300_000,

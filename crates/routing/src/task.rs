@@ -305,8 +305,8 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage the routing state holds beside its
-    /// row. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
+    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage as the row's `burn_fast` holds
+    /// it. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
     /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
     /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
     /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
@@ -2934,7 +2934,6 @@ impl Task {
                             ..current
                         };
                         renewed.cache_ttl_ms = cache_ttl_ms;
-                        let mut fast_burn = None;
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
@@ -2965,22 +2964,19 @@ impl Task {
                                     write_5m: fold(copy.write_5m, usage.write_5m),
                                 }
                             };
-                            // A fast answer is usage credits: its tokens land in the fast copy the state holds
-                            // beside the row, priced later through the fast table (`BurnRates::fast`), while the
-                            // row's two copies only decay. A standard answer folds into the row's copies, the
-                            // banded one weighed by the band, and the fast copy only decays.
+                            // A fast answer is usage credits: its tokens land in the row's fast copy, priced later
+                            // through the fast table (`BurnRates::fast`), while the row's two other copies only
+                            // decay. A standard answer folds into the plain and banded copies, the banded one
+                            // weighed by the band, and the fast copy only decays.
                             let (plain, fast_weight) = if fast { (0.0, 1.0) } else { (1.0, 0.0) };
                             renewed.burn = folded(renewed.burn, plain);
                             renewed.burn_banded =
                                 folded(renewed.burn_banded, if fast { 0.0 } else { band });
-                            fast_burn = Some(folded(self.state.fast_burn(&key), fast_weight));
+                            renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens = prompt;
                         }
                         self.state.put_pin(renewed.clone());
-                        if let Some(fast_burn) = fast_burn {
-                            self.state.set_fast_burn(&key, fast_burn);
-                        }
                         self.state.mark_renewed(&key);
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }

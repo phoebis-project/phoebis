@@ -2721,6 +2721,7 @@ fn burning_opus_pin(
         burn: input(plain),
         burn_at: Some(now - 5),
         burn_banded: input(banded),
+        burn_fast: phoebis_store::PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: now - 5,
         cache_ttl_ms: 300_000,
@@ -3215,6 +3216,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -3249,6 +3251,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -3394,6 +3397,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
