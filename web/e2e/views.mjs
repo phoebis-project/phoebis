@@ -3549,8 +3549,8 @@ async function attemptCardAtTheBottom(theme) {
 }
 
 /**
- * The computed color of the first drawn `.tok-event`, `.tok-key` and `.tok-string` span under `root`, each beside its
- * theme token resolved on a probe, or null for a class no drawn row holds.
+ * The computed color and font weight of the first drawn `.tok-event`, `.tok-key` and `.tok-string` span under `root`,
+ * each beside its theme token resolved on a probe, or null for a class no drawn row holds.
  */
 const tokenColors = (root) =>
   page.evaluate((selector) => {
@@ -3564,7 +3564,8 @@ const tokenColors = (root) =>
       // A computed color holds the value, never the token's name, so the token is resolved on a probe of its own.
       const probe = document.body.appendChild(document.createElement('span'));
       probe.style.color = `var(--${cls})`;
-      read[cls] = { color: getComputedStyle(span).color, token: getComputedStyle(probe).color };
+      const style = getComputedStyle(span);
+      read[cls] = { color: style.color, token: getComputedStyle(probe).color, weight: style.fontWeight };
       probe.remove();
     }
     return read;
@@ -3632,14 +3633,14 @@ async function bodyEnd(theme, say) {
  * "Open wide" on a captured body: the dialog is 1040 px wide at 1280 by 800 and at 1440 by 900 and takes the grouped
  * dialogs' height (800 px, or the viewport less 48), its text fills the body past the drawer's 260 px cap and scrolls
  * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. The text
- * draws as rows of `--body-row`, 18 px each, at most the rows in view plus 20 above and 20 below, and scrolled to its
- * end it draws the last line of the text Copy all hands the clipboard. The key, string and event spans the wide view
- * draws take their theme tokens' colors. It runs after the drawer measure, so a drawer is open, and moves down the
- * first page to the first row whose drawer holds a captured body when that one holds none. In the mock pass it then
- * narrows the list to the laptop key, opens a row whose answer was cut and reads that the block's head, with the cut
- * note and the row's actions (two on the story's cut row, whose answer is small), overflows nowhere at the 400 px
- * drawer and keeps the "Open wide" link on one line. The seeded router answers JSON alone, so only the mock pass draws
- * an event span.
+ * draws as rows of `--body-row`, 18 px each, covering every row in view at both sizes and at most the rows in view
+ * plus 20 above and 20 below, and scrolled to its end it draws the last line of the text Copy all hands the clipboard.
+ * The key, string and event spans the wide view draws take their theme tokens' colors, and an event span its 600
+ * weight. It runs after the drawer measure, so a drawer is open, and moves down the first page to the first row whose
+ * drawer holds a captured body when that one holds none. In the mock pass it then narrows the list to the laptop key,
+ * opens a row whose answer was cut and reads that the block's head, with the cut note and the row's actions (two on the
+ * story's cut row, whose answer is small), overflows nowhere at the 400 px drawer and keeps the "Open wide" link on one
+ * line. The seeded router answers JSON alone, so only the mock pass draws an event span.
  */
 async function wideBodyDialog(theme) {
   const say = (what) => failures.push(`${theme} /requests wide body: ${what}`);
@@ -3682,10 +3683,16 @@ async function wideBodyDialog(theme) {
       const lines = Math.round((pre.querySelector('.body-rows')?.getBoundingClientRect().height ?? 0) / token);
       const rows = [...pre.querySelectorAll('.body-row')];
       const visible = Math.ceil((pre.scrollTop + pre.clientHeight) / token) - Math.floor(pre.scrollTop / token);
+      const at = rows.map((r) => Math.round(parseFloat(r.style.top) / token));
+      const lastShown = Math.min(lines, Math.ceil((pre.scrollTop + pre.clientHeight) / token)) - 1;
       return {
         body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
         dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
         pre: { client: pre.clientHeight, drawn: rows.length, lines, long: lines * token > pre.clientHeight, outer: pre.offsetHeight, row: rows[0]?.getBoundingClientRect().height ?? null, scroll: pre.scrollHeight, token, visible },
+        span: {
+          drawn: at.length ? [Math.min(...at), Math.max(...at)] : null,
+          shown: [Math.floor(pre.scrollTop / token), lastShown],
+        },
       };
     });
   for (const { height, width } of [
@@ -3710,6 +3717,12 @@ async function wideBodyDialog(theme) {
     if (got.pre.token !== 18) say(`${where}: the row token reads ${got.pre.token}px, not 18px`);
     if (got.pre.row === null || Math.abs(got.pre.row - got.pre.token) > 0.01) say(`${where}: a drawn row is ${got.pre.row}px tall, not the token's ${got.pre.token}px`);
     if (got.pre.drawn === 0 || got.pre.drawn > got.pre.visible + 40) say(`${where}: ${got.pre.drawn} rows drawn for ${got.pre.visible} in view`);
+    // The viewer reads its box as it mounts, before the dialog's showModal gives the box a height, so only the
+    // observer's read covers the rows in view. Rows short of them are the mount's window, blank below until a scroll.
+    const { drawn, shown } = got.span;
+    if (drawn === null || drawn[0] > shown[0] || drawn[1] < shown[1]) {
+      say(`${where}: rows ${drawn?.join(' to ') ?? 'none'} drawn for rows ${shown.join(' to ')} in view`);
+    }
     if (got.body.scroll !== got.body.client) say(`${where}: the body scrolls (${got.body.scroll}px in ${got.body.client}px)`);
     if (got.dialog.scroll !== got.dialog.client) say(`${where}: the dialog scrolls (${got.dialog.scroll}px in ${got.dialog.client}px)`);
   }
@@ -3733,6 +3746,10 @@ async function wideBodyDialog(theme) {
       if (read === null) {
         if (cls !== 'tok-event' || mock) say(`no drawn row holds a .${cls} span`);
       } else if (read.color !== read.token) say(`a drawn .${cls} span reads ${read.color}, not the ${read.token} of --${cls}`);
+      // --tok-event resolves to the ink's color, so an event span that lost its rule shows only in its weight.
+      if (cls === 'tok-event' && read !== null && read.weight !== '600') {
+        say(`a drawn .tok-event span weighs ${read.weight}, not 600`);
+      }
     }
   };
   if (!mock) {

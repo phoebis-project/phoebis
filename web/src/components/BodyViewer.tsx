@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { highlightJson } from '@/lib/bodies';
 
 /** One row of the mono font's line height, 12 px at 1.5. `--body-row` in pages.css carries the same figure. */
@@ -72,11 +72,14 @@ export function BodyViewer({ highlight, lines }: { highlight: boolean; lines: re
       cancel();
     };
   }, [read]);
+  // Absolutely placed rows widen the scroll area only while drawn, so the longest line sets the block's width in the
+  // mono font's ch, and a reader scrolled sideways keeps the place when a long line leaves the window.
+  const widest = useMemo(() => lines.reduce((most, line) => Math.max(most, line.length), 0), [lines]);
   const rows = [];
   for (let i = span.first, end = Math.min(span.last, lines.length); i < end; i += 1) rows.push(<Row key={i} highlight={highlight} line={lines[i]} top={i * ROW_PX} />);
   return (
     <pre ref={box} className="body-block__pre body-block__pre--rows" tabIndex={0} onScroll={onScroll}>
-      <div className="body-rows" style={{ height: lines.length * ROW_PX }}>
+      <div className="body-rows" style={{ height: lines.length * ROW_PX, minWidth: `${widest}ch` }}>
         {rows}
       </div>
     </pre>

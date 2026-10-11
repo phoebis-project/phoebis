@@ -7849,7 +7849,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
 }
 // A body of any size draws in the drawer as its head alone and opens wide in a window of its lines: 20,000 indented
 // lines draw a bounded count of rows in the dialog, scrolled to its end the dialog draws the last line at its offset,
-// and Copy all in the drawer's head hands over the whole text the DOM never holds.
+// and Copy all in the drawer's head and in the dialog's footer hands over the whole text the DOM never holds.
 {
   const check = '/requests a 20,000-line body draws no row in the drawer, the visible rows plus the margin wide, its last row at the end, and Copy all copies the whole text';
   const shownPath = m.location().pathname;
@@ -7870,7 +7870,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
     const block = bodyBlockOf(m, 'Request');
     const inDrawer = block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1;
     const [copied = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
-    const pre = (await openWide(m, block))?.querySelector('.body-block__pre');
+    const dialog = await openWide(m, block);
+    const pre = dialog?.querySelector('.body-block__pre');
     /** Each drawn row as its line number, read off its offset, with the text it holds. */
     const rowsOf = () => [...(pre?.querySelectorAll('.body-row') ?? [])].map((r) => ({ at: parseFloat(r.style.top) / ROW_PX, text: r.textContent ?? '' }));
     const inPlace = (rows) => rows.every((r, i) => r.text === expected[r.at] && (i === 0 || r.at === rows[i - 1].at + 1));
@@ -7890,6 +7891,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
     }
     await m.settle(100);
     const scrolled = rowsOf();
+    // The footer's copy sits beside the drawn rows, so it is where a copy of those rows alone would show.
+    const [footer = ''] = await copiedByCopyAll(dialog?.querySelector('.dialog__foot'));
     await closeWide(m);
     const bound = Math.ceil(box / ROW_PX) + 2 * WINDOW_ROWS;
     const last = scrolled.at(-1);
@@ -7907,12 +7910,14 @@ await m.navigate(`/requests/${laptopRow.id}`);
         inPlace(scrolled) &&
         last?.at === 19_999 &&
         last?.text === expected[19_999] &&
-        copied === expected.join('\n'),
+        copied === expected.join('\n') &&
+        footer === expected.join('\n'),
       missing: [
         `${expected.length} lines, ${inDrawer} drawn in the drawer, the block ${height ?? 'not drawn'} tall`,
         `opened: ${opened.length} rows from line ${opened[0]?.at}${inPlace(opened) ? '' : ', a row off its line'}`,
         `scrolled: ${scrolled.length} rows of at most ${bound}, the last at line ${last?.at} reading ${JSON.stringify(last?.text)}${inPlace(scrolled) ? '' : ', a row off its line'}`,
-        `copied ${copied.length} characters of ${expected.join('\n').length}`,
+        `copied ${copied.length} characters from the drawer's head, ${footer.length} from the dialog's footer`,
+        `the text holds ${expected.join('\n').length}`,
       ],
     });
   }

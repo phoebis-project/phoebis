@@ -206,10 +206,10 @@ Body capture is off until a key or a pool asks for it. Once asked for, a capture
 bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
 the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
 once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
-bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console shows a
-captured body in the request drawer, with a control to copy it. A captured request body is the body as the
-client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
-included, whether or not the router dropped it on the way upstream.
+bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console lists a
+captured body in the request drawer, with a control to copy it, and draws it in the wide view. A captured request body
+is the body as the client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's
+permission rules and paths included, whether or not the router dropped it on the way upstream.
 
 ## The ledger writer
 
