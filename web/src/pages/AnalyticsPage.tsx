@@ -24,6 +24,7 @@ import { bandRuns } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
+import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
@@ -482,6 +483,12 @@ export function AnalyticsPage() {
   // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
+  // The reasons panel's counts link under one window and the page's filters. A session view's log read keeps the
+  // session's key lifetime alone, so its links carry that lifetime.
+  const linkInput: ReasonLink = {
+    filters: { accountIds: filters.accountId, clientPattern: classPattern.trim(), includeProbes, keyIds: linkedKeyIds(filters.keyId, sessionId === null ? null : sessionKey), models: filters.model, poolIds: filters.poolId, sessionId, userAgentPattern: userAgentPattern.trim() },
+    window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
+  };
 
   return (
     <div className="stack">
@@ -813,10 +820,10 @@ export function AnalyticsPage() {
             </ChartCard>
 
             <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
-              {loading ? <Skeleton height={190} /> : <ReasonBars totals={totals} />}
+              {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} totals={totals} />}
             </Card>
           </div>
-          <MissReasonsByGroup groups={groups} groupLabel={groupLabel} loading={loading} />
+          <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} />
           {sessionId === null && <CacheByModel groups={byModel.stale ? [] : (byModel.data ?? [])} error={byModel.error} loading={byModel.data === null || byModel.stale} />}
           {/* The route reads no session, so a session view has no placements of its own to show. */}
           {sessionId === null && (
@@ -1278,7 +1285,21 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
   return ink.series[7];
 }
 
-function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
+/** What every count of the reasons panel links under: the window and the page's filters, without a count or a reason. */
+type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason'>;
+
+/** A count of the reasons panel: a link to the requests it counts, else the figure with why it stays plain. */
+function CountLink({ children, target }: { children: ReactNode; target: RequestsLinkTarget }) {
+  return target.href === null ? (
+    <span title={target.title}>{children}</span>
+  ) : (
+    <Link to={target.href} title={target.title}>
+      {children}
+    </Link>
+  );
+}
+
+function ReasonBars({ link, totals }: { link: ReasonLink; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
     .map((reason) => ({ count: missCount(totals.cacheMissReasons, reason), reason }))
@@ -1294,7 +1315,8 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
             <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: reasonColor(ink, r.reason) }} />
           </div>
           <span className="num">
-            {fmtInt(r.count)} <span className="muted">{fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}</span>
+            <CountLink target={requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>{' '}
+            <span className="muted">{fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}</span>
           </span>
         </li>
       ))}
@@ -1335,8 +1357,12 @@ function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number
   );
 }
 
-function MissReasonsByGroup({ groups, groupLabel, loading }: { groupLabel: string; groups: AnalyticsGroup[]; loading: boolean }) {
+function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean }) {
   const order = missReasonOrder(groups);
+  const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
+    const count = missCount(g.cacheMissReasons, reason);
+    return <CountLink target={requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
+  };
   return (
     <BreakdownTable
       title={`Misses by reason by ${groupLabel.toLowerCase()}`}
@@ -1347,7 +1373,8 @@ function MissReasonsByGroup({ groups, groupLabel, loading }: { groupLabel: strin
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
-        cells: [...order.map((reason) => fmtInt(missCount(g.cacheMissReasons, reason))), fmtInt(g.expiredBetweenTurns)],
+        // Expired between turns is no reason the Requests page filters by, so it stays plain.
+        cells: [...order.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
       }))}
     />
   );

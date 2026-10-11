@@ -5,6 +5,7 @@ import type {
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
+import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { aheadOf } from '@/lib/quota';
@@ -1534,13 +1535,6 @@ function wastedProbes(h: Rng, probes: number, probeCostUsd: number): Pick<Hourly
 
 const ZERO_WASTE: Pick<HourlyRollup, 'wastedProbeReasons' | 'wastedProbeUsd' | 'wastedProbes'> = { wastedProbeReasons: emptyWastedProbeReasons(), wastedProbeUsd: 0, wastedProbes: 0 };
 
-/** The class most of a lane-hour's requests sent; the rollups keep the class as a dimension, the fixture one per row. */
-function classOfRows(list: RequestLog[]): string {
-  const counts = new Map<string, number>();
-  for (const r of list) counts.set(r.requestClass ?? '-', (counts.get(r.requestClass ?? '-') ?? 0) + 1);
-  return [...counts.entries()].reduce((best, next) => (next[1] > best[1] ? next : best))[0];
-}
-
 /** The classes a synthesized hour's traffic sent, weighted toward the main conversation. */
 const HOUR_CLASSES: [string, number][] = [['auxiliary', 2], ['compaction', 1], ['main', 12], ['subagent', 5], ['workflow', 1]];
 
@@ -1597,65 +1591,87 @@ function rollups(): HourlyRollup[] {
     const [hour, keyId, poolId, accountId, model, kind, sessionId, funding] = key.split('|') as [string, string, string, string, string, RequestKind, string, HourlyRollup['funding']];
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
-    const cacheMissReasons = emptyCacheMissReasons();
-    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+    // The seeded draws are the lane hour's, taken once each in this order, so splitting its rows by effort and class
+    // below moves no drawn figure.
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
-    const kept = isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35));
+    const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
+    const moved = list.filter((r) => r.attempts.length > 1 && r.status === 200);
+    const migrations = moved.length > 0 && h.chance(0.5) ? 1 : 0;
     const probeCostUsd = isProbe ? list.reduce((s, r) => s + r.costUsd, 0) : 0;
-    out.push({
-      hour,
-      client: CLIENTS[keyId] ?? '-',
-      keyId,
-      // One hour never holds two holders of a key, since the live key starts on the hour.
-      keyGeneration: list[0].keyGeneration,
-      kind,
-      poolId,
-      accountId,
-      model,
-      requestClass: isProbe ? '-' : classOfRows(list),
-      sessionId,
-      funding,
-      // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
-      // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
-      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
-      requests: {
-        // A stream that ended short committed its 200 and still is no success, so it counts on its own.
-        incomplete: list.filter((r) => r.outcome === 'incomplete').length,
-        ok: okRows.filter((r) => r.outcome === 'succeeded').length,
-        rate_limited: list.filter((r) => r.status === 429).length,
-        // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-        overloaded: list.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
-        upstream_error: list.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
-      },
-      // Every attempt but the last one moved the request to another member.
-      failovers: list.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
-      migrations: list.filter((r) => r.attempts.length > 1 && r.status === 200).length > 0 && h.chance(0.5) ? 1 : 0,
-      effort: 'none',
-      tokens: {
-        uncachedInput: list.reduce((s, r) => s + r.usage.input, 0),
-        cacheRead: list.reduce((s, r) => s + r.usage.cacheRead, 0),
-        cacheWrite5m: list.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
-        cacheWrite1h: list.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
-        output: list.reduce((s, r) => s + r.usage.output, 0),
-        thinking: list.reduce((s, r) => s + r.usage.thinking, 0),
-        webFetch: list.reduce((s, r) => s + r.usage.webFetch, 0),
-        webSearch: list.reduce((s, r) => s + r.usage.webSearch, 0),
-      },
-      cacheHits: okRows.filter((r) => r.usage.cacheRead > 0).length,
-      cacheMisses: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
-      cacheMissReasons,
-      expiredBetweenTurns: okRows.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
-      uncached: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
-      costUsd: list.reduce((s, r) => s + r.costUsd, 0),
-      cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
-      histograms: histogramsOf(list),
-      keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
-      probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : { ok: 0, failed: 0, held: 0, skipped: 0 },
-      probeMigrated: isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0,
-      probeCostUsd,
-      ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
-    });
+    const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
+    const probeMigrated = isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0;
+    const waste = isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE;
+    // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
+    // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
+    const speed = (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard';
+    // The rollups file each request under its effort and class as they fold them, and a probe under no class. The
+    // story files a probe under no effort either, so a lane hour's probes stay one row with the probe figures on it.
+    const parts = new Map<string, RequestLog[]>();
+    for (const r of list) {
+      const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}`;
+      parts.set(part, [...(parts.get(part) ?? []), r]);
+    }
+    for (const [part, rows] of parts) {
+      const [effort, requestClass] = part.split('|');
+      const ok = rows.filter((r) => r.status === 200);
+      const cacheMissReasons = emptyCacheMissReasons();
+      for (const r of rows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+      const keptHere = rows.filter((r) => kept.has(r));
+      out.push({
+        hour,
+        client: CLIENTS[keyId] ?? '-',
+        keyId,
+        // One hour never holds two holders of a key, since the live key starts on the hour.
+        keyGeneration: list[0].keyGeneration,
+        kind,
+        poolId,
+        accountId,
+        model,
+        requestClass,
+        sessionId,
+        funding,
+        speed,
+        requests: {
+          // A stream that ended short committed its 200 and still is no success, so it counts on its own.
+          incomplete: rows.filter((r) => r.outcome === 'incomplete').length,
+          ok: ok.filter((r) => r.outcome === 'succeeded').length,
+          rate_limited: rows.filter((r) => r.status === 429).length,
+          // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
+          overloaded: rows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          // The ledger files a stream the client closed as failed, so it counts here beside the upstream's errors.
+          upstream_error: rows.filter((r) => (r.status !== 200 && r.status !== 429 && r.status !== 529) || r.outcome === 'canceled').length,
+        },
+        // Every attempt but the last one moved the request to another member.
+        failovers: rows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        // The lane hour draws one migration, filed with the first request that moved.
+        migrations: rows.includes(moved[0]) ? migrations : 0,
+        effort,
+        tokens: {
+          uncachedInput: rows.reduce((s, r) => s + r.usage.input, 0),
+          cacheRead: rows.reduce((s, r) => s + r.usage.cacheRead, 0),
+          cacheWrite5m: rows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
+          cacheWrite1h: rows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
+          output: rows.reduce((s, r) => s + r.usage.output, 0),
+          thinking: rows.reduce((s, r) => s + r.usage.thinking, 0),
+          webFetch: rows.reduce((s, r) => s + r.usage.webFetch, 0),
+          webSearch: rows.reduce((s, r) => s + r.usage.webSearch, 0),
+        },
+        cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
+        cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
+        cacheMissReasons,
+        expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
+        uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
+        costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
+        cost: sumSplit(rows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
+        histograms: histogramsOf(rows),
+        keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
+        probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
+        probeMigrated,
+        probeCostUsd,
+        ...waste,
+      });
+    }
   }
   // The day holds one probe the router held while its ledger caught up, from the default range's first hour on, so the
   // default range draws the slice.

@@ -742,6 +742,37 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.some((r) => r.requestClass === null), 'a row sent no request class');
     assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
   });
+
+  // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the breakdown
+  // route reads them: every hour that starts inside the range.
+  const defaultRange = (s) => s.allRollups.filter((r) => Date.parse(r.hour) >= s.now - DAY && Date.parse(r.hour) <= s.now);
+
+  test(`every reason the default range's totals count lists a request under it in the window its link writes, at ${at}`, async () => {
+    const s = await story;
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const counted = Object.entries(totals.cacheMissReasons).filter(([, n]) => n > 0);
+    assert.ok(counted.length > 1, 'the range counts several reasons');
+    const filters = { accountIds: [], clientPattern: '', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' };
+    for (const [reason, count] of counted) {
+      const { href } = s.lib.requestsLink({ count, filters, reason, window: { exact: false, fromMs: s.now - DAY, nowMs: s.now, toMs: s.now } });
+      const params = new URL(href, 'http://console.test').searchParams;
+      const { requests } = await s.api.listRequests({ cacheMissReasons: params.get('cache_miss_reasons').split(','), from: params.get('from'), limit: 1, to: params.get('to') });
+      assert.ok(requests.length > 0, `${reason} lists no request from ${params.get('from')} to ${params.get('to')}`);
+    }
+  });
+
+  test(`the default range's effort and request class breakdowns count the story's rows per folded value, at ${at}`, async () => {
+    const s = await story;
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const folds = { effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
+    for (const [groupBy, fold] of Object.entries(folds)) {
+      const want = {};
+      for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
+      // A group of probe rows alone counts no request while probes are left out, as the route answers it.
+      const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
+      assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
+    }
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.

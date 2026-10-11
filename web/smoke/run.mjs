@@ -11043,6 +11043,51 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
+  // The panel names a reason by its label and its links by the name the beta sent.
+  const reasonOf = {
+    'History edited': 'messages_changed',
+    'Model changed': 'model_changed',
+    'No divergence': 'none',
+    'Not requested': 'not_requested',
+    'Previous message not found': 'previous_message_not_found',
+    'System prompt changed': 'system_changed',
+    'Tools changed': 'tools_changed',
+    Unavailable: 'unavailable',
+  };
+  const countOf = (el) => Number(el?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? NaN);
+  {
+    const keyFilter = () => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
+    const toggleKey = async (value) => {
+      keyFilter()?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+      [...(keyFilter()?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === value)?.click();
+      await m.settle(700);
+      keyFilter()?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+    };
+    const bars = () => [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => ({ count: countOf(li.querySelector('.num')), label: li.children[0]?.textContent?.trim() ?? '', link: li.querySelector('.num > a') }));
+    await toggleKey('desktop');
+    const keyed = bars();
+    const counted = keyed.filter((b) => b.count > 0);
+    const wrong = counted.flatMap((b) => {
+      const t = logTarget(b.link?.getAttribute('href'));
+      const hourly = Date.parse(t.from) % 3_600_000 === 0 && Date.parse(t.to) > Date.parse(t.from);
+      return b.link && t.path === '/requests' && t.cache_miss_reasons === reasonOf[b.label] && hourly && t.keys === 'desktop' ? [] : [`${b.label} ${b.count} ${b.link?.getAttribute('href') ?? 'no link'}`];
+    });
+    results.push({
+      name: "/analytics a totals count links to the Requests page under its reason, the range's hours and the key filter",
+      ok: counted.length > 0 && wrong.length === 0 && keyed.filter((b) => b.count === 0).every((b) => b.link === null),
+      missing: wrong.length ? wrong : keyed.map((b) => `${b.label} ${b.count}`),
+    });
+    await toggleKey('desktop');
+    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+    await m.settle(700);
+    const probed = bars().find((b) => b.link !== null);
+    const probeTitle = probed?.link?.getAttribute('title') ?? '';
+    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+    await m.settle(700);
+    results.push({ name: '/analytics with probes included a totals link says the list leaves the probes out', ok: probeTitle.includes('leaves the probes out') && logTarget(probed?.link?.getAttribute('href')).kind === undefined, missing: [probeTitle, probed?.link?.getAttribute('href') ?? 'no link'] });
+  }
   await tab(m, 'Cache warming');
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
@@ -11162,6 +11207,51 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
+  }
+  {
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const groupBy = async (label) => {
+      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      setSelect.call(select, [...(select?.options ?? [])].find((o) => o.textContent === label)?.value);
+      select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(800);
+    };
+    // Each reason cell of the table, under its column's label, read with the link it draws.
+    const cellsOf = (dimension) => {
+      const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Misses by reason by ${dimension}`));
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      return [...(table?.querySelectorAll('tbody tr') ?? [])].flatMap((tr) =>
+        [...tr.children].slice(1).map((td, i) => ({ column: heads[i + 1], count: countOf(td), link: td.querySelector('a'), row: tr.children[0]?.textContent?.trim() ?? '', title: td.querySelector('[title]')?.getAttribute('title') ?? '' })),
+      );
+    };
+    // The group key is not drawn, so a row is found by its label and the key it stands for is named beside it.
+    const linksUnder = (dimension, param, rows) => {
+      const cells = cellsOf(dimension).filter((c) => c.column !== 'Expired between turns' && Object.hasOwn(rows, c.row) && c.count > 0);
+      const wrong = cells.flatMap((c) => {
+        const t = logTarget(c.link?.getAttribute('href'));
+        return c.link && t.path === '/requests' && t[param] === rows[c.row] && t.cache_miss_reasons === reasonOf[c.column] ? [] : [`${c.row} ${c.column} ${c.link?.getAttribute('href') ?? 'no link'}`];
+      });
+      return { linked: new Set(cells.map((c) => c.row)), wrong };
+    };
+    const byKey = linksUnder('key', 'keys', { desktop: 'desktop', laptop: 'laptop' });
+    results.push({ name: '/analytics a breakdown cell under the key grouping links with its key', ok: byKey.linked.size === 2 && byKey.wrong.length === 0, missing: [...byKey.wrong, `rows ${[...byKey.linked].join(',')}`] });
+    const expired = cellsOf('key').filter((c) => c.column === 'Expired between turns');
+    results.push({ name: '/analytics the Expired between turns cells carry no link', ok: expired.some((c) => c.count > 0) && expired.every((c) => c.link === null), missing: expired.map((c) => `${c.row} ${c.count} ${c.link ? 'linked' : 'plain'}`) });
+    await groupBy('Effort');
+    const byEffort = linksUnder('effort', 'efforts', { high: 'high', max: 'max', none: 'none' });
+    results.push({ name: '/analytics a breakdown cell under the effort grouping links with its effort', ok: byEffort.linked.size === 3 && byEffort.wrong.length === 0, missing: [...byEffort.wrong, `rows ${[...byEffort.linked].join(',')}`] });
+    await groupBy('Request class');
+    const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
+    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
+    await groupBy('User agent');
+    const agents = cellsOf('user agent');
+    const counted = agents.filter((c) => c.column !== 'Expired between turns' && c.count > 0);
+    results.push({
+      name: '/analytics no cell of the user agent grouping links, and a count says the request log matches the raw header',
+      ok: counted.length > 0 && agents.every((c) => c.link === null) && counted.every((c) => c.title.includes('raw header')),
+      missing: counted.map((c) => `${c.row} ${c.column} ${c.link ? 'linked' : c.title}`),
+    });
+    await groupBy('Key');
   }
   {
     // The account rollups carry the range and the account alone, so the section takes the account selection and

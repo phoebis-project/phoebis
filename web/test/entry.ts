@@ -21,6 +21,7 @@ export * as modelPatterns from '@/lib/patterns';
 export * from '@/lib/presets';
 export * from '@/lib/quota';
 export * from '@/lib/requests';
+export * from '@/lib/requestsLink';
 export * from '@/lib/rings';
 export * from '@/lib/routingLog';
 export * from '@/lib/selection';

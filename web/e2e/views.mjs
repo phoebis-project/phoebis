@@ -3195,6 +3195,57 @@ async function requestDrawerCompact(theme) {
 }
 
 /**
+ * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
+ * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
+ * a detail follows. Following the link moves the page clock, so the mock pass runs it on a load of its own once every
+ * view's shot is taken, and it leaves the Analytics page on its Traffic tab.
+ */
+async function reasonLink(theme) {
+  const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
+  await page.goto(`${base}/analytics`);
+  await booted();
+  await advance(LOAD_MS);
+  try {
+    if (!(await tabTo(theme, 'Cache'))) return;
+    const link = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason');
+      const bar = [...(card?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.querySelector('.num > a') !== null);
+      return bar ? { href: bar.querySelector('.num > a').getAttribute('href'), label: bar.children[0]?.textContent?.trim() ?? '' } : null;
+    });
+    if (link === null) {
+      say('the panel draws no link');
+      return;
+    }
+    await page.locator(`.hbars--reasons .num > a[href="${link.href}"]`).first().click();
+    await advance(LOAD_MS);
+    try {
+      await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 });
+    } catch {
+      say(`${link.href} lists no request`);
+      return;
+    }
+    const range = await page.evaluate(() => document.querySelector('select[aria-label="Date range"]')?.selectedOptions[0]?.textContent ?? null);
+    await page.locator('.requests__table tbody tr').first().click();
+    await advance(LOAD_MS);
+    try {
+      await page.waitForSelector('.drawer .kv__row', { timeout: 15_000 });
+    } catch {
+      say('the first row drew no drawer');
+      return;
+    }
+    const cache = await page.evaluate(() => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache')?.querySelector('dd span')?.textContent ?? null);
+    measurements.push(`${theme} /analytics reasons panel link ${JSON.stringify({ cache, href: link.href, label: link.label, range })}`);
+    if (!range?.startsWith('Custom range')) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one`);
+    if (cache !== link.label) say(`the first row's drawer reads the reason ${JSON.stringify(cache)} under the "${link.label}" link`);
+  } finally {
+    await page.goto(`${base}/analytics`);
+    await booted();
+    await advance(LOAD_MS);
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
  * The attempt count's hover card for a row at the table's bottom shows whole: the card is drawn under the body and
  * placed from the count's box inside the viewport, so `.table-wrap`'s overflow clips none of it, and its last badge
  * ends inside it. The last row of two or more attempts on the page is scrolled to the viewport's bottom edge and its
@@ -5324,6 +5375,12 @@ try {
       at = `${theme} /keys copy by command`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await copyFallbackModal(theme);
+    }
+    // Following a reasons panel link moves the page clock as well.
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /analytics reasons panel link`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await reasonLink(theme);
     }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a

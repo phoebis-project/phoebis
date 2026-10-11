@@ -412,6 +412,16 @@ test('the session fold groups a user agent under its first product token, as the
   assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.269', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
 });
 
+test('the session fold keys an effort and a request class as the rollups fold them', () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const odd = { ...row, id: 'r-odd', requestClass: 'c'.repeat(65), shape: { ...row.shape, effort: 'ultra' } };
+  const unset = { ...row, id: 'r-unset', requestClass: null, shape: { ...row.shape, effort: null } };
+  assert.deepEqual(d.foldGroups([odd], 'effort').map((g) => g.key), [d.OTHER_DIMENSION], 'an effort the API does not name');
+  assert.deepEqual(d.foldGroups([unset], 'effort').map((g) => g.key), [d.NO_EFFORT], 'no effort');
+  assert.deepEqual(d.foldGroups([odd], 'request_class').map((g) => g.key), [d.OTHER_DIMENSION], 'a class past 64 bytes');
+  assert.deepEqual(d.foldGroups([unset], 'request_class').map((g) => g.key), [d.NO_CLASS], 'no class');
+});
+
 test('the cooldown move reason reads failed over and the other seven keep their words', () => {
   assert.deepEqual(d.PIN_MIGRATION_LABEL, {
     cooldown: 'failed over',
