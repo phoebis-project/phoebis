@@ -3007,6 +3007,7 @@ async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, 
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
         })

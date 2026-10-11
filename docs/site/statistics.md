@@ -470,7 +470,8 @@ shows a dash. Below a window width of 1420 pixels the model moves beneath the ac
 
 After a held request's bound runs out, the log reads one held row per member at its cap, each with its `in flight`
 count, then the exhausted row with `held`, `retry none` and `answer`, the wait and the status the client got: `answer
-429` for a pool at its cap.
+429` for a pool at its cap. A request whose freed slot another request took passes the account over, and its exhausted
+row reads `retry none` and `answer 429`.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the

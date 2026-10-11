@@ -288,6 +288,9 @@ async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str
         );
         let lapse = pending_lapse(r, agent);
         tick_to(r, lapse).await;
+        // The sweep's settlements reach the ledger with the save that drops the probes, which the production
+        // flusher runs on its own.
+        r.engine.flush_persisted().await;
     }
     assert_eq!(
         wasted(r, status.probes).await,

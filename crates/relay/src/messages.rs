@@ -1747,6 +1747,7 @@ impl Relay {
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
                     dialed,
+                    held_out,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
                 })

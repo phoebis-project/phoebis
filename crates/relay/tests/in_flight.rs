@@ -1074,6 +1074,7 @@ async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a
         .await
         .unwrap();
     assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    let mut events = h.router.subscribe_events();
     // Both placements wait on a. Ending the one stream wakes both in the same turn; a freed slot is read, not
     // reserved, so the placement whose selection runs second finds it taken by the first.
     let (two, three, ()) = tokio::join!(
@@ -1123,6 +1124,24 @@ async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a
         posts(&up),
         2,
         "nothing was dialled for the placement passed over"
+    );
+    let id = outcome(passed_over).request_id;
+    let seen = router_events_until(&mut events, |event| match event {
+        RouterEvent::Decision {
+            summary, record, ..
+        } => record.request.request_id == id && summary.kind == "exhausted",
+        _ => false,
+    })
+    .await;
+    let Decided { kinds, facts, .. } = decided(&seen, &id);
+    assert_eq!(kinds, [(1, "held"), (2, "held"), (3, "exhausted")]);
+    assert_eq!(
+        facts,
+        [
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ],
+        "the row records the 429 the client got for the account passed over"
     );
     drop((first, two, three));
     up.release();

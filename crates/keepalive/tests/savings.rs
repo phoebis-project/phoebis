@@ -420,9 +420,11 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
         (Reason::IdleLimit, 3),
         "the ceiling keeps the three probes pending"
     );
-    // The last probe's entry, written 810 s in, ends at 1,110 s.
+    // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
+    // that drops the probes, which the production flusher runs on its own.
     r.advance(30_000);
     r.step().await;
+    r.engine.flush_persisted().await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
     let probe = probe_rows(&rows);
     assert!(
@@ -1175,9 +1177,11 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         (Reason::IdleLimit, 3),
         "the ceiling keeps the three probes pending"
     );
-    // The last probe's entry, written 810 s in, ends at 1,110 s.
+    // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
+    // that drops the probes, which the production flusher runs on its own.
     r.advance(30_000);
     r.step().await;
+    r.engine.flush_persisted().await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
     assert_eq!(
         fundings(&rows, |row| row.wasted_probes > 0),
@@ -1680,6 +1684,7 @@ async fn a_probe_past_the_idle_limit_is_credited_inside_its_entry_and_settles_at
     );
     r.advance(1);
     r.step().await;
+    r.engine.flush_persisted().await;
     let rows = final_rollups(&r).await;
     assert_eq!(
         (
@@ -1737,8 +1742,8 @@ async fn a_turn_streaming_across_a_pending_probes_entry_end_keeps_it_off_the_lap
 }
 
 /// A session whose only recipe the idle limit ended holds its pending probe alone, with nothing retained for a tick to
-/// ask the router about: the first tick at the entry's end still settles it under `idle_limit`, and the settlement
-/// reaches the ledger from that tick with no router view asked.
+/// ask the router about: the first tick at the entry's end still settles it under `idle_limit` with no router view
+/// asked, and the settlement reaches the ledger with the save after it.
 #[tokio::test]
 async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without_asking_the_router()
 {
@@ -1756,6 +1761,7 @@ async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without
         (views, 0),
         "the tick settled the probe and asked the router nothing"
     );
+    r.engine.flush_persisted().await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     assert_eq!(
         probe_rows(&rows).wasted_probe_reasons,
@@ -1793,6 +1799,7 @@ async fn a_turn_ended_before_its_head_or_by_a_bus_gap_leaves_the_pending_probe_t
             0,
             "the lapse settled the probe (bus gap: {gap})"
         );
+        r.engine.flush_persisted().await;
         let rows = final_rollups(&r).await;
         assert_eq!(
             (

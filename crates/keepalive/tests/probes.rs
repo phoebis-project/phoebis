@@ -794,6 +794,8 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     r.advance(1);
     r.step().await;
     assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
+    // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
+    r.engine.flush_persisted().await;
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {

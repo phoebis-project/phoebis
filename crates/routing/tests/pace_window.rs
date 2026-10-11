@@ -113,6 +113,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         parent_agent_id: None,
         holds: Vec::new(),
         dialed: false,
+        held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
     }

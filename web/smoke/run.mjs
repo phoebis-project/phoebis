@@ -8324,14 +8324,14 @@ m.unmount();
       name: '/routing-log the Kinds trigger reads 2 hidden and kinds=probe lists the probe alone',
       ok:
         trigger === 'Kinds (2 hidden)' && entries[0] === '# Decisions' && events > 0 && entries[events - 1] === '- Probe decisions (hidden by default)' && entries[entries.length - 1] === '- Warm prefix expired (hidden by default)' &&
-        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 34 &&
+        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 33 &&
         probes.rows.length === 1 && probes.rows[0].probe && JSON.stringify(listed) === JSON.stringify([probes.rows[0].requestId]) && onlyTrigger === 'Kinds (1)',
       missing: [trigger, ...entries.slice(0, 3), `${probes.rows.length} probes, listed ${listed.join(',')}`, onlyTrigger],
     });
   }
   {
     // The day's rows too, so the cell is read on every kind the story holds and not on the last hour's alone.
-    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
+    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
     const wrong = [];
     let pairs = 0;
     for (const page of [m, day]) {
@@ -9756,7 +9756,6 @@ m.unmount();
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
-      reauth_required: ['Routing'],
       refresh_failed: ['Error'],
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
@@ -9770,7 +9769,7 @@ m.unmount();
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
-      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'refresh_failed',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
       'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;

@@ -308,10 +308,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
-            tokio::runtime::Builder::new_multi_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
-                .build()?
-                .block_on(phoebis_router::app::run(config, async {
+                .build()?;
+            let deadline = phoebis_router::app::ShutdownDeadline::default();
+            let served = runtime.block_on(phoebis_router::app::run_until(config, async {
                     let ctrl_c = tokio::signal::ctrl_c();
                     let mut terminate =
                         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -341,7 +342,11 @@ fn main() -> anyhow::Result<()> {
                         }
                         _ = terminate.recv() => {}
                     }
-                }))
+                }, &deadline));
+            // A writer the budget cut still runs on a blocking thread, which a plain drop of the runtime would wait
+            // for without a bound.
+            runtime.shutdown_timeout(deadline.remaining_at(std::time::Instant::now()));
+            served
         }
     }
 }

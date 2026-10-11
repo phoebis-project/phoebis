@@ -7,7 +7,7 @@ use std::io::{BufRead, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use phoebis_store::{
-    permissions, RecoveryStore, SealedCounts, StateCause, StorageKey, Store, StoreError,
+    permissions, KeyMatch, RecoveryStore, SealedCounts, StateCause, StorageKey, Store, StoreError,
 };
 
 use crate::{config, init};
@@ -32,9 +32,10 @@ const FOLLOW_UPS: [&str; 3] = [
 
 /// Exit 0 once the accounts are marked, 1 on a refusal or a failure, 2 when the operator answered anything but
 /// `yes`. The lines it prints: the lock refusal "the registry is locked, stop the service first", the matching
-/// key "the storage key matches the registry, nothing to recover", the generated key file's path, the discard
-/// summary (one line per count), the prompt, and the three follow-up steps. A run that exits 1 or 2 after it
-/// generated the key file removes the file again, with the directories it created for it, and says so.
+/// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
+/// the generated key file's path, the discard summary (one line per count), the prompt, and the three follow-up
+/// steps. A run that exits 1 or 2 after it generated the key file removes the file again, with the directories it
+/// created for it, and says so.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -155,8 +156,19 @@ fn discard(
 ) -> Result<i32, String> {
     let registry_error =
         |error: StoreError| format!("reading the registry at {}: {error}", registry.display());
-    if store.key_matches(key).map_err(registry_error)? {
-        return Err("the storage key matches the registry, nothing to recover".to_string());
+    match store.key_matches(key).map_err(registry_error)? {
+        KeyMatch::Matches => {
+            return Err("the storage key matches the registry, nothing to recover".to_string())
+        }
+        // The key is the right one and the discard would erase what it still opens.
+        KeyMatch::CorruptCanary { readable_rows } => {
+            let rows = if readable_rows == 1 { "row" } else { "rows" };
+            return Err(format!(
+                "the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing was \
+                 discarded: restore the canary from a backup"
+            ));
+        }
+        KeyMatch::Differs => {}
     }
     let counts = store.sealed_counts().map_err(registry_error)?;
     say(

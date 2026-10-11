@@ -844,9 +844,13 @@ pub struct FundingRetry {
     /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
-    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A registry load
-    /// that started before it may predate the mark's write, so such a load drops nothing.
+    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A retry's success
+    /// that went out before it says nothing of the balance the mark found.
     pub stamped_at: i64,
+    /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
+    /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
+    /// claim, which writes nothing, read 0.
+    pub mark_revision: Option<u64>,
 }
 
 pub struct RoutingState {
@@ -1318,8 +1322,21 @@ impl RoutingState {
                 incarnation,
                 claimed_by: None,
                 stamped_at: now,
+                mark_revision: None,
             },
         );
+    }
+
+    /// The writer finished the mark's write for `account_id` under `incarnation`: landed at `revision`, or refused by
+    /// its fences.
+    pub fn funding_written(&mut self, account_id: &str, incarnation: u64, revision: Option<u64>) {
+        if let Some(retry) = self
+            .funding_retries
+            .get_mut(account_id)
+            .filter(|retry| retry.incarnation == incarnation && retry.mark_revision.is_none())
+        {
+            retry.mark_revision = Some(revision.unwrap_or(0));
+        }
     }
 
     pub fn funding_cleared(&mut self, account_id: &str) {
@@ -1364,6 +1381,7 @@ impl RoutingState {
                         incarnation,
                         claimed_by: Some(ticket),
                         stamped_at: now,
+                        mark_revision: Some(0),
                     },
                 );
             }
@@ -1371,16 +1389,18 @@ impl RoutingState {
     }
 
     /// Keeps an entry only while `snapshot` reads its account `FundingRequired` under the entry's incarnation, so a
-    /// Clear, a re-pairing or a deletion that reached the registry drops it. An entry stamped at or after the load's
-    /// start stays whatever the snapshot reads, since that load may have read the registry before the mark's write
-    /// landed.
+    /// Clear, a re-pairing or a deletion that reached the registry drops it. Under the same incarnation an entry whose
+    /// mark the writer has not acknowledged, or one the snapshot reads at a row revision below the mark's, stays
+    /// whatever the snapshot reads, since that load read the registry before the mark's write landed.
     pub fn reconcile_funding_retries(&mut self, snapshot: &RegistrySnapshot) {
         self.funding_retries.retain(|account_id, retry| {
-            retry.stamped_at >= snapshot.loaded_at
-                || snapshot.account(account_id).is_some_and(|account| {
-                    account.state == AccountState::FundingRequired
-                        && account.incarnation == retry.incarnation
-                })
+            snapshot.account(account_id).is_some_and(|account| {
+                account.incarnation == retry.incarnation
+                    && (account.state == AccountState::FundingRequired
+                        || retry
+                            .mark_revision
+                            .is_none_or(|written| account.revision < written))
+            })
         });
     }
 

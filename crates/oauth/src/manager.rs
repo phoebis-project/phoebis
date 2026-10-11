@@ -395,9 +395,25 @@ impl CredentialManager {
     /// Refuses the lineage of a token the upstream rejected on a replay, as a landed mark refuses its own: the token
     /// is the one a refresh just committed, valid to its expiry, so a leg that still carries the pre-mark row would be
     /// handed it again from the cache or the store until the relay's report reaches the snapshot. A credential
-    /// committed past `credential_generation`, by a pairing, ends the refusal.
+    /// committed past `credential_generation`, by a pairing, ends the refusal, and one committed while the replay was
+    /// upstream supersedes it: the slot's newer bundle or refusal stays as it is.
     pub fn refuse_rejected(&self, account: &AccountRow, credential_generation: u64) {
-        self.inner.refuse(account, credential_generation);
+        // Read before the store, so an invalidation that lands after the read supersedes the refusal as well.
+        let epoch = self.inner.epoch(&account.id);
+        let superseded = self
+            .inner
+            .store
+            .credential_metadata(&account.id)
+            .is_ok_and(|stored| {
+                stored.is_some_and(|stored| {
+                    stored.lifecycle_generation != account.lifecycle_generation
+                        || stored.generation > credential_generation
+                })
+            });
+        if !superseded {
+            self.inner
+                .refuse(account, credential_generation, Some(epoch));
+        }
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -1127,7 +1143,7 @@ impl Inner {
         if !landed {
             return None;
         }
-        self.refuse(account, credential_generation);
+        self.refuse(account, credential_generation, None);
         Some(LandedMark {
             account_id: account.id.clone(),
             state: AccountState::ReauthRequired,
@@ -1139,10 +1155,14 @@ impl Inner {
     }
 
     /// Drops the account's cached bundle and refuses its lineage at `credential_generation`, so a miss on it answers
-    /// the refusal rather than reading the refused bundle back from the store.
-    fn refuse(&self, account: &AccountRow, credential_generation: u64) {
+    /// the refusal rather than reading the refused bundle back from the store. With `since`, the epoch a caller read
+    /// before its own store read, an invalidation that moved the epoch meanwhile leaves the slot as it is.
+    fn refuse(&self, account: &AccountRow, credential_generation: u64, since: Option<u64>) {
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
         let slot = bundles.entry(account.id.clone()).or_default();
+        if since.is_some_and(|epoch| epoch != slot.epoch) {
+            return;
+        }
         slot.outrun();
         slot.refused = Some(Lineage {
             incarnation: account.incarnation,

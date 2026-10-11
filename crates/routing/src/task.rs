@@ -607,19 +607,32 @@ impl Report {
                 sample.observed_at >= held.observed_at
             }
             // A reconnect restarts the credential generation at 1 under a new lifecycle, so the lifecycle is read
-            // first; under one lifecycle a stale credential's verdict never replaces a current one's.
+            // first, and under one lifecycle a stale credential's verdict never replaces a current one's. A refusal
+            // held under the same generations is stamped when the loop drains it, after any retry already queued
+            // beside it went out, so that retry's success clears nothing and never replaces it.
             (
                 Report::AccountState {
+                    state,
                     lifecycle_generation,
                     credential_generation,
+                    dispatched_at,
                     ..
                 },
                 Report::AccountState {
+                    state: held_state,
                     lifecycle_generation: held_lifecycle,
                     credential_generation: held_credential,
                     ..
                 },
-            ) => (lifecycle_generation, credential_generation) >= (held_lifecycle, held_credential),
+            ) => {
+                let generations = (lifecycle_generation, credential_generation);
+                let held_generations = (held_lifecycle, held_credential);
+                let stale_retry = generations == held_generations
+                    && *held_state == AccountState::FundingRequired
+                    && *state != AccountState::FundingRequired
+                    && dispatched_at.is_some();
+                !stale_retry && generations >= held_generations
+            }
             (Report::Credits { state, .. }, Report::Credits { state: held, .. }) => {
                 state.observed_at >= held.observed_at
             }
@@ -736,6 +749,10 @@ enum Command {
     },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
+    FundingWritten {
+        rows: Vec<FundingWritten>,
     },
     /// The account-state rows a writer wake moved, sent ahead of the reload the move asks for.
     StateMoved {
@@ -1457,13 +1474,23 @@ pub fn spawn(
             // reload once the write is on disk rather than before. The rows whose state it moved go first, so their
             // events leave ahead of the snapshot that shows them.
             let marks = writer.wake(batch).await;
-            if marks.landed {
+            if marks.landed || !marks.funding.is_empty() {
                 if let Some(tx) = writer_tx.upgrade() {
-                    if !marks.moved.is_empty() {
-                        let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                    // Ahead of the reload, so the swap it leads to finds each funding retry's write acknowledged.
+                    if !marks.funding.is_empty() {
+                        let _ = tx
+                            .send(Command::FundingWritten {
+                                rows: marks.funding,
+                            })
+                            .await;
                     }
-                    let (reply, _rx) = oneshot::channel();
-                    let _ = tx.send(Command::Reload { reply }).await;
+                    if marks.landed {
+                        if !marks.moved.is_empty() {
+                            let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                        }
+                        let (reply, _rx) = oneshot::channel();
+                        let _ = tx.send(Command::Reload { reply }).await;
+                    }
                 }
             }
         }
@@ -1591,39 +1618,62 @@ struct MovedState {
     detail: Option<String>,
 }
 
+/// A funding mark's write as the writer finished it, for the retry the loop stamped: the row's revision after it,
+/// `None` when the fences refused it.
+struct FundingWritten {
+    account_id: String,
+    incarnation: u64,
+    revision: Option<u64>,
+}
+
 /// What a wake's account-state writes did: whether any passed its fences, which the snapshot is rebuilt from even
-/// when the state was already the one written, and the rows whose state moved, which alone are transitions.
+/// when the state was already the one written, the rows whose state moved, which alone are transitions, and the
+/// funding marks it finished, landed or refused.
 #[derive(Default)]
 struct Marks {
     landed: bool,
     moved: Vec<MovedState>,
+    funding: Vec<FundingWritten>,
 }
 
 impl Marks {
     fn absorb(&mut self, other: Marks) {
         self.landed |= other.landed;
         self.moved.extend(other.moved);
+        self.funding.extend(other.funding);
     }
 
     /// One state write's marks from the store's answer: the row's revision after it and the state before it, `None`
     /// when the fences refused it.
     fn of(write: &StateWrite, answer: Option<(u64, AccountState)>) -> Marks {
-        let (
-            StateWrite::AccountState {
-                account_id,
-                state,
-                incarnation,
-                cause,
-                detail,
-                ..
-            },
-            Some((revision, before)),
-        ) = (write, answer)
+        let StateWrite::AccountState {
+            account_id,
+            state,
+            incarnation,
+            cause,
+            detail,
+            ..
+        } = write
         else {
             return Marks::default();
         };
+        let funding = (*state == AccountState::FundingRequired)
+            .then(|| FundingWritten {
+                account_id: account_id.clone(),
+                incarnation: *incarnation,
+                revision: answer.map(|(revision, _)| revision),
+            })
+            .into_iter()
+            .collect();
+        let Some((revision, before)) = answer else {
+            return Marks {
+                funding,
+                ..Marks::default()
+            };
+        };
         Marks {
             landed: true,
+            funding,
             moved: (before != *state)
                 .then(|| MovedState {
                     account_id: account_id.clone(),
@@ -2369,6 +2419,12 @@ impl Task {
             Command::RecordRefusal { request, refusal } => self.record_refusal(&request, &refusal),
             // The top of this turn drained the map already.
             Command::Coalesced => {}
+            Command::FundingWritten { rows } => {
+                for row in rows {
+                    self.state
+                        .funding_written(&row.account_id, row.incarnation, row.revision);
+                }
+            }
             Command::StateMoved { rows } => self.state_moved(rows),
             #[cfg(any(test, feature = "debug-hooks"))]
             Command::HoldReports { reply } => {

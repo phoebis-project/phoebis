@@ -85,9 +85,18 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const SESSION_ABSOLUTE: Duration = Duration::from_secs(43_200);
 const SESSION_IDLE: Duration = Duration::from_secs(900);
 
-/// Builds every component from the configuration, serves the proxy, the admin, and the metrics listeners
-/// until `shutdown` resolves, then drains.
+/// `run_until` for a caller whose runtime outlives the run, as an in-process test's does.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
+    run_until(config, shutdown, &ShutdownDeadline::default()).await
+}
+
+/// Builds every component from the configuration, serves the proxy, the admin, and the metrics listeners
+/// until `shutdown` resolves, then drains, the drain's deadline written to `deadline`.
+pub async fn run_until(
+    config: Config,
+    shutdown: impl Future<Output = ()>,
+    deadline: &ShutdownDeadline,
+) -> anyhow::Result<()> {
     init_tracing();
     let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
 
@@ -591,7 +600,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         anyhow!("the {listener} listener ended on its own: {result:?}")
     });
     tracing::info!("shutting down");
-    let budget = ShutdownBudget::start(budget_total);
+    let budget = deadline.start(budget_total);
     let _ = stop.send(true);
     // The attention arm's state dies with the process, so nothing the drain completes is worth reading into it. The
     // stop is synchronous and sits outside the timed block, so it has run whatever the block does.
@@ -681,14 +690,23 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // stop watch before the router task, the last writer of the registry, shuts down.
     drop(bus);
     // The ledger's event mirror reads routing state, so it stops before the task that answers it.
-    if let Some(Err(error)) = budget.bound("ledger", ledger.shutdown()).await {
-        tracing::warn!(%error, "the ledger task had already stopped");
+    match budget.bound("ledger", ledger.shutdown()).await {
+        Some(Err(error)) => tracing::warn!(%error, "the ledger task had already stopped"),
+        None => tracing::warn!(
+            "the ledger's last write was still running when the shutdown budget ran out, so the process ends without it"
+        ),
+        Some(Ok(())) => {}
     }
     drop(ledger_db);
     // The router task is the last writer: a pin or a cooldown the relay acknowledged reaches the store while
     // this waits, rather than dying with the process.
-    if let Some(Err(error)) = budget.bound("router", router_task.shutdown()).await {
-        tracing::warn!(%error, "the router task had already stopped");
+    match budget.bound("router", router_task.shutdown()).await {
+        Some(Err(error)) => tracing::warn!(%error, "the router task had already stopped"),
+        None => tracing::warn!(
+            "the routing state's last registry write was still running when the shutdown budget ran out, so the \
+             process ends without it"
+        ),
+        Some(Ok(())) => {}
     }
     drop(pool);
     served
@@ -845,6 +863,29 @@ impl ShutdownBudget {
                 None
             }
         }
+    }
+}
+
+/// The shutdown budget's end on the process clock, set when the budget starts. A phase the budget cut leaves its
+/// writer running on a blocking thread, and a runtime dropped as it is waits for that thread without a bound, so
+/// `main` stops the runtime within what is left of the budget.
+#[derive(Clone, Debug, Default)]
+pub struct ShutdownDeadline(Arc<std::sync::OnceLock<std::time::Instant>>);
+
+impl ShutdownDeadline {
+    /// What the runtime's teardown may wait at `now`: zero once the deadline passed, and the whole budget when no
+    /// shutdown started, as for a start that failed.
+    pub fn remaining_at(&self, now: std::time::Instant) -> Duration {
+        match self.0.get() {
+            Some(deadline) => deadline.saturating_duration_since(now),
+            None => shutdown_budget(),
+        }
+    }
+
+    fn start(&self, total: Duration) -> ShutdownBudget {
+        let budget = ShutdownBudget::start(total);
+        let _ = self.0.set(budget.deadline.into_std());
+        budget
     }
 }
 
@@ -1321,6 +1362,27 @@ models:
         let _ = tx_metrics.send(());
         join_remaining(&mut ended, [&mut proxy, &mut admin, &mut metrics]).await;
         assert!(ended.iter().all(Option::is_some), "{ended:?}");
+    }
+
+    #[test]
+    fn the_runtime_teardown_waits_what_the_budget_left_and_the_whole_budget_before_any_shutdown() {
+        let deadline = ShutdownDeadline::default();
+        let now = std::time::Instant::now();
+        assert_eq!(
+            deadline.remaining_at(now),
+            shutdown_budget(),
+            "a start that failed returns before the budget starts"
+        );
+        deadline.0.set(now + Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            deadline.remaining_at(now + Duration::from_secs(3)),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            deadline.remaining_at(now + Duration::from_secs(12)),
+            Duration::ZERO,
+            "a blocking write past the deadline gets no wait"
+        );
     }
 
     #[tokio::test(start_paused = true)]

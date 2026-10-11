@@ -144,8 +144,11 @@ service layout, as root:
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with
 `the storage key matches the registry, nothing to recover` when the key file still opens the registry's canary (or,
-without one, any of its sealed rows), and with one line when the registry does not exist. Each refusal exits 1, and a
-failure after the run generated the key file removes the file as a declined run does. Past them it runs the sequence
+without one, any of its sealed rows), with one line naming how many sealed rows the key still opens when the canary
+alone does not open, since the canary is then the corrupt part and a backup restores it, and with one line when the
+registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal exits 1,
+and a failure after the run generated the key file removes the file as a declined run does. A run that stops before
+the discard leaves the registry at the schema version it found. Past them it runs the sequence
 under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
 prints the summary again and the steps that remain, and exits 0 once the accounts are marked. It prints counts and
 paths, never a key. Then start the service, and:
@@ -301,7 +304,9 @@ container's environment and so the admin secret.
    running, the catalog's retries, a credential refresh still in flight, the ledger's last writes, then the routing
    state's. In-flight requests drain for up to 30 seconds inside the budget, which leaves the phases after them at least
    five. Each phase takes what the ones before it left, and the session memory's last flush and the store's close run
-   whatever is left. The unit's `TimeoutStopSec=40` leaves five seconds past the budget.
+   whatever is left. The process then stops its runtime within what remains of the budget, so a ledger or routing write
+   the budget cut, which still runs on a blocking thread, ends with the process, and a warn line names that write. The
+   unit's `TimeoutStopSec=40` leaves five seconds past the budget.
 7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
    `version`, `storage_ok`, `ready`, `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`.
    `router.dropped_reports` counts the reports a closed queue refused at shutdown, zero on a running router; a loop

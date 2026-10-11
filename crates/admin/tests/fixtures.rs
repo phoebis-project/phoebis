@@ -402,6 +402,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
         })
@@ -492,6 +493,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 ran_out: false,
             }],
             dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
         })
@@ -1345,6 +1347,7 @@ fn asked(
         parent_agent_id: None,
         holds: Vec::new(),
         dialed: false,
+        held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -1550,6 +1553,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         .select(SelectRequest {
             attempted: vec![wait.account_id.clone(), passed_over],
             holds: vec![wait],
+            held_out: true,
             ..asked(parts, key_generation, "r-capped", 3, None)
         })
         .await

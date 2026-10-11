@@ -1682,3 +1682,42 @@ async fn a_refresh_traces_its_steps() {
         "a refresh token reached the trace: {text}"
     );
 }
+
+/// A replay the upstream rejects after the operator paired the slot again refuses a credential the pairing already
+/// replaced: the cache keeps the replacement, and an acquisition that names no generation serves it.
+#[tokio::test]
+async fn a_replay_refused_after_a_re_pairing_leaves_the_replacement_serving() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    let bundle = |token: &str| NewBundle {
+        access_token: Secret::new(token),
+        refresh_token: Some(Secret::new("rt")),
+        issued_at: 1_000_000,
+        expires_at: 1_000_000 + 3_600_000,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    };
+    let replayed = store
+        .commit_credentials("a", 1, 1, None, None, &bundle("replayed"))
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    let token = mgr.acquire_for(&row, Some(replayed)).await.unwrap();
+    assert_eq!(token.secret.expose(), "replayed", "the replay's token");
+    // The operator pairs the slot again while the replay is upstream. No disconnect, so the lifecycle stays.
+    store
+        .commit_credentials("a", 1, 1, Some(replayed), None, &bundle("paired"))
+        .unwrap();
+    mgr.invalidate("a");
+    mgr.refuse_rejected(&row, replayed);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "paired",
+        "the usage poll's acquisition serves the replacement"
+    );
+    assert_eq!(
+        mgr.acquire_for(&row, None).await.unwrap().secret.expose(),
+        "paired",
+        "so does a leg still carrying the row it was admitted on"
+    );
+    up.shutdown().await;
+}

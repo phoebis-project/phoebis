@@ -447,6 +447,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane,
             fast: false,
         })
@@ -717,6 +718,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -1221,6 +1223,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 parent_agent_id: None,
                 holds: Vec::new(),
                 dialed: false,
+                held_out: false,
                 lane: lane_key(&pin.model, "standard", "none", "-"),
                 fast: false,
             })
@@ -1555,9 +1558,11 @@ async fn the_retention_rules_reach_a_paused_recipe() {
         (Reason::IdleLimit, 0, 1),
         "the ceiling keeps the probe pending"
     );
-    // The probe's entry ended long before the ceiling, so the next tick's lapse settles it.
+    // The probe's entry ended long before the ceiling, so the next tick's lapse settles it, and the save that drops
+    // the probe, which the production flusher runs on its own, sends the settlement to the ledger.
     r.advance(1_000);
     r.step().await;
+    r.engine.flush_persisted().await;
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
             r.db.read_blocking(|c| {
@@ -1642,6 +1647,8 @@ async fn the_idle_limit_ends_the_recipe_with_its_probe_kept_pending_until_the_en
     r.advance(1);
     r.step().await;
     assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
+    // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
+    r.engine.flush_persisted().await;
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
             r.db.read_blocking(|c| {

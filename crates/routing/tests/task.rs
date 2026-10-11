@@ -157,6 +157,7 @@ fn request(
         parent_agent_id: None,
         holds: Vec::new(),
         dialed: false,
+        held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -1050,6 +1051,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         }
@@ -1184,6 +1186,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             parent_agent_id: None,
             holds: Vec::new(),
             dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -2294,6 +2297,79 @@ async fn a_funding_retry_holds_its_one_slot_until_the_claiming_attempt_s_ticket_
         placed_on(&handle.select(request(&handle, None, later)).await.unwrap()),
         Some("a"),
         "the first attempt ended, so the next request tries the account"
+    );
+}
+
+/// A refusal and an older retry's success that coalesce before the loop drains them: the refusal is the newer
+/// evidence, so the success clears nothing and the account waits out the retry interval from the refusal's mark.
+#[tokio::test]
+async fn a_funding_refusal_queued_beside_an_older_retry_s_success_keeps_the_account_held() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    now.store(301_000, Ordering::SeqCst);
+    // The retry went out when it was due and answered 200, and a request after it was refused again. The refusal's
+    // report reaches the queue first, the retry's success after it.
+    let parked = handle.park_loop().await;
+    handle.report(funding_mark("a")).await;
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::Ready,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+            cause: StateCause::FundingRetry,
+            detail: None,
+            dispatched_at: Some(301_000),
+        })
+        .await;
+    drop(parked);
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000 + 300_000)],
+        "the refusal's mark stands, stamped when the loop drained it"
+    );
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::FundingRequired
+    );
+}
+
+/// A reload that starts between a funding mark's stamp and the writer's commit reads the account `Ready`, as the
+/// registry still says. The mark's write is not acknowledged yet, so the retry stays, and the five-minute wait the
+/// commit leads to holds.
+#[tokio::test]
+async fn a_reload_between_a_funding_mark_s_stamp_and_its_commit_keeps_the_five_minute_wait() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)]
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.snapshot().account("a").map(|a| a.state),
+        Some(AccountState::Ready),
+        "the load read the registry before the mark's commit"
+    );
+    hold.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)],
+        "the retry outlived the load that predates the commit"
+    );
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the five-minute wait holds"
     );
 }
 

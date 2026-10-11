@@ -409,6 +409,7 @@ fn select_request(
         parent_agent_id: None,
         holds: Vec::new(),
         dialed: false,
+        held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
     }
@@ -1517,9 +1518,9 @@ fn a_marked_account_with_no_retry_entry_is_tried_at_once_and_its_claim_holds_the
 }
 
 #[test]
-fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_the_load_predates_the_stamp(
+fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read_the_row_before_the_mark_s_write(
 ) {
-    let marked_under = |state: AccountState, incarnation: u64, loaded_at: i64| {
+    let marked_under = |state: AccountState, incarnation: u64, revision: u64| {
         let mut load = load_of(
             Pool {
                 members: vec![("a", 0), ("b", 1)],
@@ -1529,28 +1530,44 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_the_loa
             &[("a", true, state)],
         );
         load.accounts[0].incarnation = incarnation;
-        RegistrySnapshot::from_load(load, [0; 32], loaded_at, 2)
+        load.accounts[0].revision = revision;
+        RegistrySnapshot::from_load(load, [0; 32], 3_000, 2)
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.funding_marked("a", 1, 2_000, 300_000);
-    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1_000));
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert_eq!(
         st.funding_retries(),
         vec![("a".to_string(), 302_000)],
-        "a load that started before the stamp may predate the mark's write"
+        "the writer has not acknowledged the mark, so the load may predate its write"
     );
-    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 1, 3_000));
+    st.funding_written("a", 1, Some(5));
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 4));
+    assert_eq!(
+        st.funding_retries().len(),
+        1,
+        "a load that read the row below the mark's revision predates its write"
+    );
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 1, 5));
     assert_eq!(st.funding_retries().len(), 1, "the mark still stands");
-    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 2, 3_000));
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 2, 5));
     assert!(
         st.funding_retries().is_empty(),
         "the id names another holder, whose mark is its own"
     );
     st.funding_marked("a", 1, 2_000, 300_000);
-    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 3_000));
+    st.funding_written("a", 1, Some(5));
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 6));
     assert!(
         st.funding_retries().is_empty(),
         "the operator cleared the mark"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, None);
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
+    assert!(
+        st.funding_retries().is_empty(),
+        "a mark the fences refused never landed, so the snapshot decides"
     );
 }
 
@@ -13449,7 +13466,8 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
     );
 }
 
-/// A request on members `a` and `b` that waited on `a` at its first selection, with `attempted` as the relay left it.
+/// A request on members `a` and `b` that waited on `a` at its first selection, with `attempted` and the at-cap
+/// reading as the relay left them: a wait that ran out holds the request out.
 fn after_a_wait_on_a(
     s: &RegistrySnapshot,
     seq: u32,
@@ -13466,6 +13484,7 @@ fn after_a_wait_on_a(
             seq: 1,
             ran_out,
         }],
+        held_out: ran_out,
         ..request(s, None, "claude-sonnet-5", true, attempted, T)
     }
 }

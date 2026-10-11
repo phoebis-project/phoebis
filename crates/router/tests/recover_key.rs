@@ -547,3 +547,186 @@ fn a_root_run_hands_the_owner_the_key_file_the_directory_and_the_lock_it_created
         "the registry keeps the owner it had"
     );
 }
+
+/// The one line a recovery refuses a corrupt canary with while `readable` sealed rows still open under the key.
+fn corrupt_canary_line(readable: u64) -> String {
+    let rows = if readable == 1 { "row" } else { "rows" };
+    format!(
+        "the storage key opens {readable} sealed {rows} but not the corrupt canary, so nothing was discarded: \
+         restore the canary from a backup"
+    )
+}
+
+/// The registry's canary as `sqlite3` would leave it after a bad edit: still base64, opened by no key. Answers the
+/// value it replaced, the copy a backup holds.
+fn corrupt_canary(registry: &Path) -> String {
+    let conn = rusqlite::Connection::open(registry).unwrap();
+    let value: String = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'storage_key_canary'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE meta SET value = ?1 WHERE key = 'storage_key_canary'",
+        ["A".repeat(value.len())],
+    )
+    .unwrap();
+    value
+}
+
+fn restore_canary(registry: &Path, value: &str) {
+    rusqlite::Connection::open(registry)
+        .unwrap()
+        .execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'storage_key_canary'",
+            [value],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_corrupt_canary_over_rows_the_key_still_opens_is_refused_with_their_count_and_discards_nothing()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    let canary = corrupt_canary(&registry(dir.path()));
+    std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(
+        stdout_lines(&out),
+        [corrupt_canary_line(4)],
+        "two credential bundles, an API-key secret and a recipe body open: {}",
+        printed(&out)
+    );
+    assert_no_key(&out, &[OLD_KEY]);
+    restore_canary(&registry(dir.path()), &canary);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
+#[test]
+fn a_registry_without_a_canary_whose_one_readable_row_follows_32_that_do_not_open_is_nothing_to_recover(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let old = key(OLD_KEY);
+    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    for index in 0..33 {
+        let id = format!("claude-{index:02}");
+        store
+            .insert_account(&account(&id, AccountKind::Oauth))
+            .unwrap();
+        store
+            .commit_credentials(&id, 1, 1, None, None, &bundle())
+            .unwrap();
+    }
+    store.debug_drop_canary().unwrap();
+    drop(store);
+    rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .execute(
+            "UPDATE credentials SET sealed = zeroblob(length(sealed)) \
+             WHERE rowid IN (SELECT rowid FROM credentials ORDER BY rowid LIMIT 32)",
+            [],
+        )
+        .unwrap();
+    std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
+    let left: i64 = rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM credentials", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, 33, "nothing was discarded");
+}
+
+#[test]
+fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let old = key(OLD_KEY);
+    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: vec![KeepaliveSessionRow {
+                key_id: "desktop".into(),
+                key_generation: 1,
+                session_id: "s-1".into(),
+                record_version: 1,
+                payload: "{}".into(),
+                updated_at: 1_800_000_000_000,
+            }],
+            agents: vec![agent("main", Some(b"the user's own prompt"))],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store.debug_drop_canary().unwrap();
+    drop(store);
+    std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(
+        stdout_lines(&out),
+        [MATCH_LINE],
+        "the body opens under the key: {}",
+        printed(&out)
+    );
+    std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(
+        stdout_lines(&out).contains(&"  keepalive recipe bodies: 1".to_owned()),
+        "a key the body does not open discards it: {}",
+        printed(&out)
+    );
+    let store = Store::open(&registry(dir.path()), &key(NEW_KEY)).unwrap();
+    let (_, agents, _) = store.load_keepalive().unwrap();
+    assert!(agents.iter().all(|agent| agent.body.is_none()));
+}
+
+/// The reverse of the registry's newest migration, the five fast burn columns, as `crates/store/tests` replays it.
+const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; \
+     ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; \
+     ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; \
+     UPDATE meta SET value = '51' WHERE key = 'schema_version';";
+
+#[test]
+fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .execute_batch(UNDO_V52)
+        .unwrap();
+    std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
+    assert_eq!(
+        Store::read_schema_version(&registry(dir.path())).unwrap(),
+        Some(51),
+        "a matching key migrates nothing"
+    );
+    std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
+    let out = recover_key(&config, &[], b"no\n");
+    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
+    assert_eq!(
+        Store::read_schema_version(&registry(dir.path())).unwrap(),
+        Some(51),
+        "a declined run migrates nothing, so the build that wrote the registry still opens it"
+    );
+    let out = recover_key(&config, &[], b"yes\n");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert_eq!(
+        Store::read_schema_version(&registry(dir.path())).unwrap(),
+        Some(phoebis_store::SCHEMA_VERSION),
+        "the recovery that proceeds prepares the schema"
+    );
+}

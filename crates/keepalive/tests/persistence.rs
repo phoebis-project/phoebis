@@ -1556,3 +1556,65 @@ async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_t
         "a later load finds the probe settled"
     );
 }
+
+/// The idle limit's pending probe settles at its entry's end only once the registry holds the agent without it, as a
+/// load's settlements do: a save that fails sends nothing to the ledger, so a restart that restores the probe and
+/// lapses it again counts it once.
+#[tokio::test]
+async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and_a_restart() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    r.engine.flush_persisted().await;
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let lapse = payload["kept"][0]["entry_expires"]
+        .as_i64()
+        .expect("the pending probe's entry");
+    // The registry refuses every agent row from here on, so no save drops the probe.
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    r.advance(lapse - r.now());
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        0,
+        "the sweep settled the probe at its entry's end"
+    );
+    r.engine.flush_persisted().await;
+    // The process dies before another save: the next one restores the probe still pending in the registry.
+    let second = r.restart().await;
+    second.load_persisted().await;
+    second.step().await;
+    second.wait_idle().await;
+    conn.execute_batch("DROP TRIGGER refuse_insert; DROP TRIGGER refuse_update;")
+        .unwrap();
+    second.flush_persisted().await;
+    let mut marks = 0;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::from([("idle_limit".to_string(), 1)]),
+        "one settlement, with the save that dropped the probe"
+    );
+}

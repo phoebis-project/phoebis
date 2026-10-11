@@ -109,6 +109,10 @@ pub struct SelectRequest {
     /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
     /// ran out, or one passed over at its cap, is attempted with nothing dialed.
     pub dialed: bool,
+    /// Whether the relay passed an account over at its cap for this request: a hold whose bound ran out, an account
+    /// it already held for once, or one met past the request's one bound. The relay answers the untimed exhaustion
+    /// that follows from this reading, so the row records the same.
+    pub held_out: bool,
     /// The cache lane the request writes to, as the relay composed it; a pin or an entry of another lane is cold.
     pub lane: String,
     /// The body carried `speed: "fast"`: fast eligibility applies.
@@ -3895,9 +3899,9 @@ impl Readings<'_> {
                     (None, None) => summary_fact("retry", FactValue::Text("none".into()), "text"),
                 };
                 facts.push(fact);
-                // A hold that ran out is a request held at the cap, so the client was answered at the cap unless a
-                // leg was dialed, the reading the relay answers on too.
-                if let (Some(_), Some(answered)) = (run_out, self.exhaustion) {
+                // A request held at the cap was answered at the cap unless a leg was dialed. The relay's own reading
+                // decides, since a freed slot another request took leaves no hold that ran out.
+                if let Some(answered) = self.exhaustion.filter(|_| self.request.held_out) {
                     facts.push(answer_fact(exhaustion_status(
                         answered,
                         !self.request.dialed,

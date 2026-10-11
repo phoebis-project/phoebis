@@ -994,8 +994,9 @@ pub(crate) struct Inner {
     pub running: usize,
     pub closed: bool,
     pub settlements: Vec<Settlement>,
-    /// The settlements the load queued, held until a save has dropped their probes from the agents: a failed save
-    /// then sends nothing to the ledger, and a restart before a landed save settles each probe once rather than twice.
+    /// The settlements the load and the lapse sweep queued, held until a save has dropped their probes from the
+    /// agents: a failed save then sends nothing to the ledger, and a restart before a landed save settles each probe
+    /// once rather than twice.
     pub settlements_after_save: Vec<Settlement>,
     /// The probes a gate withheld this locked section, with the keys their skip rows file under, read while the
     /// recipe still held its speed.
@@ -1356,9 +1357,9 @@ impl Inner {
     }
 
     /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, on
-    /// each agent with no turn open, and touches each agent it settled for the next save. True when it queued a
-    /// settlement.
-    pub(crate) fn settle_lapsed_pending(&mut self, now: i64) -> bool {
+    /// each agent with no turn open, and touches each agent it settled for the next save, which releases the
+    /// settlements.
+    pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
         let lapsed = |kept: &Kept| kept.pending.is_some() && kept.entry_expires <= now;
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
@@ -1379,7 +1380,7 @@ impl Inner {
                 agent.kept = waiting;
                 for kept in due {
                     if let Some(label) = kept.pending {
-                        self.settlements.push(kept.settle(key, label));
+                        self.settlements_after_save.push(kept.settle(key, label));
                     }
                 }
                 settled.push((key.clone(), agent_id.clone()));
@@ -1388,7 +1389,6 @@ impl Inner {
         for (key, agent_id) in &settled {
             self.touch_agent(key, agent_id);
         }
-        !settled.is_empty()
     }
 
     /// A gate's hold on a retained recipe. One hold withholds one probe, whatever number of ticks it spans: the
@@ -2649,7 +2649,7 @@ impl Engine {
         // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let (retained_models, swept) = {
+        let retained_models = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
@@ -2665,16 +2665,10 @@ impl Engine {
             inner.advance_idle_episodes(&snapshot, now);
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
-            let swept = inner.settle_lapsed_pending(now);
-            (
-                inner.anything_retained().then(|| inner.retained_models()),
-                swept,
-            )
+            inner.settle_lapsed_pending(now);
+            inner.anything_retained().then(|| inner.retained_models())
         };
         let Some(retained_models) = retained_models else {
-            if swept {
-                self.flush();
-            }
             return;
         };
         let view = self.router_view(now, retained_models).await;
