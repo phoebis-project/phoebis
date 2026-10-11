@@ -174,8 +174,8 @@ pub enum StoreError {
     #[error("pool {0} not found")]
     PoolNotFound(String),
     #[error(
-        "the registry's schema version {found} is newer than this build supports ({supported}); \
-         restore the backup taken before the upgrade"
+        "the registry's schema version {found} is newer than this build supports ({supported}), \
+         so restore the backup taken before the upgrade"
     )]
     SchemaTooNew { found: u32, supported: u32 },
     #[error(transparent)]

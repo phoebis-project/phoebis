@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(
             p.next_event().unwrap().name.as_deref(),
             Some(b"message_start".as_slice()),
-            "a trailing CR ends the empty line; the LF that may follow is skipped as a leading empty line"
+            "a trailing CR ends the empty line, and the LF that may follow is skipped as a leading empty line"
         );
         p.feed(b"\nevent: ping\n\n").unwrap();
         assert_eq!(names(&mut p), ["ping"]);

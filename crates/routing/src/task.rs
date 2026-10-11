@@ -1696,7 +1696,7 @@ impl Writer {
                             skipped,
                             left,
                             "a database-wide failure left {left} of {size} retried routing state writes \
-                             unapplied, after {skipped} refused; they are dropped"
+                             unapplied, after {skipped} refused, so they are dropped"
                         );
                     } else {
                         tracing::error!(
@@ -1706,7 +1706,7 @@ impl Writer {
                             skipped,
                             left,
                             "a database-wide failure left {left} of {size} routing state writes unapplied, \
-                             after {skipped} refused; they are tried once more at the next wake"
+                             after {skipped} refused, so they are tried once more at the next wake"
                         );
                         self.remainder = Some(remainder);
                     }
@@ -2118,7 +2118,7 @@ impl Task {
                 tracing::warn!(
                     rows = lost.len() - rekeys,
                     rekeys,
-                    "the routing state writer has stopped; the writes held in memory are lost"
+                    "the routing state writer has stopped, so the writes held in memory are lost"
                 );
             }
             // Cleared whatever the send did: the loop is leaving, and nothing is held for it any more.
@@ -3233,11 +3233,14 @@ impl Task {
             {
                 Ok(Ok(loaded)) => Ok(loaded),
                 Ok(Err(error)) => {
-                    tracing::error!(%error, "the registry could not be reloaded; the previous snapshot stays in force");
+                    tracing::error!(
+                        %error,
+                        "the registry could not be reloaded, so the previous snapshot stays in force"
+                    );
                     Err(error.to_string())
                 }
                 Err(error) => {
-                    tracing::error!(%error, "the registry load panicked; the previous snapshot stays in force");
+                    tracing::error!(%error, "the registry load panicked, so the previous snapshot stays in force");
                     Err(error.to_string())
                 }
             };
@@ -3631,7 +3634,7 @@ impl Task {
                 if !self.writer_status.degraded.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         depth = WRITER_DEPTH,
-                        "the routing state writer is behind; writes wait in memory, one per row"
+                        "the routing state writer is behind, so writes wait in memory, one per row"
                     );
                 }
             }
@@ -3653,7 +3656,7 @@ impl Task {
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 self.writer_status.degraded.store(false, Ordering::Relaxed);
                 tracing::info!(
-                    "the routing state writer caught up; the writes held in memory are queued"
+                    "the routing state writer caught up, so the writes held in memory are queued"
                 );
             }
             Err(mpsc::error::TrySendError::Full(())) => {}
@@ -3664,7 +3667,7 @@ impl Task {
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 tracing::warn!(
                     lost,
-                    "the routing state writer has stopped; the writes held in memory are lost"
+                    "the routing state writer has stopped, so the writes held in memory are lost"
                 );
             }
         }

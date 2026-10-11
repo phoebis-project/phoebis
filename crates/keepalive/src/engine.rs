@@ -1932,7 +1932,7 @@ impl Engine {
         inner.gap_backlog = backlog;
         tracing::warn!(
             dropped,
-            "the keepalive subscriber fell behind the bus; pending observations discarded"
+            "the keepalive subscriber fell behind the bus, so the pending observations were discarded"
         );
         let open: Vec<(SessionKey, String)> = inner.pending.values().cloned().collect();
         for (key, agent_id) in open {

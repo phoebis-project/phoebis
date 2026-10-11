@@ -2328,7 +2328,7 @@ mod tests {
         assert_eq!(
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
-            "still two requests; the output is 20 + 50"
+            "still two requests, and the output is 20 + 50"
         );
         assert_eq!(
             (
@@ -2627,7 +2627,8 @@ mod tests {
         expected.funding = PLAN_FUNDING.into();
         assert_eq!(
             rows[0], expected,
-            "every old value is where it was; effort is none, and the three sums, the incomplete count and the held count are zero"
+            "every old value is where it was, effort is none, and the three sums, the incomplete count and the \
+             held count are zero"
         );
     }
 }

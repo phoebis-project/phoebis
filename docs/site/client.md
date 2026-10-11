@@ -302,7 +302,7 @@ inflates past `proxy.max_request_bytes` is the same `413`, and a body that is no
 error code `invalid_body` and the message `the request body is not valid gzip`. Any other request encoding (`br`,
 `deflate`, `zstd` or an unknown token), and a head carrying more than one `content-encoding` line, is refused before
 its body is read with `415` `invalid_request_error`, the error code `unsupported_content_encoding` and the message
-`the request body's content-encoding is not supported; send gzip or identity`.
+`the request body's content-encoding is not supported. Send gzip or identity`.
 
 While the router's ledger is behind, its writer channel at least half full, a request is refused after its body is read
 and before any account is chosen with `503` `api_error`, the error code `ledger_behind`, the message `the router is not

@@ -65,7 +65,7 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
 }
 
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
-// line with the marker last; the trailing `\n` ends the marker's comment.
+// line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 // The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
@@ -73,7 +73,7 @@ const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABL
 // The reverse of `V51`: the affinity rows lose the answer id, which no version before it stored.
 const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
 // The reverse of the registry's version 50: the keepalive's day budgets table as the versions before it left it. One
-// line with the marker last; the trailing `\n` ends the marker's comment.
+// line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V50: &str = "CREATE TABLE keepalive_budgets (day TEXT NOT NULL, scope TEXT NOT NULL, id TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, five_hour_share REAL NOT NULL DEFAULT 0, PRIMARY KEY (day, scope, id)); -- rollback\n";
 // The reverse of the registry's version 49: the keepalive engine's three tables.
 const UNDO_V49: &str =
@@ -95,7 +95,7 @@ ALTER TABLE affinity DROP COLUMN depth;
 ALTER TABLE accounts DROP COLUMN state_cause;
 "#;
 // The reverse of the registry's version 45, so a store stamped back below it can run it again. One line with the
-// marker last; the trailing `\n` ends the marker's comment.
+// marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V45: &str =
     "ALTER TABLE pools RENAME COLUMN shed_ahead_of_pace TO migrate_above_utilization; -- rollback\n";
 // The reverse of the registry's version 44, one statement per line; the request and response links it deleted are

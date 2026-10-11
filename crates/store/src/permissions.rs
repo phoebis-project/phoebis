@@ -17,7 +17,7 @@ pub fn check_private_file(path: &Path, expected: u32) -> Vec<String> {
     let mode = metadata.mode() & 0o777;
     if mode & 0o077 != 0 {
         warnings.push(format!(
-            "{} is readable by group or other (mode {mode:04o}); expected {expected:04o}",
+            "{} is readable by group or other (mode {mode:04o}) where {expected:04o} is expected",
             path.display()
         ));
     }

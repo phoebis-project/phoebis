@@ -129,14 +129,14 @@ const UNDO_V37: &str = "DROP TABLE usage_credits;";
 // are not restored, since no older version needs them. The trailing `\n` ends the marker's comment.
 const UNDO_V38: &str = "ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT NULL DEFAULT 0; -- rollback\n";
 // The reverse of `V39`: each set's dropped key back at the set's `main`, the value `V29` wrote it with, so a seeded
-// version-38 store is faithful. One line with the marker last; the trailing `\n` ends the marker's comment.
+// version-38 store is faithful. One line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V39: &str = "UPDATE pools SET cache_ttl_json = json_set(cache_ttl_json, '$.plan.keepalive', json_extract(cache_ttl_json, '$.plan.main'), '$.metered.keepalive', json_extract(cache_ttl_json, '$.metered.main')) WHERE json_valid(cache_ttl_json) AND json_type(cache_ttl_json, '$.plan') = 'object'; -- rollback\n";
 // The reverse of `V40`: the kind prefix stripped from a session key. The replays run it over a memory table they
 // never seed.
 const UNDO_V40: &str =
     "UPDATE session_memory SET session_id = substr(session_id, 9) WHERE session_id LIKE 'session:%';";
 // The reverse of `V41`: the one budget back with its period, the monthly preferred when a member carries both, so
-// a seeded version-40 store is faithful. One line with the marker last; the trailing `\n` ends the marker's comment.
+// a seeded version-40 store is faithful. One line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id);";
 // The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
@@ -145,7 +145,7 @@ const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABL
 // The reverse of `V51`: the affinity rows lose the answer id, which no version before it stored.
 const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
 // The reverse of `V50`: the table `V28` created, as `V33` and `V38` left it, so the chains below replay `UNDO_V38` and
-// `UNDO_V33` over it unchanged. One line with the marker last; the trailing `\n` ends the marker's comment.
+// `UNDO_V33` over it unchanged. One line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V50: &str = "CREATE TABLE keepalive_budgets (day TEXT NOT NULL, scope TEXT NOT NULL, id TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, five_hour_share REAL NOT NULL DEFAULT 0, PRIMARY KEY (day, scope, id)); -- rollback\n";
 // The reverse of `V49`: the keepalive engine's three tables.
 const UNDO_V49: &str =
@@ -166,7 +166,7 @@ DROP TABLE shed_rounds;
 ALTER TABLE affinity DROP COLUMN depth;
 ALTER TABLE accounts DROP COLUMN state_cause;
 "#;
-// The reverse of `V45`. One line with the marker last, since it restores a dropped name; the trailing `\n` ends the
+// The reverse of `V45`. One line with the marker last, since it restores a dropped name. The trailing `\n` ends the
 // marker's comment.
 const UNDO_V45: &str =
     "ALTER TABLE pools RENAME COLUMN shed_ahead_of_pace TO migrate_above_utilization; -- rollback\n";

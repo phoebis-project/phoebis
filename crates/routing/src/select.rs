@@ -3044,8 +3044,8 @@ fn pace_of(
 /// `allow` still demotes an overage oauth account behind a plan-quota one. `overage_policy` governs eligibility
 /// everywhere and orders the tier itself only when the kind order is off, through the overage bit. The kind order
 /// puts the group ahead of the priority. Within a group, `prefer_plan` still orders an overage account behind a
-/// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with its model week
-/// spent (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
+/// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with a spent window
+/// (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
 /// whatever the priorities: it joins the overage group under the kind order and leads the key otherwise. The third
 /// element is the overage bit under either order, which the selection trace reads.
 fn tier_of(
@@ -3077,7 +3077,7 @@ fn tier_of(
 }
 
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
-/// `spent_model` names the candidates step 6 kept on extra usage with the request's model week spent. The pick's
+/// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's
 /// line names the tier, every tier member's score under Pace, the ties and the round-robin turn, and the tier's
 /// members take their rank, the chosen one first.
 #[allow(clippy::too_many_arguments)]

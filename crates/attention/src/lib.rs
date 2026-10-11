@@ -60,7 +60,7 @@ pub struct AttentionParts {
     pub usage: Option<Arc<UsageService>>,
 }
 
-/// A read the reader could not finish; the route answers 500 and the scrape answers 500 on either, so no condition
+/// A read the reader could not finish. The route answers 500 and the scrape answers 500 on either, so no condition
 /// is reported clear that was not read.
 #[derive(Debug, thiserror::Error)]
 pub enum AttentionError {

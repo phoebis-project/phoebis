@@ -2015,7 +2015,7 @@ impl Relay {
                 admitted_pool = ?admitted.pool_id,
                 selected_pool = %selection.pool_id,
                 obstacle = POOL_MOVED,
-                "the key moved between pools after admission; the request is refused"
+                "the key moved between pools after admission, so the request is refused"
             );
             let mut outcome = self.outcome(
                 admitted.trace,
@@ -3536,7 +3536,7 @@ impl Relay {
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
-            "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
+            "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
         );
         self.router.record_refusal(
             RefusedRequest {

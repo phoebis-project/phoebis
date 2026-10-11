@@ -270,14 +270,16 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
-            message: "the client's version suffix does not reproduce from the prompt and the user agent; re-pin the router to this client version",
+            message: "the client's version suffix does not reproduce from the prompt and the user agent. \
+                      Re-pin the router to this client version",
             retry_after: None,
         },
         RelayError::ClientDrift { .. } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
-            message: "the client's billing hash does not match the pinned profile; re-pin the router to this client version",
+            message: "the client's billing hash does not match the pinned profile. \
+                      Re-pin the router to this client version",
             retry_after: None,
         },
         RelayError::InvalidModel => Failure {
@@ -301,7 +303,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
             error_type: "invalid_request_error",
             code: "unsupported_content_encoding",
-            message: "the request body's content-encoding is not supported; send gzip or identity",
+            message: "the request body's content-encoding is not supported. Send gzip or identity",
             retry_after: None,
         },
     }

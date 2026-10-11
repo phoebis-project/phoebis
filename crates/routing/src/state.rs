@@ -2379,7 +2379,7 @@ mod tests {
         assert_eq!(
             sessions(&shed_marks(&mixed, 0.5 * 7.0)),
             ["cold-3", "warm-4"],
-            "the target is half the priced burn; the unpriced pins are skipped, not marked"
+            "the target is half the priced burn, and the unpriced pins are skipped rather than marked"
         );
         assert_eq!(
             sessions(&shed_marks(
@@ -2872,7 +2872,7 @@ mod tests {
         state.charge("a", 6_000, &[(FIVE_HOUR, 0.125), (SEVEN_DAY, 0.0)]);
         assert!(
             (utilization(&state, FIVE_HOUR, 7_000) - 0.125).abs() < CLOSE,
-            "a request completed since the reset counts; the one before it does not"
+            "a request completed since the reset counts, and the one before it does not"
         );
     }
 

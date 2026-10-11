@@ -650,7 +650,7 @@ async fn writer(
                 stats.retrying.store(1, Ordering::Relaxed);
                 if !stats.degraded.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
-                        "a ledger batch could not be written; budgeted members wait until it lands"
+                        "a ledger batch could not be written, so budgeted members wait until it lands"
                     );
                     router.report(Report::Accounting { degraded: true }).await;
                 }
@@ -895,7 +895,7 @@ async fn park(
         Err(park_error) => tracing::error!(
             request_id = %request.id,
             error = %park_error,
-            "a priced record could not be parked; it stays held"
+            "a priced record could not be parked, so it stays held"
         ),
     }
     parked
@@ -916,7 +916,7 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
     let lost = &rest.records[rest.from..];
     tracing::error!(
         records = lost.len(),
-        "the ledger stopped with records it could not write; they are lost"
+        "the ledger stopped with records it could not write, and they are lost"
     );
     for record in lost {
         drop_counted(ctx, record);
@@ -936,7 +936,7 @@ async fn land_parked(
     now: i64,
 ) -> Result<(u64, u64), LedgerError> {
     let rows = blocking(db, |db| db.parked_rows()).await.inspect_err(|error| {
-        tracing::warn!(%error, "the parked records could not be read; they wait for the next start or replay");
+        tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
     })?;
     if rows.is_empty() {
         return Ok((0, 0));
@@ -1236,7 +1236,7 @@ impl Spends {
             Ok(announced) => self.budgets.announced = announced,
             Err(error) => tracing::warn!(
                 %error,
-                "the ledger's budget crossings could not be read; a member over its budget is announced again"
+                "the ledger's budget crossings could not be read, so a member over its budget is announced again"
             ),
         }
         self.read(None, &[]).await
@@ -1266,7 +1266,7 @@ impl Spends {
         }
         if spend.refreshed {
             if self.stats.degraded.swap(false, Ordering::Relaxed) {
-                tracing::info!("the ledger caught up; budgeted members are placed on again");
+                tracing::info!("the ledger caught up, so budgeted members are placed on again");
             }
             return spend.due;
         }
@@ -1377,7 +1377,7 @@ async fn refresh_member_spends(
             }
         }
         Err(error) => {
-            tracing::warn!(%error, "a member's spend could not be read; the last report stands");
+            tracing::warn!(%error, "a member's spend could not be read, so the last report stands");
             let due = match current {
                 Some(at) if at > now => current,
                 _ => Some(now + event_poll.as_millis() as i64),
@@ -1608,7 +1608,7 @@ async fn land_acknowledging(
                     %request_id,
                     seq,
                     attempt,
-                    "a cache map found no decision to land on; it is counted and dropped"
+                    "a cache map found no decision to land on, so it is counted and dropped"
                 );
             }
             for observation in observations {
@@ -1632,7 +1632,7 @@ async fn land_acknowledging(
             }
         }
         Err(error) => {
-            tracing::error!(%error, records = size, "the ledger writer panicked; the batch is lost");
+            tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
             for table in &tables {

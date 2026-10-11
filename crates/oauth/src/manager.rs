@@ -552,7 +552,7 @@ impl CredentialManager {
         if joined.is_err() {
             tracing::warn!(
                 unjoined = running.len(),
-                "credential refreshes still running at shutdown; the next start quarantines their accounts"
+                "credential refreshes still running at shutdown, so the next start quarantines their accounts"
             );
         }
     }

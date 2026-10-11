@@ -1080,7 +1080,7 @@ fn a_key_file_readable_by_others_warns() {
     assert!(
         String::from_utf8_lossy(&out.stdout).lines().any(|line| line
             == format!(
-                "warning: {} is readable by group or other (mode 0644); expected 0600",
+                "warning: {} is readable by group or other (mode 0644) where 0600 is expected",
                 key.display()
             )),
         "{}",

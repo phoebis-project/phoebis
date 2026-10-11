@@ -586,7 +586,8 @@ pub fn spawn_event_mirror(
         Err(error) => {
             tracing::warn!(
                 %error,
-                "the ledger's newest row could not be read; a reset or a wind-down the previous run announced is written again"
+                "the ledger's newest row could not be read, so a reset or a wind-down the previous run announced \
+                 is written again"
             );
             None
         }

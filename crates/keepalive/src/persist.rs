@@ -1221,7 +1221,7 @@ impl Engine {
     /// A snapshot, its save and its acknowledgment, on the blocking pool under the flush lock whole: two flushes never
     /// overlap, an older batch never follows a newer one to the store, and a flush whose caller went away still runs
     /// to its end, so the shutdown's flush queues behind it. A failed save keeps every row dirty for the next flush
-    /// and holds back the settlements waiting on it; a landed save releases them, and they reach the ledger here.
+    /// and holds back the settlements waiting on it. A landed save releases them, and they reach the ledger here.
     pub async fn flush_persisted(self: &Arc<Self>) {
         let engine = self.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || engine.flush_blocking()).await {

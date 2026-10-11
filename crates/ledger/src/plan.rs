@@ -211,7 +211,7 @@ fn refuse(message: String) -> LedgerError {
 fn undated_key(section: &str, key: &str) -> Result<(), LedgerError> {
     match phoebis_routing::listing::undated(key) {
         Some(_) => Err(refuse(format!(
-            "{section}.{key}: a dated id; the file keys undated ids"
+            "{section}.{key}: a dated id, where the file keys undated ids"
         ))),
         None => Ok(()),
     }

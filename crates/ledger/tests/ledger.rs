@@ -2254,7 +2254,7 @@ fn head_with_reading(utilization: &str) -> Respond {
 }
 
 #[tokio::test]
-async fn a_relayed_heads_reading_reaches_the_router_and_a_header_sample_with_its_instant() {
+async fn a_relayed_heads_reading_reaches_the_router_and_a_head_sample_with_its_instant() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: head_with_reading("0.3125"),
@@ -2878,7 +2878,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
 }
 
 #[tokio::test]
-async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_and_keeps_the_header_row_of_a_collision(
+async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_and_keeps_the_head_row_of_a_collision(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");

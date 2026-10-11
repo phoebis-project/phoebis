@@ -2048,7 +2048,7 @@ pub fn series(
     let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }
     let mut points = Vec::new();
@@ -2117,7 +2117,7 @@ pub async fn series_paged(
     let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }
     let starts: Vec<i64> = (0..)
@@ -2835,7 +2835,7 @@ pub async fn pool_traffic(
     let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }
     let mut out: Vec<TrafficBucket> = (0..)
@@ -2905,7 +2905,7 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     let count = (last - first).saturating_add(filter.bucket_seconds - 1) / filter.bucket_seconds;
     if !(0..=MAX_POINTS).contains(&count) {
         return Err(LedgerError::Yaml(format!(
-            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+            "the range needs {count} points, and the most a chart carries is {MAX_POINTS}"
         )));
     }
     Ok((first, last))
