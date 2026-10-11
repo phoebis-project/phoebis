@@ -1158,8 +1158,11 @@ fn refused_probe_events(id: &str, error_code: &str) -> [BusEvent; 2] {
     ]
 }
 
-/// The hour's probe row once it holds `requests` probes.
-async fn probe_row(h: &Harness, requests: u64) -> phoebis_ledger::RollupRow {
+/// The hour's probe row once `landed` reads true of it.
+async fn probe_row(
+    h: &Harness,
+    landed: impl Fn(&phoebis_ledger::RollupRow) -> bool,
+) -> phoebis_ledger::RollupRow {
     wait_for_async(Duration::from_secs(5), || async {
         h.db.read(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -1167,14 +1170,15 @@ async fn probe_row(h: &Harness, requests: u64) -> phoebis_ledger::RollupRow {
         .await
         .unwrap()
         .into_iter()
-        .find(|r| r.kind == "probe" && r.requests == requests)
+        .find(|r| r.kind == "probe" && landed(r))
     })
     .await
 }
 
 /// The router's own `503 ledger_behind` holds a probe while its ledger catches up, which the account never answered:
-/// the row counts it under `probes_held` whatever outcome it carries, outside `failed` and `rejected`. A probe refused
-/// with another code is a rejection as before.
+/// the row counts it under `probes_held` whatever outcome it carries, outside `requests`, `failed`, `rejected` and the
+/// error codes, so the error rate counts what reached an account. A probe refused with another code is a rejection as
+/// before.
 #[tokio::test]
 async fn a_probe_the_relay_refused_at_admission_folds_as_held_and_not_as_failed_or_rejected() {
     let up = FakeUpstream::start(vec![]).await;
@@ -1182,20 +1186,26 @@ async fn a_probe_the_relay_refused_at_admission_folds_as_held_and_not_as_failed_
     for event in refused_probe_events("held", phoebis_relay::LEDGER_BEHIND) {
         h.bus.publish(event);
     }
-    let row = probe_row(&h, 1).await;
+    let row = probe_row(&h, |r| r.probes_held == 1).await;
     assert_eq!(
-        (row.probes_held, row.rejected, row.failed),
-        (1, 0, 0),
+        (row.probes_held, row.requests, row.rejected, row.failed),
+        (1, 0, 0, 0),
         "the held probe counts under its own column alone"
     );
+    assert!(row.errors.is_empty(), "no error code: {:?}", row.errors);
     for event in refused_probe_events("refused", "auth_unknown") {
         h.bus.publish(event);
     }
-    let row = probe_row(&h, 2).await;
+    let row = probe_row(&h, |r| r.rejected == 1).await;
     assert_eq!(
-        (row.probes_held, row.rejected, row.failed),
-        (1, 1, 0),
+        (row.probes_held, row.requests, row.rejected, row.failed),
+        (1, 1, 1, 0),
         "a probe refused with another code folds into rejected"
+    );
+    assert_eq!(
+        row.errors.iter().collect::<Vec<_>>(),
+        [(&"auth_unknown".to_string(), &1)],
+        "the rejection's code alone"
     );
     up.shutdown().await;
 }
@@ -2083,7 +2093,7 @@ async fn a_relayed_heads_reading_reaches_the_router_and_a_header_sample_with_its
     .await;
     assert_eq!(
         (row.utilization, row.reset_at, row.source.as_str()),
-        (Some(0.3125), Some(4_600_000), "header")
+        (Some(0.3125), Some(4_600_000), "head")
     );
     assert!(
         row.observed_at.is_some(),
@@ -2678,10 +2688,10 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
                  ALTER TABLE requests DROP COLUMN stream_end_at; \
                  ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
                  INSERT INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES \
-                   ('a', 0, '5h', 0.5, NULL, 'header', 10), \
+                   ('a', 0, '5h', 0.5, NULL, 'head', 10), \
                    ('a', 0, 'five_hour', 0.4, NULL, 'poll', 20), \
-                   ('a', 0, '7d', 0.2, NULL, 'header', 10), \
-                   ('a', 0, '7d_oi', 0.9, NULL, 'header', 10), \
+                   ('a', 0, '7d', 0.2, NULL, 'head', 10), \
+                   ('a', 0, '7d_oi', 0.9, NULL, 'head', 10), \
                    ('a', 0, 'seven_day_overage_included', 0.8, NULL, 'poll', 20), \
                    ('a', 0, 'fable', 0.42, NULL, 'poll', 20), \
                    ('a', 0, 'seven_day_fable', 0.5, NULL, 'poll', 20), \
@@ -2715,12 +2725,12 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
     assert_eq!(
         rows,
         [
-            (0, "five_hour", Some(0.5), "header"),
+            (0, "five_hour", Some(0.5), "head"),
             (300, "five_hour", Some(0.3), "poll"),
-            (0, "seven_day", Some(0.2), "header"),
+            (0, "seven_day", Some(0.2), "head"),
             (0, "seven_day_fable", Some(0.42), "poll"),
             (0, "seven_day_opus", Some(0.03), "poll"),
-            (0, "seven_day_overage_included", Some(0.9), "header"),
+            (0, "seven_day_overage_included", Some(0.9), "head"),
         ],
         "each window reads under the endpoint's key, a colliding pair keeps the row the old spelling named, and a \
          poll row with nothing to collide with stays"
@@ -3144,6 +3154,26 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
     up.shutdown().await;
 }
 
+/// A refusal under a key the snapshot no longer holds spells its pool empty, and the row stores no pool, so no
+/// filter finds it under an empty id.
+#[test]
+fn a_decision_whose_pool_is_empty_reads_back_with_no_pool() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let (summary, mut record) = decision("r1", 1, 1);
+    record.request.pool_id = String::new();
+    put_decision(&db, &DecisionRow::of(summary, record, NOW));
+    let pool_id: Option<String> = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT pool_id FROM decisions WHERE request_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(pool_id, None);
+}
+
 #[tokio::test]
 async fn a_cache_map_write_lands_on_the_decision_its_seq_names_and_a_stray_one_counts() {
     let up = FakeUpstream::start(vec![]).await;
@@ -3506,6 +3536,25 @@ fn a_stream_end_the_ledger_reads_after_the_finish_is_held_to_the_finish() {
         request.stream_end_at,
         Some(NOW + 1_000),
         "a stream end read after the finish is held to the finish"
+    );
+}
+
+#[test]
+fn a_second_message_stop_chunk_keeps_the_first_chunks_stream_end() {
+    let (mut assembler, clock) = assembler_on_a_stepped_clock();
+    assembler.observe(head_event("r1", 200, NOW + 120));
+    clock.store(NOW + 500, Ordering::SeqCst);
+    assembler.observe(chunk_with_phase(0, Some(Phase::MessageStop)));
+    clock.store(NOW + 900, Ordering::SeqCst);
+    assembler.observe(chunk_with_phase(1, Some(Phase::MessageStop)));
+    let records = assembler.observe(finished_event(NOW + 1_000));
+    let [Record::Request { request, .. }] = records.as_slice() else {
+        panic!("{} records at completion", records.len());
+    };
+    assert_eq!(
+        request.stream_end_at,
+        Some(NOW + 500),
+        "the first message_stop chunk wins"
     );
 }
 
@@ -5990,6 +6039,104 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
     up.shutdown().await;
 }
 
+/// The registry and the ledger a previous run left: the member's last request spent past the monthly budget it
+/// carries now, so the writer's first spend read at the next start crosses it.
+async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb>) {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let previous = harness_on(
+        store.clone(),
+        db.clone(),
+        up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        LedgerConfig::default(),
+        None,
+    )
+    .await;
+    previous.ledger.clone().shutdown().await.unwrap();
+    previous.router.shutdown().await.unwrap();
+    store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(1.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: NOW - 1_000,
+            pool_id: Some("main".into()),
+            canonical_model: "claude-haiku-4-5".into(),
+            model: "claude-haiku-4-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(2_000_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    (store, db)
+}
+
+/// A replay the writer runs on its first turn, ahead of the start row the spawn queued, reads the members' spend and
+/// leaves the budget rows it crosses for the next batch, so they land behind the start row. The writer takes either
+/// first at random, so the case starts the router enough times that a replay landing the rows itself would show.
+#[tokio::test]
+async fn a_replay_on_the_writers_first_turn_lands_its_budget_row_behind_the_start_row() {
+    let up = FakeUpstream::start(vec![]).await;
+    for start in 0..30 {
+        let (store, db) = over_budget_after_a_run(&up).await;
+        let h = harness_on(
+            store,
+            db,
+            &up,
+            &[api_key("a", C, 0)],
+            (0, None),
+            LedgerConfig {
+                start_version: Some("0.1.0".into()),
+                ..LedgerConfig::default()
+            },
+            None,
+        )
+        .await;
+        let replayed = h.ledger.replay_parked(NOW, BOUND).await.unwrap();
+        assert_eq!((replayed.landed, replayed.remaining), (0, 0));
+        let kinds = wait_for_async(Duration::from_secs(5), || async {
+            let rows: Vec<EventRecord> = h.db.events(0, i64::MAX, 100).await.unwrap();
+            rows.iter()
+                .any(|e| e.kind == "budget_reached")
+                .then(|| rows.into_iter().map(|e| e.kind).collect::<Vec<_>>())
+        })
+        .await;
+        assert_eq!(
+            kinds,
+            ["router_started", "budget_reached"],
+            "start {start}: the replay's budget row follows the start row"
+        );
+        h.ledger.clone().shutdown().await.unwrap();
+        h.router.shutdown().await.unwrap();
+    }
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_one() {
     let up = FakeUpstream::start(vec![]).await;
@@ -6277,6 +6424,7 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
     let db = LedgerDb::open_in_memory().unwrap();
     put_decision(&db, &logged("r1", 1, 1, 100, "held"));
     put_decision(&db, &logged("r1", 2, 1, 100, "placed"));
+    put_decision(&db, &logged("r2", 1, 1, 100, "placed"));
     db.insert_event(&logged_event(100, "cooldown_set")).unwrap();
     db.insert_event(&logged_event(100, "cooldown_cleared"))
         .unwrap();
@@ -6284,26 +6432,28 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
         db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), cursor, limit))
             .unwrap()
     };
-    let whole = page(None, 4);
+    let whole = page(None, 5);
     assert_eq!(
         whole.rows.iter().map(log_id).collect::<Vec<_>>(),
         [
+            "d:r2/1",
             "d:r1/2",
             "d:r1/1",
             "e:cooldown_cleared@100",
             "e:cooldown_set@100"
-        ]
+        ],
+        "at one instant the newer request id first, then each request's newest seq"
     );
     assert_eq!(
         whole.next_cursor, None,
         "a page of exactly `limit` rows has nothing past it"
     );
-    let first = page(None, 3);
-    assert_eq!(first.rows.len(), 3);
-    let cursor = first.next_cursor.expect("a row lies past a page of three");
+    let first = page(None, 4);
+    assert_eq!(first.rows.len(), 4);
+    let cursor = first.next_cursor.expect("a row lies past a page of four");
     let next = page(
         Some(&phoebis_ledger::RoutingLogCursor::parse(&cursor).expect("the cursor parses back")),
-        3,
+        4,
     );
     assert_eq!(
         next.rows.iter().map(log_id).collect::<Vec<_>>(),

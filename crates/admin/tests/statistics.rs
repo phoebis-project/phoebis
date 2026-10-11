@@ -1614,7 +1614,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
-                    source: "header".into(),
+                    source: "head".into(),
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {

@@ -494,8 +494,8 @@ mod tests {
         assert!(
             message.starts_with("pricing table: ")
                 && message.contains("long_context")
-                && message.contains("missing field"),
-            "{message}"
+                && message.contains("missing field `output`"),
+            "the refusal names the cell the block leaves out: {message}"
         );
     }
 

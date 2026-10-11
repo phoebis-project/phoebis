@@ -176,7 +176,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "at": 900000,
               "utilization": 0.41,
               "resets_at": 87400000,
-              "source": "header"
+              "source": "head"
             }
           ]
         },
@@ -7676,7 +7676,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "zPd1-QV0",
+      "prefix": "RLotbS1_",
       "created_at": 1000000,
       "updated_at": 1000000,
       "revision": 4398047511104,
@@ -7744,7 +7744,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "zPd1-QV0",
+          "prefix": "RLotbS1_",
           "created_at": 1000000,
           "updated_at": 1000000,
           "revision": 4398047511104,
@@ -7815,9 +7815,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "u424fUc8F4rxCsJ_NoUTNpv08zgeIYAst8kMsMvmaTA",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A50836%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=7xlQhEJrwu_gNGmRwNLoT5Tpy9A1Mpw-diylwTvuano&code_challenge_method=S256&state=fgpbNYB-5-vv0onyjS2QKchRooP3Bq2D7vEvtHBpj20",
-      "redirect_uri": "http://localhost:50836/callback",
+      "id": "z98uzyFNnb0g-coVv5Dd6JmpLRP2N-PVh1sH2ARhSYY",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A53994%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=LtlgjvYQTeZHEhgCLanEvOwIPNXxbQEL49blB6t7yp4&code_challenge_method=S256&state=tRqO-2k8PbgxJVTHO5DMR6mGEyQNQeHvFZVdssIn85Q",
+      "redirect_uri": "http://localhost:53994/callback",
       "expires_at": 1600000
     }
   },
@@ -8132,7 +8132,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "zPd1-QV0",
+              "prefix": "RLotbS1_",
               "enabled": true
             }
           ],
@@ -9625,7 +9625,7 @@ export const FIXTURES: Record<string, Fixture> = {
     }
   },
   "routing_log": {
-    "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,reauth_required,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+    "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
     "body": {
       "rows": [
         {
@@ -10685,7 +10685,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "type": "event",
           "id": 32,
           "at": -1820000,
-          "kind": "reauth_required",
+          "kind": "account_state_changed",
           "account_id": "business",
           "key_id": null,
           "pool_id": null,
@@ -10694,7 +10694,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": null,
           "request_id": null,
           "actor": null,
-          "detail": null
+          "detail": {
+            "from": "ready",
+            "to": "reauth_required",
+            "cause": "refresh_failed",
+            "detail": null
+          }
         },
         {
           "type": "event",
@@ -11028,7 +11033,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "KKokvcE9NHn9fz_hUnLaQAhw9SIvDAiV37Lgewbd3vo"
+      "session_id": "7hoSXuRBFRaRI3LiceUabo81mLxjjIxN4_ogOlNIzEs"
     }
   },
   "sessions": {

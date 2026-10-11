@@ -820,7 +820,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     window: "five_hour".into(),
                     utilization: Some(0.4),
                     reset_at: Some(now + HOUR),
-                    source: "header".into(),
+                    source: "head".into(),
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
@@ -881,7 +881,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             windows[0]["samples"][0]["utilization"].as_f64(),
             windows[0]["samples"][0]["source"].as_str()
         ),
-        (Some(bucket * 1_000), Some(0.4), Some("header"))
+        (Some(bucket * 1_000), Some(0.4), Some("head"))
     );
     assert_eq!(quota["extra_usage"][0]["used_credits"].as_u64(), Some(10));
     assert_eq!(
@@ -2811,7 +2811,7 @@ async fn the_overview_counts_a_probe_the_router_held_under_held_and_not_as_faile
 }
 
 /// The analytics groups count the same held probe under `probes.held`, and with probes counted as requests its row
-/// counts under no failure and no rejection, on the breakdown and on the series alike.
+/// counts under no request, no failure and no rejection, on the breakdown and on the series alike.
 #[tokio::test]
 async fn an_analytics_group_counts_a_probe_the_router_held_under_held_and_not_as_failed_or_rejected(
 ) {
@@ -2843,8 +2843,8 @@ async fn an_analytics_group_counts_a_probe_the_router_held_under_held_and_not_as
     };
     assert_eq!(
         counts(row),
-        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
-        "the client request and the held probe: {row}"
+        (Some(1), Some(0), Some(1), Some(1), Some(0), Some(0)),
+        "the client request alone, the held probe outside the requests: {row}"
     );
     let series = json(
         get(
@@ -2865,7 +2865,7 @@ async fn an_analytics_group_counts_a_probe_the_router_held_under_held_and_not_as
     assert_eq!(groups.len(), 1, "one bucket holds both rows: {series}");
     assert_eq!(
         counts(groups[0]),
-        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
+        (Some(1), Some(0), Some(1), Some(1), Some(0), Some(0)),
         "{series}"
     );
 }

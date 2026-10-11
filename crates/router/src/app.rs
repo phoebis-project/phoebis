@@ -96,6 +96,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
     );
     tracing::info!(database = %config.storage.path.display(), "store opened");
+    // Ahead of the recovery below, so the refresh it settles and the quarantine it lands reach the ledger as rows.
+    let mirror_baseline = phoebis_ledger::MirrorBaseline::read(&store);
 
     let extra_ca = match &config.upstream.extra_ca_pem {
         None => None,
@@ -227,6 +229,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
             start_version: Some(env!("CARGO_PKG_VERSION").into()),
+            mirror_baseline: Some(mirror_baseline),
         },
     );
     // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the

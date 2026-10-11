@@ -100,7 +100,7 @@ pub(crate) fn samples_from_unified(
                 window: window.into(),
                 utilization,
                 reset_at,
-                source: "header".into(),
+                source: "head".into(),
                 observed_at: Some(observed_at),
             });
         }
@@ -116,7 +116,7 @@ pub(crate) fn samples_from_unified(
         currency: None,
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
-        source: "header".into(),
+        source: "head".into(),
     });
     (quota, extra)
 }
@@ -620,14 +620,14 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             [
-                ("five_hour", Some(0.42), Some(2_000_000), 1_200, "header"),
-                ("seven_day", Some(0.13), None, 1_200, "header"),
+                ("five_hour", Some(0.42), Some(2_000_000), 1_200, "head"),
+                ("seven_day", Some(0.13), None, 1_200, "head"),
                 (
                     "seven_day_overage_included",
                     Some(0.91),
                     None,
                     1_200,
-                    "header"
+                    "head"
                 )
             ]
         );
@@ -641,7 +641,7 @@ mod tests {
                 extra.used_credits,
                 extra.source.as_str()
             ),
-            (true, Some(true), Some(0.5), Some(3_000_000), None, "header")
+            (true, Some(true), Some(0.5), Some(3_000_000), None, "head")
         );
         assert_eq!(samples_from_head("a", &[], 1), (vec![], None));
     }

@@ -989,7 +989,7 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
         ["five_hour", "seven_day"],
         "one row per window the endpoint reports: {rows:?}"
     );
-    assert!(rows.iter().all(|r| r.source != "header"), "{rows:?}");
+    assert!(rows.iter().all(|r| r.source != "head"), "{rows:?}");
     let sample = routed_sample(&h.router, "business", NOW).await;
     assert!(
         sample.reading("five_hour").is_some(),

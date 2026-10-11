@@ -169,7 +169,8 @@ async fn a_pin_event_s_agent_and_a_cooldown_s_request_land_in_their_columns() {
 }
 
 #[tokio::test]
-async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_is_an_event() {
+async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_is_one_transition_row(
+) {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(
         &up,
@@ -203,6 +204,7 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
     })
     .await;
     assert_eq!(event.actor.as_deref(), Some("admin:abc"));
+    assert_eq!(event.pool_id, None, "an account's change names no pool");
     let detail: serde_json::Value = serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
     assert_eq!(
         (detail["kind"].as_str(), detail["target"].as_str()),
@@ -225,17 +227,26 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
             StateCause::Operator,
         )
         .unwrap();
-    let kinds = wait_for_async(Duration::from_secs(5), || async {
+    wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
-        rows.iter()
-            .any(|e| e.kind == "reauth_required")
-            .then(|| rows.iter().map(|e| e.kind.clone()).collect::<Vec<_>>())
+        (rows.iter().any(|e| e.kind == "refresh_failed")
+            && rows.iter().any(|e| e.kind == "account_state_changed"))
+        .then_some(())
     })
     .await;
-    assert!(
-        kinds.contains(&"refresh_failed".to_string())
-            && kinds.contains(&"reauth_required".to_string())
+    assert_eq!(
+        account_rows(&h).await,
+        [transition("ready", "reauth_required", "operator", None)],
+        "the transition row records the move into the state"
     );
+    stays_for_async(Duration::from_millis(200), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "reauth_required")
+    })
+    .await;
     up.shutdown().await;
 }
 
@@ -473,6 +484,11 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
             })
     })
     .await;
+    assert_eq!(
+        row.pool_id.as_deref(),
+        Some("main"),
+        "a pool's change names the pool"
+    );
     let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
     assert!(
         detail["diff"].is_object(),
@@ -573,7 +589,7 @@ async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
         .await
         .unwrap()
         .into_iter()
-        .filter(|e| e.kind == "account_state_changed" || e.kind == "reauth_required")
+        .filter(|e| e.kind == "account_state_changed")
         .map(|e| {
             assert_eq!(e.account_id.as_deref(), Some("a"));
             let detail = e
@@ -598,10 +614,6 @@ fn transition(
     )
 }
 
-fn reauth() -> (String, serde_json::Value) {
-    ("reauth_required".to_string(), serde_json::Value::Null)
-}
-
 fn polled_every_50_ms() -> LedgerConfig {
     LedgerConfig {
         event_poll: Duration::from_millis(50),
@@ -610,7 +622,7 @@ fn polled_every_50_ms() -> LedgerConfig {
 }
 
 #[tokio::test]
-async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
+async fn every_account_transition_writes_one_row_a_move_into_reauth_required_included() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
     h.store
@@ -625,7 +637,7 @@ async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
         .unwrap();
     let rows = wait_for_async(Duration::from_secs(5), || async {
         let rows = account_rows(&h).await;
-        (rows.len() == 3).then_some(rows)
+        (rows.len() == 2).then_some(rows)
     })
     .await;
     assert_eq!(
@@ -633,7 +645,6 @@ async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
         [
             transition("ready", "funding_required", "operator", None),
             transition("funding_required", "reauth_required", "operator", None),
-            reauth(),
         ]
     );
     up.shutdown().await;
@@ -655,15 +666,12 @@ async fn the_routing_loop_s_cause_lands_on_the_transition_it_names() {
         detail: Some("invalid x-api-key".into()),
         at: NOW,
     });
-    let expected = [
-        transition(
-            "ready",
-            "reauth_required",
-            "auth_failed",
-            Some("invalid x-api-key"),
-        ),
-        reauth(),
-    ];
+    let expected = [transition(
+        "ready",
+        "reauth_required",
+        "auth_failed",
+        Some("invalid x-api-key"),
+    )];
     wait_for_async(Duration::from_secs(5), || async {
         (account_rows(&h).await == expected).then_some(())
     })
@@ -699,10 +707,7 @@ async fn a_newer_watch_observation_drops_a_delayed_older_transition() {
     h.store
         .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
-    let expected = [
-        transition("ready", "reauth_required", "operator", None),
-        reauth(),
-    ];
+    let expected = [transition("ready", "reauth_required", "operator", None)];
     wait_for_async(Duration::from_secs(5), || async {
         (account_rows(&h).await == expected).then_some(())
     })
@@ -818,7 +823,10 @@ async fn a_deleted_account_s_last_row_reads_deleted() {
     })
     .await;
     replaced_and_marked(&h.store);
-    let expected = [last[0].clone(), reauth()];
+    let expected = [
+        last[0].clone(),
+        transition("unpaired", "reauth_required", "refresh_failed", None),
+    ];
     wait_for_async(Duration::from_secs(5), || async {
         (account_rows(&h).await == expected).then_some(())
     })
@@ -867,7 +875,10 @@ async fn an_account_replaced_under_its_id_between_two_ticks_writes_the_old_holde
     replaced_and_marked(&h.store);
     // Whether a tick reads the gap between the two writes or not, the held holder is gone and the new one is one the
     // mirror never saw.
-    let expected = [transition("ready", "deleted", "deleted", None), reauth()];
+    let expected = [
+        transition("ready", "deleted", "deleted", None),
+        transition("unpaired", "reauth_required", "refresh_failed", None),
+    ];
     wait_for_async(Duration::from_secs(5), || async {
         (account_rows(&h).await == expected).then_some(())
     })
@@ -1229,11 +1240,19 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
         (rows.len() == 3).then_some(rows)
     })
     .await;
+    // By row id rather than by `at`: the refresh row's instant is the store's wall clock, which sorts after `NOW`
+    // whichever row lands first.
+    let order: Vec<String> = db
+        .read_blocking(|c| {
+            let mut stmt = c.prepare("SELECT kind FROM events ORDER BY rowid")?;
+            let kinds = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(kinds)
+        })
+        .unwrap();
     assert_eq!(
-        landed
-            .iter()
-            .map(|(kind, _)| kind.as_str())
-            .collect::<Vec<_>>(),
+        order,
         ["pin_created", "router_started", "refresh_failed"],
         "the mirror's row lands behind the start row"
     );
@@ -1242,5 +1261,103 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
         start["down_since"],
         serde_json::json!(down_since),
         "the gap ends at the previous run's last row"
+    );
+}
+
+/// The router reads the mirror's baseline before the start's recovery, so the refresh the recovery settles and the
+/// quarantine it lands are mirrored as changes rather than taken as history.
+#[tokio::test]
+async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let account = |id: &str, cause: StateCause| phoebis_store::AccountRow {
+        id: id.into(),
+        kind: phoebis_store::AccountKind::Oauth,
+        label: id.into(),
+        enabled: true,
+        identity: None,
+        lifecycle_generation: 1,
+        incarnation: 1,
+        revision: 1,
+        state: AccountState::Ready,
+        state_cause: cause,
+    };
+    store
+        .insert_account(&account("a", StateCause::Operator))
+        .unwrap();
+    let attempt = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    let baseline = phoebis_ledger::MirrorBaseline::read(&store);
+    // The recovery's own writes on a refresh the previous run left in flight.
+    store
+        .set_state("a", AccountState::ReauthRequired, StateCause::RefreshFailed)
+        .unwrap();
+    store
+        .resolve_refresh_attempt(
+            attempt,
+            1,
+            phoebis_store::AttemptOutcome::Failed("quarantined at start".into()),
+        )
+        .unwrap();
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let _ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(phoebis_ledger::Pricing::new(
+            phoebis_ledger::PriceTable::shipped(),
+        )),
+        store.clone(),
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(phoebis_ledger::Metrics::new()),
+        LedgerConfig {
+            mirror_baseline: Some(baseline),
+            ..polled_every_50_ms()
+        },
+    );
+    // A holder born after the spawn: the tick reads accounts last and by id, so once its row lands every row the
+    // tick wrote for `a` has.
+    store
+        .insert_account(&account("b", StateCause::Paired))
+        .unwrap();
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = db.events(0, i64::MAX, 100).await.unwrap();
+        rows.iter()
+            .any(|e| e.kind == "account_state_changed" && e.account_id.as_deref() == Some("b"))
+            .then_some(rows)
+    })
+    .await;
+    let of_a = |kind: &str| -> Vec<serde_json::Value> {
+        rows.iter()
+            .filter(|e| e.kind == kind && e.account_id.as_deref() == Some("a"))
+            .map(|e| serde_json::from_str(e.detail.as_deref().unwrap()).unwrap())
+            .collect()
+    };
+    assert_eq!(
+        of_a("refresh_failed")
+            .iter()
+            .map(|detail| detail["error"].clone())
+            .collect::<Vec<_>>(),
+        [serde_json::json!("quarantined at start")],
+        "the attempt the recovery settled"
+    );
+    assert_eq!(
+        of_a("account_state_changed"),
+        [
+            serde_json::json!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null })
+        ],
+        "the quarantine the recovery landed"
+    );
+}
+
+/// A move into `reauth_required` is an `account_state_changed` row, so the routing log's kinds name no kind of that
+/// state's own.
+#[test]
+fn the_event_kinds_hold_no_reauth_required_kind() {
+    assert!(phoebis_ledger::EVENT_KINDS.contains(&"account_state_changed"));
+    assert!(
+        !phoebis_ledger::EVENT_KINDS.contains(&"reauth_required"),
+        "{:?}",
+        phoebis_ledger::EVENT_KINDS
     );
 }

@@ -295,7 +295,7 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     let header = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
         rows.iter()
-            .any(|r| r.window == "five_hour" && r.source == "header")
+            .any(|r| r.window == "five_hour" && r.source == "head")
             .then_some(rows)
     })
     .await;
@@ -317,7 +317,7 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
             extra[0].in_use,
             extra[0].used_credits
         ),
-        ("header", Some(false), None),
+        ("head", Some(false), None),
         "a head carries no credits"
     );
 
@@ -342,8 +342,8 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     assert_eq!(
         windows,
         [
-            ("five_hour", "header", Some(0.77)),
-            ("seven_day", "header", Some(0.2)),
+            ("five_hour", "head", Some(0.77)),
+            ("seven_day", "head", Some(0.2)),
             ("seven_day_fable", "poll", Some(0.42)),
         ],
         "one row per window: the header's readings survive the poll, the Fable week comes from limits[] and \
@@ -355,7 +355,7 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     assert_eq!(extra.len(), 1, "one extra-usage row per bucket");
     assert_eq!(
         (extra[0].source.as_str(), extra[0].used_credits),
-        ("header", None),
+        ("head", None),
         "the header row keeps its bucket; credits wait for a bucket the poll owns"
     );
 
@@ -951,6 +951,34 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
         h.ledger.tracked(),
         before,
         "no attempt is tracked by the ledger"
+    );
+    up.shutdown().await;
+}
+
+/// A startup read the endpoint refuses counts under `failed`, apart from the account whose sample landed.
+#[tokio::test]
+async fn the_startup_step_counts_an_account_the_endpoint_refused_as_failed() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(OAUTH_C, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(
+        (sampled.reported, sampled.failed, sampled.pending),
+        (1, 1, 0),
+        "the 429 is a failed read beside the reported one"
     );
     up.shutdown().await;
 }

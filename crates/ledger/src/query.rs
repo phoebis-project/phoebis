@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
-use crate::plan::{funding_of, price_shares, Funding, PlanTables};
+use crate::plan::{funding_of, price_shares, Funding, PlanTables, WindowShares};
 use crate::pricing::{PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -535,7 +535,6 @@ pub const EVENT_KINDS: &[&str] = &[
     "pin_released",
     "poll_backoff_ended",
     "poll_backoff_started",
-    "reauth_required",
     "refresh_failed",
     "refresh_succeeded",
     "refresh_uncertain",
@@ -1763,6 +1762,18 @@ impl ShareSums {
     /// Folds one plan-funded row in: the request side's shares and counts when `counted`, as the request dollars
     /// take the row, and the probe cost when the row is a probe's, each window priced at the row's own hour.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
+        self.add_priced(row, counted, |usage| {
+            price_shares(tables, tier, &row.canonical_model, usage, row.hour * 1_000)
+        });
+    }
+
+    /// `add` with the pricer passed in, so a test can count the pricings a row costs.
+    fn add_priced(
+        &mut self,
+        row: &RollupRow,
+        counted: bool,
+        price: impl Fn(PinUsage) -> WindowShares,
+    ) {
         if counted {
             self.plan_requests += row.requests;
             self.plan_output_tokens += row.output_tokens;
@@ -1784,12 +1795,10 @@ impl ShareSums {
         if usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output == 0 {
             return;
         }
-        let price = |usage: PinUsage| {
-            price_shares(tables, tier, &row.canonical_model, usage, row.hour * 1_000)
-        };
+        let priced = price(usage);
         if counted {
-            for (window, share) in price(usage) {
-                self.cost.entry(window).or_default().add(share);
+            for (window, share) in &priced {
+                self.cost.entry(*window).or_default().add(*share);
             }
             let read = price(PinUsage {
                 cache_read: usage.cache_read,
@@ -1812,7 +1821,7 @@ impl ShareSums {
             }
         }
         if row.kind == "probe" {
-            for (window, share) in price(usage) {
+            for (window, share) in priced {
                 self.probe_cost.entry(window).or_default().add(share);
             }
         }
@@ -2932,8 +2941,7 @@ fn price_usage(point: &mut BurnPoint, tier: Option<&str>, tables: &PlanTables, r
             // A failed request books a row with no token, and the model refuses a model it has no weight for before
             // it reads the usage: such a row would null a priced hour for a charge of nothing.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
-                // The two shared windows alone: the burn chart draws no model week.
-                let shares = price_shares(tables, tier, row.canonical_model, usage, row.at);
+                let shares = price_shared_windows(tables, tier, row.canonical_model, usage, row.at);
                 let shared = |window: &str| shares.get(window).copied().flatten();
                 match shared(FIVE_HOUR) {
                     Some(share) if !point.five_hour_unpriced => {
@@ -2962,6 +2970,26 @@ fn price_usage(point: &mut BurnPoint, tier: Option<&str>, tables: &PlanTables, r
     point.cached_tokens += row.cache_read_tokens;
     point.tokens += tokens;
     point.uncached_tokens += row.input_tokens;
+}
+
+/// `price_shares` for the two shared windows alone, the five-hour and the seven-day: the burn chart draws no model
+/// week, so none is built.
+fn price_shared_windows(
+    tables: &PlanTables,
+    tier: &str,
+    canonical_model: &str,
+    usage: PinUsage,
+    at: i64,
+) -> WindowShares {
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .map(|window| {
+            (
+                window,
+                tables.share_at(window, tier, canonical_model, usage, at),
+            )
+        })
+        .collect()
 }
 
 /// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
@@ -3411,5 +3439,75 @@ mod tests {
             !plan.iter().any(|step| step.starts_with("SCAN")),
             "a poll never walks the whole history: {plan:?}"
         );
+    }
+
+    /// 2026-01-15 00:00 UTC in seconds, inside the test cost model's effective range.
+    const HOUR: i64 = 1_768_435_200;
+    const TIER: &str = "default_claude_max_20x";
+
+    /// The burn chart draws the two shared windows alone, so a model with a week of its own is priced on those two
+    /// and no entry is built for its week.
+    #[test]
+    fn a_burn_row_of_a_model_with_its_own_week_prices_the_two_shared_windows_alone() {
+        let tables = crate::test_tables::subscription_costs();
+        let model = "claude-fable-5-1";
+        assert_ne!(
+            phoebis_routing::window_for(model),
+            SEVEN_DAY,
+            "the model has a week of its own"
+        );
+        let usage = PinUsage {
+            input: 1_000,
+            output: 100,
+            ..PinUsage::default()
+        };
+        let at = HOUR * 1_000;
+        let shares = price_shared_windows(&tables, TIER, model, usage, at);
+        assert_eq!(
+            shares.keys().copied().collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY],
+            "no model-week entry: {shares:?}"
+        );
+        for window in [FIVE_HOUR, SEVEN_DAY] {
+            let priced = tables.share_at(window, TIER, model, usage, at);
+            assert!(priced.is_some(), "the test model prices {window}");
+            assert_eq!(shares[window], priced, "{window}");
+        }
+    }
+
+    /// A counted probe row is one usage for both sides, so it is priced once and the request side's cost and the
+    /// probe side's cost read the same shares.
+    #[test]
+    fn a_counted_probe_row_is_priced_once_for_its_cost_and_its_probe_cost() {
+        let tables = crate::test_tables::subscription_costs();
+        let model = "claude-sonnet-5-5";
+        let mut row = RollupRow::key(
+            HOUR, "k", 0, "p", "a", model, "probe", "-", "-", "-", "-", "standard", "plan",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.output_tokens = 100;
+        let usage = PinUsage {
+            input: 1_000,
+            output: 100,
+            ..PinUsage::default()
+        };
+        let whole = std::cell::Cell::new(0);
+        let mut sums = ShareSums::default();
+        sums.add_priced(&row, true, |priced| {
+            if priced == usage {
+                whole.set(whole.get() + 1);
+            }
+            price_shares(&tables, TIER, model, priced, HOUR * 1_000)
+        });
+        assert_eq!(whole.get(), 1, "the row's usage is priced once");
+        let sums_of = |windows: &IndexMap<&'static str, WindowSum>| {
+            windows
+                .iter()
+                .map(|(window, sum)| (*window, sum.sum, sum.unpriced))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sums_of(&sums.cost), sums_of(&sums.probe_cost));
+        assert_eq!(sums.cost.len(), 2, "both shared windows priced");
     }
 }

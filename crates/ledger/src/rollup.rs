@@ -446,15 +446,15 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
         }),
     );
-    d.requests = 1;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
-    if request.kind == "probe"
+    let held = request.kind == "probe"
         && request.status == Some(503)
-        && request.error_code.as_deref() == Some("ledger_behind")
-    {
+        && request.error_code.as_deref() == Some("ledger_behind");
+    if held {
         d.probes_held = 1;
     } else {
+        d.requests = 1;
         match request.outcome.as_str() {
             "succeeded" => d.succeeded = 1,
             "failed" if request.status == Some(429) => d.rate_limited = 1,
@@ -529,8 +529,11 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             d.output_tps_hist.record(out as f64 / span_s);
         }
     }
-    if let Some(code) = &request.error_code {
-        *d.errors.entry(code.clone()).or_default() += 1;
+    // A held probe asked no account, so its code names no failure the rate should count.
+    if !held {
+        if let Some(code) = &request.error_code {
+            *d.errors.entry(code.clone()).or_default() += 1;
+        }
     }
     d
 }
@@ -593,9 +596,10 @@ pub fn fold_request(
         let old = delta_of(old_request, old_attempts);
         if let Some(mut row) = read_rollup(tx, &old)? {
             row.subtract(&old);
-            // Every delta sets `requests` to 1, so zero here means the key holds no request any more: a
-            // replace that moved keys, not one that landed back on its own row. Leaving a row of zeros would
-            // surface as a phantom group in every reader that lists keys rather than summing values.
+            // Every delta sets `requests` to 1 but a held probe's, which leaves it at 0 and sets `probes_held`, one
+            // of the counters `keepalive_empty` reads. A row at zero on both holds no request any more: a replace
+            // that moved keys, not one that landed back on its own row. Leaving a row of zeros would surface as a
+            // phantom group in every reader that lists keys rather than summing values.
             //
             // A request without a user agent shares the reserved row with its key's keepalive deltas, which
             // no request row backs; the row goes only when nothing of either is left in it.

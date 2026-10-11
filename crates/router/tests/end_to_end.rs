@@ -2448,6 +2448,88 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     up.shutdown().await;
 }
 
+/// A refresh the previous run left in flight is quarantined at the start, and the routing log answers the settled
+/// refresh and the account's move into `reauth_required`: the ledger's mirror takes its baseline before the
+/// recovery runs.
+#[tokio::test]
+async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_log_answers_both_rows(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    seed_oauth_account(&db_path, &key_path);
+    // On the seeded account's incarnation and generations, so the start quarantines it rather than closing the
+    // attempt as superseded.
+    phoebis_store::Store::open(
+        &db_path,
+        &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+    )
+    .unwrap()
+    .open_refresh_attempt("a", 1, 1, 1)
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_QUARANTINE_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_QUARANTINE_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    let log = wait_json(
+        &client,
+        &admin("/routing-log?accounts=a&kinds=account_state_changed,refresh_failed"),
+        |log| log["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let row = |kind: &str| {
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} row: {log}"))
+            .clone()
+    };
+    assert_eq!(
+        row("refresh_failed")["detail"]["error"],
+        "quarantined at start",
+        "{log}"
+    );
+    assert_eq!(
+        row("account_state_changed")["detail"],
+        serde_json::json!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null }),
+        "{log}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
     let dir = tempfile::tempdir().unwrap();

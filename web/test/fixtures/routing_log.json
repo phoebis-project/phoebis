@@ -1,5 +1,5 @@
 {
-  "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,reauth_required,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+  "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
   "body": {
     "rows": [
       {
@@ -1059,7 +1059,7 @@
         "type": "event",
         "id": 32,
         "at": -1820000,
-        "kind": "reauth_required",
+        "kind": "account_state_changed",
         "account_id": "business",
         "key_id": null,
         "pool_id": null,
@@ -1068,7 +1068,12 @@
         "model": null,
         "request_id": null,
         "actor": null,
-        "detail": null
+        "detail": {
+          "from": "ready",
+          "to": "reauth_required",
+          "cause": "refresh_failed",
+          "detail": null
+        }
       },
       {
         "type": "event",

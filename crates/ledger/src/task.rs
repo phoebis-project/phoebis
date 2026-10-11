@@ -20,7 +20,7 @@ use crate::db::{
     begin_write, delete_parked_in, insert_decision_in, insert_event_in, insert_request_in,
     insert_samples_in, newest_row_at, update_cache_map_in,
 };
-use crate::events::spawn_event_mirror;
+use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
 use crate::query::{member_spends, period_bounds, BudgetedMember};
@@ -72,6 +72,9 @@ pub struct LedgerConfig {
     /// The binary's version for the `router_started` row `spawn` records ahead of everything it starts. `None`
     /// records none, as a test's ledger does.
     pub start_version: Option<String>,
+    /// The event mirror's starting point, read by the caller before the start's recovery writes the registry.
+    /// `None` reads it when the mirror spawns, as a test's ledger does.
+    pub mirror_baseline: Option<MirrorBaseline>,
 }
 
 impl Default for LedgerConfig {
@@ -83,6 +86,7 @@ impl Default for LedgerConfig {
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
             start_version: None,
+            mirror_baseline: None,
         }
     }
 }
@@ -256,7 +260,7 @@ impl Ledger {
 
     /// The start-up pass on demand, run by the writer task between two of its batches: every parked row once, in
     /// parking order, each in its own transaction with its row's deletion (`land_acknowledging`), then the spend
-    /// refresh the start runs after its own pass, so the routing table holds the landed money before this answers.
+    /// read the start runs after its own pass, so the routing table holds the landed money before this answers.
     /// The writer's turn is the serialization: no row is landed twice by two passes, or by a pass and a batch, at
     /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped or the count cannot be
     /// read.
@@ -319,7 +323,7 @@ pub fn spawn(
     router: RouterHandle,
     clock: Clock,
     metrics: Arc<Metrics>,
-    config: LedgerConfig,
+    mut config: LedgerConfig,
 ) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
     let (control, control_rx) = mpsc::channel::<Control>(1);
@@ -354,6 +358,7 @@ pub fn spawn(
         router.clone(),
         clock.clone(),
         config.event_poll,
+        config.mirror_baseline.take(),
     );
     ledger.tasks.lock().expect(TASKS_POISONED).push(mirror);
     let subscriber = bus.subscribe("ledger", Delivery::Durable);
@@ -586,11 +591,12 @@ async fn writer(
                 }
                 let replayed = match land_parked(&db, &pricing, &stats, &metrics, now).await {
                     Ok((landed, _)) => {
-                        // The refresh the start runs after its own pass: the landed money reaches the routing table
-                        // before the caller hears the counts, so a selection after a replay that crossed a budget is
-                        // refused.
+                        // The spend read the start runs after its own pass: the landed money reaches the routing
+                        // table before the caller hears the counts, so a selection after a replay that crossed a
+                        // budget is refused. The budget rows it crosses wait for the next batch or flush, as the
+                        // start's own do, so a replay on the writer's first turn lands none ahead of the start row.
                         member_revision = router.snapshot().revision;
-                        spend_due = spends.refresh(spend_due, &[]).await;
+                        spend_due = spends.read(spend_due, &[]).await;
                         let remaining = db.read(crate::query::parked_count).await;
                         remaining.map(|remaining| Replayed { landed, remaining })
                     }

@@ -531,7 +531,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     window: "seven_day".into(),
                     utilization: Some(0.41),
                     reset_at: Some(now + 86_400_000),
-                    source: "header".into(),
+                    source: "head".into(),
                     observed_at: None,
                 },
                 QuotaSampleRecord {
@@ -1818,7 +1818,12 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             detail: Some(j!({ "request_id": "r-gap", "reason": "chunk_skipped" }).to_string()),
             ..written(12, "ledger_gap")
         },
-        written(13, "reauth_required"),
+        EventRecord {
+            detail: Some(
+                j!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null }).to_string(),
+            ),
+            ..written(13, "account_state_changed")
+        },
         EventRecord {
             detail: Some(
                 j!({ "until": now + 3_600_000, "access_expires_at": now + 3_600_000, "refresh_expires_at": null })
