@@ -250,23 +250,63 @@ test("a bucket's share is null when any row is unpriced, in either order", () =>
   assert.equal(d.bucketShare([]), null, 'a bucket with no row has no share');
 });
 
-test("the mock's burn fold prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
-  // Wednesday 2026-09-16 at 10:00 UTC, before the peak band opens in Los Angeles; primary is the story's Max 20x.
-  const hour = Date.parse('2026-09-16T10:00:00Z');
-  const row = (model, uncachedInput) => ({ accountId: 'primary', costUsd: 0, funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+test("the mock's burn fold sums the rows' own shares, prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
+  // The shipped model the mock prices through, so a row's shares are the ones the share rule gives for it.
+  const costs = d.decodeSettings(fixture('settings')).subscriptionCosts;
+  // The hour before the peak band opens in Los Angeles on Wednesday 2026-09-16. Primary is the story's Max 20x.
+  const edge = d.bandNow(costs, Date.parse('2026-09-16T10:00:00Z')).at;
+  const hour = edge - HOUR;
+  const tier = 'default_claude_max_20x';
+  const usageOf = (input) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output: 0 });
+  // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
+  const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareOf(costs, w, tier, model, usageOf(input), at)]));
+  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
-  const priced = row('claude-opus-5-5', 1_000_000);
-  // The shipped model the mock prices through, so the fold's figure is the one the share rule gives for the row.
-  const costs = d.decodeSettings(fixture('settings')).subscriptionCosts;
-  const want = d.shareOf(costs, 'five_hour', 'default_claude_max_20x', 'claude-opus-5-5', { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 1_000_000, output: 0 }, hour);
-  assert.ok(want !== null && want > 0, 'the shipped model prices Opus 5.5 on Max 20x');
+  // A request that arrived before the band opened and completed inside it, so the band's factor prices it.
+  const priced = row('claude-opus-5-5', 1_000_000, edge + 60_000);
+  const want = priced.shares.five_hour;
+  const atTheHour = d.shareOf(costs, 'five_hour', tier, 'claude-opus-5-5', usageOf(1_000_000), hour);
+  assert.ok(want !== null && atTheHour !== null && want > atTheHour, 'the shipped model prices Opus 5.5 on Max 20x, higher inside the band');
   // A failed request on Sonnet 4.5, which the cost model has no weight for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
-  for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share');
+  for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share, the row\'s own and not its tokens\' at the hour');
   assert.equal(shareOf([failed, row('claude-opus-5-5', 0)]), null, 'rows with no token alone are an idle bucket, not a share of zero');
   const unpriced = row('claude-sonnet-5', 1_000);
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
+});
+
+test('an hour of two requests in different bands sums the per-request shares at their completions', async () => {
+  const api = new d.MockApi();
+  await api.login('admin');
+  const costs = (await api.getSettings()).subscriptionCosts;
+  const tierOf = new Map(d.ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
+  // A plan-funded inference the cost model prices, as the template the two rows are written from.
+  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && d.fundingOf(r.attempts[0]) === 'plan' && d.isWeighted(costs, r.canonicalModel));
+  assert.ok(template, 'the story holds a priced plan-funded answer');
+  const tier = tierOf.get(template.accountId);
+  // The band's next edge after the early hours of a Wednesday, read off the table the mock prices with.
+  const edge = d.bandNow(costs, Date.parse('2026-09-16T08:00:00Z')).at;
+  assert.ok(edge !== null, 'the band flips within the week');
+  const usage = (input, output) => ({ ...template.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output });
+  const rowAt = (at, durationMs, u, id) => ({ ...template, at: new Date(at).toISOString(), durationMs, id, usage: u });
+  // One arrives a minute before the edge and completes a minute past it, and the other lies wholly before the edge
+  // inside the same hour, so the hour holds both and only the first completes on the far side.
+  const crossing = rowAt(edge - 60_000, 120_000, usage(400_000, 20_000), 'req_crossing');
+  const before = rowAt(edge - 20 * 60_000, 60_000, usage(250_000, 9_000), 'req_before');
+  const hours = d.rollups([crossing, before]);
+  assert.equal(hours.length, 1, 'the two requests share one hour of one lane');
+  const share = (r, at) => d.shareOf(costs, 'five_hour', tier, r.canonicalModel, r.usage, at);
+  const completion = (r) => Date.parse(r.at) + r.durationMs;
+  const got = hours[0].shares.five_hour;
+  const want = share(crossing, completion(crossing)) + share(before, completion(before));
+  assert.ok(Math.abs(got - want) < 1e-12, `the hour reads ${got} against the requests' own ${want}`);
+  const atArrivals = share(crossing, Date.parse(crossing.at)) + share(before, Date.parse(before.at));
+  assert.ok(Math.abs(got - atArrivals) > 1e-9, 'a request priced at its arrival reads the other band');
+  const summed = usage(650_000, 29_000);
+  for (const at of [completion(crossing), completion(before)]) {
+    assert.ok(Math.abs(got - d.shareOf(costs, 'five_hour', tier, template.canonicalModel, summed, at)) > 1e-9, 'the summed tokens priced at one instant read one band for both');
+  }
 });
 
 const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });

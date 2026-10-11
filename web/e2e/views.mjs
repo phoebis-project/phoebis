@@ -3781,7 +3781,7 @@ async function escapeReachesFilter(theme, what, station) {
  * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
  * kind badge's box, grown by a line for each line a station's badge wraps to, with its text inside its pill, and the
  * strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
- * placement the page lists. The router's seed places no request by a rung and records no move, so there that check
+ * placement the log lists. The router's seed places no request by a rung and records no move, so there that check
  * stands down and the shed move's badge colors are the story's alone. A station's popover keeps inside the card at the
  * two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest popover), its Cool
  * reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the seeded router's
@@ -3894,6 +3894,11 @@ async function decisionCard(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
+  // The story hour's newer rows hold its rung placements past the default hour's first page.
+  if ((await rung.count()) === 0 && mock) {
+    await page.locator('button[aria-label="Next page"]').click();
+    await advance(LOAD_MS);
+  }
   if ((await rung.count()) === 0) {
     if (mock) say('the story lists no rung placement whose Prefix cell to read');
     return;
@@ -4947,9 +4952,9 @@ async function sessionForkMark(theme) {
  * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
  * center, with the default columns.
  * The badge sits under the id and wraps its words when the column is narrower than they are, so
- * its height is free and its width is what the measurement records beside its cell's. The story forks two sessions
- * beside their bases, so the mock pass requires two links; the router pass measures the links its seed draws and
- * records their count.
+ * its height is free and its width is what the measurement records beside its cell's. The story forks three sessions
+ * beside their bases, one of them without a pin, so the mock pass requires three links. The router pass measures the
+ * links its seed draws and records their count.
  */
 async function sessionForkBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
@@ -4985,7 +4990,7 @@ async function sessionForkBadges(theme) {
   ]) {
     const links = await read();
     measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}`);
-    if (mock && links.length !== 2) say(`${links.length} fork links are drawn with ${set}, not the story's two`);
+    if (mock && links.length !== 3) say(`${links.length} fork links are drawn with ${set}, not the story's three`);
     for (const l of links) {
       const name = `"${l.text}" with ${set}`;
       if (!(l.width > 0)) say(`${name} has no width`);

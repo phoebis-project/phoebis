@@ -486,10 +486,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 10, 0 and 0 pins, the pinned sessions under their keys, all on primary or nightly, and the
-  // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
+  // The story's pools hold 19, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
+  // nightly, and the sessions route answers 19 rows, so a hero counting rows or a note counting every row's account
+  // reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '10' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '19' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -4514,9 +4515,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
-  // work's one primary pin (the busy laptop session) is its slice's last unmarked pin, so its preview sheds nothing,
-  // whatever desktop, still all's key, holds there. The mock's cost model has no weight for the pin's Sonnet 5 either,
-  // so the 0 holds from both causes.
+  // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
+  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 5, so the round sheds
+  // nothing.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -4554,8 +4555,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
-    // count that it ran over laptop's one pin alone.
-    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 1 pin the cost model cannot price stays\.$/.test(line),
+    // count that it ran over laptop's two pins alone.
+    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 2 pins the cost model cannot price stay\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -8093,7 +8094,7 @@ m.unmount();
       name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
-        hour.rows.length === 45 && hour.nextCursor === null && drawn.length === 25 &&
+        hour.rows.length === 49 && hour.nextCursor === null && drawn.length === 25 &&
         JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
@@ -12025,8 +12026,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
     results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
-    // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
-    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
+    // Twelve of the story's nineteen rows hold a recipe. The overview's own count is every session row.
+    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 12 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   {
     // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
@@ -12088,7 +12089,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 19, missing: [String(rows().length)] });
+  {
+    // The session the mod released whole keeps its row and its recipe state, though its expanded detail draws no line.
+    const whole = new Map();
+    for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+    const released = [...whole].filter(([, all]) => all).map(([id]) => id);
+    const row = rows().find((r) => released.includes(cell(r, 'Session')?.getAttribute('title') ?? ''));
+    const badge = row ? cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined;
+    results.push({ name: '/sessions lists the session the mod released whole with its state badge', ok: released.length === 1 && badge === 'idle', missing: [released.join(',') || 'no such session', String(badge)] });
+  }
   await showColumn(m, 'Next probe');
   const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
   results.push({ name: '/sessions still lists the ci key\'s sessions', ok: ci.length === 2, missing: [String(ci.length)] });
@@ -12108,7 +12118,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
-      ok: kinds.length === 16 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      ok: kinds.length === 18 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
     });
   }
@@ -12164,7 +12174,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 17 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 16, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 19 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 17, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -12291,11 +12301,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       });
     const badgeWords = (f) => `fork of ${f.session.forkedFrom.slice(0, 13)}… at ${f.session.forkDepth}, ${f.relation}`;
     const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
-    const wrongFork = forks.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
-    const wrongTarget = forks.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
+    // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
+    const related = forks.filter((f) => f.session.pinned);
+    const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
+    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
     results.push({
-      name: '/sessions each fork badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
-      ok: forks.length === 2 && forks.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
+      name: '/sessions each pinned fork\'s badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
+      ok: forks.length === 3 && related.length === 2 && related.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
       missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
     });
     const same = forks.find((f) => f.relation === 'same account');
@@ -12489,7 +12501,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 19, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -12694,7 +12706,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(150);
   }
   // A subagent the mod released under a live session draws no line, and the Agents column and tile leave the released
-  // lines out of their counts by taking them off the engine's record counts. The column stays on.
+  // lines out of their counts by taking them off the engine's record counts. A line the session's end released stays
+  // listed and counted. The column stays on.
   {
     const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
     const ov = await api.getKeepaliveOverview();
@@ -12710,8 +12723,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
     const want = `${ov.limits?.agents.count - hidden.length} of 1,024`;
     results.push({
-      name: '/sessions a released line is not listed and the Agents column and tile leave it out of their counts',
-      ok: hidden.length > 0 && lines.length === 4 && lines.every((l) => l.word !== 'released' && !['e7c1', '91aa'].includes(l.id)) && count === '4' && count === String(lines.length) && tile === want,
+      name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
+      ok:
+        hidden.length > 0 &&
+        lines.length === 5 &&
+        JSON.stringify(lines.filter((l) => l.word === 'released').map((l) => l.id)) === JSON.stringify(['c3a9']) &&
+        lines.every((l) => !['e7c1', '91aa'].includes(l.id)) &&
+        count === '5' &&
+        count === String(lines.length) &&
+        tile === want,
       missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`, `tile ${tile ?? 'absent'}, want ${want}`],
     });
     row?.click();
@@ -12728,7 +12748,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 16, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 18, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

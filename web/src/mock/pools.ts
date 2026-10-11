@@ -3,10 +3,16 @@ import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, P
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
-/** A member as the story seeds it; the mock reads its kind and its eligibility off the account, as the route does. */
-type MemberSeed = Omit<PoolMember, 'budgetUntil' | 'eligible' | 'kind'>;
-/** The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. */
-export type PoolSeed = Omit<Pool, 'keys' | 'members'> & { members: MemberSeed[] };
+/**
+ * A member as the story seeds it. The mock reads its kind and its eligibility off the account, as the route does, and
+ * its pins off the recipes once they are drawn.
+ */
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'eligible' | 'kind'>;
+/**
+ * The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. Its pins are its
+ * members' sum, which the pool view reads, so the seed holds no figure of its own.
+ */
+export type PoolSeed = Omit<Pool, 'activePins' | 'keys' | 'members'> & { members: MemberSeed[] };
 
 const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
@@ -86,8 +92,6 @@ export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKee
 
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
 const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
-/** The pins the story's sessions hold, which `operations.ts` counts once the sessions are drawn. */
-const UNTIL_PINNED: Pick<PoolSeed, 'activePins'> = { activePins: 0 };
 
 const POOL_ROWS: PoolSeed[] = [
   {
@@ -148,7 +152,6 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    ...UNTIL_PINNED,
     // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
@@ -199,7 +202,6 @@ const POOL_ROWS: PoolSeed[] = [
     ],
     members: [{ accountId: 'research', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
     ...UNTIL_DRAWN,
-    ...UNTIL_PINNED,
     updatedAt: daysAgo(12),
   },
   {
@@ -225,11 +227,11 @@ const POOL_ROWS: PoolSeed[] = [
     modelRules: [],
     members: [unbudgeted('studio', 0)],
     ...UNTIL_DRAWN,
-    ...UNTIL_PINNED,
     updatedAt: daysAgo(40),
   },
 ];
 
+// MockApi restamps revision at construction, so the served figure is not this seed's.
 export const POOLS: PoolSeed[] = POOL_ROWS;
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
@@ -237,13 +239,14 @@ export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 // Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
 // older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,
 // so its lifetime is theirs.
+// MockApi restamps revision at construction, so the served figure is not this seed's.
 export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'desktop',
     autoModeServer: null,
     name: 'desktop',
-    prefix: 'phoebis-8f2a',
+    prefix: 'phoebis-8f2a1c4e',
     poolId: 'all',
     modelRules: [],
     modelRulesMode: 'extend',
@@ -270,7 +273,7 @@ export const KEYS: ApiKey[] = [
     id: 'laptop',
     autoModeServer: null,
     name: 'laptop',
-    prefix: 'phoebis-c41d',
+    prefix: 'phoebis-c41d7b09',
     poolId: 'all',
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
@@ -297,7 +300,7 @@ export const KEYS: ApiKey[] = [
     id: 'batch',
     autoModeServer: null,
     name: 'batch',
-    prefix: 'phoebis-5b70',
+    prefix: 'phoebis-5b70e3a2',
     poolId: 'jobs',
     modelRules: [],
     modelRulesMode: 'extend',
@@ -322,7 +325,7 @@ export const KEYS: ApiKey[] = [
     id: 'ci',
     autoModeServer: null,
     name: 'ci',
-    prefix: 'phoebis-19e7',
+    prefix: 'phoebis-19e7f6d4',
     poolId: 'jobs',
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
@@ -352,7 +355,7 @@ export const KEYS: ApiKey[] = [
     // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
     autoModeServer: false,
     name: 'notebook',
-    prefix: 'phoebis-a07c',
+    prefix: 'phoebis-a07c2e58',
     poolId: 'work',
     modelRules: [],
     modelRulesMode: 'extend',

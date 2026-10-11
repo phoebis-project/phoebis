@@ -335,6 +335,12 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
 
+test("a pool member reads the pins on its account under the pool's keys, and none where the route answers none", () => {
+  const pool = fixture('pools').pools[0];
+  const members = [{ account_id: 'business', active_pins: 3, priority: 0 }, { account_id: 'direct', priority: 1 }];
+  assert.deepEqual(d.decodePool({ ...pool, members }).members.map((m) => [m.accountId, m.activePins]), [['business', 3], ['direct', 0]]);
+});
+
 test('a pool decodes the ceilings the router resolved for it, and a pool with no member reads null', () => {
   const row = fixture('pools').pools[0];
   const resolved = d.decodePool(row).keepaliveResolved;
@@ -671,6 +677,14 @@ test("an attempt reads the upstream's request id, and its message id only on the
   );
   const missing = d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0];
   assert.deepEqual([missing.upstreamRequestId, missing.upstreamMessageId], [null, null], 'an attempt with no head names neither');
+});
+
+test("an attempt reads the answer's service tier, and none where the answer carried none", () => {
+  const wire = fixture('requests').requests[0].attempts[0];
+  assert.equal(wire.service_tier, null, 'the captured answer carried no tier');
+  assert.equal(d.decodeRequest({ attempts: [wire] }).attempts[0].serviceTier, null);
+  assert.equal(d.decodeRequest({ attempts: [{ ...wire, service_tier: 'priority' }] }).attempts[0].serviceTier, 'priority');
+  assert.equal(d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0].serviceTier, null, 'an attempt without the field reads none');
 });
 
 test('a stream that ended before its end decodes as incomplete and a group reads its own counter', () => {

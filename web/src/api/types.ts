@@ -322,6 +322,8 @@ export type SubagentPlacement = 'by_cohort' | 'by_strategy' | 'with_main';
 
 export interface PoolMember {
   accountId: string;
+  /** The pins under the pool's keys on this account, one per key, session, agent and model. */
+  activePins: number;
   /** Null is no budget over that period; a member may carry one, both, or neither. */
   budgetDailyUsd: number | null;
   budgetMonthlyUsd: number | null;
@@ -553,6 +555,8 @@ export interface Attempt {
   response: AttemptResponse;
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
+  /** The answer's `service_tier`, null on an answer that carried none. */
+  serviceTier: string | null;
   startedAt: string;
   /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
   upstreamMessageId: string | null;

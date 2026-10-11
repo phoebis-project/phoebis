@@ -412,13 +412,35 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
 
-  test(`each pool's active pins are the pinned sessions under its keys, and the dashboard's are their sum, at ${at}`, async () => {
+  test(`each pool's active pins count one pin per key, session, agent and model under its keys, its members' sum to it, and the dashboard's are their sum, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    const live = (await s.api.listKeepaliveRecipes()).filter((r) => r.agentState !== 'released');
+    // The engine's pin key, so a session's subagents on another model, or on another account, hold pins of their own.
+    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`)).size;
     for (const p of s.pools) {
-      assert.equal(p.activePins, s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length, `${p.id}'s active pins`);
+      assert.equal(p.activePins, pins(p.id), `${p.id}'s active pins`);
+      for (const m of p.members) assert.equal(m.activePins, pins(p.id, m.accountId), `${p.id}'s ${m.accountId}`);
+      assert.equal(sum(p.members, (m) => m.activePins), p.activePins, `${p.id}'s members sum to its figure`);
     }
+    assert.ok(s.pools.some((p) => p.activePins > s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length), 'a pool holds more pins than pinned sessions');
     assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
+  });
+
+  test(`two sessions on one account and one model hold two pins, at ${at}`, async () => {
+    const s = await story;
+    const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    const live = (await s.api.listKeepaliveRecipes()).filter((r) => r.agentState !== 'released' && poolOf.get(r.keyId) === 'all' && r.accountId === 'primary');
+    // The desktop sessions on primary whose main runs Fable share the account, the agent id and the model.
+    const pair = new Set(live.filter((r) => r.keyId === 'desktop' && r.agentId === 'main' && r.model === 'claude-fable-5-1').map((r) => r.sessionId));
+    assert.ok(pair.size >= 2, `${pair.size} such sessions`);
+    const pool = s.pools.find((p) => p.id === 'all');
+    const member = pool.members.find((m) => m.accountId === 'primary');
+    const perSession = new Set(live.map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`)).size;
+    const merged = new Set(live.map((r) => `${r.keyId}|${r.agentId}|${r.model}`)).size;
+    assert.ok(merged <= perSession - (pair.size - 1), 'merged across sessions the count would lose a pin per session past the first');
+    assert.equal(member.activePins, perSession, "primary's figure holds one pin per session of them");
+    assert.ok(pool.activePins >= member.activePins, "and the pool's figure holds the member's");
   });
 
   test(`the key with one request in its life reads one, at ${at}`, async () => {
@@ -427,7 +449,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
   });
 
-  test(`the last warmed session holds an agent in each lifecycle word, two released records and a seventeen-character id, listed out of the view's order, at ${at}`, async () => {
+  test(`the written session holds an agent in each lifecycle word, three released records and a seventeen-character id, listed out of the view's order, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     const bySession = new Map();
@@ -436,8 +458,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(full.length, 1, 'one session holds every lifecycle word');
     const rows = full[0];
     const released = rows.filter((r) => r.agentState === 'released');
-    assert.equal(released.length, 2, 'two released records');
-    for (const r of released) assert.deepEqual([r.state, r.cause, r.nextProbeAt], ['ended', 'agent_released', null], `${r.agentId} reads as the route answers a released agent`);
+    assert.deepEqual(released.map((r) => r.cause).sort(), ['agent_released', 'agent_released', 'session_ended'], 'two agents the mod released and one ended with the session');
+    for (const r of released) assert.deepEqual([r.state, r.nextProbeAt], ['ended', null], `${r.agentId} reads as the route answers a released agent`);
     assert.equal(recipes.filter((r) => r.agentId.length === 17).length, 1, 'one id of the length Claude Code gives a subagent');
     assert.equal(s.sessions.find((x) => x.sessionId === rows[0].sessionId).agents, rows.length, 'the session row counts every record, the released ones too');
     // The list's order is not the view's: the parked row precedes the idle one, whose last request is newer than the
@@ -450,6 +472,30 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const count = (word) => recipes.filter((r) => r.agentState === word).length;
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');
     assert.equal(overview.limits.agents.count, s.sessions.filter((x) => x.companion !== 'none' || x.keepalive.state !== null).reduce((n, x) => n + x.agents, 0), 'the cap counts every record');
+  });
+
+  test(`the all-released session lists every record released and keeps its row, at ${at}`, async () => {
+    const s = await story;
+    const bySession = new Map();
+    for (const r of await s.api.listKeepaliveRecipes()) bySession.set(`${r.keyId}|${r.sessionId}`, [...(bySession.get(`${r.keyId}|${r.sessionId}`) ?? []), r]);
+    const whole = [...bySession.values()].filter((rows) => rows.every((r) => r.agentState === 'released'));
+    assert.equal(whole.length, 1, 'one session the mod released whole');
+    const [rows] = whole;
+    assert.ok(rows.some((r) => r.agentId === 'main'), 'main among them');
+    for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
+    const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
+    assert.ok(row !== undefined, 'the session keeps its row');
+    assert.equal(row.agents, rows.length, 'the row counts every record');
+    assert.notEqual(row.keepalive.state, null, 'the session still holds its recipe state');
+  });
+
+  test(`no sample of legacy is newer than its last clean poll, at ${at}`, async () => {
+    const s = await story;
+    const clean = Date.parse(s.accounts.find((a) => a.id === 'legacy').usage.poll.lastCleanAt);
+    const samples = (await s.api.getQuotaHistory('legacy')).flatMap((h) => h.samples);
+    assert.ok(samples.length > 0, 'legacy has samples');
+    const late = samples.filter((x) => Date.parse(x.at) > clean);
+    assert.deepEqual(late.map((x) => x.at), [], `samples past the last clean poll of ${iso(clean)}`);
   });
 
   test(`a Fable request's member without the model week's reading scores untouched on the model week, at ${at}`, async () => {
@@ -805,20 +851,27 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(seen > 10);
   });
 
-  test(`the story lists two forks, one on its base's account and one on another, at ${at}`, async () => {
+  test(`the story lists three forks, one on its base's account, one on another and one without a pin, at ${at}`, async () => {
     const s = await story;
     // The mock lists its live sessions in the order it seeds them, one per slot of its session ids, so a row's place
     // among them is the slot the story pinned its fork on.
     const listed = s.sessions.filter((x) => !x.historical);
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
-    assert.equal(forks.length, 2, `${forks.length} forks are listed`);
+    assert.equal(forks.length, 3, `${forks.length} forks are listed`);
     const pairs = forks.map((fork) => {
       const base = s.sessions.find((x) => x.sessionId === fork.forkedFrom && x.keyId === fork.keyId);
       assert.ok(base, `${fork.sessionId}'s base ${fork.forkedFrom} is listed under ${fork.keyId}`);
       return { base, fork };
     });
-    const same = pairs.filter((p) => p.fork.accountId === p.base.accountId);
-    const other = pairs.filter((p) => p.fork.accountId !== p.base.accountId);
+    // An unpinned drawn session's first turn takes the third fork, which slot depending on whether the clock left
+    // that turn a token count, and its base is a session of its own key.
+    const pinless = pairs.filter((p) => !p.fork.pinned);
+    assert.equal(pinless.length, 1, 'one fork holds no pin');
+    const slot = listed.indexOf(pinless[0].fork);
+    assert.deepEqual([slot, pinless[0].base.sessionId, pinless[0].fork.forkDepth], slot === 12 ? [12, listed[7].sessionId, 2] : [13, listed[1].sessionId, 2], 'the pinless fork and its base');
+    const pinned = pairs.filter((p) => p.fork.pinned);
+    const same = pinned.filter((p) => p.fork.accountId === p.base.accountId);
+    const other = pinned.filter((p) => p.fork.accountId !== p.base.accountId);
     assert.equal(same.length, 1, "one fork sits on its base's account");
     assert.equal(other.length, 1, 'one fork sits on another account than its base');
     assert.deepEqual([same[0].fork.sessionId, same[0].base.sessionId], [listed[5].sessionId, listed[3].sessionId], 'the same-account fork and its base');
@@ -881,7 +934,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the breakdown's account shares equal the sum of its rows' shares, at ${at}`, async () => {
+  test(`the breakdown's account shares equal the sum of its rows' own shares, the cache splits priced at each row's hour, at ${at}`, async () => {
     const s = await story;
     const costs = s.settings.subscriptionCosts;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
@@ -891,7 +944,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const tiers = new Map(s.accounts.map((a) => [a.id, a.subscription?.rateLimitTier]));
     const usageOf = (r) => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
     const windowsOf = (r) => ['five_hour', 'seven_day', ...s.lib.modelWeeks(costs, r.model)];
-    // The rows' shares summed as the route sums them: a window read null by any row reads null for the group.
+    // The rows' own shares, each request priced at its completion, summed as the route sums them: a window read null by
+    // any row reads null for the group.
+    const own = (rows) => {
+      const out = {};
+      for (const r of rows) {
+        if (tokensOf(r) === 0) continue;
+        for (const [w, share] of Object.entries(r.shares)) out[w] = share === null || out[w] === null ? null : (out[w] ?? 0) + share;
+      }
+      return out;
+    };
+    // The cache splits have no per-request figure on a row, so each row's tokens price at its hour.
     const summed = (rows, tier, usage) => {
       const out = {};
       for (const r of rows) {
@@ -917,7 +980,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const plan = day.filter((r) => r.accountId === g.key && r.funding === 'plan');
       const counted = plan.filter((r) => r.kind !== 'probe');
       const probes = plan.filter((r) => r.kind === 'probe');
-      const cost = summed(counted, tier, usageOf);
+      const cost = own(counted);
       // An unpriced window is absent from the group's map, as the route answers it, while a request row keeps the key
       // with null.
       assert.deepEqual(Object.keys(g.costShares ?? {}).sort(), Object.keys(cost).filter((w) => cost[w] !== null).sort(), `${g.key}'s windows`);
@@ -930,7 +993,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         close(entry.read, read[w], `${g.key}'s ${w} cache read`);
         close(entry.write, write[w], `${g.key}'s ${w} cache write`);
       }
-      const probe = summed(probes, tier, usageOf);
+      const probe = own(probes);
       const probeUsd = sum(probes, (r) => r.probeCostUsd);
       const ratio = probeUsd > 0 ? sum(probes, (r) => r.wastedProbeUsd) / probeUsd : null;
       assert.deepEqual(Object.keys(g.probeShares ?? {}).sort(), Object.keys(probe).filter((w) => probe[w] !== null).sort(), `${g.key}'s probe windows`);
@@ -943,6 +1006,36 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       compared += 1;
     }
     assert.ok(compared > 0 && groups.some((g) => g.costShares !== null && Object.values(g.costShares).some((v) => v !== null)), 'an account carries a priced share');
+  });
+
+  test(`the first page under the default range holds the undecodable row and its capture stops after the second delta, at ${at}`, async () => {
+    const s = await story;
+    const { requests } = await s.api.listRequests({ from: iso(s.now - DAY), limit: 25, to: iso(s.now) });
+    const row = requests.find((r) => r.id === 'req_5e2f7a19-b03');
+    assert.ok(row, 'the first page holds the row');
+    assert.deepEqual([row.keyId, row.errorCode, row.status, row.outcome, row.transport, row.accountId], ['laptop', 'stream_undecodable', 502, 'failed', 'sse', 'primary']);
+    assert.deepEqual([row.attempts.length, row.attempts[0].upstreamStatus, row.ttfbMs, row.usage.output], [1, 200, null, 0], "the upstream's head arrived and the relay forwarded none of the stream it could not decode");
+    const { response } = await s.api.getCapturedBodies(row.id);
+    const events = response.split('\n\n').filter(Boolean).map((frame) => frame.split('\n')[0]);
+    assert.deepEqual(events, ['event: message_start', 'event: content_block_start', 'event: content_block_delta', 'event: content_block_delta'], 'the capture ends after the second delta');
+  });
+
+  test(`the undecodable row files under its own error on the account that served its head, at ${at}`, async () => {
+    const s = await story;
+    const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
+    const primary = groups.find((g) => g.key === 'primary');
+    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').length;
+    const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
+    assert.ok(undecodable > 0, 'primary served the head of an undecodable stream');
+    assert.deepEqual([primary.errors.stream_undecodable, primary.errors.api_error ?? 0], [undecodable, otherErrors], 'the count leaves the upstream errors for its own entry');
+  });
+
+  test(`the first page under the default range holds a plan-funded Fable row with captured bodies, at ${at}`, async () => {
+    const s = await story;
+    const { requests } = await s.api.listRequests({ from: iso(s.now - DAY), limit: 25, to: iso(s.now) });
+    const fable = requests.filter((r) => r.canonicalModel === 'claude-fable-5-1' && r.capturedBodies && s.lib.fundingOf(r.attempts.at(-1) ?? null) === 'plan');
+    assert.ok(fable.length > 0, 'the first page holds one');
+    assert.ok((await s.api.getCapturedBodies(fable[0].id)) !== null, 'its bodies were captured');
   });
 
   test(`every rollup's funding reads the answer that served its requests, an API key account's answer filing under billed and a request no attempt served under plan, at ${at}`, async () => {

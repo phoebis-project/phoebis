@@ -1105,6 +1105,10 @@ function storySpecs(): Spec[] {
       prefix: { primary: { static: cohort(t(14, 21, 14)), staticMatch: cohort(t(14, 21, 14)) } },
       rung: { depth: 1, prefixTokens: 18_400, rung: 'static' },
     }),
+    // The router keyed the laptop turn by the root its content matched and placed it on primary, whose head arrived
+    // before the relay found the stream past it undecodable.
+    at('req_5e2f7a19-b03', 1, 1, t(14, 22, 48), 'placed', 'primary'),
+    at('req_a6c19e73-5d2', 1, 1, t(14, 23, 30), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 1, 1, t(14, 24, 9), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 2, 2, t(14, 24, 10), 'placed', 'nightly', { attempted: ['primary'], failover: 'cooldown', from: 'primary', pin: live() }),
     at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
