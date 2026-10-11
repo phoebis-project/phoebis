@@ -46,13 +46,14 @@ context edits, the temperature, and the requested speed and service tier.
 A session that
 branched from another conversation carries that conversation's root and the matched depth as well. The session it names
 is the client's own,
-and the Sessions view groups a row by it. The attempt row names
-the account and its kind; the upstream status, request id and message id; the outcome; the cooldown the attempt set; the
-stop reason, the model the answer names when it differs from the one the router resolved, the speed, the region
-inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model; the five token
-counts, with the thinking share of the output and the web search and fetch calls the answer made; the cache miss reason
-the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across input, cache read,
-cache write, and output; and the pricing version the estimate used.
+and the Sessions view groups a row by it. The request row
+records who put the cache diagnostics member on the body the upstream compared: the client, the router, or none. The
+attempt row names the account and its kind; the upstream status, request id and message id; the outcome; the cooldown
+the attempt set; the stop reason, the model the answer names when it differs from the one the router resolved, the
+speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;
+the five token counts, with the thinking share of the output and the web search and fetch calls the answer made; the
+cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across
+input, cache read, cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -395,16 +396,24 @@ on the second. A request that did not succeed names how it ended beside its stat
 `incomplete`, or `rejected`. A request that waited for a slot while every account was at its cap carries a held marker
 after its attempt count with the time it waited. The search matches the request id, the session, the key, the model, the
 error code, and an attempt's account, upstream request id or upstream message id, literally: `_` and `%` are characters,
-not wildcards. Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for
-any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the
-client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
-values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
-the answer reported, else by whether the request asked for `fast`, the status filter offers the codes the router and
-Anthropic answer and any other code the page holds, the outcome filter picks how the request ended (`canceled`,
-`exhausted`, `failed`, `incomplete`, `rejected`, or `succeeded`), and the held toggle keeps the requests that waited for
-a slot. The search and the two pattern fields apply 400 milliseconds after the last keystroke, on Enter, or when the
-field loses focus. Every filter, the range and the page size live in the page's address, so a reload or a shared link
-keeps them. A filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
+not wildcards. Filters narrow the table: the account filter keeps the requests whose serving attempt ran on a chosen
+account, so a request that failed over lists under the account that answered it, as the Analytics view counts it,
+the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one,
+a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
+the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers
+and attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, else
+by whether the request asked for `fast`, the status filter offers the codes the router and Anthropic answer and
+any other code the page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`, `failed`,
+`incomplete`, `rejected`, or `succeeded`), the held toggle keeps the requests that waited for a slot, the cache
+miss reason filter picks the reason the serving attempt reported, the known reasons in their reading order and
+then any other name the rows or the address carry, the effort filter picks a level as the hourly rollups fold it
+(`low` to `max`, `none` for a request that asked for none, `other` for a level outside the five), and the request
+class filter picks a class as the rollups fold it (`unattributed` for a request that sent none, `other` for a value
+outside the identifier charset or past 64 bytes). The search and the two pattern fields apply 400 milliseconds after
+the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the
+page's address, so a reload or a shared link keeps them. An address carrying `from` and `to` as instants lists
+that window under a Custom range entry of the range control, which Refresh reads again and which a preset or Reset
+drops. A filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
 detail, which shows the outcome beneath the status, the user agent,
 the model as the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing
 (asked for a server-side check under an on setting; carried the safeguards member under an off setting, which the
@@ -416,19 +425,20 @@ entry, the last entry's level, else the request's top-level `output_config.effor
 still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
 it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the answer's facts:
 the status, the outcome, the serving account and model, the answer's stop reason and geography (global, us, or not
-available for a model that takes no geography), and the cache miss reason. The phases follow as a waterfall from
-received to finished, each phase with its offset and a phase the ledger holds no instant for marked not measured, then
-the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table, then the request's identity
-with the upstream request and message ids under it, its shape, the client hints and the captured bodies. The usage ends
-with the request's estimated cost in its native unit: a request a subscription window paid reads its share of the
-account's 5-hour, 7-day and model-week windows with the dollar equivalent after them, an overage, fast mode or API key
-request reads dollars with why, and a subscription request the cost model prices no share for reads the dollar
-equivalent alone. Its head carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
-[routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
-compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
-the captured request and response bodies highlighted, a streamed answer as its events with each `event:` line over its
-data, each with Copy, which copies the text as shown, and an "Open wide" link that opens the body in a wide dialog. A
-body past 256 KiB shows compact until Pretty-print is pressed.
+available for a model that takes no geography), and the cache miss reason, with a Diagnostics row below it that
+names the cache diagnostics member's source: sent by the client, added by the router, or none. The phases follow
+as a waterfall from received to finished, each phase with its offset and a phase the ledger holds no instant for
+marked not measured, then the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table,
+then the request's identity with the upstream request and message ids under it, its shape, the client hints and the
+captured bodies. The usage ends with the request's estimated cost in its native unit: a request a subscription window
+paid reads its share of the account's 5-hour, 7-day and model-week windows with the dollar equivalent after them,
+an overage, fast mode or API key request reads dollars with why, and a subscription request the cost model prices
+no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and each row a "Routing" link
+beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either side. While
+the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the chosen set
+returns when it closes. The drawer shows the captured request and response bodies highlighted, a streamed answer
+as its events with each `event:` line over its data, each with Copy, which copies the text as shown, and an "Open
+wide" link that opens the body in a wide dialog. A body past 256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -633,6 +643,20 @@ fast-mode answers drew from usage credits; Cache warming reports what probes cos
 probes wasted, a fast-mode session's under speed `fast`, the probe cost reading as a share under Window shares with one
 account named; and Accounts reports peak utilization, each window's usage and lead over pace per account from the quota
 samples under a window toggle, ineligible time, and pin churn per account.
+
+The Misses by reason panel counts, under the console's labels (No divergence, Model changed, System prompt changed,
+Tools changed, History edited, Previous message not found, Unavailable, Not requested), the requests whose answer
+reported each reason, conversation turns alone, since a helper request carries no member and reports nothing, with a
+per-group table below it. Every count except the Expired between turns column links to the Requests view on those
+requests: the reason set, the window as the whole hours the panel read, and the page's account, client, key, model and
+pool filters carried over, a table cell adding its row's group as the matching filter, an effort or a request class
+included. A session view's links carry its exact window instead, the session's id as the search text and the key
+lifetime the view reads the session under. A count stays plain where the Requests view cannot list exactly its requests,
+and its hover says why: a row of the user agent grouping and every count while the user agent pattern is set, since the
+request log matches the raw header where the rollups match the folded token, a row of the client grouping keyed `other`,
+since the rollups file a long or unusual class there while the request log matches the raw class, and a zero count. With
+Include probes on, a link's list leaves the probes out, which its hover says, except the kind grouping's `probe` row,
+which lists them.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

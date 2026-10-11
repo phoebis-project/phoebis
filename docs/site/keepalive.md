@@ -37,11 +37,11 @@ alone: a session that switches between fast mode and standard requests earns no 
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
-`inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
-from what the router sent, never from the marker the client wrote. A usage that reports a cache write without saying
-which TTL it was written at, as the stream's running totals do, proves nothing about the TTL and leaves what the engine
-knew in place. The first probe after a turn follows that turn's cache TTL; the probe itself writes with the TTL its
-agent's branch holds in the rule set, which the next probe then follows.
+`inject_when_absent` is on and the recipe's class is not auxiliary. The engine learns the TTL an entry was written with
+from the response's usage and from what the router sent, never from the marker the client wrote. A usage that reports a
+cache write without saying which TTL it was written at, as the stream's running totals do, proves nothing about the TTL
+and leaves what the engine knew in place. The first probe after a turn follows that turn's cache TTL; the probe itself
+writes with the TTL its agent's branch holds in the rule set, which the next probe then follows.
 
 Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
 cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
