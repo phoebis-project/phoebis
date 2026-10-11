@@ -1339,6 +1339,13 @@ impl RoutingState {
         self.funding_retries.remove(account_id);
     }
 
+    /// Whether the account's entry was stamped after `at`, the instant an attempt went out.
+    pub fn funding_stamped_after(&self, account_id: &str, at: i64) -> bool {
+        self.funding_retries
+            .get(account_id)
+            .is_some_and(|retry| retry.stamped_at > at)
+    }
+
     /// Whether a `funding_required` account may take a request at `now`: at once with no entry, as after a restart,
     /// else once its retry is due and no live attempt holds the slot.
     pub fn funding_retry_admits(&self, account_id: &str, now: i64) -> bool {

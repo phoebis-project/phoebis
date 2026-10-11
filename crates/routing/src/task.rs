@@ -378,6 +378,9 @@ pub enum Report {
         cause: StateCause,
         /// The upstream error's message where the verdict read one.
         detail: Option<String>,
+        /// When the attempt went out, on a funding retry's success alone. An attempt sent before the account's newest
+        /// funding mark says nothing about the balance that mark's refusal found, so its success clears nothing.
+        dispatched_at: Option<i64>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -3056,7 +3059,18 @@ impl Task {
                 credential_generation,
                 cause,
                 detail,
+                dispatched_at,
             } => {
+                if state != AccountState::FundingRequired
+                    && dispatched_at
+                        .is_some_and(|at| self.state.funding_stamped_after(&account_id, at))
+                {
+                    tracing::debug!(
+                        account = %account_id,
+                        "a funding retry's success predates the account's newest mark and clears nothing"
+                    );
+                    return;
+                }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
                 if !self.superseded(

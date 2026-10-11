@@ -646,7 +646,10 @@ pub fn release_reasons(
             if !account.enabled {
                 reasons.push("paused");
             }
-            if let Some(name) = state_name(account.state) {
+            // A funding mark whose retry the selection would admit stands against nothing, as `obstacle` reads it.
+            let retry_admitted = account.state == AccountState::FundingRequired
+                && state.funding_retry_admits(&pin.account_id, request.now);
+            if let Some(name) = state_name(account.state).filter(|_| !retry_admitted) {
                 reasons.push(name);
             }
         }

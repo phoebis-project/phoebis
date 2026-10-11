@@ -864,6 +864,7 @@ impl CatalogService {
                                     credential_generation: mark.credential_generation,
                                     cause: mark.cause,
                                     detail: None,
+                                    dispatched_at: None,
                                 })
                                 .await;
                         }

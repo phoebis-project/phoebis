@@ -854,6 +854,7 @@ async fn an_account_answers_its_funding_retry_while_marked_and_null_once_the_ope
             credential_generation: snapshot.credential_generation("direct").unwrap_or(1),
             cause: StateCause::FundingRefused,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     fake_upstream::wait_for(std::time::Duration::from_secs(2), || {

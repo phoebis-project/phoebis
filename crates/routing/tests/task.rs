@@ -578,6 +578,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -760,6 +761,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     // The previous lifecycle's verdict, under a credential generation the reconnect has not reached again.
@@ -772,6 +774,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential + 2,
             cause: StateCause::FundingRefused,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     drop(park);
@@ -804,6 +807,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             credential_generation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         },
         Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
@@ -885,6 +889,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     // The verdict named the key the store has since replaced, so the writer fences it out.
@@ -901,6 +906,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     wait_for(WRITTEN, || {
@@ -2158,6 +2164,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             incarnation: 1,
             cause: StateCause::FundingRefused,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     handle
@@ -2192,6 +2199,7 @@ fn funding_mark(account_id: &str) -> Report {
         incarnation: 1,
         cause: StateCause::FundingRefused,
         detail: None,
+        dispatched_at: None,
     }
 }
 
@@ -7475,6 +7483,7 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
         credential_generation: 1,
         cause: StateCause::AuthFailed,
         detail: Some("invalid x-api-key".into()),
+        dispatched_at: None,
     };
     handle.report(verdict()).await;
     match next_event(&mut events).await {

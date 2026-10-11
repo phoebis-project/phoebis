@@ -686,7 +686,7 @@ at the first read.
 | `writer_degraded` | the routing state writer | the backlog drains |
 | `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
 | `reauth_required` | the account | the account is paired again, or an API-key account gets a new secret |
-| `funding_required` | the API-key account | a retry after five minutes succeeds, or the operator clears funding |
+| `funding_required` | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
@@ -725,9 +725,10 @@ loader's line and when the pair still served was loaded.
 the first read of this process that saw the state. The detail names the account and its label.
 
 **`funding_required`** holds while the account's state is `funding_required`, set when the upstream refuses a request
-over the account's credit balance. It clears when the router's retry five minutes later succeeds or the operator clears
-funding ([cooldowns and failover](routing.md#cooldowns-and-failover)). It is read from the registry and dated and
-detailed as `reauth_required` is.
+over the account's credit balance. It clears when the operator clears funding or when the router's retry succeeds after
+five minutes, or the model rejection interval when that is shorter ([cooldowns and
+failover](routing.md#cooldowns-and-failover)). It is read from the registry and dated and detailed as `reauth_required`
+is.
 
 **`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a

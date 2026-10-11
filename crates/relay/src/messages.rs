@@ -2780,6 +2780,7 @@ impl Relay {
                             credential_generation: generations.2,
                             cause: StateCause::FundingRetry,
                             detail: None,
+                            dispatched_at: Some(written_at),
                         })
                         .await;
                 }
@@ -3245,6 +3246,7 @@ impl Relay {
                                 credential_generation: mark.credential_generation,
                                 cause: mark.cause,
                                 detail: None,
+                                dispatched_at: None,
                             })
                             .await;
                         return Err(NoCredential::Marked);
@@ -4292,6 +4294,7 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
             cause,
             detail,
+            dispatched_at: None,
         });
     }
     reports

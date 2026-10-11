@@ -1550,6 +1550,43 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_the_loa
     );
 }
 
+#[test]
+fn the_release_reasons_name_a_funding_mark_only_while_the_selection_would_not_try_the_account() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
+        "a",
+        "the first request after a restart pins the marked account"
+    );
+    let pin = st.pin(&pin_key("s1")).cloned().unwrap();
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(2_000)),
+        vec!["released"],
+        "with no retry entry the account is tried at once"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(301_999)),
+        vec!["funding_required"],
+        "a millisecond before the retry is due"
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(302_000)),
+        vec!["released"],
+        "the retry is due and nothing holds it"
+    );
+    let ticket = st.in_flight().dispatched("a", 302_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 302_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(302_000)),
+        vec!["funding_required"],
+        "another attempt holds the one slot"
+    );
+    drop(ticket);
+}
+
 /// `req` sent with `speed: "fast"`, on its model's fast lane.
 fn fast(req: SelectRequest) -> SelectRequest {
     SelectRequest {

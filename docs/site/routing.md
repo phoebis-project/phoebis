@@ -492,13 +492,13 @@ without a move records `pin_expired` with `reasons`, every fact the selection fo
 pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose
 `fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast`
 row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the
-account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released`
-when the selection found nothing else against the account, as with a move whose destination emptied. A pin whose
-creating request was answered 400, 403, or 404, or was bound to its account and ended at an authentication failure that
-marked nothing, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records
-the single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
-Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin
-the same way.
+account's state when it cannot serve (`disconnected`, `funding_required` until its retry is admitted, `reauth_required`,
+`unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
+emptied. A pin whose creating request was answered 400, 403, or 404, or was bound to its account and ended at an
+authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the session
+renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request is
+placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -541,9 +541,9 @@ read. The retry is due five minutes after the mark lands, or after `routing.mode
 shorter, and the account then takes one request at a time: the attempt the selection placed on it holds the slot until
 that attempt ends, however long its head takes. A 2xx answer to a message request clears the mark, and its
 `account_state_changed` row reads the cause `funding_retry`. Another credit-balance refusal marks the account again with
-a new retry instant. A token count may reach the account under the same rule, but it holds no slot and clears nothing.
-The router keeps the retry instant in memory, so after a restart the first request tries a marked account at once. Clear
-funding retries at once too.
+a new retry instant, and a success from an attempt sent before that mark leaves it standing. A token count may reach the
+account under the same rule, but it holds no slot and clears nothing. The router keeps the retry instant in memory, so
+after a restart the first request tries a marked account at once. Clear funding makes the account eligible at once.
 
 **fast mode** (either kind, read ahead of the two tables above)
 
