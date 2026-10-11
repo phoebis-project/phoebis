@@ -6,6 +6,7 @@ import type {
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
+import { foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -293,7 +294,8 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   // A request the router never attributed matches no filter on that field.
   if (q.keyIds?.length && !q.keyIds.some((k) => selectsKey(k, r, live))) return false;
   if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
-  if (q.accountIds?.length && (r.accountId === null || !q.accountIds.includes(r.accountId))) return false;
+  // The route files a request no attempt served under the unattributed id, as the rollups do.
+  if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.statuses?.length && (r.status === null || !q.statuses.includes(r.status))) return false;
   if (q.outcomes?.length && !q.outcomes.includes(r.outcome)) return false;
@@ -315,6 +317,16 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   // as standard otherwise, as the route reads it.
   if (q.speeds?.length && !q.speeds.includes(r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard'))) return false;
   if (q.held && r.held === null) return false;
+  // The serving attempt is the last, the one the rollups count a request's reason on. A request with no attempt or a
+  // null serving reason matches nothing.
+  if (q.cacheMissReasons?.length) {
+    const reason = r.attempts[r.attempts.length - 1]?.cacheMissReason ?? null;
+    if (reason === null || !q.cacheMissReasons.includes(reason)) return false;
+  }
+  if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
+  if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
+  // Probes are off the log unless they are what the query asks for, as the route lists them.
+  if (r.kind === 'probe' && !q.includeProbes && q.kind !== 'probe') return false;
   return true;
 }
 

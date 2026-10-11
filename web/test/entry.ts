@@ -11,6 +11,7 @@ export * from '@/lib/cache';
 export * from '@/lib/chunks';
 export * from '@/lib/costs';
 export * from '@/lib/decisionStrip';
+export * from '@/lib/dimensions';
 export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/keepalive';

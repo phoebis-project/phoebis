@@ -130,7 +130,8 @@ const CLOSED = {
     '.requests[].attempts[].selection.skipped[].obstacle': d.SKIP_OBSTACLE_VALUES,
     '.requests[].kind': d.REQUEST_KIND_VALUES,
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
-    '.requests[].requestClass': REQUEST_CLASS_VALUES,
+    // A client that sends no class header, an SDK runner among them, reads null.
+    '.requests[].requestClass': [...REQUEST_CLASS_VALUES, null],
   },
   sessions: { '[].keepalive.cause': [...d.RECIPE_CAUSE_VALUES, null], '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
 };

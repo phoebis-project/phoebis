@@ -37,7 +37,8 @@ async function storyAt(at) {
   const api = new d.MockApi();
   await api.login('admin');
   const [accounts, pools, keys, sessions, attention, overview] = await Promise.all([api.listAccounts(), api.listPools(), api.listKeys(), api.listSessions(), api.getAttention(), api.getOverview()]);
-  const { requests } = await api.listRequests({ limit: 100_000 });
+  // The probes too, which the list leaves out unless asked, since the story's checks read every row it holds.
+  const { requests } = await api.listRequests({ includeProbes: true, limit: 100_000 });
   const events = (await Promise.all(requests.map((r) => api.getRequest(r.id)))).flatMap((detail) => detail?.events ?? []);
   const now = Date.parse(at);
   // The day the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total, and a
@@ -727,6 +728,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const lane = laneOf(iso(startOfHour(Date.parse(unserved[0].at))), unserved[0].keyId, unserved[0].poolId, '-', unserved[0].model, unserved[0].kind, unserved[0].sessionId);
       assert.ok(filed.get(lane)?.has('plan'), `${unserved[0].id} asked for fast and no attempt served it, so its rollup files under plan`);
     }
+  });
+
+  test(`a row names who put the diagnostics member on its body exactly when its serving attempt reads a diagnosed reason, at ${at}`, async () => {
+    const s = await story;
+    const diagnosed = (reason) => reason === 'none' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
+    for (const r of s.requests) {
+      const reason = r.attempts.at(-1)?.cacheMissReason ?? null;
+      if (reason !== null && diagnosed(reason)) assert.ok(r.diagnosticsSource === 'client' || r.diagnosticsSource === 'router', `${r.id} reads ${reason} and names ${r.diagnosticsSource}`);
+      else assert.equal(r.diagnosticsSource, null, `${r.id} reads ${reason} and names a source`);
+    }
+    assert.deepEqual([...new Set(s.requests.map((r) => r.diagnosticsSource))].filter((v) => v !== null).sort(), ['client', 'router'], 'both sources occur');
+    assert.ok(s.requests.some((r) => r.requestClass === null), 'a row sent no request class');
+    assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
   });
 }
 

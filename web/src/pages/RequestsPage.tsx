@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
+import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
 import { Chips } from '@/components/DecisionCard';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
@@ -14,9 +14,10 @@ import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyText, highlightJson } from '@/lib/bodies';
-import { isDivergence, missLabel } from '@/lib/cache';
+import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
+import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
@@ -74,6 +75,23 @@ const statusOptions = (rows: RequestLog[], selected: string[]) => {
 };
 /** The words the ledger records an outcome under; one the address carries that names no outcome is dropped. */
 const outcomesOf = (values: string[]): RequestOutcome[] => values.flatMap((v) => REQUEST_OUTCOME_VALUES.filter((o) => o === v));
+/**
+ * The known reasons in their reading order, then every other name the loaded rows' serving attempts or the address
+ * carry, alphabetically, so a link naming a reason the console has no label for still shows as chosen.
+ */
+const missReasonOptions = (rows: RequestLog[], selected: string[]) => {
+  const served = rows.flatMap((r) => r.attempts[r.attempts.length - 1]?.cacheMissReason ?? []);
+  const others = new Set([...served, ...selected].filter((name) => !CACHE_MISS_REASONS.includes(name)));
+  return [...CACHE_MISS_REASONS, ...[...others].sort()].map((name) => ({ label: missLabel(name), value: name }));
+};
+/**
+ * The classes the loaded rows and the address carry as the rollups fold them, alphabetically, then a request that sent
+ * no class under the label the Analytics page gives it, then the classes the fold reads as `other`.
+ */
+const requestClassOptions = (rows: RequestLog[], selected: string[]) => {
+  const classes = new Set([...rows.map((r) => foldRequestClass(r.requestClass)), ...selected].filter((c) => c !== NO_CLASS && c !== OTHER_DIMENSION));
+  return [...[...classes].sort().map((c) => ({ label: c, value: c })), { label: 'unattributed', value: NO_CLASS }, { label: OTHER_DIMENSION, value: OTHER_DIMENSION }];
+};
 
 /** Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them. */
 interface Filters {
@@ -82,21 +100,43 @@ interface Filters {
   agent: string;
   agentTypes: string[];
   client: string;
+  efforts: string[];
+  /** The custom range as two ISO instants, both empty while the preset applies. */
+  from: string;
   held: boolean;
   keys: string[];
   kind: '' | RequestKind;
+  missReasons: string[];
   models: string[];
   outcomes: RequestOutcome[];
   pools: string[];
   range: string;
+  requestClasses: string[];
   rows: number;
   search: string;
   speeds: string[];
   statuses: string[];
+  to: string;
   turnOrigins: string[];
 }
 
-const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', held: false, keys: [], kind: '', models: [], outcomes: [], pools: [], range: '24h', rows: 25, search: '', speeds: [], statuses: [], turnOrigins: [] };
+const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', efforts: [], from: '', held: false, keys: [], kind: '', missReasons: [], models: [], outcomes: [], pools: [], range: '24h', requestClasses: [], rows: 25, search: '', speeds: [], statuses: [], to: '', turnOrigins: [] };
+
+/**
+ * An instant as the routing log's address spells one, else empty: a bare integer is Unix milliseconds. One past the
+ * dates a `Date` holds reads as empty too, since its ISO form would throw.
+ */
+const instantOf = (value: string | null): string => {
+  if (!value) return '';
+  const at = new Date(/^\d+$/.test(value) ? Number(value) : Date.parse(value));
+  return Number.isFinite(at.getTime()) ? at.toISOString() : '';
+};
+/** Both instants of the custom range while both read and `from` precedes `to`, else neither, so the preset applies. */
+function linkedWindow(from: string | null, to: string | null): { from: string; to: string } {
+  const start = instantOf(from);
+  const end = instantOf(to);
+  return start !== '' && end !== '' && Date.parse(start) < Date.parse(end) ? { from: start, to: end } : { from: '', to: '' };
+}
 
 /** Absent keys read as the defaults, and so does a kind, range, page size or status the page could not have written. */
 function filtersFromParams(params: URLSearchParams): Filters {
@@ -105,22 +145,28 @@ function filtersFromParams(params: URLSearchParams): Filters {
   const kind = KINDS.find((k) => k === params.get('kind'));
   const range = RANGES.find((r) => r.value === params.get('range'));
   const rows = Number(params.get('rows'));
+  const linked = linkedWindow(params.get('from'), params.get('to'));
   return {
     accounts: list('accounts'),
     agent: text('agent'),
     agentTypes: list('agent_types'),
     client: text('client'),
+    efforts: list('efforts'),
+    from: linked.from,
     held: params.get('held') === '1',
     keys: list('keys'),
     kind: kind ?? DEFAULTS.kind,
+    missReasons: list('cache_miss_reasons'),
     models: list('models'),
     outcomes: outcomesOf(list('outcomes')),
     pools: list('pools'),
     range: range?.value ?? DEFAULTS.range,
+    requestClasses: list('request_classes'),
     rows: PAGE_SIZES.includes(rows) ? rows : DEFAULTS.rows,
     search: text('search'),
     speeds: list('speeds'),
     statuses: list('statuses').filter((code) => /^\d+$/.test(code)),
+    to: linked.to,
     turnOrigins: list('turn_origins'),
   };
 }
@@ -136,6 +182,8 @@ function paramsFromFilters(f: Filters): URLSearchParams {
   put('agent', f.agent);
   put('agent_types', f.agentTypes.join(','));
   put('turn_origins', f.turnOrigins.join(','));
+  put('efforts', f.efforts.join(','));
+  put('request_classes', f.requestClasses.join(','));
   put('speeds', f.speeds.join(','));
   put('held', f.held ? '1' : '');
   put('keys', f.keys.join(','));
@@ -144,8 +192,11 @@ function paramsFromFilters(f: Filters): URLSearchParams {
   put('models', f.models.join(','));
   put('statuses', f.statuses.join(','));
   put('outcomes', f.outcomes.join(','));
+  put('cache_miss_reasons', f.missReasons.join(','));
   put('kind', f.kind);
   put('range', f.range === DEFAULTS.range ? '' : f.range);
+  put('from', f.from);
+  put('to', f.to);
   put('rows', f.rows === DEFAULTS.rows ? '' : String(f.rows));
   return params;
 }
@@ -242,11 +293,13 @@ export function RequestsPage() {
   const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { flushSync: true, replace: true });
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
+  // A custom range names its own window, which Refresh reads again rather than moving it to now.
+  const linked = filters.from !== '' && filters.to !== '';
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === filters.range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, client: filters.client, cursor, from: new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
-  }, [filters, cursor, loadedAt]);
+    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.missReasons, client: filters.client, cursor, efforts: filters.efforts, from: linked ? filters.from : new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: linked ? filters.to : new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
+  }, [filters, cursor, linked, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
@@ -277,12 +330,17 @@ export function RequestsPage() {
       <div className="stack">
         <div className="filters">
           <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
-          <Select value={filters.range} onChange={(e) => update({ range: e.target.value })} aria-label="Date range">
+          <Select value={linked ? 'linked' : filters.range} onChange={(e) => update({ range: e.target.value, from: '', to: '' })} aria-label="Date range">
             {RANGES.map((r) => (
               <option key={r.value} value={r.value}>
                 {r.label}
               </option>
             ))}
+            {linked && (
+              <option value="linked" title={`${filters.from} to ${filters.to}`}>
+                {`Custom range: ${fmtTime(filters.from)} to ${fmtTime(filters.to)}`}
+              </option>
+            )}
           </Select>
           <MultiSelect
             label="Keys"
@@ -329,8 +387,11 @@ export function RequestsPage() {
             value={filters.outcomes}
             onChange={(v) => update({ outcomes: outcomesOf(v) })}
           />
+          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.missReasons)} value={filters.missReasons} onChange={(v) => update({ missReasons: v })} />
           <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
           <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
+          <MultiSelect label="Effort" options={[...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v }))} value={filters.efforts} onChange={(v) => update({ efforts: v })} mono />
+          <MultiSelect label="Request class" options={requestClassOptions(rows, filters.requestClasses)} value={filters.requestClasses} onChange={(v) => update({ requestClasses: v })} mono />
           <Select value={filters.kind} onChange={(e) => update({ kind: e.target.value as '' | RequestKind })} aria-label="Kind">
             <option value="">Any kind</option>
             <option value="inference">Inference</option>
@@ -357,7 +418,7 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
-            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(new Date(loadedAt).toISOString())}. Refresh reads up to now`}>
+            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={linked ? `Rows from ${fmtTime(filters.from)} to ${fmtTime(filters.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(new Date(loadedAt).toISOString())}. Refresh reads up to now`}>
               Refresh
             </Button>
             <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
@@ -600,6 +661,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                   ? [
                       { label: 'Answer', value: answer.length ? <Chips chips={answer} /> : <span className="muted">none</span> },
                       { label: 'Cache', value: <CacheValue attempt={serving} usage={r.usage} /> },
+                      { label: 'Diagnostics', title: 'Who put diagnostics.previous_message_id on the body the upstream compared', value: <DiagnosticsValue source={r.diagnosticsSource} /> },
                     ]
                   : []),
               ]}
@@ -788,6 +850,12 @@ function CacheValue({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
       {detail && <span className="muted">, {detail}</span>}
     </>
   );
+}
+
+function DiagnosticsValue({ source }: { source: DiagnosticsSource | null }) {
+  if (source === 'client') return <>sent by the client</>;
+  if (source === 'router') return <>added by the router</>;
+  return <span className="muted">none</span>;
 }
 
 /** Indenting a body past this many stored bytes is a long render and a far longer text, so it waits to be asked. */

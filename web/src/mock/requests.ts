@@ -1,5 +1,5 @@
 import type {
-  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
@@ -218,6 +218,16 @@ function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
     ]);
     return { ...a, cacheMissReason };
   });
+}
+
+/**
+ * Who put the diagnostics member on a row's serving body: nobody where the beta compared nothing, the router for the
+ * laptop's reduced-shape client, which the relay inserts the member for, and the client itself on the current build.
+ */
+function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null {
+  const reason = attempts[attempts.length - 1]?.cacheMissReason ?? null;
+  if (reason === null || reason === 'not_requested') return null;
+  return keyId === 'laptop' ? 'router' : 'client';
 }
 
 /**
@@ -483,6 +493,7 @@ function buildRequests(): RequestLog[] {
       durationMs,
       usage,
       costUsd: Math.round(costOf(model, usage) * 10_000) / 10_000,
+      diagnosticsSource: sourceOf(attempts, lane.keyId),
       errorCode,
       sessionId,
       agentId,
@@ -830,6 +841,7 @@ function storyRow(seed: StorySeed): RequestLog {
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
     costUsd: answered ? Math.round(costOf(seed.model, usage, fast) * 10_000) / 10_000 : 0,
+    diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
     forkDepth: null,
@@ -1264,7 +1276,8 @@ function traceRequests() {
     const pool = poolById.get(r.poolId ?? '');
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
     const events = REQUEST_EVENTS.get(r.id) ?? [];
-    r.requestClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
+    const drawnClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
+    r.requestClass = drawnClass;
     r.attempts = r.attempts.map((a, i, all): Attempt => {
       const moved = events.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.

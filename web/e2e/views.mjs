@@ -2814,6 +2814,25 @@ async function speedFilter(theme) {
 }
 
 /**
+ * The Cache miss reason, Effort and Request class controls of the request log's filter bar against the Turn origin
+ * control, as the Speed control is read: the same trigger box, type and border.
+ */
+async function diagnosticsFilters(theme) {
+  const LABELS = ['Cache miss reason', 'Effort', 'Request class'];
+  const read = await page.evaluate((labels) => {
+    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+    const box = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
+    };
+    return { controls: Object.fromEntries(labels.map((label) => [label, box(trigger(label))])), turn: box(trigger('Turn origin')) };
+  }, LABELS);
+  measurements.push(`${theme} /requests diagnostics filters ${JSON.stringify(read)}`);
+  for (const label of LABELS) failures.push(...compare(read.controls[label], read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${label} control against Turn origin`));
+}
+
+/**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
@@ -5251,6 +5270,7 @@ try {
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
         await speedFilter(theme);
+        await diagnosticsFilters(theme);
       }
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
