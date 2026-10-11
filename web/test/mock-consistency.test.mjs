@@ -13,7 +13,7 @@ const startOfHour = (ms) => Math.floor(ms / HOUR) * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
 
 /** A rollup row's requests, as the analytics routes count them. */
-const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error;
+const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -37,7 +37,8 @@ async function storyAt(at) {
   const api = new d.MockApi();
   await api.login('admin');
   const [accounts, pools, keys, sessions, attention, overview] = await Promise.all([api.listAccounts(), api.listPools(), api.listKeys(), api.listSessions(), api.getAttention(), api.getOverview()]);
-  const { requests } = await api.listRequests({ limit: 100_000 });
+  // The probes too, which the list leaves out unless asked, since the story's checks read every row it holds.
+  const { requests } = await api.listRequests({ includeProbes: true, limit: 100_000 });
   const events = (await Promise.all(requests.map((r) => api.getRequest(r.id)))).flatMap((detail) => detail?.events ?? []);
   const now = Date.parse(at);
   // The day the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total, and a
@@ -727,6 +728,61 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const lane = laneOf(iso(startOfHour(Date.parse(unserved[0].at))), unserved[0].keyId, unserved[0].poolId, '-', unserved[0].model, unserved[0].kind, unserved[0].sessionId);
       assert.ok(filed.get(lane)?.has('plan'), `${unserved[0].id} asked for fast and no attempt served it, so its rollup files under plan`);
     }
+  });
+
+  test(`a row names who put the diagnostics member on its body exactly when its serving attempt reads a diagnosed reason, at ${at}`, async () => {
+    const s = await story;
+    const diagnosed = (reason) => reason === 'none' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
+    for (const r of s.requests) {
+      const reason = r.attempts.at(-1)?.cacheMissReason ?? null;
+      if (reason !== null && diagnosed(reason)) assert.ok(r.diagnosticsSource === 'client' || r.diagnosticsSource === 'router', `${r.id} reads ${reason} and names ${r.diagnosticsSource}`);
+      else assert.equal(r.diagnosticsSource, null, `${r.id} reads ${reason} and names a source`);
+    }
+    assert.deepEqual([...new Set(s.requests.map((r) => r.diagnosticsSource))].filter((v) => v !== null).sort(), ['client', 'router'], 'both sources occur');
+    assert.ok(s.requests.some((r) => r.requestClass === null), 'a row sent no request class');
+    assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
+  });
+
+  // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the mock's
+  // `inQuery` reads them: every hour that starts inside the range.
+  const defaultRange = (s) => s.allRollups.filter((r) => Date.parse(r.hour) >= s.now - DAY && Date.parse(r.hour) <= s.now);
+
+  test(`every reason the default range's totals count lists a request under it in the window its link writes, at ${at}`, async () => {
+    const s = await story;
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const counted = Object.entries(totals.cacheMissReasons).filter(([, n]) => n > 0);
+    assert.ok(counted.length > 1, 'the range counts several reasons');
+    const filters = { accountIds: [], clientPattern: '', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' };
+    for (const [reason, count] of counted) {
+      const { href } = s.lib.requestsLink({ count, filters, reason, window: { exact: false, fromMs: s.now - DAY, nowMs: s.now, toMs: s.now } });
+      const params = new URL(href, 'http://console.test').searchParams;
+      const { requests } = await s.api.listRequests({ cacheMissReasons: params.get('cache_miss_reasons').split(','), from: params.get('from'), limit: 1, to: params.get('to') });
+      assert.ok(requests.length > 0, `${reason} lists no request from ${params.get('from')} to ${params.get('to')}`);
+    }
+  });
+
+  test(`the default range's effort and request class breakdowns count the story's rows per folded value, at ${at}`, async () => {
+    const s = await story;
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const folds = { effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
+    for (const [groupBy, fold] of Object.entries(folds)) {
+      const want = {};
+      for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
+      // A group of probe rows alone counts no request while probes are left out, as the route answers it.
+      const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
+      assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
+    }
+  });
+
+  test(`the default range counts a stream the client closed as failed under the code the relay files it with, at ${at}`, async () => {
+    const s = await story;
+    const closed = s.requests.filter((r) => r.outcome === 'canceled');
+    assert.ok(closed.length > 0, 'the story holds a stream the client closed');
+    for (const r of closed) assert.equal(r.errorCode, 'client_gone', `${r.id} names the code`);
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
+    assert.equal(totals.errors.api_error ?? 0, rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length, 'and counts no closed stream as an upstream error');
   });
 }
 

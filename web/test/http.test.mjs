@@ -160,6 +160,15 @@ test('listRequests passes the speeds as one comma list', async () => {
   assert.ok(!String(calls[1].url).includes('speeds'), 'no speed filter, no parameter');
 });
 
+test('listRequests passes the cache miss reasons, the efforts and the request classes as comma lists', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ cacheMissReasons: ['previous_message_not_found', 'tools_changed'], efforts: ['high', 'none'], requestClasses: ['main', 'other'] });
+  const params = new URL(calls[0].url, 'http://x').searchParams;
+  assert.deepEqual([params.get('cache_miss_reasons'), params.get('efforts'), params.get('request_classes')], ['previous_message_not_found,tools_changed', 'high,none', 'main,other']);
+  await new HttpApi().listRequests({});
+  for (const name of ['cache_miss_reasons', 'efforts', 'request_classes']) assert.ok(!String(calls[1].url).includes(name), `no ${name} filter, no parameter`);
+});
+
 test('the request list encodes the outcome list', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ outcomes: ['canceled', 'failed'] });

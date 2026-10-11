@@ -655,6 +655,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             observed.auto_mode.map(|m| m.as_str().to_string())
         },
         held: complete.held.clone(),
+        diagnostics_source: complete.diagnostics.map(|s| s.as_str().to_string()),
     };
     records.push(Record::Request {
         request,
@@ -853,9 +854,21 @@ mod tests {
             response_bytes: Some(20),
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: 1_500,
         })
+    }
+
+    /// `complete`'s answer from account `a`, carrying who put the diagnostics member on its body.
+    fn complete_with_source(id: &str, diagnostics: Option<DiagnosticsSource>) -> Event {
+        let Event::RequestComplete(mut done) =
+            complete(id, 1, Some("a"), Outcome::Succeeded, 200, None)
+        else {
+            unreachable!()
+        };
+        done.diagnostics = diagnostics;
+        Event::RequestComplete(done)
     }
 
     /// A completion carrying only the two fields a capture-completeness test cares about; named apart from
@@ -881,6 +894,7 @@ mod tests {
             response_bytes,
             response_chunks,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: 1_500,
         }
@@ -1738,6 +1752,26 @@ mod tests {
             !request.response_truncated,
             "nothing was captured, so nothing reads truncated"
         );
+    }
+
+    #[test]
+    fn the_request_row_records_the_completions_diagnostics_source() {
+        for (source, word) in [
+            (Some(DiagnosticsSource::Router), Some("router")),
+            (Some(DiagnosticsSource::Client), Some("client")),
+            (None, None),
+        ] {
+            let mut a = Assembler::new(clock());
+            a.observe(observed("r1", Some("k")));
+            a.observe(selected("r1", 1, "a", 1_010));
+            a.observe(head("r1", 1, 200, AttemptOutcome::Succeeded, 1_060));
+            let records = a.observe(complete_with_source("r1", source));
+            assert_eq!(
+                request_of(&records).diagnostics_source.as_deref(),
+                word,
+                "{source:?}"
+            );
+        }
     }
 
     #[test]

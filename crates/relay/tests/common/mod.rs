@@ -49,6 +49,15 @@ pub fn user(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "user", "content": text})
 }
 
+/// A user message whose one text block carries a `cache_control` marker, so the body holds a marker of the
+/// client's own.
+pub fn user_with_marker(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "role": "user",
+        "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}],
+    })
+}
+
 pub fn assistant(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "assistant", "content": text})
 }
@@ -997,6 +1006,45 @@ pub fn with_control_entry(body: &[u8], effort: &str) -> Vec<u8> {
     serde_json::to_vec(&value).expect("a Value always re-encodes")
 }
 
+/// Every `cache_control` member removed, so a policy sees a body with no marker anywhere.
+pub fn without_markers(native: &[u8]) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(native).unwrap();
+    let strip = |v: &mut serde_json::Value| {
+        if let Some(obj) = v.as_object_mut() {
+            obj.remove("cache_control");
+        }
+    };
+    for field in ["system", "tools"] {
+        if let Some(items) = value.get_mut(field).and_then(|v| v.as_array_mut()) {
+            for item in items {
+                strip(item);
+            }
+        }
+    }
+    if let Some(messages) = value.get_mut("messages").and_then(|v| v.as_array_mut()) {
+        for message in messages {
+            if let Some(content) = message.get_mut("content").and_then(|v| v.as_array_mut()) {
+                for block in content {
+                    strip(block);
+                }
+            }
+        }
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
+/// The `tools` member removed, or set to `[]` when `empty`: a body that sends no tools list either way.
+pub fn without_tools(native: &[u8], empty: bool) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(native).unwrap();
+    let object = value.as_object_mut().expect("the body is a JSON object");
+    if empty {
+        object.insert("tools".into(), serde_json::json!([]));
+    } else {
+        object.remove("tools");
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
 /// Sets a header on a fixture request the way a caller that sent it would have: on the map the relay reads
 /// and on the recorded head the outbound builder walks, so the two never disagree about what arrived.
 pub fn set_header(req: &mut Request<Body>, name: &str, value: &str) {
@@ -1040,6 +1088,29 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     let mut req = request_from_fixture(
         inference_head(FixtureKind::OauthNonFirstParty),
         native.as_bytes(),
+        key,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
+/// The OAuth non-first-party fixture with its `messages` replaced, so a scenario sends a real conversation turn
+/// whose chains the relay reads. The fixture's two system markers and its 26 tools stay, so the diagnostics
+/// member's gate holds, and it carries no billing hash and no `diagnostics` member of its own.
+pub fn conversation_request(
+    key: &str,
+    model: &str,
+    session: &str,
+    messages: &[serde_json::Value],
+) -> Request<Body> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
+    value["model"] = serde_json::Value::from(model);
+    value["messages"] = serde_json::Value::Array(messages.to_vec());
+    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &native,
         key,
     );
     set_header(&mut req, "x-claude-code-session-id", session);

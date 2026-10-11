@@ -444,6 +444,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 request_id: "r-0".into(),
                 seq: 1,
                 attempt: 1,
+                message_id: None,
             },
         ))
         .await;
@@ -585,6 +586,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fork_depth: Some(2),
             auto_mode: Some("server".into()),
             held: Some(placed_held),
+            diagnostics_source: Some("router".into()),
             // The serving attempt started 400 ms in, so the head and the first content follow its write.
             ttfb_ms: Some(400 + 120),
             ttfc_ms: Some(400 + 300),
@@ -726,6 +728,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
+            diagnostics_source: Some("client".into()),
             ..request(
                 key_generation,
                 "r-captured",
@@ -897,6 +900,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: Some("msg_k1_1".into()),
             finished_at: now,
         }));
@@ -955,6 +959,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            diagnostics: None,
             message_id: None,
             finished_at: now,
         }));
@@ -1382,6 +1387,7 @@ fn warmed(
         request_id: request_id.into(),
         seq: 1,
         attempt: 1,
+        message_id: None,
     })
 }
 

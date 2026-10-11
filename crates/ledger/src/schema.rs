@@ -279,6 +279,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 29: every routing decision is its own row beside the attempt rows, one compressed record per decision keyed
 /// by the request and the decision's place in it. The events gain the pool, the agent and the request as columns
 /// with their indexes, so a merged list filters both tables by the same keys without reading `detail`.
+///
+/// Version 32: the request row records who put the cache diagnostics member on the body the upstream compared, the
+/// client or the router, so the drawer tells a client's own comparison from the relay's insertion. A row from before
+/// reads NULL.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -877,4 +881,5 @@ CREATE INDEX events_request ON events (request_id);",
         "ALTER TABLE attempts ADD COLUMN written_at INTEGER; \
          ALTER TABLE requests ADD COLUMN stream_end_at INTEGER;",
     ),
+    (32, "ALTER TABLE requests ADD COLUMN diagnostics_source TEXT;"),
 ];

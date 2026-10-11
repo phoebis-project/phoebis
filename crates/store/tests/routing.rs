@@ -774,6 +774,7 @@ fn affinity_row(model: &str, hash: &str, account_id: &str) -> AffinityRow {
         root: "root-1".into(),
         lane: lane_key(model, "standard", "none", "-"),
         depth: 1,
+        message_id: None,
     }
 }
 
@@ -840,6 +841,95 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
         ),
         (3, 0),
         "a batch of three leaves in one call"
+    );
+}
+
+// The reverse of the registry's version 51, so a store stamped back below it migrates again.
+const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
+
+#[test]
+fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_reads_none() {
+    let store = store_with(&["a"]);
+    store
+        .upsert_affinity(&[
+            AffinityRow {
+                message_id: Some("msg_01".into()),
+                ..affinity_row("claude-sonnet-5", "hash-1", "a")
+            },
+            affinity_row("claude-sonnet-5", "hash-2", "a"),
+        ])
+        .unwrap();
+    let message_ids = |store: &Store| {
+        store
+            .load_routing()
+            .unwrap()
+            .affinity
+            .into_iter()
+            .map(|r| (r.hash, r.message_id))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        message_ids(&store),
+        vec![
+            ("hash-1".to_string(), Some("msg_01".to_string())),
+            ("hash-2".to_string(), None),
+        ],
+        "the id reads back on the row written with it and nowhere else"
+    );
+    store
+        .upsert_affinity(&[affinity_row("claude-sonnet-5", "hash-1", "a")])
+        .unwrap();
+    assert_eq!(
+        message_ids(&store)[0],
+        ("hash-1".to_string(), None),
+        "the store files the row it is handed, so a row without an id replaces the one with it"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+    }
+    // A registry stamped at the version before the column, holding a row that version wrote.
+    let before = affinity_row("claude-sonnet-5", "hash-1", "a");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    conn.execute(
+        "INSERT INTO affinity (model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, \
+         key_id, key_generation, root, lane, depth) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        rusqlite::params![
+            before.model,
+            before.hash,
+            before.chain,
+            before.account_id,
+            before.incarnation as i64,
+            before.written_at,
+            before.ttl_ms,
+            before.prefix_tokens as i64,
+            before.key_id,
+            before.key_generation,
+            before.root,
+            before.lane,
+            before.depth
+        ],
+    )
+    .unwrap();
+    drop(conn);
+    let migrated =
+        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
+    assert_eq!(migrated.schema_version().unwrap(), 51);
+    assert_eq!(
+        migrated.load_routing().unwrap().affinity,
+        vec![AffinityRow {
+            message_id: None,
+            ..before
+        }],
+        "the row from before the column reads no id and keeps every field it was written with"
     );
 }
 

@@ -199,7 +199,8 @@
         ],
         "cohort": "direct",
         "held_ms": 1250
-      }
+      },
+      "diagnostics_source": "router"
     },
     "events": [
       {

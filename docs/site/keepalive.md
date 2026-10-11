@@ -37,19 +37,21 @@ alone: a session that switches between fast mode and standard requests earns no 
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
-`inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
-from what the router sent, never from the marker the client wrote. A usage that reports a cache write without saying
-which TTL it was written at, as the stream's running totals do, proves nothing about the TTL and leaves what the engine
-knew in place. The first probe after a turn follows that turn's cache TTL; the probe itself writes with the TTL its
-agent's branch holds in the rule set, which the next probe then follows.
+`inject_when_absent` is on and the recipe's class is not auxiliary. The engine learns the TTL an entry was written with
+from the response's usage and from what the router sent, never from the marker the client wrote. A usage that reports a
+cache write without saying which TTL it was written at, as the stream's running totals do, proves nothing about the TTL
+and leaves what the engine knew in place. The first probe after a turn follows that turn's cache TTL; the probe itself
+writes with the TTL its agent's branch holds in the rule set, which the next probe then follows.
 
-Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
-cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
-account, the turn the probe keeps warm, so the upstream's report says whether that entry was still there. A
-probe's own answer is never remembered as a previous turn: the next probe and the next real request still name
-the last real answer. Its cache-miss reason lands in the request log like any other request's. A probe's 400
-naming an injected item strips it and retries the probe but never latches the account, since only a real
-request's diagnostics latch; the next real request re-sends the item, takes its own 400, and latches.
+Cache diagnostics apply to a probe the same way. With the pool's `cache_diagnostics` option on, a probe carries the
+cache-diagnosis beta and a `diagnostics.previous_message_id` member only when the replayed body carries a cache marker
+of the client's and a tools list, the gate every request passes. The member names the answer on that account of the turn
+the probe replays and keeps warm, which is the session's last real answer when the probe replays the latest turn, so the
+upstream's report says whether that entry was still there. A probe's own answer is never remembered as a previous turn:
+the next probe and the next real request still name the last real answer. Its cache-miss reason lands in the request log
+like any other request's. A probe's 400 naming an injected item strips it and retries the probe but never latches the
+account, since only a real request's diagnostics latch. The next real request re-sends the item, takes its own 400, and
+latches.
 
 ## The mod
 

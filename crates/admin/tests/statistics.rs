@@ -1010,6 +1010,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
         response_bytes: None,
         response_chunks: None,
         held: Some(held),
+        diagnostics: None,
         message_id: None,
         finished_at: now + 1_300,
     }));
@@ -1228,7 +1229,7 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
     assert_eq!(
         direct["requests"].as_array().unwrap().len(),
         12,
-        "an account filter matches any attempt"
+        "an account filter matches the serving attempt"
     );
     let text = json(
         get(
@@ -1459,6 +1460,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         response_bytes: None,
         response_chunks: Some(published),
         held: None,
+        diagnostics: None,
         message_id: None,
         finished_at: common::NOW + 900,
     }));

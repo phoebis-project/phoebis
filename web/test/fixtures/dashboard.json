@@ -300,7 +300,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-captured",
@@ -421,7 +422,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": "client"
       },
       {
         "id": "r-failed",
@@ -542,7 +544,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-incomplete",
@@ -667,7 +670,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-earlier-holder",
@@ -788,7 +792,8 @@
             }
           }
         ],
-        "held": null
+        "held": null,
+        "diagnostics_source": null
       },
       {
         "id": "r-failover",
@@ -988,7 +993,8 @@
           ],
           "cohort": "direct",
           "held_ms": 1250
-        }
+        },
+        "diagnostics_source": "router"
       }
     ],
     "accounts": [

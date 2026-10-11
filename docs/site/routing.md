@@ -84,9 +84,14 @@ Every field, in the order the request body takes them:
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
-The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch in the expert view, forces the
-cache-diagnosis beta and the `previous_message_id` member toward `api.anthropic.com` for this pool's requests, whatever
-the client; off by default, and `count_tokens` is never touched.
+The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch in the expert view, turns the cache
+diagnostics on for this pool's requests toward `api.anthropic.com`: the router adds the cache-diagnosis beta and a
+`diagnostics.previous_message_id` member to a body that carries a cache marker of the client's and a tools list, never
+to a token count, and never rewrites a member the client sent. The clients that send no member (an older Claude Code,
+the reduced shape) are the case the insertion exists for. The member names the answer the request continues: the newest
+answer at the deepest message boundary the request shares with an earlier answer of its own conversation, or of the
+conversation it forked from, on the serving account, else the newest answer of the session on that account and model.
+A fork names its parent's answer only until it has an answer of its own on that account and model. Off by default.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the
@@ -161,10 +166,11 @@ when the body is one hour, and the `cch` hash is restamped when the client sent 
 stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the relay's cache TTL guard cannot reach
 (a key on the marker's path spelled with an escape) is refused `400` with the error code `body_shape`, so a TTL the
 policy could not enforce never travels unreported. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL`
-has no effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in
-which case the top-level `cache_control` member is added with the TTL, before `stream`; a token count is never edited by
-the policy: its markers travel as the client sent them and no beta follows it. The metered set applies while the write
-costs money: the serving account is in overage, or is an API-key account. Every request, a keepalive probe's
+has no effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on and
+the request's class is not auxiliary (the class header absent, or naming `compaction`, `main` or `subagent`), in which
+case the top-level `cache_control` member is added with the TTL, before `stream`. A token count is never edited by the
+policy: its markers travel as the client sent them and no beta follows it. The metered set applies while the write costs
+money: the serving account is in overage, or is an API-key account. Every request, a keepalive probe's
 replay included, reads `main` or `subagent` by its agent, and one without an agent id reads as the main conversation.
 The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of

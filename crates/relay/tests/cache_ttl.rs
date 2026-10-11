@@ -1,11 +1,15 @@
 mod common;
+use std::time::Duration;
+
 use common::*;
 
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::EXTENDED_TTL_BETA;
+use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
 use phoebis_store::{AffinityMode, OveragePolicy};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";
@@ -39,31 +43,41 @@ fn markers(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Every `cache_control` member removed, so a policy sees a body with no marker anywhere.
-fn without_markers(native: &[u8]) -> Vec<u8> {
-    let mut value: serde_json::Value = serde_json::from_slice(native).unwrap();
-    let strip = |v: &mut serde_json::Value| {
-        if let Some(obj) = v.as_object_mut() {
-            obj.remove("cache_control");
-        }
-    };
-    for field in ["system", "tools"] {
-        if let Some(items) = value.get_mut(field).and_then(|v| v.as_array_mut()) {
-            for item in items {
-                strip(item);
-            }
-        }
-    }
-    if let Some(messages) = value.get_mut("messages").and_then(|v| v.as_array_mut()) {
-        for message in messages {
-            if let Some(content) = message.get_mut("content").and_then(|v| v.as_array_mut()) {
-                for block in content {
-                    strip(block);
-                }
-            }
+/// The router's events up to and including the first one `last` accepts, under a five-second bound.
+async fn router_events_until(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    last: impl Fn(&RouterEvent) -> bool,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's event arrives")
+            .expect("not lagged");
+        let done = last(&event);
+        seen.push(event);
+        if done {
+            return seen;
         }
     }
-    serde_json::to_vec(&value).unwrap()
+}
+
+/// The decisions among `events` for `request_id`, in the order the router made them.
+fn decisions_of(
+    events: &[RouterEvent],
+    request_id: &str,
+) -> Vec<(DecisionSummary, DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } if record.request.request_id == request_id => {
+                Some(((**summary).clone(), (**record).clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -363,6 +377,209 @@ async fn with_the_toggle_on_a_marker_less_body_takes_the_member() {
     assert!(
         beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
         "the hour's beta follows the injected member"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn with_the_toggle_on_a_marker_less_auxiliary_body_goes_as_sent() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // gives the restoration and diagnostics edits nothing to touch either, so the policy's member is the one
+    // edit the relay could still make.
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"metered":{"main":"1h"}}"#),
+    )
+    .await;
+
+    let native: &[u8] =
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+    let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
+    set_header(&mut req, "x-claude-code-request-class", "auxiliary");
+    let client_betas: Vec<String> = req
+        .headers()
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .expect("the recorded head names its betas")
+        .split(',')
+        .map(str::trim)
+        .map(String::from)
+        .collect();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    let wire: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+    assert!(
+        wire.get("cache_control").is_none(),
+        "a one-off helper's write is one nothing reads, so the policy adds no top-level member"
+    );
+    assert!(
+        sent.body == native,
+        "the auxiliary body reaches the upstream byte-identical"
+    );
+    assert_eq!(
+        beta_list(sent),
+        client_betas,
+        "no beta for a TTL the body never claims, and none of the client's dropped"
+    );
+    assert_eq!(
+        outcome(&resp).cache_ttl_ms,
+        None,
+        "the attempt reports no TTL"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn with_the_toggle_on_a_marker_less_main_body_takes_the_member() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("o", OA, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#),
+    )
+    .await;
+
+    let stripped = without_markers(body(BodyFixture::Oauth));
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &stripped,
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-request-class", "main");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert_eq!(
+        markers(&sent.body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
+        "a conversation class is not auxiliary, so the wire carries exactly the top-level member"
+    );
+    let text = String::from_utf8_lossy(&sent.body);
+    let cache_at = text
+        .find("\"cache_control\"")
+        .expect("the member is present");
+    let stream_at = text.find("\"stream\"").expect("the fixture body streams");
+    assert!(cache_at < stream_at, "the top-level member precedes stream");
+    assert!(
+        beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "the hour's beta follows the injected member"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_auxiliary_body_carrying_a_marker_is_rewritten_to_the_policys_ttl() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    // Five minutes against the fixture's three one-hour markers, so a leg that skipped the rewrite for an
+    // auxiliary class would leave the hour on the wire rather than pass on a no-op edit.
+    let h = harness(
+        &up,
+        &[oauth("o", OA, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"5m"}}"#),
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        body(BodyFixture::Oauth),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-request-class", "auxiliary");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[0].body),
+        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
+        "the client's own markers take the policy's TTL whatever the request's class"
+    );
+    let id = outcome(&resp).request_id;
+    assert_eq!(outcome(&resp).cache_ttl_ms, Some(300_000));
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == id)
+    })
+    .await;
+    assert_eq!(
+        decisions_of(&seen, &id)
+            .iter()
+            .map(|(_, record)| record.request.flags.marker)
+            .collect::<Vec<_>>(),
+        vec![true],
+        "a body carrying the client's marker carries one whatever its class"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_decisions_marker_reads_false_for_the_auxiliary_marker_less_body_and_true_for_the_class_less_one(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("o", OA, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#),
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    let stripped = without_markers(body(BodyFixture::Oauth));
+
+    let mut auxiliary = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &stripped,
+        KEY,
+    );
+    set_header(&mut auxiliary, "x-claude-code-request-class", "auxiliary");
+    let resp = h.app.clone().oneshot(auxiliary).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let auxiliary_id = outcome(&resp).request_id;
+
+    let class_less = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &stripped,
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(class_less).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let class_less_id = outcome(&resp).request_id;
+
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == class_less_id)
+    })
+    .await;
+    let marker = |id: &str| {
+        decisions_of(&seen, id)
+            .iter()
+            .map(|(_, record)| record.request.flags.marker)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        marker(&auxiliary_id),
+        vec![false],
+        "the policy leaves an auxiliary helper's marker-less body alone, so it neither carries nor receives a marker"
+    );
+    assert_eq!(
+        marker(&class_less_id),
+        vec![true],
+        "a class-less body receives the policy's member"
     );
     up.shutdown().await;
 }

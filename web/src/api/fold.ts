@@ -1,6 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
+import { foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { earlierHolderLabel } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -73,13 +74,17 @@ export function foldUserAgent(raw: string): string {
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'client') return r.client ?? '-';
-  if (by === 'effort') return r.shape.effort ?? 'none';
+  // The effort and the request class key as the rollups fold them, so a session view's group is the value the
+  // Requests filters match.
+  if (by === 'effort') return foldEffort(r.shape.effort);
   // A key id created again is another holder, so the group is the lifetime, which a `keys=` selector names too.
   if (by === 'key') return `${r.keyId ?? '-'}@${r.keyGeneration}`;
   if (by === 'kind') return r.kind;
-  if (by === 'model') return r.model;
+  // The canonical id, as the rollups file a request and the Models filter matches it, so a `[1m]` spelling or an
+  // alias joins the group of the model it resolved to.
+  if (by === 'model') return r.canonicalModel;
   if (by === 'pool') return r.poolId ?? '-';
-  if (by === 'request_class') return r.requestClass ?? '-';
+  if (by === 'request_class') return foldRequestClass(r.requestClass);
   // A fast request refused before any attempt served still asked for fast, and the rollups file it so.
   if (by === 'speed') return r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
   if (by === 'user_agent') {

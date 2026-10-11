@@ -45,12 +45,14 @@ fit (asserted in the router pass and recorded in the mock pass, whose story runs
 columns (Client the fill, the Status, Attempts and links cells wrapping, the width past the card
 recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client class or agent type
 cut, each read on its own span), the request pages' widths, walked on a load of their own once every view's shot is
-taken, the speed filter, the traffic cards (each Analytics check opens the tab it reads and returns
-to Traffic), the tab strip docked under the filter bar at the end of the Latency tab, the Unit select in the Cost, Cache
-and Cache warming heads (inside the head, below the tab strip and inside the viewport at 1280 and 400 px), the fast
-lane, the request drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and
-the Estimated cost row's share chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by
-900), the routing log's decision card, which opens once the log's shot is taken (the strip and the candidate table
+taken, the speed filter, and the cache miss reason, effort and request class filters (each against
+Turn origin), the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the tab strip
+docked under the filter bar at the end of the Latency tab, the Unit select in the Cost, Cache and Cache warming heads
+(inside the head, below the tab strip and inside the viewport at 1280 and 400 px), the fast lane, the request drawer,
+which opens once the request list's shot is taken (its chips in the status badge's type, and the Estimated cost row's
+share chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900), a reasons panel link
+landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once every view's shot is
+taken), the routing log's decision card, which opens once the log's shot is taken (the strip and the candidate table
 inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then 1118 px, the strip's
 drawing as wide as the strip at each width, every station badge in the kind badge's box, the station labels clear of the
 leaf rows and the brackets, every station's and way out's dot, the gap to its words and its word taking the pointer for

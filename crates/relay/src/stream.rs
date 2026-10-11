@@ -263,6 +263,9 @@ pub(crate) struct AffinityFacts {
     pub request_id: String,
     pub seq: u32,
     pub attempt: u32,
+    /// Whether the answer's id is remembered: the leg carried or received the member and is not a probe, whose
+    /// answer belongs to the turn it replayed.
+    pub remembers: bool,
 }
 
 impl AffinityFacts {
@@ -276,6 +279,7 @@ impl AffinityFacts {
         status: u16,
         usage: Option<&Usage>,
         fast: bool,
+        message_id: Option<String>,
         waiting: &mut Waiting,
     ) {
         // A rejection continues no conversation, so it leaves no link to resolve a later request by.
@@ -333,6 +337,7 @@ impl AffinityFacts {
             request_id: self.request_id,
             seq: self.seq,
             attempt: self.attempt,
+            message_id: message_id.filter(|_| self.remembers),
         };
         let file = move |router: &RouterHandle, seq: Option<u64>| {
             if let Some(seq) = seq {
@@ -571,7 +576,14 @@ impl Publish {
             renewal.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
         }
         if let Some(affinity) = self.affinity.take() {
-            affinity.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
+            affinity.send(
+                (self.clock)(),
+                self.status,
+                usage.as_ref(),
+                fast,
+                self.message_id.clone(),
+                waiting,
+            );
         }
         self.trace
             .complete(

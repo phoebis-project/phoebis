@@ -222,8 +222,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(31), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that records the phase instants"
+        (Some(32), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that records the diagnostics member's source"
     );
     assert_eq!(
         (
@@ -2379,6 +2379,85 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
         serde_json::json!({ "account_id": "direct", "obstacle": "cooldown" }),
         "a named object on the wire, never a tuple: {body}"
     );
+}
+
+#[tokio::test]
+async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_effort_and_class() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let planted = [
+        (
+            "d-client",
+            Some("client"),
+            Some("high"),
+            Some("main"),
+            "none",
+        ),
+        ("d-router", Some("router"), None, None, "messages_changed"),
+        ("d-none", None, Some("ultra"), Some("bad class"), "none"),
+    ];
+    for ((id, source, effort, class, reason), age) in planted.into_iter().zip(1..) {
+        let mut row = record(id, common::NOW - age * 1_000, "claude-sonnet-5", "s1");
+        if let Record::Request {
+            request, attempts, ..
+        } = &mut row
+        {
+            request.diagnostics_source = source.map(String::from);
+            request.effort = effort.map(String::from);
+            request.request_class = class.map(String::from);
+            attempts[0].cache_miss_reason = Some(reason.into());
+        }
+        parts.ledger.record(row);
+    }
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("d-none").await.unwrap()
+    })
+    .await;
+    let words = [
+        ("d-client", serde_json::json!("client")),
+        ("d-router", serde_json::json!("router")),
+        ("d-none", serde_json::Value::Null),
+    ];
+    let listed = json(get(&parts.app, "/admin/requests", Some(&cookie)).await).await;
+    let rows = listed["requests"].as_array().unwrap();
+    assert_eq!(rows.len(), words.len(), "{listed}");
+    for (row, (id, word)) in rows.iter().zip(&words) {
+        assert_eq!(
+            (row["id"].as_str(), row.get("diagnostics_source")),
+            (Some(*id), Some(word)),
+            "the list answers each row's source"
+        );
+        let shown =
+            json(get(&parts.app, &format!("/admin/requests/{id}"), Some(&cookie)).await).await;
+        assert_eq!(
+            shown["request"].get("diagnostics_source"),
+            Some(word),
+            "the detail answers {id}'s source as the list does"
+        );
+    }
+    for (query, expected) in [
+        ("cache_miss_reasons=messages_changed", &["d-router"][..]),
+        ("efforts=none,other", &["d-router", "d-none"]),
+        ("request_classes=-", &["d-router"]),
+        ("request_classes=other", &["d-none"]),
+    ] {
+        let body = json(
+            get(
+                &parts.app,
+                &format!("/admin/requests?{query}"),
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await;
+        let ids: Vec<&str> = body["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        assert_eq!(ids, expected, "{query}");
+    }
 }
 
 #[tokio::test]

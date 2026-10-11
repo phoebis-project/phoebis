@@ -69,6 +69,25 @@ fn cli_request(session: &str, agent: Option<&str>, parent: Option<&str>) -> Requ
     req
 }
 
+/// `cli_request` from a client that sends its own `diagnostics` member, so the session memory remembers the
+/// answer's id with the pool's switch off. The fixture carries no billing hash, so nothing is re-signed.
+fn cli_request_with_member(session: &str) -> Request<Body> {
+    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(
+            r#"{"model""#,
+            r#"{"diagnostics":{"previous_message_id":null},"model""#,
+            1,
+        );
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
 /// A tool loop shape built directly rather than sliced out of the fixture: the fixture's `messages` array is not
 /// the last top-level member, so a byte-level splice would have to track nesting the tests elsewhere never need.
 fn tool_loop_request(session: &str) -> Request<Body> {
@@ -707,9 +726,11 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
         "s-1",
         "main",
     );
+    // An answer's id is remembered only for a request that carried or received the member, so every body here
+    // carries the client's own.
     let resp = app
         .clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(cli_request_with_member("s-1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -736,7 +757,7 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
     );
     let resp = app
         .clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(cli_request_with_member("s-1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -754,7 +775,7 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
     );
     let resp = app
         .clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(cli_request_with_member("s-1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -1121,9 +1142,11 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         1,
     )
     .await;
+    // The hook runs only for a request that carried or received the member, so every session here sends the
+    // client's own and each commit's hook joins the race below.
     let held = tokio::spawn({
         let app = h.app.clone();
-        async move { app.oneshot(cli_request("s-1", None, None)).await.unwrap() }
+        async move { app.oneshot(cli_request_with_member("s-1")).await.unwrap() }
     });
     wait_for(std::time::Duration::from_secs(5), || {
         (up.requests().len() == 1).then_some(())
@@ -1146,7 +1169,7 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
     // this one record rather than shedding it under a pile-up of its own.
     h.app
         .clone()
-        .oneshot(cli_request("s-2", None, None))
+        .oneshot(cli_request_with_member("s-2"))
         .await
         .unwrap();
     h.relay.flush_memory().await;
@@ -1167,7 +1190,7 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         .map(|session| {
             tokio::spawn({
                 let app = h.app.clone();
-                async move { app.oneshot(cli_request(session, None, None)).await.unwrap() }
+                async move { app.oneshot(cli_request_with_member(session)).await.unwrap() }
             })
         })
         .collect();

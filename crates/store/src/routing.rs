@@ -210,10 +210,14 @@ pub struct AffinityRow {
     /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it. A row
     /// stored before the registry kept it reads 0.
     pub depth: u32,
+    /// The upstream id of the newest answer produced at this boundary on the account that holds the row, which the
+    /// relay's cache diagnostics member names for a request that continues the conversation here. `None` on a
+    /// static row, on a row whose answer was not remembered, and on a row stored before the registry kept it.
+    pub message_id: Option<String>,
 }
 
 const AFFINITY_COLUMNS: &str =
-    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane, depth";
+    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane, depth, message_id";
 
 fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
     Ok(AffinityRow {
@@ -230,6 +234,7 @@ fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
         root: r.get(10)?,
         lane: r.get(11)?,
         depth: r.get(12)?,
+        message_id: r.get(13)?,
     })
 }
 
@@ -688,12 +693,12 @@ fn delete_cooldown_on(
 
 fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
     let mut stmt = conn.prepare(&format!(
-        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
          ON CONFLICT(model, hash) DO UPDATE SET \
            chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
            written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
            key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
-           lane = excluded.lane, depth = excluded.depth"
+           lane = excluded.lane, depth = excluded.depth, message_id = excluded.message_id"
     ))?;
     for row in rows {
         stmt.execute(params![
@@ -709,7 +714,8 @@ fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), Sto
             row.key_generation,
             row.root,
             row.lane,
-            row.depth
+            row.depth,
+            row.message_id
         ])?;
     }
     Ok(())

@@ -465,6 +465,9 @@ export interface CreatedApiKey {
  */
 export type AutoMode = 'body_shape' | 'server' | 'stripped';
 export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const satisfies readonly AutoMode[];
+/** Who put `diagnostics.previous_message_id` on the body the upstream compared. */
+export type DiagnosticsSource = 'client' | 'router';
+export const DIAGNOSTICS_SOURCE_VALUES = ['client', 'router'] as const satisfies readonly DiagnosticsSource[];
 export type RequestKind = 'count_tokens' | 'inference' | 'probe';
 export type Transport = 'json' | 'sse';
 export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succeeded' | 'transport_error' | 'upstream_error';
@@ -628,6 +631,8 @@ export interface RequestLog {
   contextCompacted: string | null;
   costShares: CostShares | null;
   costUsd: number;
+  /** The member's source on the serving leg's body; null for a body that went without one. */
+  diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
@@ -725,9 +730,13 @@ export interface RequestDetail {
 export interface RequestQuery {
   accountIds?: string[];
   agentTypes?: string[];
+  /** The serving attempt's cache miss reason, any name the beta sent. */
+  cacheMissReasons?: string[];
   /** A pattern over the client class, the grammar of `userAgent`. */
   client?: string;
   cursor?: string;
+  /** The effort as the rollups fold it: a level, `none` or `other`. */
+  efforts?: string[];
   from?: string;
   /** Keep the requests that waited for a slot. */
   held?: boolean;
@@ -738,6 +747,8 @@ export interface RequestQuery {
   models?: string[];
   outcomes?: RequestOutcome[];
   poolIds?: string[];
+  /** The class as the rollups fold it: the class, `-` or `other`. */
+  requestClasses?: string[];
   search?: string;
   /** `fast`, `standard`: the serving attempt's speed, else `fast` for a request that asked for it. */
   speeds?: string[];

@@ -7517,6 +7517,37 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   }
 }
 {
+  // The Diagnostics row sits right after the Cache row and is drawn whenever it is, with its hover on the value.
+  const TITLE = 'Who put diagnostics.previous_message_id on the body the upstream compared';
+  const read = () => {
+    const labels = [...m.container.querySelectorAll('.drawer section:first-of-type .kv__row dt')].map((dt) => dt.textContent?.trim() ?? '');
+    const dd = drawerRowOf(m, 'Diagnostics')?.querySelector('dd');
+    return { after: labels.indexOf('Diagnostics') === labels.indexOf('Cache') + 1, ink: dd?.firstElementChild?.className ?? null, text: dd?.textContent?.trim() ?? 'no Diagnostics row', title: dd?.getAttribute('title') ?? null };
+  };
+  const cases = [
+    ['client', requests.find((r) => r.diagnosticsSource === 'client'), 'sent by the client', null],
+    ['router', requests.find((r) => r.diagnosticsSource === 'router'), 'added by the router', null],
+    ['none', requests.find((r) => r.attempts.at(-1)?.cacheMissReason === 'not_requested'), 'none', 'muted'],
+  ];
+  for (const [source, r, text, ink] of cases) {
+    const name = `/requests the Diagnostics row reads ${text} after the Cache row, its hover naming the member`;
+    if (!r) {
+      results.push({ name, ok: false, missing: [`fixture: no ${source} row`] });
+      continue;
+    }
+    await m.navigate(`/requests/${r.id}`);
+    await m.settle(300);
+    const got = read();
+    results.push({ name, ok: got.after && got.text === text && got.title === TITLE && got.ink === ink, missing: [r.id, JSON.stringify(got)] });
+  }
+  const unserved = requests.find((r) => r.attempts.length === 0);
+  if (unserved) {
+    await m.navigate(`/requests/${unserved.id}`);
+    await m.settle(300);
+    results.push({ name: '/requests a request with no attempt draws neither a Cache nor a Diagnostics row', ok: drawerRowOf(m, 'Status') !== undefined && drawerRowOf(m, 'Cache') === undefined && drawerRowOf(m, 'Diagnostics') === undefined, missing: [unserved.id] });
+  }
+}
+{
   // The drawer draws its seven sections and nothing of the attempts, however many the request made. Each attempt's
   // routing is read in the routing log.
   const several = requests.find((r) => r.attempts.length >= 3);
@@ -7845,6 +7876,180 @@ m.unmount();
     results.push({ name: replacedCheck, ok: field.value === 'other' && !searched.includes('abc') && searched.includes('other'), missing: [`field ${JSON.stringify(field.value)}`, JSON.stringify(searched)] });
   }
   replaced.unmount();
+}
+
+// The cache miss reason, effort and request class filters and the custom range live in the address beside the other
+// filters: each control narrows the table to the rows the rollups file under its value and writes its own key.
+{
+  const choose = (select, value) => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+  const filterOf = (page, label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+  const triggerText = (page, label) => filterOf(page, label)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`;
+  // A list stays open across a choice, so it is opened only while it is shut.
+  const openOptions = async (page, label) => {
+    const filter = filterOf(page, label);
+    if (filter && !filter.querySelector('.mselect__list')) {
+      filter.querySelector('.mselect__trigger')?.click();
+      await page.settle(150);
+    }
+    return [...(filterOf(page, label)?.querySelectorAll('.mselect__option') ?? [])];
+  };
+  const pick = async (page, label, text) => {
+    (await openOptions(page, label)).find((o) => o.textContent?.trim() === text)?.click();
+    await page.settle();
+  };
+  const resetOf = (page) => [...page.container.querySelectorAll('.filters .link-btn')].find((b) => b.textContent?.trim() === 'Reset');
+  // The table's rows, matched back to the story by their short id.
+  const listed = (page) =>
+    [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+      const shown = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+      return requests.find((r) => shown !== '' && r.id.startsWith(shown)) ?? null;
+    });
+  const param = (page, name) => new URLSearchParams(page.location().search).get(name);
+  const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
+  const rangeOf = (page) => page.container.querySelector('select[aria-label="Date range"]');
+  const KNOWN = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
+
+  const reasonCheck = '/requests the Cache miss reason filter follows Outcome and offers the known reasons in their reading order';
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const triggers = [...page.container.querySelectorAll('.filters .mselect__trigger')].map((t) => t.textContent?.trim() ?? '');
+  const after = (label, before) => triggers.indexOf(label) > 0 && triggers.indexOf(label) === triggers.indexOf(before) + 1;
+  const reasons = (await openOptions(page, 'Cache miss reason')).map((o) => o.textContent?.trim() ?? '');
+  results.push({ name: reasonCheck, ok: after('Cache miss reason', 'Outcome') && JSON.stringify(reasons.slice(0, KNOWN.length)) === JSON.stringify(KNOWN), missing: [JSON.stringify(triggers), JSON.stringify(reasons)] });
+
+  const chosenCheck = '/requests choosing History edited narrows the table to its serving attempts and writes cache_miss_reasons';
+  const spy = countCalls('listRequests');
+  await pick(page, 'Cache miss reason', 'History edited');
+  spy.restore();
+  const changed = listed(page);
+  results.push({
+    name: chosenCheck,
+    ok: changed.length > 0 && changed.every((r) => served(r) === 'messages_changed') && param(page, 'cache_miss_reasons') === 'messages_changed' && JSON.stringify(spy.calls.at(-1)?.[0]?.cacheMissReasons) === '["messages_changed"]',
+    missing: [page.location().search, JSON.stringify(spy.calls.map(([q]) => q?.cacheMissReasons ?? null)), ...changed.slice(0, 5).map((r) => `${r?.id}: ${served(r)}`)],
+  });
+  page.unmount();
+
+  const remountCheck = '/requests mounts with cache_miss_reasons applied and Reset clears it';
+  const again = await mount('/requests?cache_miss_reasons=messages_changed', { now: CLOCK_ORIGIN });
+  const mounted = { rows: listed(again), trigger: triggerText(again, 'Cache miss reason') };
+  resetOf(again)?.click();
+  await again.settle();
+  const cleared = { param: param(again, 'cache_miss_reasons'), trigger: triggerText(again, 'Cache miss reason') };
+  results.push({
+    name: remountCheck,
+    ok: mounted.trigger === 'Cache miss reason (1)' && mounted.rows.length > 0 && mounted.rows.every((r) => served(r) === 'messages_changed') && cleared.trigger === 'Cache miss reason' && cleared.param === null,
+    missing: [mounted.trigger, `${mounted.rows.length} rows`, JSON.stringify(cleared)],
+  });
+  again.unmount();
+
+  const FROM = '2026-09-16T12:00:00.000Z';
+  const TO = '2026-09-16T13:00:00.000Z';
+  const inside = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
+  const windowCheck = '/requests mounts with from and to under Custom range and lists that window alone';
+  const windowSpy = countCalls('listRequests');
+  const linked = await mount(`/requests?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+  windowSpy.restore();
+  const range = rangeOf(linked);
+  const option = range?.selectedOptions[0];
+  const windowed = listed(linked);
+  const sent = windowSpy.calls.map(([q]) => `${q?.from} ${q?.to}`);
+  results.push({
+    name: windowCheck,
+    ok:
+      range?.options.length === 4 &&
+      (option?.textContent ?? '').startsWith('Custom range') &&
+      (option?.getAttribute('title') ?? '').includes(FROM) &&
+      (option?.getAttribute('title') ?? '').includes(TO) &&
+      inside.length > 0 &&
+      windowed.length === Math.min(25, inside.length) &&
+      windowed.every((r) => r !== null && inside.includes(r)) &&
+      sent.length > 0 &&
+      sent.every((s) => s === `${FROM} ${TO}`),
+    missing: [`${range?.options.length} options`, option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', `${windowed.length} rows of ${inside.length}`, ...sent],
+  });
+
+  const refreshCheck = '/requests Refresh reads the custom range again and says so';
+  const refreshButton = [...linked.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim() === 'Refresh');
+  const refreshTitle = refreshButton?.getAttribute('title') ?? 'no Refresh button';
+  // The clock stands still, so it is stepped for Refresh to take a new instant.
+  tick(1_000);
+  const refreshSpy = countCalls('listRequests');
+  refreshButton?.click();
+  await linked.settle();
+  refreshSpy.restore();
+  const reread = refreshSpy.calls.map(([q]) => `${q?.from} ${q?.to}`);
+  results.push({
+    name: refreshCheck,
+    ok: refreshTitle.includes('Refresh reads the same window again') && reread.length === 1 && reread[0] === `${FROM} ${TO}` && param(linked, 'from') === FROM && param(linked, 'to') === TO,
+    missing: [refreshTitle, ...reread, linked.location().search],
+  });
+
+  const presetCheck = '/requests choosing a preset drops the custom range';
+  if (range) choose(range, '6h');
+  await linked.settle();
+  results.push({ name: presetCheck, ok: param(linked, 'range') === '6h' && param(linked, 'from') === null && param(linked, 'to') === null && rangeOf(linked)?.options.length === 3, missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`] });
+  linked.unmount();
+
+  // A half window, one that runs backwards, and an instant past the date range each read as the preset, quietly.
+  const halfCheck = '/requests reads a half, backward or unparsable window as the preset';
+  const seen = problems.length;
+  const halves = [];
+  for (const address of [`/requests?from=${FROM}`, `/requests?from=${TO}&to=${FROM}`, `/requests?from=99999999999999999999&to=${TO}`]) {
+    const halfSpy = countCalls('listRequests');
+    const half = await mount(address, { now: CLOCK_ORIGIN });
+    halfSpy.restore();
+    halves.push({ address, options: rangeOf(half)?.options.length ?? 0, to: halfSpy.calls.at(-1)?.[0]?.to ?? null, value: rangeOf(half)?.value ?? null });
+    half.unmount();
+  }
+  const thrown = problems.slice(seen);
+  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 3 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+
+  const effortCheck = '/requests the Effort filter offers the levels, none and other, and choosing none lists the rows without an effort and writes efforts';
+  const efforts = await mount('/requests', { now: CLOCK_ORIGIN });
+  const levels = (await openOptions(efforts, 'Effort')).map((o) => ({ mono: o.classList.contains('mono'), text: o.textContent?.trim() ?? '' }));
+  await pick(efforts, 'Effort', 'none');
+  const effortless = listed(efforts);
+  results.push({
+    name: effortCheck,
+    ok:
+      after('Effort', 'Turn origin') &&
+      JSON.stringify(levels.map((l) => l.text)) === JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max', 'none', 'other']) &&
+      levels.every((l) => l.mono) &&
+      effortless.length > 0 &&
+      effortless.every((r) => r !== null && r.shape.effort === null) &&
+      param(efforts, 'efforts') === 'none',
+    missing: [JSON.stringify(levels), `${effortless.length} rows`, efforts.location().search],
+  });
+  efforts.unmount();
+
+  const classCheck = '/requests the Request class filter lists the rows without a class under unattributed, then the main rows, and writes request_classes';
+  const classes = await mount('/requests', { now: CLOCK_ORIGIN });
+  const offered = (await openOptions(classes, 'Request class')).map((o) => ({ mono: o.classList.contains('mono'), text: o.textContent?.trim() ?? '' }));
+  await pick(classes, 'Request class', 'unattributed');
+  const classless = { param: param(classes, 'request_classes'), rows: listed(classes) };
+  // A chosen class narrows the loaded rows, and with them the classes offered, so the second choice starts from Reset.
+  resetOf(classes)?.click();
+  await classes.settle();
+  await pick(classes, 'Request class', 'main');
+  const mains = { param: param(classes, 'request_classes'), rows: listed(classes) };
+  results.push({
+    name: classCheck,
+    ok:
+      after('Request class', 'Effort') &&
+      JSON.stringify(offered.slice(-2).map((o) => o.text)) === JSON.stringify(['unattributed', 'other']) &&
+      offered.some((o) => o.text === 'main') &&
+      offered.every((o) => o.mono) &&
+      classless.param === '-' &&
+      classless.rows.length > 0 &&
+      classless.rows.every((r) => r !== null && r.requestClass === null) &&
+      mains.param === 'main' &&
+      mains.rows.length > 0 &&
+      mains.rows.every((r) => r !== null && r.requestClass === 'main'),
+    missing: [JSON.stringify(offered), JSON.stringify({ ...classless, rows: classless.rows.length }), JSON.stringify({ ...mains, rows: mains.rows.length })],
+  });
+  classes.unmount();
 }
 
 // A filter fed by a list that did not load offers nothing to pick, so it is disabled and says why where a pointer and a
@@ -10838,6 +11043,51 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
+  // The panel names a reason by its label and its links by the name the beta sent.
+  const reasonOf = {
+    'History edited': 'messages_changed',
+    'Model changed': 'model_changed',
+    'No divergence': 'none',
+    'Not requested': 'not_requested',
+    'Previous message not found': 'previous_message_not_found',
+    'System prompt changed': 'system_changed',
+    'Tools changed': 'tools_changed',
+    Unavailable: 'unavailable',
+  };
+  const countOf = (el) => Number(el?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? NaN);
+  {
+    const keyFilter = () => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
+    const toggleKey = async (value) => {
+      keyFilter()?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+      [...(keyFilter()?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === value)?.click();
+      await m.settle(700);
+      keyFilter()?.querySelector('.mselect__trigger')?.click();
+      await m.settle(150);
+    };
+    const bars = () => [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => ({ count: countOf(li.querySelector('.num')), label: li.children[0]?.textContent?.trim() ?? '', link: li.querySelector('.num > a') }));
+    await toggleKey('desktop');
+    const keyed = bars();
+    const counted = keyed.filter((b) => b.count > 0);
+    const wrong = counted.flatMap((b) => {
+      const t = logTarget(b.link?.getAttribute('href'));
+      const hourly = Date.parse(t.from) % 3_600_000 === 0 && Date.parse(t.to) > Date.parse(t.from);
+      return b.link && t.path === '/requests' && t.cache_miss_reasons === reasonOf[b.label] && hourly && t.keys === 'desktop' ? [] : [`${b.label} ${b.count} ${b.link?.getAttribute('href') ?? 'no link'}`];
+    });
+    results.push({
+      name: "/analytics a totals count links to the Requests page under its reason, the range's hours and the key filter",
+      ok: counted.length > 0 && wrong.length === 0 && keyed.filter((b) => b.count === 0).every((b) => b.link === null),
+      missing: wrong.length ? wrong : keyed.map((b) => `${b.label} ${b.count}`),
+    });
+    await toggleKey('desktop');
+    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+    await m.settle(700);
+    const probed = bars().find((b) => b.link !== null);
+    const probeTitle = probed?.link?.getAttribute('title') ?? '';
+    m.container.querySelector('.filters [role="switch"][aria-label="Include probes"]')?.click();
+    await m.settle(700);
+    results.push({ name: '/analytics with probes included a totals link says the list leaves the probes out', ok: probeTitle.includes('leaves the probes out') && logTarget(probed?.link?.getAttribute('href')).kind === undefined, missing: [probeTitle, probed?.link?.getAttribute('href') ?? 'no link'] });
+  }
   await tab(m, 'Cache warming');
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
@@ -10957,6 +11207,51 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
+  }
+  {
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const groupBy = async (label) => {
+      const select = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+      setSelect.call(select, [...(select?.options ?? [])].find((o) => o.textContent === label)?.value);
+      select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(800);
+    };
+    // Each reason cell of the table, under its column's label, read with the link it draws.
+    const cellsOf = (dimension) => {
+      const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Misses by reason by ${dimension}`));
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      return [...(table?.querySelectorAll('tbody tr') ?? [])].flatMap((tr) =>
+        [...tr.children].slice(1).map((td, i) => ({ column: heads[i + 1], count: countOf(td), link: td.querySelector('a'), row: tr.children[0]?.textContent?.trim() ?? '', title: td.querySelector('[title]')?.getAttribute('title') ?? '' })),
+      );
+    };
+    // The group key is not drawn, so a row is found by its label and the key it stands for is named beside it.
+    const linksUnder = (dimension, param, rows) => {
+      const cells = cellsOf(dimension).filter((c) => c.column !== 'Expired between turns' && Object.hasOwn(rows, c.row) && c.count > 0);
+      const wrong = cells.flatMap((c) => {
+        const t = logTarget(c.link?.getAttribute('href'));
+        return c.link && t.path === '/requests' && t[param] === rows[c.row] && t.cache_miss_reasons === reasonOf[c.column] ? [] : [`${c.row} ${c.column} ${c.link?.getAttribute('href') ?? 'no link'}`];
+      });
+      return { linked: new Set(cells.map((c) => c.row)), wrong };
+    };
+    const byKey = linksUnder('key', 'keys', { desktop: 'desktop', laptop: 'laptop' });
+    results.push({ name: '/analytics a breakdown cell under the key grouping links with its key', ok: byKey.linked.size === 2 && byKey.wrong.length === 0, missing: [...byKey.wrong, `rows ${[...byKey.linked].join(',')}`] });
+    const expired = cellsOf('key').filter((c) => c.column === 'Expired between turns');
+    results.push({ name: '/analytics the Expired between turns cells carry no link', ok: expired.some((c) => c.count > 0) && expired.every((c) => c.link === null), missing: expired.map((c) => `${c.row} ${c.count} ${c.link ? 'linked' : 'plain'}`) });
+    await groupBy('Effort');
+    const byEffort = linksUnder('effort', 'efforts', { high: 'high', max: 'max', none: 'none' });
+    results.push({ name: '/analytics a breakdown cell under the effort grouping links with its effort', ok: byEffort.linked.size === 3 && byEffort.wrong.length === 0, missing: [...byEffort.wrong, `rows ${[...byEffort.linked].join(',')}`] });
+    await groupBy('Request class');
+    const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
+    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
+    await groupBy('User agent');
+    const agents = cellsOf('user agent');
+    const counted = agents.filter((c) => c.column !== 'Expired between turns' && c.count > 0);
+    results.push({
+      name: '/analytics no cell of the user agent grouping links, and a count says the request log matches the raw header',
+      ok: counted.length > 0 && agents.every((c) => c.link === null) && counted.every((c) => c.title.includes('raw header')),
+      missing: counted.map((c) => `${c.row} ${c.column} ${c.link ? 'linked' : c.title}`),
+    });
+    await groupBy('Key');
   }
   {
     // The account rollups carry the range and the account alone, so the section takes the account selection and
@@ -11462,8 +11757,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const perModel = trafficRows('model');
     const want = new Map();
     for (const r of requests.filter((x) => x.sessionId === session && x.kind !== 'probe')) {
-      const sums = want.get(r.model) ?? [0, 0];
-      want.set(r.model, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
+      const sums = want.get(r.canonicalModel) ?? [0, 0];
+      want.set(r.canonicalModel, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
     const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
     results.push({
@@ -11498,7 +11793,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Effort');
     const perEffort = trafficRows('effort');
     const counted = perEffort.reduce((n, row) => n + num(row[1]), 0);
-    const own = requests.filter((r) => r.sessionId === session).length;
+    // Include probes is off, so the session view lists the session's other rows alone, as the route does.
+    const own = requests.filter((r) => r.sessionId === session && r.kind !== 'probe').length;
     results.push({
       name: '/analytics a session groups on the effort each of its requests asked for',
       ok: perEffort.length > 0 && perEffort.every((row) => ['high', 'max', 'none'].includes(row[0])) && counted === own,
@@ -12561,7 +12857,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     // The parked main inside its ceilings and the one held past its horizon, each line's state word, cause and park.
     const lines = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
-    const lineOf = (park) => lines.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
+    // The park's deadline and wake count from the story's instant, so their lines are read on a view pinned to it:
+    // on the live clock the deadline's hours depend on how long the run took to get here.
+    const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
+    [...pinned.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+    await pinned.settle(250);
+    const parks = [...pinned.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
+    const lineOf = (park) => parks.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
     const read = (line) => ({
       cause: line?.querySelector('.agents__state > .badge:nth-child(2)')?.textContent?.trim() ?? null,
       hint: line?.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? null,
@@ -12572,6 +12874,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
     const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    pinned.unmount();
     const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({
       name: '/sessions the agent line shows the state word with its cause and the park detail',
