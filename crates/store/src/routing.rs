@@ -4,7 +4,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
-use crate::{AccountState, StateCause, Store, StoreError, LOCK_POISONED};
+use crate::{AccountState, Clock, StateCause, Store, StoreError, LOCK_POISONED};
 
 /// The identity a pin is held under: one conversation of one agent under one key, per model.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -333,7 +333,8 @@ impl Store {
     ) -> Result<T, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_routing_hold();
-        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { tx })))
+        let clock = self.clock.lock().expect(LOCK_POISONED).clone();
+        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { clock, tx })))
     }
 
     /// One routing commit under the lock, at `synchronous = NORMAL` while every other write of the connection runs
@@ -472,6 +473,7 @@ impl Store {
 
 /// The routing writes on one open transaction; each is the inner form of the public method of the same name.
 pub struct RoutingTx<'a> {
+    pub(crate) clock: Clock,
     pub(crate) tx: &'a Transaction<'a>,
 }
 
@@ -522,6 +524,7 @@ impl RoutingTx<'_> {
     ) -> Result<Option<(u64, AccountState)>, StoreError> {
         set_state_if_generations_on(
             self.tx,
+            (self.clock)(),
             id,
             state,
             cause,

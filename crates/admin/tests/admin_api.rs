@@ -1552,6 +1552,63 @@ async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_th
 }
 
 #[tokio::test]
+async fn an_account_re_created_inside_a_hold_answers_the_unread_reason_beside_the_deadline() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.usage.poll("business").await.unwrap();
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 10_000, Ordering::SeqCst);
+    let refused = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/usage/refresh",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused["poll"]["last_outcome"], "rate_limited", "{refused}");
+    // The id is deleted and inserted again behind the routes, so nothing clears the poll's hold on it, and the
+    // snapshot the earlier holder left is filtered out.
+    let earlier = h.store.account("business").unwrap().unwrap();
+    h.store.delete_account("business", "test").unwrap();
+    h.store
+        .insert_account(&phoebis_store::AccountRow {
+            lifecycle_generation: earlier.lifecycle_generation + 1,
+            ..earlier
+        })
+        .unwrap();
+    let held = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            &held["error"],
+            &held["held_until"],
+            &held["fetched_at"],
+            &held["identity_generation"],
+        ),
+        (
+            &serde_json::json!("the poll has not read this account yet"),
+            &serde_json::json!(NOW + 10_000 + 120_000),
+            &serde_json::Value::Null,
+            &serde_json::json!(0),
+        ),
+        "{held}"
+    );
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+}
+
+#[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{

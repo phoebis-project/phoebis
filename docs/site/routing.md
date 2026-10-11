@@ -67,8 +67,8 @@ Every field, in the order the request body takes them:
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
 | `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20%. See Moves. |
 | `shed_share` | `0.5` | 0 to 1 |
-| `burn_window_seconds` | `600` | at least 60 |
-| `source_dwell_seconds` | `900` | at least 60 |
+| `burn_window_seconds` | `600` | 60 to 604800 |
+| `source_dwell_seconds` | `900` | 60 to 604800 |
 | `migrate_when_spent` | `true` | `true` or `false` |
 | `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
 | `retry_in_place_seconds` | `60` | 0 to 300; see Retry in place |

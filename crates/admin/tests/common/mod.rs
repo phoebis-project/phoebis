@@ -7,7 +7,7 @@
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
     router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
@@ -16,7 +16,8 @@ use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
+    spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
+    PriceTable, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
@@ -197,6 +198,61 @@ pub fn park_unreadable(db: &LedgerDb, pool: &str, account: &str, at: i64) {
         Ok(())
     })
     .unwrap();
+}
+
+/// Steps the harness clock, which the ledger's waits read.
+pub fn step(parts: &Full, by: Duration) {
+    parts
+        .clock_cell
+        .fetch_add(by.as_millis() as i64, Ordering::SeqCst);
+}
+
+/// The writer's retrying count.
+pub fn retrying(parts: &Full) -> u64 {
+    parts.ledger.stats().retrying.load(Ordering::SeqCst)
+}
+
+/// A step past the replay route's bound, so a replay asked for while the writer holds a batch is refused.
+pub fn step_past_replay_bound(parts: &Full) {
+    step(parts, Duration::from_secs(31));
+}
+
+/// Records `request` widened to a 512 KiB row on a filled disk, so the writer holds its batch under retry and takes
+/// no turn between batches until the disk is freed.
+pub async fn hold_the_writer(parts: &Full, request: RequestRecord, attempts: Vec<AttemptRecord>) {
+    parts.db.fill_the_disk();
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (retrying(parts) == 1).then_some(())
+    })
+    .await;
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands: the writer waits on an in-place
+/// retry or on its hold, and reads the clock every 250 ms, so each step gets a second to be seen.
+pub async fn free_the_writer(parts: &Full) {
+    parts.db.free_the_disk();
+    for _ in 0..10 {
+        step(parts, BATCH_RETRY_HOLD);
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < until {
+            if retrying(parts) == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    panic!("the held batch never landed");
 }
 
 /// The generation the store stamped for `key_id`. A companion session belongs to the key and the generation
@@ -674,8 +730,14 @@ async fn build_app(
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let clock: Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
     let store =
         store.unwrap_or_else(|| Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()));
+    store.set_clock(clock.clone());
     let paired = identity.is_some();
     // A store handed in by the caller already carries its own accounts; seeding it again would collide.
     if store.accounts().unwrap().is_empty() {
@@ -756,11 +818,6 @@ async fn build_app(
         control_builder.build(),
         resolver.clone(),
     ));
-    let clock_cell = Arc::new(AtomicI64::new(NOW));
-    let clock: Clock = {
-        let c = clock_cell.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
-    };
     let manager = Arc::new(CredentialManager::new(
         store.clone(),
         control.clone(),
@@ -853,7 +910,12 @@ async fn build_app(
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),
-        timing: KeepaliveTiming::default(),
+        // No jitter, so a probe's due instant reads the same in every capture.
+        timing: KeepaliveTiming {
+            jitter_5m_ms: 0,
+            jitter_1h_ms: 0,
+            ..KeepaliveTiming::default()
+        },
     });
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
@@ -873,6 +935,7 @@ async fn build_app(
         metrics_listen: "127.0.0.1:9464".into(),
         profile: p.name.into(),
         proxy_listen: "test".into(),
+        proxy_tls: tls,
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         subscription_costs_path: None,

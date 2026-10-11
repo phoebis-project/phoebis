@@ -88,6 +88,19 @@
       },
       {
         "route": "PATCH /admin/pools/{id}",
+        "field": "burn_window_seconds",
+        "value": 604800,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "burn_window_seconds",
+        "value": 604801,
+        "status": 400,
+        "error": "burn_window_seconds is at most 604800 (one week)"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
         "field": "source_dwell_seconds",
         "value": 60,
         "status": 200
@@ -98,6 +111,19 @@
         "value": 59,
         "status": 400,
         "error": "source_dwell_seconds is at least 60"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "source_dwell_seconds",
+        "value": 604800,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "source_dwell_seconds",
+        "value": 604801,
+        "status": 400,
+        "error": "source_dwell_seconds is at most 604800 (one week)"
       },
       {
         "route": "PATCH /admin/pools/{id}",

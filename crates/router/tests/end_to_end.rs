@@ -3251,15 +3251,6 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         (Some(1), Some(64)),
         "the session count beside the cap the file sets"
     );
-    let settings: serde_json::Value = client
-        .get(admin("/settings"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(64));
     let text = client
         .get(format!("http://127.0.0.1:{metrics_port}/metrics"))
         .send()

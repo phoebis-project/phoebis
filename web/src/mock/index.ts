@@ -89,7 +89,9 @@ const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
   if (!(input.shedShare >= 0 && input.shedShare <= 1)) return 'shed_share is between 0 and 1';
   if (!whole(input.burnWindowSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'burn_window_seconds is at least 60';
+  if (input.burnWindowSeconds > 604_800) return 'burn_window_seconds is at most 604800 (one week)';
   if (!whole(input.sourceDwellSeconds, 60, Number.MAX_SAFE_INTEGER)) return 'source_dwell_seconds is at least 60';
+  if (input.sourceDwellSeconds > 604_800) return 'source_dwell_seconds is at most 604800 (one week)';
   if (!WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions)) return 'warm_sessions must be always, never, or when_needed';
   if (!whole(input.retryInPlaceSeconds, 0, 300)) return 'retry_in_place_seconds is 0 to 300';
   if (!whole(input.inFlightCap, 1, 4_294_967_295)) return 'in_flight_cap is at least 1';

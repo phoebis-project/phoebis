@@ -5,9 +5,7 @@ use std::time::Duration;
 use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::Delivery;
-use phoebis_ledger::{
-    AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord, BATCH_RETRY_HOLD,
-};
+use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
 use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause};
 
 const HOUR: i64 = 3_600_000;
@@ -86,11 +84,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ("about", &["profile", "version"][..]),
         ("access", &["admin_configured"]),
         ("api_prices", &["content", "effective", "source"]),
-        (
-            "keepalive",
-            &["max_agents", "max_retained_bytes", "max_sessions"],
-        ),
-        ("listeners", &["metrics", "proxy"]),
+        ("listeners", &["metrics", "proxy", "proxy_tls"]),
         ("retention", &["body_capture_max_hours"]),
         ("sessions", &["expire_after_seconds"]),
         (
@@ -120,20 +114,16 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     assert_eq!(
         (
             settings["retention"]["body_capture_max_hours"].as_u64(),
-            settings["keepalive"]["max_agents"].as_u64(),
-            settings["keepalive"]["max_retained_bytes"].as_u64(),
-            settings["keepalive"]["max_sessions"].as_u64(),
             settings["sessions"]["expire_after_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str(),
+            settings["listeners"]["proxy_tls"].as_bool(),
             settings["usage"]["cache_ttl_seconds"].as_u64()
         ),
         (
             Some(72),
-            Some(1_024),
-            Some(268_435_456),
-            Some(128),
             Some(86_400),
             Some("127.0.0.1:9464"),
+            Some(false),
             Some(60)
         )
     );
@@ -241,7 +231,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["mirror_lagged"].as_u64()
         ),
         (Some(0), Some(0)),
-        "a ledger that stored every decision has no orphaned cache map, and a mirror that kept up missed nothing: {system}"
+        "every decision stored leaves no orphaned cache map, and a mirror that kept up missed nothing: {system}"
     );
     assert_eq!(
         (
@@ -308,6 +298,18 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (&system["ready"], &system["dead"]),
         (&serde_json::json!(true), &serde_json::json!([])),
         "the harness's router task, ledger consumer and store are all alive"
+    );
+}
+
+#[tokio::test]
+async fn the_settings_answer_reads_proxy_tls_true_where_the_proxy_listener_terminates_tls() {
+    let (app, _up) = common::admin_app_tls().await;
+    let cookie = login(&app, "admin-secret").await;
+    let settings = json(get(&app, "/admin/settings", Some(&cookie)).await).await;
+    assert_eq!(
+        settings["listeners"]["proxy_tls"].as_bool(),
+        Some(true),
+        "{settings}"
     );
 }
 
@@ -472,21 +474,6 @@ async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
     );
 }
 
-/// Steps the harness clock, which the ledger's waits read.
-fn step(parts: &common::Full, by: Duration) {
-    parts
-        .clock_cell
-        .fetch_add(by.as_millis() as i64, std::sync::atomic::Ordering::SeqCst);
-}
-
-fn retrying(parts: &common::Full) -> u64 {
-    parts
-        .ledger
-        .stats()
-        .retrying
-        .load(std::sync::atomic::Ordering::SeqCst)
-}
-
 /// Parks a priced record the writer can land, once its start-up pass is behind it: a replay answers from the writer's
 /// loop alone, which starts after the pass, so the pass cannot take the row before the case asks.
 async fn park_landable(parts: &common::Full, cookie: &str) {
@@ -515,48 +502,15 @@ async fn park_landable(parts: &common::Full, cookie: &str) {
         .unwrap();
 }
 
-/// A request row too wide for the capped file, so the writer holds its batch under retry and takes no turn between
-/// batches until the disk is freed.
-async fn hold_the_writer(parts: &common::Full) {
-    parts.db.fill_the_disk();
+/// The request the writer is held on, as `record` builds it.
+fn held() -> (RequestRecord, Vec<AttemptRecord>) {
     let Record::Request {
         request, attempts, ..
     } = record("held", common::NOW, "claude-sonnet-5", "s1")
     else {
         unreachable!("`record` builds a request")
     };
-    parts
-        .ledger
-        .record_request(Record::Request {
-            request: RequestRecord {
-                user_agent: Some("x".repeat(512 << 10)),
-                ..request
-            },
-            attempts,
-            bodies: None,
-        })
-        .await;
-    wait_for(Duration::from_secs(5), || {
-        (retrying(parts) == 1).then_some(())
-    })
-    .await;
-}
-
-/// Frees the disk and steps the clock a hold at a time until the held batch lands: the writer waits on an in-place
-/// retry or on its hold, and reads the clock every 250 ms, so each step gets a second to be seen.
-async fn free_the_writer(parts: &common::Full) {
-    parts.db.free_the_disk();
-    for _ in 0..10 {
-        step(parts, BATCH_RETRY_HOLD);
-        let until = std::time::Instant::now() + Duration::from_secs(1);
-        while std::time::Instant::now() < until {
-            if retrying(parts) == 0 {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    }
-    panic!("the held batch never landed");
+    (request, attempts)
 }
 
 /// The replay route called on a task, so the case can step the clock while it waits.
@@ -577,10 +531,11 @@ async fn the_replay_route_answers_503_after_its_bound_while_the_writer_is_held_a
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     park_landable(&parts, &cookie).await;
-    hold_the_writer(&parts).await;
+    let (request, attempts) = held();
+    common::hold_the_writer(&parts, request, attempts).await;
     let asked = replay_on_a_task(&parts, &cookie);
     stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
-    step(&parts, Duration::from_secs(31));
+    common::step_past_replay_bound(&parts);
     let refused = tokio::time::timeout(Duration::from_secs(5), asked)
         .await
         .expect("the route answers once its bound passed")
@@ -590,7 +545,7 @@ async fn the_replay_route_answers_503_after_its_bound_while_the_writer_is_held_a
         json(refused).await,
         serde_json::json!({"error": "the ledger writer is held, try again"})
     );
-    free_the_writer(&parts).await;
+    common::free_the_writer(&parts).await;
     // The control channel is read in order, so the message given up on reaches the writer ahead of this one: a landed
     // row here means the first never ran.
     let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
@@ -608,11 +563,12 @@ async fn the_replay_route_answers_200_for_a_replay_the_writer_claimed_inside_the
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     park_landable(&parts, &cookie).await;
-    hold_the_writer(&parts).await;
+    let (request, attempts) = held();
+    common::hold_the_writer(&parts, request, attempts).await;
     let asked = replay_on_a_task(&parts, &cookie);
     stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
     parts.db.free_the_disk();
-    step(&parts, Duration::from_secs(15));
+    common::step(&parts, Duration::from_secs(15));
     let landed = || {
         parts
             .db
@@ -625,7 +581,7 @@ async fn the_replay_route_answers_200_for_a_replay_the_writer_claimed_inside_the
             == 0
     };
     wait_for(Duration::from_secs(5), || landed().then_some(())).await;
-    step(&parts, Duration::from_secs(16));
+    common::step(&parts, Duration::from_secs(16));
     let answered = tokio::time::timeout(Duration::from_secs(5), asked)
         .await
         .expect("the claimed replay answers")
@@ -807,7 +763,7 @@ async fn the_price_routes_answer_the_long_context_set_beside_the_standard_cells(
         assert_eq!(
             models[long_model],
             serde_json::to_value(long_row).unwrap(),
-            "{route}: a model priced by prompt length answers its threshold and the five cells over it under the file's names"
+            "{route}: a banded model answers its threshold and the five cells over it under the file's names"
         );
         assert_eq!(
             models[plain_model],
@@ -3115,10 +3071,11 @@ async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names
     parts
         .ledger
         .record(routing_event(now + 3_000, "cooldown_cleared"));
-    // `from` as an RFC 3339 instant, `to` as Unix milliseconds: the route reads both.
+    // `from` as an RFC 3339 instant, `to` as Unix milliseconds: the route reads both. The page opens a millisecond
+    // past `now`, the instant the store stamped the pool and the key with, so their registry rows stay off it.
     let page = wait_json(
         &parts.app,
-        "/admin/routing-log?from=1970-01-01T00:16:40Z&to=1010000",
+        "/admin/routing-log?from=1970-01-01T00:16:40.001Z&to=1010000",
         &cookie,
         |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
     )
@@ -3171,7 +3128,9 @@ async fn the_routing_log_pages_through_its_cursor() {
     parts
         .ledger
         .record(routing_event(now + 3_000, "cooldown_cleared"));
-    let range = format!("from={now}&to={}", now + 10_000);
+    // A millisecond past `now`, the instant the store stamped the pool and the key with, so their registry rows stay
+    // off the pages.
+    let range = format!("from={}&to={}", now + 1, now + 10_000);
     wait_json(
         &parts.app,
         &format!("/admin/routing-log?{range}"),
@@ -3253,6 +3212,45 @@ async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_l
             "{query}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_empty_kinds_reads_as_the_default_set() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now - 3_000).await;
+    // Outside the default set, so an empty `kinds=` read as every kind would answer it.
+    parts
+        .ledger
+        .record(routing_event(now - 2_000, "warm_prefix_expired"));
+    parts
+        .ledger
+        .record(routing_event(now - 1_000, "cooldown_set"));
+    // The window closes a millisecond before `now`, the instant the store stamped the pool and the key with, so
+    // their registry rows cannot land between the two reads.
+    let window = format!("from={}&to={}", now - 10_000, now - 1);
+    let absent = wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?{window}"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let emptied = json(
+        get(
+            &parts.app,
+            &format!("/admin/routing-log?{window}&kinds="),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        emptied["rows"], absent["rows"],
+        "an empty kinds answers the page an absent one does"
+    );
 }
 
 #[tokio::test]

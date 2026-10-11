@@ -1100,7 +1100,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         Some(&cookie),
     )
     .await;
-    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    // The key's generation is the stamp the store gave it, read back rather than assumed.
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let land = |id: &str, at: i64| {
         parts.ledger.record(Record::Request {
@@ -1813,7 +1813,7 @@ async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
             .status(),
         204
     );
-    // The first holder's create is moved a minute past the wall clock: the state the second create sees when
+    // The first holder's create is moved a minute past the store's clock: the state the second create sees when
     // it lands inside the first's millisecond, pinned rather than raced for.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
@@ -2053,6 +2053,90 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
         ),
         (Some(1.0), Some(1.0), Some(300), Some(300), Some(10_080)),
         "every field's upper inclusive edge is accepted"
+    );
+}
+
+#[tokio::test]
+async fn a_burn_window_or_a_source_dwell_past_a_week_is_refused_and_writes_nothing() {
+    let (app, _up) = common::admin_app().await;
+    let app = &app;
+    let cookie = &login(app, "admin-secret").await;
+    let created = post(
+        app,
+        "/admin/pools",
+        r#"{"id":"eng","label":"Engine"}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let listed =
+        || async move { json(get(app, "/admin/pools", Some(cookie)).await).await["pools"].clone() };
+    let before = listed().await;
+    for (field, message) in [
+        (
+            "burn_window_seconds",
+            "burn_window_seconds is at most 604800 (one week)",
+        ),
+        (
+            "source_dwell_seconds",
+            "source_dwell_seconds is at most 604800 (one week)",
+        ),
+    ] {
+        let refused = post(
+            app,
+            "/admin/pools",
+            &format!(r#"{{"id":"wide","label":"Wide","{field}":604801}}"#),
+            Some(cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "POST {field}");
+        assert_eq!(json(refused).await["error"].as_str(), Some(message));
+        let refused = patch(
+            app,
+            "/admin/pools/eng",
+            &format!(r#"{{"{field}":604801}}"#),
+            Some(cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "PATCH {field}");
+        assert_eq!(json(refused).await["error"].as_str(), Some(message));
+        assert_eq!(listed().await, before, "a refused {field} writes nothing");
+    }
+    let week = |pool: &serde_json::Value| {
+        (
+            pool["burn_window_seconds"].as_u64(),
+            pool["source_dwell_seconds"].as_u64(),
+        )
+    };
+    let admitted = json(
+        post(
+            app,
+            "/admin/pools",
+            r#"{"id":"week","label":"Week","burn_window_seconds":604800,"source_dwell_seconds":604800}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        week(&admitted),
+        (Some(604_800), Some(604_800)),
+        "a create at the ceiling is admitted"
+    );
+    let patched = json(
+        patch(
+            app,
+            "/admin/pools/eng",
+            r#"{"burn_window_seconds":604800,"source_dwell_seconds":604800}"#,
+            Some(cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        week(&patched),
+        (Some(604_800), Some(604_800)),
+        "an update to the ceiling is admitted"
     );
 }
 
@@ -2614,6 +2698,96 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
             Some(15),
         ),
         "an unrelated patch leaves every engine field at what it was stored with"
+    );
+}
+
+/// Each member counts the pins under the pool's keys on its own account, so the members' counts sum to the pool's.
+#[tokio::test]
+async fn each_pool_member_answers_the_pins_under_the_pools_keys_on_its_account() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    // An account is a member of one pool, so the spare pool holds none: its key's pin on `business` is the one a
+    // count over the account alone would take.
+    for (pool, key, members) in [
+        (
+            "main",
+            "k",
+            r#"[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]"#,
+        ),
+        ("spare", "other", "[]"),
+    ] {
+        let created = post(
+            &first,
+            "/admin/pools",
+            &format!(
+                r#"{{"id":"{pool}","label":"{pool}","strategy":"priority","members":{members}}}"#
+            ),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(created.status(), 201, "{}", json(created).await);
+        // A pin belongs to the live key of its id, so the key exists before the pins do.
+        let created = post(
+            &first,
+            "/admin/keys",
+            &format!(r#"{{"id":"{key}","label":"{key}","pool_id":"{pool}"}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(created.status(), 201, "{}", json(created).await);
+    }
+    for (key, session, account) in [
+        ("k", "s1", "business"),
+        ("k", "s2", "business"),
+        ("k", "s3", "direct"),
+        ("other", "s4", "business"),
+    ] {
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: key.into(),
+                session_id: session.into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-4-5".into(),
+                account_id: account.into(),
+                epoch: 1,
+                created_at: common::NOW - 10_000,
+                last_used_at: common::NOW - 5,
+                key_generation: common::generation(&store, key),
+                incarnation: 1,
+                burn: phoebis_store::PinBurn::default(),
+                burn_at: None,
+                burn_banded: phoebis_store::PinBurn::default(),
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: phoebis_routing::lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+            })
+            .unwrap();
+    }
+    // A second app over the same store: its router task loads the pins the first one never saw.
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let main = pools["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .expect("the main pool is listed");
+    let members: Vec<(&str, Option<u64>)> = main["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["account_id"].as_str().unwrap(), m["active_pins"].as_u64()))
+        .collect();
+    assert_eq!(
+        (members, main["active_pins"].as_u64()),
+        (vec![("business", Some(2)), ("direct", Some(1))], Some(3)),
+        "the spare pool's pin on business counts for neither member: {main}"
     );
 }
 

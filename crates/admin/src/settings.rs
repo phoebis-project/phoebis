@@ -17,8 +17,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION") },
         "access": { "admin_configured": true },
         "api_prices": envelopes["api_prices"],
-        "keepalive": s.keepalive,
-        "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen },
+        "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen, "proxy_tls": s.proxy_tls },
         "retention": { "body_capture_max_hours": s.body_capture_max_hours },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
         "storage": {

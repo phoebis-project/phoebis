@@ -22,6 +22,7 @@ mod rules;
 mod session;
 mod sessions;
 mod settings;
+mod tiers;
 mod tls;
 
 use std::collections::HashMap;
@@ -101,11 +102,14 @@ pub struct SettingsView {
     /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
     /// upstream gave no length for still stands.
     pub cooldown_fallback_seconds: u64,
+    /// Not answered by the settings route: the sessions overview reads it to answer each cap beside its count.
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
     pub profile: String,
     pub proxy_listen: String,
+    /// Whether the proxy listener terminates TLS, the console's URL scheme.
+    pub proxy_tls: bool,
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
     pub subscription_costs_path: Option<String>,

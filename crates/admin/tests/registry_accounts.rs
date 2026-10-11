@@ -131,8 +131,8 @@ async fn a_creation_whose_key_check_fails_at_the_endpoint_is_refused_and_leaves_
         404,
         "a refused creation leaves no row"
     );
-    // The fake reads the request and closes without a head, which is what a host that is down looks like
-    // to the check, and the rule stays scoped to this one credential.
+    // The fake reads the request and closes the connection without a head, and the rule stays scoped to this one
+    // credential.
     up.add_credential_rule(
         "sk-ant-api03-GONE",
         "/v1/models",

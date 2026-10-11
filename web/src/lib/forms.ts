@@ -38,11 +38,11 @@ type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] ext
 
 /** The pool routes' inclusive bound on each whole-number engine field; the two shares are ratios from 0 to 1. */
 export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'paceFloor' | 'shedShare'>, { max: number; min: number }> = {
-  burnWindowSeconds: { max: Number.MAX_SAFE_INTEGER, min: 60 },
+  burnWindowSeconds: { max: 604_800, min: 60 },
   inFlightCap: { max: 4_294_967_295, min: 1 },
   overageMoveGraceMinutes: { max: 300, min: 0 },
   retryInPlaceSeconds: { max: 300, min: 0 },
-  sourceDwellSeconds: { max: Number.MAX_SAFE_INTEGER, min: 60 },
+  sourceDwellSeconds: { max: 604_800, min: 60 },
   windDownMinutes: { max: 10_080, min: 0 },
 };
 

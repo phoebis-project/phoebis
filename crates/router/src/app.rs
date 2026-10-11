@@ -392,6 +392,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             metrics_listen: config.stats.metrics_listen.to_string(),
             profile: profile.name.to_string(),
             proxy_listen: config.proxy.listen.to_string(),
+            proxy_tls: config.proxy.tls.is_some(),
             session_expire_after_seconds: config.sessions.expire_after_seconds,
             storage_path: config.storage.path.display().to_string(),
             subscription_costs_path: config

@@ -14,7 +14,7 @@
         "last_probe_at": null,
         "last_request_at": 1000000,
         "model": "claude-sonnet-5",
-        "next_probe_at": 1235276,
+        "next_probe_at": 1240000,
         "park_kind": null,
         "pool_id": "main",
         "probes_today": 0,

@@ -1506,7 +1506,7 @@ async fn the_request_log_reads_a_key_selector_by_lifetime() {
         Some(&cookie),
     )
     .await;
-    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    // The key's generation is the stamp the store gave it, read back rather than assumed.
     let live = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let earlier = live - 60_000;
     for (id, generation) in [("r-live", live), ("r-earlier", earlier)] {

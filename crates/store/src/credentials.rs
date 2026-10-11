@@ -293,7 +293,7 @@ impl Store {
         message: &str,
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         let updated = conn.execute(
             "UPDATE credentials SET last_error = ?3, updated_at = ?4 WHERE account_id = ?1 \
              AND EXISTS (SELECT 1 FROM accounts WHERE accounts.id = ?1 AND accounts.incarnation = ?2)",
@@ -332,7 +332,7 @@ impl Store {
             expected_generation,
             attempt_id,
             bundle,
-            jiff::Timestamp::now().as_millisecond(),
+            self.now_ms(),
         )?;
         tx.commit()?;
         Ok(generation)
@@ -355,7 +355,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
         // attempt whatever the clock does between the two writes.
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         let generation = self.commit_credentials_in(
             &tx,
             account_id,
@@ -546,7 +546,7 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         store_api_key_secret(&tx, &self.key, account_id, secret)?;
-        crate::accounts::bump_revision(&tx, account_id)?;
+        crate::accounts::bump_revision(&tx, self.now_ms(), account_id)?;
         tx.commit()?;
         Ok(())
     }
@@ -708,7 +708,7 @@ impl Store {
         if pending {
             return Err(StoreError::AttemptPending);
         }
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         conn.execute(
             "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, started_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -734,7 +734,7 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         let (label, detail) = match outcome {
             AttemptOutcome::Committed => ("committed", None),
             AttemptOutcome::Failed(detail) => ("failed", Some(detail)),

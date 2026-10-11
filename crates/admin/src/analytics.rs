@@ -18,6 +18,7 @@ use phoebis_store::AccountKind;
 use serde_json::{json, Map, Value};
 
 use crate::routes::{failure, store_failure};
+use crate::tiers::oauth_tiers;
 use crate::AdminState;
 
 const BURN_GROUP_BYS: &[&str] = &["account", "key", "request_class", "session"];
@@ -88,17 +89,11 @@ fn kinds_and_tiers(
 ) -> Result<(HashMap<String, AccountKind>, Tiers), Response> {
     let accounts = state.store.accounts().map_err(store_failure)?;
     let kinds = accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
-    let mut tiers = Tiers::new();
-    if group_by == "account" {
-        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-            let tier = state
-                .store
-                .subscription(&account.id)
-                .map_err(store_failure)?
-                .and_then(|s| s.tier);
-            tiers.insert(account.id.clone(), tier);
-        }
-    }
+    let tiers = if group_by == "account" {
+        oauth_tiers(&state.store, &accounts).map_err(store_failure)?
+    } else {
+        Tiers::new()
+    };
     Ok((kinds, tiers))
 }
 

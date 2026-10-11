@@ -640,7 +640,7 @@ test('a request carries its seven phases as ISO instants and null where the ledg
   assert.equal(ms(phases.writtenAt) - ms(failover.attempts[1].startedAt), 30, "the serving attempt's write");
   assert.deepEqual(
     [phases.headAt, phases.firstContentAt, phases.streamEndAt, phases.finishedAt].map((s) => ms(s) - ms(phases.receivedAt)),
-    [120, 300, 850, 900],
+    [520, 700, 850, 900],
     'the head, the first content, the stream end and the finish follow the receipt',
   );
   const bare = d.decodeRequest({ at: 5, phases: { received_at: 5 } }).phases;

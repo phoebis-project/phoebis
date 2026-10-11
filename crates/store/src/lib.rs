@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::{Arc, Condvar};
-use std::sync::{LockResult, Mutex, MutexGuard};
+use std::sync::Condvar;
+use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 use std::time::Duration;
 
 use base64::Engine;
@@ -286,7 +286,12 @@ impl Clone for StorageKey {
     }
 }
 
+/// The instant the store stamps a row with: the wall clock in production, and a test rig's own cell under
+/// `set_clock`, so a capture of the registry's answers reads the same twice.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
 pub struct Store {
+    clock: Mutex<Clock>,
     conn: CountedMutex<Connection>,
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
@@ -380,6 +385,7 @@ impl Store {
         prepare(&mut conn, true)?;
         check_or_seal_canary(&mut conn, key, db_path)?;
         Ok(Store {
+            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: Some(process_lock),
@@ -418,6 +424,7 @@ impl Store {
         prepare(&mut conn, false)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
         Ok(Store {
+            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: None,
@@ -448,6 +455,16 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_hold: Mutex::new(None),
         })
+    }
+
+    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it once, before it seeds the
+    /// registry, so two captures stamp the same instants.
+    pub fn set_clock(&self, clock: Clock) {
+        *self.clock.lock().expect(LOCK_POISONED) = clock;
+    }
+
+    pub(crate) fn now_ms(&self) -> i64 {
+        (self.clock.lock().expect(LOCK_POISONED))()
     }
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {

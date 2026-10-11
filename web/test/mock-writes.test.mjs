@@ -570,3 +570,16 @@ test('the mock answers each captured bound probe with the route\'s status and se
     if (error !== undefined) assert.equal(answer.reason.message, error, label);
   }
 });
+
+test('the mock refuses a burn window or a source dwell past a week and admits a week', async () => {
+  const api = await signedIn();
+  const base = await storyPool(api);
+  for (const [field, error] of [
+    ['burnWindowSeconds', 'burn_window_seconds is at most 604800 (one week)'],
+    ['sourceDwellSeconds', 'source_dwell_seconds is at most 604800 (one week)'],
+  ]) {
+    await assert.rejects(() => api.updatePool('all', { ...base, [field]: 604_801 }), refusedAs(400, error), `${field} 604801`);
+    const admitted = await api.updatePool('all', { ...base, [field]: 604_800 });
+    assert.equal(admitted[field], 604_800, `${field} 604800`);
+  }
+});
