@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -7452,6 +7452,33 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const three = requests.filter((r) => r.attempts.length === 3);
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
+/** The drawer's body block under `label`. */
+const bodyBlockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
+/**
+ * The rows a body viewer `pre` draws, each a line of its text. jsdom lays nothing out, so the window is the margin
+ * below an empty viewport: the text's first WINDOW_ROWS lines, which `firstRows` reads off an expected text.
+ */
+const drawnRows = (pre) => [...(pre?.querySelectorAll('.body-row') ?? [])].map((row) => row.textContent ?? '');
+const firstRows = (text) => text.split('\n').slice(0, WINDOW_ROWS).join('\n');
+/** What "Copy all" under `node` hands the clipboard, through a stub that stands for the one click. */
+const copiedByCopyAll = async (node) => {
+  const copied = [];
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
+  [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy all'].includes(b.textContent?.trim() ?? ''))?.click();
+  await m.settle(100);
+  delete window.navigator.clipboard;
+  return copied;
+};
+/** Opens `block` wide on `page` and answers the open dialog, whose viewer draws the body. */
+const openWide = async (page, block) => {
+  [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Open wide')?.click();
+  await page.settle(100);
+  return page.container.querySelector('dialog[open]');
+};
+const closeWide = async (page) => {
+  page.container.querySelector('dialog[open] .dialog__close')?.click();
+  await page.settle(100);
+};
 await m.navigate(`/requests/${laptopRow.id}`);
 results.push({
   name: "/requests the drawer's compact set holds no fill, so the table takes its content width beside the drawer",
@@ -7460,9 +7487,16 @@ results.push({
 });
 {
   // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
+  // The drawer draws no body text, so the bodies' needles are read from what Copy all hands over.
   const titles = [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
-  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response', 'cache_control', 'ephemeral_5m_input_tokens'];
-  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n))];
+  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response'];
+  const [request = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Request')?.querySelector('.body-block__head'));
+  const [response = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Response')?.querySelector('.body-block__head'));
+  const bodyNeedles = [
+    ['cache_control', request],
+    ['ephemeral_5m_input_tokens', response],
+  ];
+  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n)), ...bodyNeedles.filter(([n, text]) => !text.includes(n)).map(([n]) => `${n} in the copied body`)];
   results.push({ name: '/requests/:laptop drawer', ok: missing.length === 0, missing });
 }
 {
@@ -7576,26 +7610,38 @@ results.push({
 }
 // Back on the laptop request's drawer, which the search above left for the list.
 await m.navigate(`/requests/${laptopRow.id}`);
-// A captured body is serialized once per answer: a small one is indented at once, one past 256 KiB shows compact until
-// Pretty-print is pressed, Copy takes the text on screen, and a clock tick that redraws the drawer serializes nothing.
+// A captured body draws in the drawer as its head alone and opens wide indented whatever its size. Copy all takes the
+// whole text, and the indent runs once, when the body is first opened wide or copied, so neither the drawer's first
+// draw nor a clock tick that redraws it serializes a body.
 {
-  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
-  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
-  const shown = (block) => block?.querySelector('.body-block__pre')?.textContent ?? '';
-
-  const small = ['Request', 'Response'].map((label) => ({ label, pretty: pretty(blockOf(m, label)) !== undefined, text: shown(blockOf(m, label)) }));
-  results.push({
-    name: '/requests a captured body under the threshold is indented',
-    ok: small.every((b) => b.text.includes('\n  "') && !b.pretty),
-    missing: small.map((b) => `${b.label}: ${b.text.slice(0, 40)}${b.pretty ? ' with Pretty-print' : ''}`),
-  });
+  const pretty = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  {
+    const read = [];
+    for (const label of ['Request', 'Response']) {
+      const block = bodyBlockOf(m, label);
+      const [text = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+      read.push({ drawn: block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, label, pretty: pretty(block) !== undefined, text });
+    }
+    results.push({
+      name: '/requests a captured body draws its head alone in the drawer and copies indented',
+      ok: read.every((b) => b.drawn === 0 && !b.pretty && b.text.includes('\n  "')),
+      missing: read.map((b) => `${b.label}: ${b.drawn} drawn${b.pretty ? ', with Pretty-print' : ''}, ${JSON.stringify(b.text.slice(0, 40))}`),
+    });
+  }
   {
     // The laptop row streamed, and its stored capture is the text of its events: each `event:` line over its data,
-    // indented, the frames the upstream sends in order.
+    // indented, the frames the upstream sends in order. The frames run past the rows the wide view draws, so their
+    // order is read from the whole text Copy all hands over, and the drawn event spans from the rows it draws.
     const EVENTS = ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'];
-    const block = blockOf(m, 'Response');
-    const text = shown(block);
-    const events = [...(block?.querySelector('.body-block__pre')?.querySelectorAll('.tok-event') ?? [])].map((s) => s.textContent);
+    const block = bodyBlockOf(m, 'Response');
+    const [text = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const pre = (await openWide(m, block))?.querySelector('.body-block__pre');
+    const drawn = drawnRows(pre).join('\n');
+    const events = [...(pre?.querySelectorAll('.tok-event') ?? [])].map((s) => s.textContent);
+    await closeWide(m);
+    const eventRows = firstRows(text)
+      .split('\n')
+      .filter((line) => line.startsWith('event:')).length;
     // Each frame is found past the one before it, so the two deltas are two frames rather than one found twice.
     let from = 0;
     const ordered = EVENTS.every((e) => {
@@ -7605,12 +7651,12 @@ await m.navigate(`/requests/${laptopRow.id}`);
     });
     results.push({
       name: "/requests a streamed story row's Response block draws its events over indented data",
-      ok: laptopRow.transport === 'sse' && events.length === EVENTS.length && ordered && text.includes('"ephemeral_5m_input_tokens"'),
-      missing: [laptopRow.id, `${events.length} event spans: ${events.join(', ')}`, JSON.stringify(text.slice(0, 80))],
+      ok: laptopRow.transport === 'sse' && eventRows > 0 && events.length === eventRows && drawn === firstRows(text) && ordered && text.includes('"ephemeral_5m_input_tokens"'),
+      missing: [laptopRow.id, `${events.length} event spans for ${eventRows} event rows drawn: ${events.join(', ')}`, drawn === firstRows(text) ? '' : "the drawn rows are not the copied text's first rows", JSON.stringify(text.slice(0, 80))],
     });
   }
 
-  const largeCheck = '/requests a body over 256 KiB renders unindented with a Pretty-print action';
+  const largeCheck = '/requests a body over 256 KiB draws no Pretty-print and opens wide indented';
   const other = requests.find((r) => r.capturedBodies && r.id !== laptopRow.id);
   if (!other) results.push({ name: largeCheck, ok: false, missing: ['fixture'] });
   else {
@@ -7621,29 +7667,18 @@ await m.navigate(`/requests/${laptopRow.id}`);
       const answer = await original.call(api, id);
       return { ...answer, requestId: id, response: large, responseBytesStored: 300_000 };
     };
-    const copied = [];
-    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
-    // The button reads Copied for a moment after a write and still copies when pressed again.
-    const copy = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''))?.click();
     await m.navigate(`/requests/${other.id}`);
-    const response = () => blockOf(m, 'Response');
-    const before = { button: pretty(response()) !== undefined, text: shown(response()) };
-    copy(response());
-    await m.settle(100);
-    // Pressed from the keyboard's place: the button leaves as it is pressed, and the focus has to land on the text.
-    const pressed = pretty(response());
-    pressed?.focus();
-    pressed?.click();
-    await m.settle();
-    const after = { button: pretty(response()) !== undefined, focused: document.activeElement === response()?.querySelector('.body-block__pre'), text: shown(response()) };
-    copy(response());
-    await m.settle(100);
     api.getCapturedBodies = original;
-    delete window.navigator.clipboard;
+    const block = bodyBlockOf(m, 'Response');
+    const head = { drawn: block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, pretty: pretty(block) !== undefined };
+    const [copied = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const dialog = await openWide(m, block);
+    const wide = { pretty: pretty(dialog) !== undefined, text: drawnRows(dialog?.querySelector('.body-block__pre')).join('\n') };
+    await closeWide(m);
     results.push({
       name: largeCheck,
-      ok: before.button && before.text.length > 300_000 && !before.text.includes('\n') && !after.button && after.focused && after.text.includes('\n  "') && copied.length === 2 && copied[0] === before.text && copied[1] === after.text,
-      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text.length} characters, ${before.text.includes('\n') ? 'indented' : 'compact'}`, `after: ${after.button ? 'Pretty-print' : 'no Pretty-print'}, ${after.text.includes('\n') ? 'indented' : 'compact'}, focus on ${after.focused ? 'the text' : (document.activeElement?.tagName ?? 'nothing')}`, `copied ${copied.map((t) => t.length).join(', ')}`],
+      ok: head.drawn === 0 && !head.pretty && copied.length > 300_000 && copied.includes('\n  "') && !wide.pretty && wide.text === firstRows(copied) && wide.text.includes('\n  "'),
+      missing: [`drawer: ${head.drawn} drawn${head.pretty ? ', with Pretty-print' : ''}`, `copied ${copied.length} characters, ${copied.includes('\n  "') ? 'indented' : 'compact'}`, `wide: ${wide.pretty ? 'with Pretty-print, ' : ''}${wide.text === firstRows(copied) ? "the copied text's first rows" : 'other rows'}`],
     });
   }
 
@@ -7651,7 +7686,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
   // The request is a JSON object, serialized once, and the response is the text of a stream, split into its frames
   // once. The split is counted on the line split the frame reader runs over the stored text, since the reader itself
   // is a binding inside the bundle.
-  const firstCheck = '/requests the first draw serializes each captured body once';
+  const firstCheck = "/requests the drawer's first draw serializes no captured body";
+  const onceCheck = '/requests a captured body is serialized once, when it is first opened wide or copied';
   const tickCheck = '/requests a clock tick does not serialize the bodies again';
   const original = api.getCapturedBodies;
   const answered = [];
@@ -7675,10 +7711,25 @@ await m.navigate(`/requests/${laptopRow.id}`);
   };
   let frozen;
   let first = { ...serialized };
+  let opened = { ...serialized };
+  let drawer = { blocks: 0, drawn: -1 };
   try {
     frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
     api.getCapturedBodies = original;
     first = { ...serialized };
+    drawer = { blocks: frozen.container.querySelectorAll('.drawer .body-block').length, drawn: frozen.container.querySelectorAll('.drawer .body-block__pre').length };
+    // Opened wide twice and copied in between, the request still serializes once, and the response's frames split once.
+    const request = bodyBlockOf(frozen, 'Request');
+    await openWide(frozen, request);
+    await closeWide(frozen);
+    await copiedByCopyAll(request?.querySelector('.body-block__head'));
+    await openWide(frozen, request);
+    await closeWide(frozen);
+    const response = bodyBlockOf(frozen, 'Response');
+    await copiedByCopyAll(response?.querySelector('.body-block__head'));
+    await openWide(frozen, response);
+    await closeWide(frozen);
+    opened = { ...serialized };
     serialized.request = 0;
     serialized.response = 0;
     tick(15_000);
@@ -7689,24 +7740,24 @@ await m.navigate(`/requests/${laptopRow.id}`);
     api.getCapturedBodies = original;
   }
   const bodies = answered.at(-1);
-  const drawn = frozen.container.querySelectorAll('.drawer .body-block__pre').length;
-  results.push({ name: firstCheck, ok: bodies !== undefined && typeof bodies.response === 'string' && drawn === 2 && first.request === 1 && first.response === 1, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `request ${first.request} serializations, response ${first.response} frame splits on the first draw`] });
+  const answers = `${answered.length} answers`;
+  results.push({ name: firstCheck, ok: bodies !== undefined && typeof bodies.response === 'string' && drawer.blocks === 2 && drawer.drawn === 0 && first.request === 0 && first.response === 0, missing: [answers, `${drawer.blocks} blocks, ${drawer.drawn} bodies drawn`, `request ${first.request} serializations, response ${first.response} frame splits on the first draw`] });
+  const openedOnce = { request: opened.request - first.request, response: opened.response - first.response };
+  results.push({ name: onceCheck, ok: bodies !== undefined && openedOnce.request === 1 && openedOnce.response === 1, missing: [answers, `request ${openedOnce.request} serializations, response ${openedOnce.response} frame splits over the openings and copies`] });
   const after = serialized.request + serialized.response;
-  results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && after === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${after} serializations after the tick`] });
+  results.push({ name: tickCheck, ok: bodies !== undefined && drawer.blocks === 2 && after === 0, missing: [answers, `${drawer.blocks} blocks`, `${after} serializations after the tick`] });
   frozen.unmount();
 }
-// A streamed capture draws as its events over indented data and both blocks carry token spans, "Open wide" opens
-// the block in a dialog with the same text, Escape with the dialog open leaves the drawer, a plain string draws
-// unquoted, and a large stream stays its stored text until Pretty-print splits it. Each stubbed answer lands on a
-// captured row the drawer is not showing: a navigation to the shown path reads no bodies, and the block keyed on the
-// request keeps its Pretty-print state.
+// A streamed capture opens wide as its events over indented data and both blocks carry token spans, "Open wide" opens
+// the block in a dialog holding the text Copy all hands over, Escape with the dialog open leaves the drawer, a plain
+// string draws unquoted, and a large stream opens wide as its events. Each stubbed answer lands on a captured row the
+// drawer is not showing: a navigation to the shown path reads no bodies.
 {
-  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
-  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
-  const shown = (block) => block?.querySelector(':scope > .body-block__pre')?.textContent ?? '';
-  const spans = (block, cls) => [...(block?.querySelector(':scope > .body-block__pre')?.querySelectorAll(`.${cls}`) ?? [])].map((s) => s.textContent);
+  const pretty = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  const shownWide = (dialog) => drawnRows(dialog?.querySelector('.body-block__pre')).join('\n');
+  const spans = (dialog, cls) => [...(dialog?.querySelectorAll(`.body-block__pre .${cls}`) ?? [])].map((s) => s.textContent);
   const wide = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Open wide');
-  const copy = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''));
+  const copy = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy all'].includes(b.textContent?.trim() ?? ''));
   const original = api.getCapturedBodies;
   /** The next bodies read answers the row's own capture with `patch` over it, once. */
   const stub = (patch) => {
@@ -7718,39 +7769,42 @@ await m.navigate(`/requests/${laptopRow.id}`);
   };
   const shownPath = m.location().pathname;
   const [streamRow, plainRow, largeRow] = requests.filter((r) => r.capturedBodies && !r.responseTruncated && shownPath !== `/requests/${r.id}`).slice(-3);
-  const streamCheck = '/requests a captured stream draws its events over indented data and both blocks carry key spans';
+  const streamCheck = '/requests a captured stream opens wide as its events over indented data and both blocks carry key spans';
   const wideCheck = "/requests Open wide opens a dialog titled with the block's label and the request id holding the same text";
   const escapeCheck = '/requests Escape with the wide dialog open leaves the drawer open';
   const plainCheck = '/requests a plain string capture draws unquoted with its newlines';
-  const largeCheck = '/requests a large stream capture stays its stored text until Pretty-print splits it';
+  const largeCheck = '/requests a large stream capture opens wide as its events over indented data';
   if (!streamRow || !plainRow || !largeRow) {
     for (const name of [streamCheck, wideCheck, escapeCheck, plainCheck, largeCheck]) results.push({ name, ok: false, missing: ['fixture: three captured rows'] });
   } else {
     const sse = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
     stub({ response: sse, responseBytesStored: sse.length });
     await m.navigate(`/requests/${streamRow.id}`);
-    const request = blockOf(m, 'Request');
-    const response = blockOf(m, 'Response');
-    const text = shown(response);
-    const keys = spans(request, 'tok-key');
-    const events = spans(response, 'tok-event');
+    const request = bodyBlockOf(m, 'Request');
+    const responseWide = await openWide(m, bodyBlockOf(m, 'Response'));
+    const text = shownWide(responseWide);
+    const events = spans(responseWide, 'tok-event');
+    await closeWide(m);
+    const [requestText = ''] = await copiedByCopyAll(request?.querySelector('.body-block__head'));
+
+    wide(request)?.click();
+    await m.settle(100);
+    const dialog = m.container.querySelector('dialog[open]');
+    const keys = spans(dialog, 'tok-key');
     results.push({
       name: streamCheck,
       ok: text.includes('event: message_start\n{\n  "type"') && text.includes('event: message_stop') && keys.includes('"model"') && events.length === 2,
       missing: [`response: ${JSON.stringify(text.slice(0, 60))}`, `request keys: ${keys.slice(0, 3).join(', ')}`, `${events.length} event spans`],
     });
 
-    wide(request)?.click();
-    await m.settle(100);
-    const dialog = m.container.querySelector('dialog[open]');
     const title = dialog?.querySelector('.dialog__title')?.textContent ?? '';
     const expectedTitle = `Request of ${streamRow.id.length > 24 ? `${streamRow.id.slice(0, 24)}…` : streamRow.id}`;
-    const dialogText = dialog?.querySelector('.body-block__pre')?.textContent ?? '';
+    const dialogText = shownWide(dialog);
     const footCopy = copy(dialog?.querySelector('.dialog__foot')) !== undefined;
     results.push({
       name: wideCheck,
-      ok: dialog !== null && title === expectedTitle && dialogText.length > 0 && dialogText === shown(request) && footCopy,
-      missing: [dialog ? `title "${title}", expected "${expectedTitle}"` : 'no open dialog', dialogText === shown(request) ? '' : 'the dialog text differs from the block', footCopy ? '' : 'no Copy in the footer'],
+      ok: dialog !== null && title === expectedTitle && dialogText.length > 0 && dialogText === firstRows(requestText) && footCopy,
+      missing: [dialog ? `title "${title}", expected "${expectedTitle}"` : 'no open dialog', dialogText === firstRows(requestText) ? '' : 'the dialog text differs from the copied text', footCopy ? '' : 'no Copy all in the footer'],
     });
 
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
@@ -7768,28 +7822,106 @@ await m.navigate(`/requests/${laptopRow.id}`);
 
     stub({ request: 'line one\nline two', requestBytesStored: 17 });
     await m.navigate(`/requests/${plainRow.id}`);
-    const plain = shown(blockOf(m, 'Request'));
+    const plain = shownWide(await openWide(m, bodyBlockOf(m, 'Request')));
+    await closeWide(m);
     results.push({ name: plainCheck, ok: plain === 'line one\nline two', missing: [JSON.stringify(plain.slice(0, 40))] });
 
-    // One frame a few KiB long reaches the threshold in about a hundred frames, so the split draws thousands of
-    // spans rather than tens of thousands.
+    // One frame a few KiB long passes 256 KiB in about a hundred frames, so the split stays quick.
     const delta = `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(3_000)}"}}\n\n`;
     let stored = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n';
     while (stored.length <= 256 * 1024) stored += delta;
     stub({ response: stored, responseBytesStored: stored.length });
     await m.navigate(`/requests/${largeRow.id}`);
-    const large = () => blockOf(m, 'Response');
-    const before = { button: pretty(large()) !== undefined, events: spans(large(), 'tok-event').length, text: shown(large()) };
-    pretty(large())?.click();
-    await m.settle();
-    const after = shown(large());
+    const large = bodyBlockOf(m, 'Response');
+    const head = { drawn: large?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, pretty: pretty(large) !== undefined };
+    const [copied = ''] = await copiedByCopyAll(large?.querySelector('.body-block__head'));
+    const largeWide = await openWide(m, large);
+    const drawn = shownWide(largeWide);
+    const largeEvents = spans(largeWide, 'tok-event').length;
+    await closeWide(m);
     results.push({
       name: largeCheck,
-      ok: before.button && before.text === stored && before.events === 0 && !/\n {2}/.test(before.text) && after.startsWith('event: message_start\n{\n  "type"'),
-      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text === stored ? 'the stored text' : 'another text'}, ${before.events} event spans, ${/\n {2}/.test(before.text) ? 'indented' : 'compact'}`, `after: ${JSON.stringify(after.slice(0, 40))}`],
+      ok: head.drawn === 0 && !head.pretty && copied.startsWith('event: message_start\n{\n  "type"') && copied.includes('event: content_block_delta\n{\n  "type"') && drawn === firstRows(copied) && largeEvents > 0,
+      missing: [`drawer: ${head.drawn} drawn${head.pretty ? ', with Pretty-print' : ''}`, `copied: ${JSON.stringify(copied.slice(0, 40))}`, `wide: ${drawn === firstRows(copied) ? "the copied text's first rows" : 'other rows'}, ${largeEvents} event spans`],
     });
   }
   api.getCapturedBodies = original;
+}
+// A body of any size draws in the drawer as its head alone and opens wide in a window of its lines: 20,000 indented
+// lines draw a bounded count of rows in the dialog, scrolled to its end the dialog draws the last line at its offset,
+// and Copy all in the drawer's head hands over the whole text the DOM never holds.
+{
+  const check = '/requests a 20,000-line body draws no row in the drawer, the visible rows plus the margin wide, its last row at the end, and Copy all copies the whole text';
+  const shownPath = m.location().pathname;
+  const row = requests.find((r) => r.capturedBodies && shownPath !== `/requests/${r.id}`);
+  if (!row) results.push({ name: check, ok: false, missing: ['fixture: a captured row'] });
+  else {
+    // An array of 19,998 numbers indents to 20,000 lines.
+    const value = Array.from({ length: 19_998 }, (_, i) => i);
+    const expected = JSON.stringify(value, null, 2).split('\n');
+    const original = api.getCapturedBodies;
+    api.getCapturedBodies = async (id) => {
+      api.getCapturedBodies = original;
+      const answer = await original.call(api, id);
+      return { ...answer, request: value, requestBytesStored: JSON.stringify(value).length, requestId: id };
+    };
+    await m.navigate(`/requests/${row.id}`);
+    api.getCapturedBodies = original;
+    const block = bodyBlockOf(m, 'Request');
+    const inDrawer = block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1;
+    const [copied = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const pre = (await openWide(m, block))?.querySelector('.body-block__pre');
+    /** Each drawn row as its line number, read off its offset, with the text it holds. */
+    const rowsOf = () => [...(pre?.querySelectorAll('.body-row') ?? [])].map((r) => ({ at: parseFloat(r.style.top) / ROW_PX, text: r.textContent ?? '' }));
+    const inPlace = (rows) => rows.every((r, i) => r.text === expected[r.at] && (i === 0 || r.at === rows[i - 1].at + 1));
+    // jsdom lays nothing out, so before the geometry below the box reads 0 px tall and draws the margin alone.
+    const opened = rowsOf();
+    const height = pre?.querySelector('.body-rows')?.style.height;
+    // The geometry a browser gives the dialog's box, about its height at 1280 by 800, scrolled to the bottom offset
+    // it allows.
+    const box = 700;
+    let top = 0;
+    if (pre) {
+      Object.defineProperty(pre, 'clientHeight', { configurable: true, get: () => box });
+      Object.defineProperty(pre, 'scrollHeight', { configurable: true, get: () => 20_000 * ROW_PX });
+      Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => (top = to) });
+      pre.scrollTop = pre.scrollHeight - pre.clientHeight;
+      pre.dispatchEvent(new window.Event('scroll'));
+    }
+    await m.settle(100);
+    const scrolled = rowsOf();
+    await closeWide(m);
+    const bound = Math.ceil(box / ROW_PX) + 2 * WINDOW_ROWS;
+    const last = scrolled.at(-1);
+    results.push({
+      name: check,
+      ok:
+        expected.length === 20_000 &&
+        inDrawer === 0 &&
+        height === `${20_000 * ROW_PX}px` &&
+        opened.length === WINDOW_ROWS &&
+        opened[0]?.at === 0 &&
+        inPlace(opened) &&
+        scrolled.length > WINDOW_ROWS &&
+        scrolled.length <= bound &&
+        inPlace(scrolled) &&
+        last?.at === 19_999 &&
+        last?.text === expected[19_999] &&
+        copied === expected.join('\n'),
+      missing: [
+        `${expected.length} lines, ${inDrawer} drawn in the drawer, the block ${height ?? 'not drawn'} tall`,
+        `opened: ${opened.length} rows from line ${opened[0]?.at}${inPlace(opened) ? '' : ', a row off its line'}`,
+        `scrolled: ${scrolled.length} rows of at most ${bound}, the last at line ${last?.at} reading ${JSON.stringify(last?.text)}${inPlace(scrolled) ? '' : ', a row off its line'}`,
+        `copied ${copied.length} characters of ${expected.join('\n').length}`,
+      ],
+    });
+  }
+}
+{
+  // The rows sit at ROW_PX offsets while the stylesheet sizes each at --body-row, so the two figures must agree.
+  const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8');
+  const token = /--body-row:\s*(\d+(?:\.\d+)?)px/.exec(css)?.[1];
+  results.push({ name: "/requests the row height token and the viewer's constant agree", ok: token !== undefined && Number(token) === ROW_PX, missing: [`--body-row ${token ?? 'absent'}, ROW_PX ${ROW_PX}`] });
 }
 {
   const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
@@ -7808,19 +7940,21 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 }
 {
-  // Moving to another request while its bodies fail to load must not leave the previous prompt on screen.
+  // Moving to another request while its bodies fail to load must not leave the previous request's bodies in the drawer.
   const [first, second] = requests.filter((r) => r.capturedBodies && r.id !== laptopRow.id);
   if (first && second) {
     await m.navigate(`/requests/${first.id}`);
-    const drew = m.text().includes('cache_control');
+    const [prompt = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Request')?.querySelector('.body-block__head'));
+    const drew = prompt.includes('cache_control');
     failNextCall('getCapturedBodies', `/admin/requests/${second.id}/bodies`, 'the ledger is unavailable');
     await m.navigate(`/requests/${second.id}`);
     await m.settle(400);
     const text = m.text();
+    const left = m.container.querySelectorAll('.drawer .body-block').length;
     results.push({
       name: '/requests a failed bodies load reports itself and never draws the request before it',
-      ok: drew && text.includes('Could not load the captured bodies') && !text.includes('cache_control'),
-      missing: [drew ? '' : 'the first request drew no bodies', text.includes('Could not load the captured bodies') ? '' : 'no failed-load state', text.includes('cache_control') ? 'the previous bodies are still drawn' : ''],
+      ok: drew && text.includes('Could not load the captured bodies') && left === 0,
+      missing: [drew ? '' : 'the first request drew no bodies', text.includes('Could not load the captured bodies') ? '' : 'no failed-load state', left > 0 ? 'the previous bodies are still drawn' : ''],
     });
   } else {
     results.push({ name: '/requests two captured rows for the bodies check', ok: false, missing: ['fixture'] });

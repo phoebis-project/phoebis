@@ -129,3 +129,18 @@ test("the command's textarea is appended inside the button's open dialog, and th
   assert.ok(calls.recorded === dialog, 'the textarea sat inside the open dialog at the copy instant');
   assert.ok(document.activeElement === button, 'the focus is back on the button');
 });
+
+test('a text given as a function is read at each click and not while the button draws', async () => {
+  const written = [];
+  clipboard((text) => (written.push(text), Promise.resolve()));
+  let reads = 0;
+  const button = render(() => {
+    reads += 1;
+    return 'built at the click';
+  });
+  assert.equal(reads, 0, 'drawing the button builds no text');
+  await click(button);
+  await click(button);
+  assert.deepEqual(written, ['built at the click', 'built at the click']);
+  assert.equal(reads, 2);
+});

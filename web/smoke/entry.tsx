@@ -21,6 +21,8 @@ export { AttentionRows } from '@/components/AttentionRows';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
+// The viewer's row height and margin, so a body check bounds the drawn rows by the figures the viewer draws by.
+export { ROW_PX, WINDOW_ROWS } from '@/components/BodyViewer';
 // The two cost panels a check mounts alone, on a cost model the mock does not answer.
 export { PeakBand } from '@/components/costs/PeakBand';
 export { PlanRates } from '@/components/costs/PlanRates';

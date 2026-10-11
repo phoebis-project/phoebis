@@ -4,6 +4,7 @@ import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
 import { useFollow } from '@/app/useFollow';
+import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
@@ -15,7 +16,7 @@ import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { addressWindow, REQUEST_RANGES, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
-import { bodyText, highlightJson } from '@/lib/bodies';
+import { bodyLines, bodyText } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -757,9 +758,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               <Skeleton height={120} />
             ) : bodies.data ? (
               <div className="bodies">
-                {/* Keyed on the request, so a large body of the next request starts compact again. */}
-                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} stored={bodies.data.requestBytesStored} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} stored={bodies.data.responseBytesStored} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                {/* Keyed on the request, so the next request's block starts with its dialog closed. */}
+                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -825,26 +826,18 @@ function DiagnosticsValue({ source }: { source: DiagnosticsSource | null }) {
   return <span className="muted">none</span>;
 }
 
-/** Indenting a body past this many stored bytes is a long render and a far longer text, so it waits to be asked. */
-const PRETTY_LIMIT = 256 * 1024;
+/** A reader of `read`'s value that runs it once, the first time the value is asked for. */
+function once<T>(read: () => T): () => T {
+  let held: { value: T } | null = null;
+  return () => (held ??= { value: read() }).value;
+}
 
-function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: number; label: string; requestId: string; stored: number; value: unknown }) {
-  // The stored byte count sizes the body, so the first draw serializes it once; the memo keeps the drawer's redraws on
-  // every clock tick and list reload from serializing it again.
-  const large = stored > PRETTY_LIMIT;
-  const [pretty, setPretty] = useState(false);
+function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; label: string; requestId: string; value: unknown }) {
   const [wide, setWide] = useState(false);
-  const text = useMemo(() => bodyText(value, large && !pretty), [large, pretty, value]);
-  // A compact large body stays plain, and a large stream shows its stored text until Pretty-print splits it.
-  const tokens = useMemo(() => (large && !pretty ? null : highlightJson(text)), [large, pretty, text]);
-  const drawn = useMemo(() => (tokens === null ? text : tokens.map((t, i) => (t.cls === null ? t.text : <span key={i} className={t.cls}>{t.text}</span>))), [text, tokens]);
-  // Pretty-print leaves as it is pressed, so the focus moves to the text it indented rather than falling to the page.
-  // Under the open dialog the block's own text is inert, so the dialog's takes it.
-  const pre = useRef<HTMLPreElement>(null);
-  const widePre = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    if (pretty) (wide ? widePre : pre).current?.focus();
-  }, [pretty]);
+  // Indenting a large body is a long serialization and a far longer text, so the drawer draws no body and the indent
+  // runs when the body is first opened wide or copied. The memo keeps it while the drawer shows this body.
+  const textOf = useMemo(() => once(() => bodyText(value)), [value]);
+  const linesOf = useMemo(() => once(() => bodyLines(textOf())), [textOf]);
   // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
   // that opened it. The link takes it as the dialog goes.
   const link = useRef<HTMLButtonElement>(null);
@@ -862,21 +855,13 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
         <span>{label}</span>
         {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
         <span className="body-block__actions">
-          {large && !pretty && (
-            <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
-              Pretty-print
-            </Button>
-          )}
           <button ref={link} type="button" className="link-btn" onClick={() => setWide(true)}>
             Open wide
           </button>
-          <CopyButton text={text} />
+          <CopyButton text={textOf} label="Copy all" />
         </span>
       </div>
-      <pre ref={pre} className="body-block__pre" tabIndex={0}>
-        {drawn}
-      </pre>
-      {/* Mounted only while open, so the drawer holds one text per block. */}
+      {/* Mounted only while open, so a closed dialog draws no rows. */}
       {wide && (
         <Dialog
           open={wide}
@@ -884,20 +869,9 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
           title={`${label} of ${shortId(requestId, HEAD_ID_CHARS)}`}
           width={1040}
           className="dialog--wide"
-          footer={
-            <>
-              {large && !pretty && (
-                <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
-                  Pretty-print
-                </Button>
-              )}
-              <CopyButton text={text} />
-            </>
-          }
+          footer={<CopyButton text={textOf} label="Copy all" />}
         >
-          <pre ref={widePre} className="body-block__pre" tabIndex={0}>
-            {drawn}
-          </pre>
+          <BodyViewer highlight lines={linesOf()} />
         </Dialog>
       )}
     </div>

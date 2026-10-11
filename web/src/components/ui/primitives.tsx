@@ -329,7 +329,8 @@ function copyByCommand(text: string, button: HTMLElement): boolean {
   return copied;
 }
 
-export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string }) {
+/** `text` as a function is read at each click, so a text that is long to build waits until it is copied. */
+export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string | (() => string) }) {
   const [state, setState] = useState<'copied' | 'failed' | 'idle'>('idle');
   useEffect(() => {
     if (state === 'idle') return;
@@ -345,18 +346,19 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
       onClick={(e) => {
         // React resets the synthetic event's currentTarget once the handler returns, so the button is read first.
         const button = e.currentTarget;
+        const value = typeof text === 'function' ? text() : text;
         // Saying Copied without a write matters most in the secret dialog: the operator could close the only
         // display of a secret they never received. The command runs inside the click, the user gesture it honors.
         // After a rejected write it runs in the rejection callback, where it relies on the click's transient
         // activation still standing: a browser that counts the activation spent answers false, and the button lands
         // at the failed state rather than claiming the copy.
         if (!navigator.clipboard) {
-          setState(copyByCommand(text, button) ? 'copied' : 'failed');
+          setState(copyByCommand(value, button) ? 'copied' : 'failed');
           return;
         }
-        void navigator.clipboard.writeText(text).then(
+        void navigator.clipboard.writeText(value).then(
           () => setState('copied'),
-          () => setState(copyByCommand(text, button) ? 'copied' : 'failed'),
+          () => setState(copyByCommand(value, button) ? 'copied' : 'failed'),
         );
       }}
     >

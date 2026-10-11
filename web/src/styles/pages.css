@@ -2924,9 +2924,9 @@
   color: var(--ink-2);
 }
 
-/* Grouped, so the head's spread keeps Pretty-print beside Copy rather than in the middle of the row. A cut body's head
-   carries its note beside Pretty-print, Open wide and Copy, more than the compact drawer's row holds, so the actions
-   wrap among themselves rather than breaking a label. */
+/* Grouped, so the head's spread keeps Open wide beside Copy all rather than in the middle of the row. A cut body's head
+   carries its note beside Open wide and Copy all, more than the compact drawer's row may hold, so the actions wrap
+   among themselves rather than breaking a label. */
 .body-block__actions {
   display: flex;
   flex-wrap: wrap;
@@ -2952,6 +2952,26 @@
   background: var(--surface-2);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
+}
+
+/* One line of the mono text, 12 px at 1.5. The viewer places its rows by the same figure. */
+.body-block__pre {
+  --body-row: 18px;
+}
+
+.body-rows {
+  position: relative;
+}
+
+/* A row holds its line unwrapped at the fixed height, so a long line scrolls sideways and the block's height never
+   depends on what is drawn. */
+.body-row {
+  position: absolute;
+  left: 0;
+  min-width: 100%;
+  height: var(--body-row);
+  line-height: var(--body-row);
+  white-space: pre;
 }
 
 .snippet {

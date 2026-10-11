@@ -3549,13 +3549,97 @@ async function attemptCardAtTheBottom(theme) {
 }
 
 /**
+ * The computed color of the first drawn `.tok-event`, `.tok-key` and `.tok-string` span under `root`, each beside its
+ * theme token resolved on a probe, or null for a class no drawn row holds.
+ */
+const tokenColors = (root) =>
+  page.evaluate((selector) => {
+    const read = {};
+    for (const cls of ['tok-event', 'tok-key', 'tok-string']) {
+      const span = document.querySelector(`${selector} .body-row .${cls}`);
+      if (!span) {
+        read[cls] = null;
+        continue;
+      }
+      // A computed color holds the value, never the token's name, so the token is resolved on a probe of its own.
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.style.color = `var(--${cls})`;
+      read[cls] = { color: getComputedStyle(span).color, token: getComputedStyle(probe).color };
+      probe.remove();
+    }
+    return read;
+  }, root);
+
+/**
+ * The wide dialog's text scrolled to its end draws the body's last line at its row, still at most the rows in view
+ * plus 40. The last line is read from the text Copy all hands a `writeText` stub that stands for the one click, so the
+ * expectation is the whole text the DOM never holds.
+ */
+async function bodyEnd(theme, say) {
+  const box = 'dialog[open].dialog--wide .body-block__pre';
+  await page.evaluate(() => {
+    window.__e2eWritten = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (window.__e2eWritten.push(text), Promise.resolve()) } });
+  });
+  const copy = page.locator('dialog[open].dialog--wide .dialog__foot button', { hasText: 'Copy all' });
+  if ((await copy.count()) === 0) say('the wide dialog has no Copy all');
+  else await copy.first().click();
+  await advance(CLOCK_STEP_MS);
+  const lastAt = (selector) =>
+    page.evaluate((sel) => {
+      const pre = document.querySelector(sel);
+      const last = pre?.querySelector('.body-row:last-child');
+      return last ? Math.round(parseFloat(last.style.top) / parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'))) : null;
+    }, selector);
+  const before = await lastAt(box);
+  await page.evaluate((sel) => {
+    const pre = document.querySelector(sel);
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }, box);
+  // The paused clock owns the page's animation frames, so the scroll's frame lands as the clock steps past it.
+  await advance(CLOCK_STEP_MS);
+  const read = await page.evaluate((sel) => {
+    const written = window.__e2eWritten;
+    delete navigator.clipboard;
+    const pre = document.querySelector(sel);
+    if (!pre) return null;
+    const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
+    const rows = [...pre.querySelectorAll('.body-row')];
+    const text = written[0] ?? null;
+    const lines = text === null ? [] : text.split('\n');
+    if (text !== null && text !== '' && text.endsWith('\n')) lines.pop();
+    const last = rows.at(-1);
+    return {
+      copies: written.length,
+      drawn: rows.length,
+      lastAt: last ? Math.round(parseFloat(last.style.top) / token) : null,
+      lastHolds: last !== undefined && lines.length > 0 && last.textContent === lines.at(-1),
+      lines: lines.length,
+      visible: Math.ceil((pre.scrollTop + pre.clientHeight) / token) - Math.floor(pre.scrollTop / token),
+    };
+  }, box);
+  measurements.push(`${theme} /requests wide body scrolled to its end ${JSON.stringify({ before, ...read })}`);
+  if (read === null) {
+    say('the wide dialog closed before its text scrolled to the end');
+    return;
+  }
+  if (read.copies !== 1) say(`Copy all wrote ${read.copies} texts to the clipboard, not one`);
+  else if (read.lastAt !== read.lines - 1 || !read.lastHolds) say(`scrolled to its end, the text draws line ${read.lastAt} last, not its last line ${read.lines - 1}${read.lastHolds ? '' : ' with that line\'s text'}`);
+  if (read.drawn > read.visible + 40) say(`scrolled to its end, the text draws ${read.drawn} rows for ${read.visible} in view`);
+}
+
+/**
  * "Open wide" on a captured body: the dialog is 1040 px wide at 1280 by 800 and at 1440 by 900 and takes the grouped
  * dialogs' height (800 px, or the viewport less 48), its text fills the body past the drawer's 260 px cap and scrolls
- * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. It runs
- * after the drawer measure, so a drawer is open, and moves down the first page to the first row whose drawer draws a
- * body when that one draws none. In the mock pass it then narrows the list to the laptop key, opens a row whose answer
- * was cut and reads that the block's head, with the cut note and the row's actions (two on the story's cut row, whose
- * answer is small), overflows nowhere at the 400 px drawer and keeps the "Open wide" link on one line.
+ * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. The text
+ * draws as rows of `--body-row`, 18 px each, at most the rows in view plus 20 above and 20 below, and scrolled to its
+ * end it draws the last line of the text Copy all hands the clipboard. The key, string and event spans the wide view
+ * draws take their theme tokens' colors. It runs after the drawer measure, so a drawer is open, and moves down the
+ * first page to the first row whose drawer holds a captured body when that one holds none. In the mock pass it then
+ * narrows the list to the laptop key, opens a row whose answer was cut and reads that the block's head, with the cut
+ * note and the row's actions (two on the story's cut row, whose answer is small), overflows nowhere at the 400 px
+ * drawer and keeps the "Open wide" link on one line. The seeded router answers JSON alone, so only the mock pass draws
+ * an event span.
  */
 async function wideBodyDialog(theme) {
   const say = (what) => failures.push(`${theme} /requests wide body: ${what}`);
@@ -3592,12 +3676,16 @@ async function wideBodyDialog(theme) {
       const pre = body?.querySelector('.body-block__pre');
       if (!dialog || !body || !pre) return null;
       const s = getComputedStyle(body);
-      // The text is long when its lines outrun the box, read from the text rather than from the scroll it causes.
-      const lines = (pre.textContent ?? '').split('\n').length;
+      // The text is long when its lines outrun the box, read from the block of rows that holds every line at the row
+      // height rather than from the scroll it causes, since only the rows in view are drawn.
+      const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
+      const lines = Math.round((pre.querySelector('.body-rows')?.getBoundingClientRect().height ?? 0) / token);
+      const rows = [...pre.querySelectorAll('.body-row')];
+      const visible = Math.ceil((pre.scrollTop + pre.clientHeight) / token) - Math.floor(pre.scrollTop / token);
       return {
         body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
         dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
-        pre: { client: pre.clientHeight, lines, long: lines * parseFloat(getComputedStyle(pre).lineHeight) > pre.clientHeight, outer: pre.offsetHeight, scroll: pre.scrollHeight },
+        pre: { client: pre.clientHeight, drawn: rows.length, lines, long: lines * token > pre.clientHeight, outer: pre.offsetHeight, row: rows[0]?.getBoundingClientRect().height ?? null, scroll: pre.scrollHeight, token, visible },
       };
     });
   for (const { height, width } of [
@@ -3619,11 +3707,16 @@ async function wideBodyDialog(theme) {
     if (got.pre.client <= 260) say(`${where}: the text box is ${got.pre.client}px tall, within the drawer's 260px cap`);
     if (Math.abs(got.pre.outer - got.body.inner) > 1) say(`${where}: the text box is ${got.pre.outer}px tall in a body of ${got.body.inner}px`);
     if (got.pre.long && got.pre.scroll <= got.pre.client) say(`${where}: the text of ${got.pre.lines} lines does not scroll inside its box (${got.pre.scroll}px in ${got.pre.client}px)`);
+    if (got.pre.token !== 18) say(`${where}: the row token reads ${got.pre.token}px, not 18px`);
+    if (got.pre.row === null || Math.abs(got.pre.row - got.pre.token) > 0.01) say(`${where}: a drawn row is ${got.pre.row}px tall, not the token's ${got.pre.token}px`);
+    if (got.pre.drawn === 0 || got.pre.drawn > got.pre.visible + 40) say(`${where}: ${got.pre.drawn} rows drawn for ${got.pre.visible} in view`);
     if (got.body.scroll !== got.body.client) say(`${where}: the body scrolls (${got.body.scroll}px in ${got.body.client}px)`);
     if (got.dialog.scroll !== got.dialog.client) say(`${where}: the dialog scrolls (${got.dialog.scroll}px in ${got.dialog.client}px)`);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+  const colors = await tokenColors('dialog[open].dialog--wide');
+  await bodyEnd(theme, say);
   await page.keyboard.press('Escape');
   await settle();
   const after = await page.evaluate((el) => {
@@ -3634,7 +3727,18 @@ async function wideBodyDialog(theme) {
   if (after.dialog) say('Escape left the dialog open');
   if (!after.drawer) say('Escape closed the drawer with the dialog');
   if (after.focus !== 'the link') say(`Escape left the focus on ${after.focus}, not on the Open wide link it opened from`);
-  if (!mock) return;
+  const colorsHeld = () => {
+    measurements.push(`${theme} /requests body token colors ${JSON.stringify(colors)}`);
+    for (const [cls, read] of Object.entries(colors)) {
+      if (read === null) {
+        if (cls !== 'tok-event' || mock) say(`no drawn row holds a .${cls} span`);
+      } else if (read.color !== read.token) say(`a drawn .${cls} span reads ${read.color}, not the ${read.token} of --${cls}`);
+    }
+  };
+  if (!mock) {
+    colorsHeld();
+    return;
+  }
   // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
   await page.goto(`${base}/requests?keys=laptop`);
   await booted();
@@ -3668,6 +3772,35 @@ async function wideBodyDialog(theme) {
     if (cut.scroll > cut.client) say(`the cut body's head needs ${cut.scroll}px of its ${cut.client}px`);
     if (cut.link !== 1) say(`the cut body's Open wide link breaks over ${cut.link} lines`);
   }
+  // The story streams most answers, so a laptop row's Response opened wide draws the event span a JSON answer lacks:
+  // the open drawer's first, then the rows down the page until one does.
+  const responseColors = async () => {
+    const clicked = await page.evaluate(() => {
+      const block = [...document.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === 'Response');
+      const open = block?.querySelector('.link-btn');
+      open?.click();
+      return Boolean(open);
+    });
+    if (!clicked) return {};
+    const drew = await page
+      .waitForSelector('dialog[open].dialog--wide .body-row', { timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    await settle();
+    const read = drew ? await tokenColors('dialog[open].dialog--wide') : {};
+    await page.keyboard.press('Escape');
+    await settle();
+    return read;
+  };
+  for (let i = -1, n = await rows.count(); i < n && colors['tok-event'] === null; i += 1) {
+    if (i >= 0) {
+      await rows.nth(i).click();
+      await advance(LOAD_MS);
+      await loaded();
+    }
+    for (const [cls, read] of Object.entries(await responseColors())) colors[cls] ??= read;
+  }
+  colorsHeld();
 }
 
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';

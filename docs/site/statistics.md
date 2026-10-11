@@ -446,9 +446,9 @@ equivalent after them, an overage, fast mode or API key request reads dollars wi
 cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and each row a
 "Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either
 side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the
-chosen set returns when it closes. The drawer shows the captured request and response bodies highlighted, a streamed
-answer as its events with each `event:` line over its data, each with Copy, which copies the text as shown, and an "Open
-wide" link that opens the body in a wide dialog. A body past 256 KiB shows compact until Pretty-print is pressed.
+chosen set returns when it closes. The drawer lists the captured request and response bodies, each with Copy all,
+which copies the whole text, and an "Open wide" link. The wide view draws a body of any size pretty-printed and
+highlighted in a window of its lines, a streamed answer as its events with each `event:` line over its data.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
