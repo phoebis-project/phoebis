@@ -16,6 +16,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "enabled": true,
       "cancelled": false,
       "state": "ready",
+      "funding_retry_at": null,
       "identity": {
         "email": "test@example.invalid",
         "account_uuid": "00000000-0000-4000-8000-000000000001",
@@ -277,6 +278,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "enabled": true,
           "cancelled": false,
           "state": "ready",
+          "funding_retry_at": null,
           "identity": {
             "email": "test@example.invalid",
             "account_uuid": "00000000-0000-4000-8000-000000000001",
@@ -397,6 +399,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "enabled": true,
           "cancelled": false,
           "state": "ready",
+          "funding_retry_at": null,
           "identity": null,
           "credential": null,
           "lifecycle_generation": 1,
@@ -7676,7 +7679,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "RLotbS1_",
+      "prefix": "QMnHxrj4",
       "created_at": 1000000,
       "updated_at": 1000000,
       "revision": 4398047511104,
@@ -7744,7 +7747,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "RLotbS1_",
+          "prefix": "QMnHxrj4",
           "created_at": 1000000,
           "updated_at": 1000000,
           "revision": 4398047511104,
@@ -7815,9 +7818,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "z98uzyFNnb0g-coVv5Dd6JmpLRP2N-PVh1sH2ARhSYY",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A53994%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=LtlgjvYQTeZHEhgCLanEvOwIPNXxbQEL49blB6t7yp4&code_challenge_method=S256&state=tRqO-2k8PbgxJVTHO5DMR6mGEyQNQeHvFZVdssIn85Q",
-      "redirect_uri": "http://localhost:53994/callback",
+      "id": "_9w__uzrwYp8k6qjkpuXCrdy1cMHmMqwyn7H2p2BpSw",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A52331%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=nuOnQu-pmgwzNIcu6A704QT8--Vmi86FC6V_a5PBYpA&code_challenge_method=S256&state=AHobZas1D9Ou3TQW4g5xbzmYbae4tXzhZSEENH-p0MY",
+      "redirect_uri": "http://localhost:52331/callback",
       "expires_at": 1600000
     }
   },
@@ -8132,7 +8135,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "RLotbS1_",
+              "prefix": "QMnHxrj4",
               "enabled": true
             }
           ],
@@ -11033,7 +11036,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "7hoSXuRBFRaRI3LiceUabo81mLxjjIxN4_ogOlNIzEs"
+      "session_id": "cZ5TY-yc0_HM9aAcxbOBAagbUR_PpdH_n3YDr8gPX6g"
     }
   },
   "sessions": {

@@ -659,6 +659,16 @@ impl InFlight {
             .unwrap_or(0) as u32
     }
 
+    /// Whether the ticket `id` still counts on `account_id`: false once its guard dropped or the hour's reclaim
+    /// took it.
+    pub fn holds(&self, account_id: &str, id: u64) -> bool {
+        self.0
+            .table()
+            .accounts
+            .get(account_id)
+            .is_some_and(|slots| slots.contains_key(&id))
+    }
+
     pub fn key(&self, key_id: &str) -> u32 {
         self.0
             .table()
@@ -740,6 +750,13 @@ pub struct AccountTicket {
     id: u64,
 }
 
+impl AccountTicket {
+    /// The ticket's id in the in-flight table, which a funding retry's claim names.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 impl Drop for AccountTicket {
     fn drop(&mut self) {
         let released = {
@@ -817,6 +834,21 @@ fn rounds_of(load: &RoutingLoad) -> (HashMap<(String, String), ShedRound>, HashM
     (rounds, newest)
 }
 
+/// A `funding_required` account's retry: the instant one request may try it again, the incarnation the mark landed
+/// on, and the account ticket of the attempt that holds the one slot. Memory only: a restart reads the mark with no
+/// entry, and the first request after it retries at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FundingRetry {
+    pub retry_at: i64,
+    pub incarnation: u64,
+    /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
+    /// table, so a slow upstream head never frees it early.
+    pub claimed_by: Option<u64>,
+    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A registry load
+    /// that started before it may predate the mark's write, so such a load drops nothing.
+    pub stamped_at: i64,
+}
+
 pub struct RoutingState {
     /// The ledger's standing from its last `Report::Accounting`: while it is degraded a budgeted member's spend rows
     /// may lack a batch the writer still holds. Memory only, so a restart starts clear until the ledger's first
@@ -837,6 +869,9 @@ pub struct RoutingState {
     /// alone. Memory only, since the pin's row has no column for it, so a restart reads a pin's fast usage as none
     /// until its next fast renewal.
     fast_burn: HashMap<PinKey, PinBurn>,
+    /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
+    /// so a restart starts with none.
+    funding_retries: HashMap<String, FundingRetry>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -921,6 +956,7 @@ impl RoutingState {
                 })
                 .collect(),
             fast_burn: HashMap::new(),
+            funding_retries: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             newest_shed,
@@ -1276,6 +1312,92 @@ impl RoutingState {
     pub fn cooldowns(&self) -> Vec<CooldownRow> {
         let mut v: Vec<_> = self.cooldowns.values().cloned().collect();
         v.sort_by(|a, b| (&a.account_id, &a.scope).cmp(&(&b.account_id, &b.scope)));
+        v
+    }
+
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, and frees the slot: the
+    /// attempt that held it ended in this mark.
+    pub fn funding_marked(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        now: i64,
+        interval_ms: i64,
+    ) {
+        self.funding_retries.insert(
+            account_id.to_string(),
+            FundingRetry {
+                retry_at: now.saturating_add(interval_ms),
+                incarnation,
+                claimed_by: None,
+                stamped_at: now,
+            },
+        );
+    }
+
+    pub fn funding_cleared(&mut self, account_id: &str) {
+        self.funding_retries.remove(account_id);
+    }
+
+    /// Whether a `funding_required` account may take a request at `now`: at once with no entry, as after a restart,
+    /// else once its retry is due and no live attempt holds the slot.
+    pub fn funding_retry_admits(&self, account_id: &str, now: i64) -> bool {
+        let Some(retry) = self.funding_retries.get(account_id) else {
+            return true;
+        };
+        now >= retry.retry_at
+            && retry
+                .claimed_by
+                .is_none_or(|id| !self.in_flight.holds(account_id, id))
+    }
+
+    /// Hands the slot to the attempt the account ticket `ticket` counts. An account with no entry for
+    /// `incarnation`, as after a restart, gets one due at `now`, so the next request finds the slot taken.
+    pub fn claim_funding_retry(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        ticket: u64,
+        now: i64,
+    ) {
+        match self.funding_retries.get_mut(account_id) {
+            Some(retry) if retry.incarnation == incarnation => retry.claimed_by = Some(ticket),
+            _ => {
+                self.funding_retries.insert(
+                    account_id.to_string(),
+                    FundingRetry {
+                        retry_at: now,
+                        incarnation,
+                        claimed_by: Some(ticket),
+                        stamped_at: now,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Keeps an entry only while `snapshot` reads its account `FundingRequired` under the entry's incarnation, so a
+    /// Clear, a re-pairing or a deletion that reached the registry drops it. An entry stamped at or after the load's
+    /// start stays whatever the snapshot reads, since that load may have read the registry before the mark's write
+    /// landed.
+    pub fn reconcile_funding_retries(&mut self, snapshot: &RegistrySnapshot) {
+        self.funding_retries.retain(|account_id, retry| {
+            retry.stamped_at >= snapshot.loaded_at
+                || snapshot.account(account_id).is_some_and(|account| {
+                    account.state == AccountState::FundingRequired
+                        && account.incarnation == retry.incarnation
+                })
+        });
+    }
+
+    /// Each entry's `(account_id, retry_at)`, sorted by account, for the account view.
+    pub fn funding_retries(&self) -> Vec<(String, i64)> {
+        let mut v: Vec<_> = self
+            .funding_retries
+            .iter()
+            .map(|(id, retry)| (id.clone(), retry.retry_at))
+            .collect();
+        v.sort();
         v
     }
 

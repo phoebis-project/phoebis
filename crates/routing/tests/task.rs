@@ -2182,6 +2182,180 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
     assert!(store.load_routing().unwrap().cooldowns.is_empty());
 }
 
+/// The relay's credit-balance mark on `account_id`'s first holder.
+fn funding_mark(account_id: &str) -> Report {
+    Report::AccountState {
+        account_id: account_id.into(),
+        state: AccountState::FundingRequired,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+        cause: StateCause::FundingRefused,
+        detail: None,
+    }
+}
+
+/// The seeded pool over the one API-key account `a`, keyed at credential generation 1 so the mark's fenced write
+/// lands.
+fn keyed_a() -> Arc<Store> {
+    let store = seeded(&["a"]);
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    store
+}
+
+/// Waits for the reload after the mark's write, so the snapshot a selection reads holds the mark.
+async fn snapshot_marked(handle: &RouterHandle, account_id: &str) {
+    wait_for(WRITTEN, || {
+        handle
+            .snapshot()
+            .account(account_id)
+            .filter(|a| a.state == AccountState::FundingRequired)
+            .map(|_| ())
+    })
+    .await;
+}
+
+fn placed_on(answer: &phoebis_routing::SelectAnswer) -> Option<&str> {
+    match &answer.result {
+        SelectResult::Selected(selection) => Some(selection.account.id.as_str()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_landed_funding_mark_stamps_its_retry_the_configured_interval_after_the_landing() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        seeded(&["a"]),
+        clock(&now),
+        RouterConfig {
+            funding_retry: Duration::from_secs(120),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000 + 120_000)]
+    );
+}
+
+#[tokio::test]
+async fn a_funding_retry_holds_its_one_slot_until_the_claiming_attempt_s_ticket_drops() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(
+            &handle
+                .select(request(&handle, None, 300_999))
+                .await
+                .unwrap()
+        ),
+        None,
+        "the retry is not due yet"
+    );
+    now.store(301_000, Ordering::SeqCst);
+    let first = handle
+        .select(request(&handle, None, 301_000))
+        .await
+        .unwrap();
+    assert_eq!(placed_on(&first), Some("a"), "the retry is due");
+    // Past the relay's body read bound (60 s) and its upstream head bound (600 s): the claim lasts as long as
+    // the attempt does, not as long as either bound.
+    let later = 301_000 + 11 * 60_000;
+    now.store(later, Ordering::SeqCst);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, later)).await.unwrap()),
+        None,
+        "the first attempt still holds the one slot, on a pool whose cap is above one"
+    );
+    drop(first);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, later)).await.unwrap()),
+        Some("a"),
+        "the first attempt ended, so the next request tries the account"
+    );
+}
+
+#[tokio::test]
+async fn after_a_restart_the_first_request_retries_a_marked_account_at_once_and_holds_the_second_off(
+) {
+    let store = seeded(&["a"]);
+    store
+        .set_state(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the store keeps no instant for the mark"
+    );
+    let first = handle.select(request(&handle, None, 1_000)).await.unwrap();
+    assert_eq!(placed_on(&first), Some("a"));
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000)],
+        "the claim stamps the request's instant"
+    );
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the second request finds the slot taken while the first lives"
+    );
+    drop(first);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        Some("a")
+    );
+}
+
+#[tokio::test]
+async fn a_reload_reading_the_account_ready_or_under_a_new_holder_drops_its_funding_retry() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(handle.funding_retries().await.unwrap().len(), 1);
+    now.store(2_000, Ordering::SeqCst);
+    // The operator's Clear: a store write and a reload, never a report.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(handle.funding_retries().await.unwrap().len(), 1);
+    now.store(3_000, Ordering::SeqCst);
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    store
+        .set_state(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the new holder's mark is its own, and its first request retries at once"
+    );
+}
+
 #[tokio::test]
 async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() {
     let store = seeded(&["a"]);

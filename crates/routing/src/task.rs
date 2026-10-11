@@ -248,6 +248,9 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
+    /// The wait before a `funding_required` account is tried again: the shorter of five minutes and the model
+    /// rejection interval, which the router computes from its configuration.
+    pub funding_retry: Duration,
     /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
     /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
     /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
@@ -266,6 +269,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             band: BandWeight::default(),
+            funding_retry: Duration::from_secs(300),
             hold_first_purge: false,
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
@@ -670,6 +674,9 @@ enum Command {
     },
     FastBurns {
         reply: oneshot::Sender<HashMap<PinKey, PinBurn>>,
+    },
+    FundingRetries {
+        reply: oneshot::Sender<Vec<(String, i64)>>,
     },
     MemberSpends {
         reply: oneshot::Sender<Vec<MemberSpend>>,
@@ -1136,6 +1143,11 @@ impl RouterHandle {
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
+    }
+    /// Each `funding_required` account's retry instant as `(account_id, retry_at)`, sorted by account. A marked
+    /// account has none after a restart until its first retry claims it.
+    pub async fn funding_retries(&self) -> Result<Vec<(String, i64)>, RouterGone> {
+        self.ask(|reply| Command::FundingRetries { reply }).await
     }
     /// Every budgeted member's spend as the ledger last reported it, from the state's table alone: the
     /// analytics route reads this rather than querying the ledger a second time.
@@ -2298,14 +2310,26 @@ impl Task {
                     // reads already holds this one: a ticket taken at the dial, awaits later, would let every
                     // selection answered in between read the same count and land over the cap. A token count
                     // takes none: it is bound to no cap.
-                    SelectResult::Selected(selection) => (
-                        self.token(&selection.account.id).child_token(),
-                        (!request.count).then(|| {
+                    SelectResult::Selected(selection) => {
+                        let ticket = (!request.count).then(|| {
                             self.state
                                 .in_flight()
                                 .dispatched(&selection.account.id, request.now)
-                        }),
-                    ),
+                        });
+                        // The placed attempt's ticket is the funding retry's claim, so the one slot frees when that
+                        // attempt ends, however long its head takes.
+                        if let (Some(ticket), AccountState::FundingRequired) =
+                            (&ticket, selection.account.state)
+                        {
+                            self.state.claim_funding_retry(
+                                &selection.account.id,
+                                selection.account.incarnation,
+                                ticket.id(),
+                                request.now,
+                            );
+                        }
+                        (self.token(&selection.account.id).child_token(), ticket)
+                    }
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
                     | SelectResult::Refused(_) => (CancellationToken::new(), None),
@@ -2442,6 +2466,9 @@ impl Task {
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
+            }
+            Command::FundingRetries { reply } => {
+                let _ = reply.send(self.state.funding_retries());
             }
             Command::AccountingDegraded { reply } => {
                 let _ = reply.send(self.state.accounting_degraded());
@@ -3030,6 +3057,27 @@ impl Task {
                 cause,
                 detail,
             } => {
+                // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
+                // id no longer has moves no retry, as its write moves no state.
+                if !self.superseded(
+                    &account_id,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                ) {
+                    if state == AccountState::FundingRequired {
+                        let interval = i64::try_from(self.config.funding_retry.as_millis())
+                            .unwrap_or(i64::MAX);
+                        self.state.funding_marked(
+                            &account_id,
+                            incarnation,
+                            (self.clock)(),
+                            interval,
+                        );
+                    } else {
+                        self.state.funding_cleared(&account_id);
+                    }
+                }
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
                 // first and the reload follows once it has landed. The write is fenced by the incarnation and
                 // both generations: a verdict about a credential that was replaced, a slot that was
@@ -3190,6 +3238,8 @@ impl Task {
                 self.state.forget_sample(&account.id);
             }
         }
+        // The operator's Clear reaches the router as a store write and a reload, never as a report.
+        self.state.reconcile_funding_retries(&next);
         *self.snapshot.write().expect("snapshot lock poisoned") = next;
         // Pins of a deleted key or pool, everything held against an account the registry no longer has, and
         // a cooldown past its deadline go now rather than at the next tick. An account that left its pool is

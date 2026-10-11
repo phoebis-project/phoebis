@@ -407,13 +407,16 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
     for id in ["a", "b", "c", "d"] {
         h.router.clear_cooldown(id, "account").await.unwrap();
     }
-    for (id, state) in [
-        ("a", AccountState::ReauthRequired),
-        ("b", AccountState::FundingRequired),
-        ("c", AccountState::ReauthRequired),
-        ("d", AccountState::FundingRequired),
-    ] {
-        h.store.set_state(id, state, StateCause::Operator).unwrap();
+    for id in ["a", "c"] {
+        h.store
+            .set_state(id, AccountState::ReauthRequired, StateCause::Operator)
+            .unwrap();
+    }
+    // Marked through the relay's own report, so each funding mark carries a retry that is not due yet: a mark the
+    // routing state holds no instant for is tried at once, as after a restart.
+    for id in ["b", "d"] {
+        h.router.report(funding_mark(&h, id)).await;
+        stored_with(&h, id, AccountState::FundingRequired).await;
     }
     h.router.reload().await.unwrap();
     let resp = h
@@ -1209,6 +1212,215 @@ async fn a_credit_balance_refusal_stores_funding_refused() {
     assert_eq!(
         stored_with(&h, "k1", AccountState::FundingRequired).await,
         StateCause::FundingRefused
+    );
+    up.shutdown().await;
+}
+
+/// The relay's credit-balance mark on `id`'s current holder, as a failover reports it.
+fn funding_mark(h: &Harness, id: &str) -> phoebis_routing::Report {
+    let snapshot = h.router.snapshot();
+    let account = snapshot.account(id).unwrap();
+    phoebis_routing::Report::AccountState {
+        account_id: id.into(),
+        state: AccountState::FundingRequired,
+        incarnation: account.incarnation,
+        lifecycle_generation: account.lifecycle_generation,
+        credential_generation: snapshot.credential_generation(id).unwrap_or(1),
+        cause: StateCause::FundingRefused,
+        detail: None,
+    }
+}
+
+/// Marks `id` `funding_required` in the registry alone, as a restart reads the mark: no retry instant.
+async fn marked_in_the_registry(h: &Harness, id: &str) {
+    h.store
+        .set_state(
+            id,
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+}
+
+/// The router's retry instant for `id` once it reads `at`.
+async fn retry_at_reads(h: &Harness, id: &str, at: i64) {
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .funding_retries()
+            .await
+            .unwrap()
+            .contains(&(id.to_string(), at))
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_funding_retry_that_answers_200_clears_the_mark_with_the_funding_retry_cause() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_in_the_registry(&h, "k1").await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1"),
+        "the marked account is tried again"
+    );
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::Ready).await,
+        StateCause::FundingRetry
+    );
+    assert!(h.router.funding_retries().await.unwrap().is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_credit_balance_refusal_marks_the_account_again_with_a_later_retry() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "b");
+    retry_at_reads(&h, "k1", NOW + 300_000).await;
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account("k1")
+            .filter(|a| a.state == AccountState::FundingRequired)
+            .map(|_| ())
+    })
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            outcome(&resp).account_id.as_str(),
+            credentials_seen(&up).len()
+        ),
+        ("b", 3),
+        "the retry is not due, so the second request goes to b alone"
+    );
+    h.clock
+        .store(NOW + 300_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s3"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "b");
+    assert_eq!(
+        credentials_seen(&up)
+            .iter()
+            .filter(|c| c.as_str() == "sk-ant-api03-KEY1")
+            .count(),
+        2,
+        "the due retry tried the account once more"
+    );
+    retry_at_reads(&h, "k1", NOW + 600_000).await;
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::FundingRequired).await,
+        StateCause::FundingRefused
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_funding_retry_whose_head_is_held_keeps_the_next_request_off_the_account_until_it_answers(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Gated(Box::new(json_200())),
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_in_the_registry(&h, "k1").await;
+    let app = h.app.clone();
+    let first = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        credentials_seen(&up)
+            .contains(&"sk-ant-api03-KEY1".to_string())
+            .then_some(())
+    })
+    .await;
+    // Past the relay's body read bound: the claim lasts as long as its attempt does.
+    h.clock
+        .fetch_add(61_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b"),
+        "the held retry still holds the one slot, on a pool whose cap is above one"
+    );
+    up.release();
+    let resp = first.await.unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1")
+    );
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::Ready).await,
+        StateCause::FundingRetry
     );
     up.shutdown().await;
 }

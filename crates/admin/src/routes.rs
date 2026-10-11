@@ -1324,6 +1324,8 @@ pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The router's retry instant per `funding_required` account.
+    pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
     pub held: BTreeMap<String, UtilizationSample>,
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
@@ -1366,6 +1368,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         extra,
+        funding_retries: state
+            .router
+            .funding_retries()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         held: state
             .router
             .samples()
@@ -1486,6 +1495,10 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         }
     }
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
+    // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
+    let funding_retry_at = (row.state == AccountState::FundingRequired)
+        .then(|| ctx.funding_retries.get(&row.id).copied())
+        .flatten();
     // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
     // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
@@ -1510,6 +1523,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "enabled": row.enabled,
         "cancelled": term.cancelled,
         "state": state_name(row.state),
+        "funding_retry_at": funding_retry_at,
         "identity": row.identity.as_ref().map(|identity| json!({
             "email": identity.email,
             "account_uuid": identity.account_uuid,

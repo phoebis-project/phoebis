@@ -25,7 +25,7 @@ use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, UpstreamConfig};
+use crate::config::{Config, RoutingConfig, UpstreamConfig};
 use crate::{listen, tls};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
@@ -178,7 +178,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let router_task = phoebis_routing::spawn(
         store.clone(),
         clock.clone(),
-        router_config(&pricing.current(), tables.clone()),
+        router_config(&pricing.current(), tables.clone(), &config.routing),
     )?;
     let bus = Bus::new();
     let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
@@ -719,6 +719,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
+    routing: &RoutingConfig,
 ) -> phoebis_routing::RouterConfig {
     let band = tables.clone();
     let measured = tables.clone();
@@ -735,6 +736,7 @@ fn router_config(
             tables.share_at(window, tier, model, usage, at)
         })
         .with_measured(move |window| measured.measured(window)),
+        funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
         hold_first_purge: true,
         ..phoebis_routing::RouterConfig::default()
@@ -850,6 +852,7 @@ mod tests {
         let config = router_config(
             &phoebis_ledger::PriceTable::shipped(),
             Arc::new(tables.clone()),
+            &RoutingConfig::default(),
         );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
@@ -922,6 +925,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_router_config_retries_a_funding_mark_after_the_shorter_of_five_minutes_and_the_model_rejection_interval(
+    ) {
+        let config = |routing: &RoutingConfig| {
+            router_config(
+                &phoebis_ledger::PriceTable::shipped(),
+                Arc::new(phoebis_ledger::PlanTables::shipped()),
+                routing,
+            )
+            .funding_retry
+        };
+        assert_eq!(
+            config(&RoutingConfig {
+                model_rejection_seconds: 120,
+                ..RoutingConfig::default()
+            }),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            config(&RoutingConfig::default()),
+            Duration::from_secs(300),
+            "the default model rejection interval is longer than five minutes"
+        );
+    }
+
     /// The week's band factor is 1 in the shipped model; a file that bands the week reaches the router's 7-day
     /// share through the completion the router hands the model, with no change to the router.
     #[test]
@@ -931,6 +959,7 @@ mod tests {
         let config = router_config(
             &phoebis_ledger::PriceTable::shipped(),
             Arc::new(tables.clone()),
+            &RoutingConfig::default(),
         );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
@@ -974,7 +1003,7 @@ mod tests {
     ) {
         let prices = phoebis_ledger::PriceTable::shipped();
         let tables = phoebis_ledger::PlanTables::shipped();
-        let config = router_config(&prices, Arc::new(tables.clone()));
+        let config = router_config(&prices, Arc::new(tables.clone()), &RoutingConfig::default());
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
             cache_read: 10_000,

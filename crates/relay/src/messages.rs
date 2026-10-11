@@ -2763,6 +2763,26 @@ impl Relay {
                 mark.map(|(state, _)| state) != Some(AccountState::ReauthRequired),
             ),
             Verdict::Commit => {
+                // A message request's success on a `funding_required` account is the retry that clears its mark. A
+                // token count is admitted under the same rule, but a counting answer says nothing about the
+                // balance, and neither does an error event the held stream committed on.
+                if ctx.account.state == AccountState::FundingRequired
+                    && ctx.trace.kind != Kind::CountTokens
+                    && (200..300).contains(&head.status)
+                    && first_event.is_none()
+                {
+                    self.router
+                        .report(Report::AccountState {
+                            account_id: ctx.account.id.clone(),
+                            state: AccountState::Ready,
+                            incarnation: generations.0,
+                            lifecycle_generation: generations.1,
+                            credential_generation: generations.2,
+                            cause: StateCause::FundingRetry,
+                            detail: None,
+                        })
+                        .await;
+                }
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
                 // other accounts, and the next flush would overwrite the saved record with it. One lock while

@@ -308,8 +308,8 @@ wrote, and of the static boundaries only when the response read nothing from the
 static tier the response read from and a tier it only read keep their marker's lifetime, and a request with markers at
 both TTLs keeps each marker's.
 
-The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
-`reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
+The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
+`funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
 judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose fast
 lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an API-key account serves
 it whenever it can serve at all.
@@ -533,8 +533,17 @@ model without a week of its own.
 | 429 naming `enforced_spend_limit_reached` | Account-wide until the first of next month, reason `spend_cap` | Yes |
 | 429 with a valid Retry-After | Model-scoped until Retry-After | Yes |
 | 429 without a valid Retry-After | Account-wide for the fallback duration | Yes |
-| 400 `invalid_request_error`, credit balance | Marked `funding_required` until cleared | Yes |
+| 400 `invalid_request_error`, credit balance | Marked `funding_required` until a retry succeeds or the operator clears it | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's Retry-After | Yes |
+
+A `funding_required` account is tried again on its own clock, since an API-key balance has no signal the router can
+read. The retry is due five minutes after the mark lands, or after `routing.model_rejection_seconds` when that is
+shorter, and the account then takes one request at a time: the attempt the selection placed on it holds the slot until
+that attempt ends, however long its head takes. A 2xx answer to a message request clears the mark, and its
+`account_state_changed` row reads the cause `funding_retry`. Another credit-balance refusal marks the account again with
+a new retry instant. A token count may reach the account under the same rule, but it holds no slot and clears nothing.
+The router keeps the retry instant in memory, so after a restart the first request tries a marked account at once. Clear
+funding retries at once too.
 
 **fast mode** (either kind, read ahead of the two tables above)
 

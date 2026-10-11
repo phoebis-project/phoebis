@@ -825,6 +825,70 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
 }
 
 #[tokio::test]
+async fn an_account_answers_its_funding_retry_while_marked_and_null_once_the_operator_clears_it() {
+    use phoebis_store::{AccountState, StateCause};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let retry_at = || {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let shown = json(get(&app, "/admin/accounts/direct", Some(&cookie)).await).await;
+            assert!(
+                shown.as_object().unwrap().contains_key("funding_retry_at"),
+                "the member is answered on every account: {shown}"
+            );
+            shown["funding_retry_at"].clone()
+        }
+    };
+    assert!(retry_at().await.is_null(), "a ready account has no retry");
+    let snapshot = parts.router.snapshot();
+    let row = snapshot.account("direct").unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::AccountState {
+            account_id: "direct".into(),
+            state: AccountState::FundingRequired,
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
+            credential_generation: snapshot.credential_generation("direct").unwrap_or(1),
+            cause: StateCause::FundingRefused,
+            detail: None,
+        })
+        .await;
+    fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
+        parts
+            .store
+            .account("direct")
+            .unwrap()
+            .filter(|row| row.state == AccountState::FundingRequired)
+    })
+    .await;
+    assert_eq!(retry_at().await, common::NOW + 300_000);
+    // The Clear's reload starts after the mark's stamp, so it reads the registry the Clear wrote.
+    common::step(&parts, std::time::Duration::from_secs(1));
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts/direct/clear-funding",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert!(
+        retry_at().await.is_null(),
+        "the operator's Clear drops the retry"
+    );
+    assert!(
+        parts.router.funding_retries().await.unwrap().is_empty(),
+        "the reload after the Clear dropped the entry, not the view alone"
+    );
+}
+
+#[tokio::test]
 async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_any_reading() {
     use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
     use phoebis_routing::{UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};

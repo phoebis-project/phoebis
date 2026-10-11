@@ -1355,8 +1355,11 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
             ("c", true, AccountState::FundingRequired),
         ],
     );
+    // Marked with its retry ahead: with no entry the account would be tried at once, as after a restart.
+    let mut dead_state = RoutingState::from_load(RoutingLoad::default());
+    dead_state.funding_marked("c", 1, 1_000, 300_000);
     let (result, _) = select(
-        &mut RoutingState::from_load(RoutingLoad::default()),
+        &mut dead_state,
         &dead,
         &request(&dead, None, "claude-sonnet-5", true, &[], 1_000),
         &mut rng(),
@@ -1373,6 +1376,7 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
         ],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    st2.funding_marked("b", 1, 1_000, 300_000);
     st2.record_cooldown(cooled("c", "account", 7_000, "five_hour", "rate_limit"));
     let (result, _) = select(
         &mut st2,
@@ -1389,6 +1393,160 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
             })
         ),
         "a mixed pool answers from the cooled account's deadline"
+    );
+}
+
+/// The pool of the funding retry's cases: the API-key account `a` ahead of `b`, with `a` marked
+/// `funding_required` in the registry.
+fn funding_marked_pool() -> RegistrySnapshot {
+    snapshot_with(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            kinds: vec![("a", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        &[("a", true, AccountState::FundingRequired)],
+    )
+}
+
+fn picked_at(st: &mut RoutingState, s: &RegistrySnapshot, now: i64) -> String {
+    let (result, _) = select(
+        st,
+        s,
+        &request(s, None, "claude-sonnet-5", true, &[], now),
+        &mut rng(),
+    );
+    picked(&result).to_string()
+}
+
+#[test]
+fn a_funding_required_account_is_a_candidate_once_its_retry_is_due_and_not_before() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    assert_eq!(
+        picked_at(&mut st, &s, 1_000),
+        "b",
+        "the mark has just landed"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 300_999),
+        "b",
+        "a millisecond before the retry is due"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000),
+        "a",
+        "the retry is due, so the marked account is tried again"
+    );
+}
+
+#[test]
+fn a_claimed_funding_retry_keeps_a_second_selection_off_the_account_while_its_ticket_lives() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    assert_eq!(picked_at(&mut st, &s, 301_000), "a");
+    let ticket = st.in_flight().dispatched("a", 301_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 301_000);
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000 + HOUR / 2),
+        "b",
+        "the attempt that claimed the retry still runs, however long its head takes"
+    );
+    drop(ticket);
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000 + HOUR / 2),
+        "a",
+        "the claiming attempt ended, so the next request tries the account"
+    );
+}
+
+#[test]
+fn a_cleared_funding_retry_leaves_the_account_a_plain_candidate_while_its_claim_still_runs() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    let ticket = st.in_flight().dispatched("a", 301_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 301_000);
+    st.funding_cleared("a");
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000),
+        "a",
+        "the retry answered 200, so the account serves before the reload reads it ready"
+    );
+    let ready = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    assert_eq!(picked_at(&mut st, &ready, 301_000), "a");
+    assert!(st.funding_retries().is_empty());
+    drop(ticket);
+}
+
+#[test]
+fn a_marked_account_with_no_retry_entry_is_tried_at_once_and_its_claim_holds_the_second_request_off(
+) {
+    // A restart reads the mark from the registry with no instant.
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked_at(&mut st, &s, 1_000),
+        "a",
+        "the first request after a restart retries at once"
+    );
+    let ticket = st.in_flight().dispatched("a", 1_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 1_000);
+    assert_eq!(
+        st.funding_retries(),
+        vec![("a".to_string(), 1_000)],
+        "the claim builds the entry at the request's instant"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 2_000),
+        "b",
+        "the second request finds the slot taken while the first lives"
+    );
+    drop(ticket);
+    assert_eq!(picked_at(&mut st, &s, 2_000), "a");
+}
+
+#[test]
+fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_the_load_predates_the_stamp(
+) {
+    let marked_under = |state: AccountState, incarnation: u64, loaded_at: i64| {
+        let mut load = load_of(
+            Pool {
+                members: vec![("a", 0), ("b", 1)],
+                kinds: vec![("a", AccountKind::ApiKey)],
+                ..Pool::default()
+            },
+            &[("a", true, state)],
+        );
+        load.accounts[0].incarnation = incarnation;
+        RegistrySnapshot::from_load(load, [0; 32], loaded_at, 2)
+    };
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1_000));
+    assert_eq!(
+        st.funding_retries(),
+        vec![("a".to_string(), 302_000)],
+        "a load that started before the stamp may predate the mark's write"
+    );
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 1, 3_000));
+    assert_eq!(st.funding_retries().len(), 1, "the mark still stands");
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 2, 3_000));
+    assert!(
+        st.funding_retries().is_empty(),
+        "the id names another holder, whose mark is its own"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 3_000));
+    assert!(
+        st.funding_retries().is_empty(),
+        "the operator cleared the mark"
     );
 }
 

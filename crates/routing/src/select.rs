@@ -2324,7 +2324,16 @@ fn obstacle(
     let Some(account) = snapshot.account(&candidate.account_id) else {
         return Some(Obstacle::Operator);
     };
-    if !account.enabled || account.state != AccountState::Ready {
+    if !account.enabled {
+        return Some(Obstacle::Operator);
+    }
+    // A funding mark is tried again on its own clock, one request at a time, since an API-key balance has no signal
+    // the poll could read.
+    if account.state == AccountState::FundingRequired {
+        if !state.funding_retry_admits(&candidate.account_id, now) {
+            return Some(Obstacle::Operator);
+        }
+    } else if account.state != AccountState::Ready {
         return Some(Obstacle::Operator);
     }
     if snapshot

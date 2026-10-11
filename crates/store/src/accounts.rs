@@ -88,6 +88,8 @@ pub enum StateCause {
     Deleted,
     /// The upstream named an `api_key` account's credit balance.
     FundingRefused,
+    /// The router's own retry of a `funding_required` account, whose answer came back a success.
+    FundingRetry,
     /// The admin routes, and whatever reaches them.
     Operator,
     /// A pairing's confirm.
@@ -104,6 +106,7 @@ impl StateCause {
             StateCause::AuthFailed => "auth_failed",
             StateCause::Deleted => "deleted",
             StateCause::FundingRefused => "funding_refused",
+            StateCause::FundingRetry => "funding_retry",
             StateCause::Operator => "operator",
             StateCause::Paired => "paired",
             StateCause::RefreshFailed => "refresh_failed",
@@ -118,6 +121,7 @@ impl FromSql for StateCause {
             "auth_failed" => Ok(StateCause::AuthFailed),
             "deleted" => Ok(StateCause::Deleted),
             "funding_refused" => Ok(StateCause::FundingRefused),
+            "funding_retry" => Ok(StateCause::FundingRetry),
             "operator" => Ok(StateCause::Operator),
             "paired" => Ok(StateCause::Paired),
             "refresh_failed" => Ok(StateCause::RefreshFailed),
