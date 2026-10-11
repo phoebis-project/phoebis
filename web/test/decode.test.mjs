@@ -704,6 +704,22 @@ test('a request reads its auto-mode standing, and a spelling the console does no
   assert.equal(d.decodeRequest({ attempts: [], auto_mode: 'unknown' }).autoMode, null);
 });
 
+test('a request reads who put the diagnostics member on its body, and any other value as none', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  assert.deepEqual(
+    rows.map((r) => [r.id, r.diagnosticsSource]),
+    fixture('requests').requests.map((r) => [r.id, r.diagnostics_source]),
+    'the list reads each row as the route answered it',
+  );
+  assert.deepEqual([rows.find((r) => r.id === 'r-captured').diagnosticsSource, rows.find((r) => r.id === 'r-failover').diagnosticsSource], ['client', 'router'], 'the fixture holds both words');
+  assert.equal(d.decodeRequest(fixture('request').request).diagnosticsSource, 'router', 'the detail route answers the same row');
+  assert.deepEqual(
+    [{ diagnostics_source: null }, {}, { diagnostics_source: 'elsewhere' }].map((r) => d.decodeRequest({ attempts: [], ...r }).diagnosticsSource),
+    [null, null, null],
+    'null, an absent member and a word the console does not know read as none',
+  );
+});
+
 test('a request row carries the generation of the key it was read under', () => {
   const body = fixture('requests');
   const live = body.requests.find((r) => r.id === 'r-captured').key_generation;

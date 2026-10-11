@@ -88,6 +88,9 @@ pub struct RequestRecord {
     /// behind the bus never records a stream that ended after its request finished; `None` for an answer that
     /// never reached it and for a row from before the column.
     pub stream_end_at: Option<i64>,
+    /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,
+    /// `None` for a body that went without one and for a row from before the column.
+    pub diagnostics_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

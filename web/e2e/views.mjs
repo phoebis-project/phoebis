@@ -2814,6 +2814,25 @@ async function speedFilter(theme) {
 }
 
 /**
+ * The Cache miss reason, Effort and Request class controls of the request log's filter bar against the Turn origin
+ * control, as the Speed control is read: the same trigger box, type and border.
+ */
+async function diagnosticsFilters(theme) {
+  const LABELS = ['Cache miss reason', 'Effort', 'Request class'];
+  const read = await page.evaluate((labels) => {
+    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+    const box = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
+    };
+    return { controls: Object.fromEntries(labels.map((label) => [label, box(trigger(label))])), turn: box(trigger('Turn origin')) };
+  }, LABELS);
+  measurements.push(`${theme} /requests diagnostics filters ${JSON.stringify(read)}`);
+  for (const label of LABELS) failures.push(...compare(read.controls[label], read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the ${label} control against Turn origin`));
+}
+
+/**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
@@ -3173,6 +3192,57 @@ async function requestDrawerCompact(theme) {
   if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
   counted("the newest answered request's drawer", got);
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+}
+
+/**
+ * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
+ * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
+ * a detail follows. Following the link moves the page clock, so the mock pass runs it on a load of its own once every
+ * view's shot is taken, and it leaves the Analytics page on its Traffic tab.
+ */
+async function reasonLink(theme) {
+  const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
+  await page.goto(`${base}/analytics`);
+  await booted();
+  await advance(LOAD_MS);
+  try {
+    if (!(await tabTo(theme, 'Cache'))) return;
+    const link = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason');
+      const bar = [...(card?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.querySelector('.num > a') !== null);
+      return bar ? { href: bar.querySelector('.num > a').getAttribute('href'), label: bar.children[0]?.textContent?.trim() ?? '' } : null;
+    });
+    if (link === null) {
+      say('the panel draws no link');
+      return;
+    }
+    await page.locator(`.hbars--reasons .num > a[href="${link.href}"]`).first().click();
+    await advance(LOAD_MS);
+    try {
+      await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 });
+    } catch {
+      say(`${link.href} lists no request`);
+      return;
+    }
+    const range = await page.evaluate(() => document.querySelector('select[aria-label="Date range"]')?.selectedOptions[0]?.textContent ?? null);
+    await page.locator('.requests__table tbody tr').first().click();
+    await advance(LOAD_MS);
+    try {
+      await page.waitForSelector('.drawer .kv__row', { timeout: 15_000 });
+    } catch {
+      say('the first row drew no drawer');
+      return;
+    }
+    const cache = await page.evaluate(() => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache')?.querySelector('dd span')?.textContent ?? null);
+    measurements.push(`${theme} /analytics reasons panel link ${JSON.stringify({ cache, href: link.href, label: link.label, range })}`);
+    if (!range?.startsWith('Custom range')) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one`);
+    if (cache !== link.label) say(`the first row's drawer reads the reason ${JSON.stringify(cache)} under the "${link.label}" link`);
+  } finally {
+    await page.goto(`${base}/analytics`);
+    await booted();
+    await advance(LOAD_MS);
+    await tabTo(theme, 'Traffic');
+  }
 }
 
 /**
@@ -5257,6 +5327,7 @@ try {
         await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
         await speedFilter(theme);
+        await diagnosticsFilters(theme);
       }
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
@@ -5310,6 +5381,12 @@ try {
       at = `${theme} /keys copy by command`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await copyFallbackModal(theme);
+    }
+    // Following a reasons panel link moves the page clock as well.
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /analytics reasons panel link`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await reasonLink(theme);
     }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a

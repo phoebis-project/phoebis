@@ -14,6 +14,8 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const ACCT_SECRET: &str = "sk-ant-api03-ACCT0001";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
+/// The session id the first-party fixture's head carries.
+const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
 const REFUSED_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header."}}"#;
 const REFUSED_REQUEST_ID: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unrecognized request header `x-client-request-id`."}}"#;
@@ -62,6 +64,27 @@ fn diagnostics_previous(body: &[u8]) -> Option<String> {
     value["diagnostics"]["previous_message_id"]
         .as_str()
         .map(String::from)
+}
+
+fn carries_the_beta(r: &fake_upstream::RecordedRequest) -> bool {
+    beta_header(r).is_some_and(|b| b.split(',').any(|t| t.trim() == CACHE_DIAGNOSIS_BETA))
+}
+
+/// Every `cache_control` value's raw text, in body order.
+fn markers(body: &[u8]) -> Vec<String> {
+    phoebis_cch::cache_control_spans(body)
+        .unwrap()
+        .into_iter()
+        .map(|(start, end)| String::from_utf8(body[start..end].to_vec()).unwrap())
+        .collect()
+}
+
+/// `native` on the OAuth non-first-party head under `session`.
+fn oauth_request(native: &[u8], session: &str) -> Request<Body> {
+    let mut req =
+        request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), native, KEY);
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
 }
 
 /// The five digits after `cch=` on the billing line `find_cch` reads, `None` for a body that carries none.
@@ -134,6 +157,81 @@ fn without_billing_line(session: &str) -> Request<Body> {
     );
     set_header(&mut req, "x-claude-code-session-id", session);
     req
+}
+
+const SONNET: &str = "claude-sonnet-4-5";
+
+/// Forces a round trip through the router's command queue: a report reaches the affinity map only when the router
+/// drains it, and the map is read directly, so a map read or a later session's conversation climb sees an earlier
+/// answer's report only once something queued behind it has come back.
+async fn settle(h: &Harness) {
+    let _ = h.router.pins().await;
+}
+
+/// The message boundaries the relay reads off a body whose `messages` are these.
+fn boundaries_of(messages: &[serde_json::Value]) -> Vec<String> {
+    phoebis_relay::Chains::read(&serde_json::json!({ "messages": messages }))
+        .expect("an object always reads")
+        .message_boundaries
+        .to_vec()
+}
+
+/// The tail boundary of the OAuth fixture's own `messages`, the conversation `request_for` sends.
+fn fixture_tail() -> String {
+    let value: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
+    phoebis_relay::Chains::read(&value)
+        .and_then(|chains| chains.tail_hash().map(String::from))
+        .expect("the fixture carries messages")
+}
+
+/// The map's entry at `boundary` under `model`, copied out of the lock.
+fn entry_at(h: &Harness, model: &str, boundary: &str) -> Option<phoebis_routing::AffinityEntry> {
+    let map = h.router.affinity();
+    let guard = map.read().unwrap();
+    guard.entry(model, boundary).cloned()
+}
+
+/// The answer id the map holds at `boundary` under `model`, `None` for no entry or an entry without one.
+fn id_at(h: &Harness, model: &str, boundary: &str) -> Option<String> {
+    entry_at(h, model, boundary).and_then(|entry| entry.message_id)
+}
+
+/// The `previous_message_id` a captured body names: `None` when the body carries no member at all, so a lost
+/// member never reads as the member's `null`.
+fn member_of(body: &[u8]) -> Option<Option<String>> {
+    has_diagnostics(body).then(|| diagnostics_previous(body))
+}
+
+/// `member_of` the newest captured body.
+fn named(up: &FakeUpstream) -> Option<Option<String>> {
+    let sent = up.requests();
+    member_of(&sent.last().expect("a request reached the upstream").body)
+}
+
+/// Sends `req` and reads its answer whole, as a client does, answering the account that served it.
+async fn turn(h: &Harness, req: Request<Body>) -> String {
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let served = outcome(&resp).account_id;
+    resp.into_body().collect().await.unwrap();
+    served
+}
+
+/// One API key account under the switch, answering each request with the next of `ids`.
+async fn answering(up: &FakeUpstream, ids: &[&str]) -> Harness {
+    for id in ids {
+        up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id(id));
+    }
+    harness(
+        up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 #[tokio::test]
@@ -512,6 +610,318 @@ async fn a_clients_own_beta_passes_through_once_with_the_switch_off_and_no_membe
     assert!(
         !has_diagnostics(&sent.body),
         "the relay adds no member with the switch off"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_with_tools_and_no_marker_gets_neither_the_member_nor_the_beta() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let native = without_markers(body(BodyFixture::Oauth));
+    assert!(markers(&native).is_empty(), "the client cached nothing");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(oauth_request(&native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(
+        !has_diagnostics(&sent.body),
+        "no member for a body without a marker of the client's: {}",
+        String::from_utf8_lossy(&sent.body)
+    );
+    assert!(!carries_the_beta(sent), "{:?}", beta_header(sent));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_with_a_marker_and_no_tools_or_an_empty_tools_array_gets_neither() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    for (session, empty) in [("s1", false), ("s2", true)] {
+        let native = without_tools(body(BodyFixture::Oauth), empty);
+        assert!(!markers(&native).is_empty(), "the client's markers stay");
+        let resp = h
+            .app
+            .clone()
+            .oneshot(oauth_request(&native, session))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+    let sent = up.requests();
+    assert_eq!(sent.len(), 2);
+    for (r, shape) in sent
+        .iter()
+        .zip(["no `tools` member", "an empty `tools` array"])
+    {
+        assert!(!has_diagnostics(&r.body), "{shape}: no member");
+        assert!(!carries_the_beta(r), "{shape}: no beta");
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_marker_less_body_with_tools_under_inject_when_absent_takes_the_policys_member_and_no_diagnostics(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            cache_ttl: r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#,
+            ..Default::default()
+        },
+    )
+    .await;
+    // The fixture's head names no request class, so the policy gives the body its member.
+    let native = without_markers(body(BodyFixture::Oauth));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(oauth_request(&native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert_eq!(
+        markers(&sent.body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
+        "the wire carries the policy's one marker"
+    );
+    assert!(
+        phoebis_cch::object_member_span(&sent.body, &["cache_control"]).is_some(),
+        "and it is the top-level member"
+    );
+    assert!(
+        !has_diagnostics(&sent.body),
+        "the gate reads the client's own markers, before the policy's rewrite"
+    );
+    assert!(!carries_the_beta(sent), "{:?}", beta_header(sent));
+    up.shutdown().await;
+}
+
+/// Pins the member-less client, the case the insertion exists for: a reduced-shape turn with markers and tools
+/// that sends no member of its own.
+#[tokio::test]
+async fn a_member_less_reduced_shape_turn_takes_the_member_and_the_beta_and_its_second_turn_names_the_first_answer(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        !has_diagnostics(body(BodyFixture::Oauth)),
+        "the reduced shape sends no member"
+    );
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    assert!(has_diagnostics(&up.requests()[0].body));
+    assert_diagnosed_shape(&up.requests()[0], None);
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
+    assert_diagnosed_shape(&up.requests()[1], Some("msg_01"));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_sent_member_on_a_body_without_tools_passes_through_as_sent_and_its_answers_id_is_remembered(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    // The first-party fixture as a client that sends its own member and no tools signs it.
+    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    phoebis_cch::remove_top_level_member(&mut native, "tools").expect("the fixture carries tools");
+    let native = phoebis_cch::sign(&native).expect("the fixture signs");
+    let (start, end) = phoebis_cch::object_member_span(&native, &["diagnostics"])
+        .expect("the client sends its own member");
+    let req = request_from_fixture(inference_head(FixtureKind::OauthFirstParty), &native, KEY);
+    let betas_of = |list: Option<&str>| {
+        list.map_or(0, |l| {
+            l.split(',')
+                .filter(|t| t.trim() == CACHE_DIAGNOSIS_BETA)
+                .count()
+        })
+    };
+    let client_betas = betas_of(
+        req.headers()
+            .get("anthropic-beta")
+            .map(|v| v.to_str().unwrap()),
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let sent = &up.requests()[0];
+    let (sent_start, sent_end) = phoebis_cch::object_member_span(&sent.body, &["diagnostics"])
+        .expect("the client's member reaches the upstream");
+    assert_eq!(
+        &sent.body[sent_start..sent_end],
+        &native[start..end],
+        "the member goes as the client sent it"
+    );
+    assert!(
+        betas_of(beta_header(sent)) <= client_betas,
+        "the beta goes no more often than the client sent it: {:?}",
+        beta_header(sent)
+    );
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        FIRST_PARTY_SESSION,
+        "main",
+    );
+    assert_eq!(
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+            .as_deref(),
+        Some("msg_01"),
+        "a request that carried the member has its answer remembered"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn after_a_turn_the_gate_refused_the_memory_still_names_the_turn_before_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_01"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_02"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_03"));
+    let h = harness(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s1",
+        "main",
+    );
+    let remembered = || {
+        h.relay
+            .previous(&key, "acct", "claude-sonnet-4-5")
+            .message_id
+    };
+
+    let r1 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.status(), 200);
+    r1.into_body().collect().await.unwrap();
+    assert_eq!(remembered().as_deref(), Some("msg_01"));
+
+    // A turn of the same session that sends no tools list: the gate gives it no member, so its answer is not
+    // the next turn's predecessor.
+    let r2 = h
+        .app
+        .clone()
+        .oneshot(oauth_request(
+            &without_tools(body(BodyFixture::Oauth), false),
+            "s1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r2.status(), 200);
+    r2.into_body().collect().await.unwrap();
+    assert!(!has_diagnostics(&up.requests()[1].body));
+    assert_eq!(
+        remembered().as_deref(),
+        Some("msg_01"),
+        "the gated turn's answer is not remembered"
+    );
+    // The gated turn sends the first turn's messages, so its report refreshes the same tail, and only the turn
+    // that carried the member leaves its id there.
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &fixture_tail()).as_deref(),
+        Some("msg_01"),
+        "the gated turn's answer never reaches the map"
+    );
+
+    let r3 = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(r3.status(), 200);
+    assert_eq!(
+        diagnostics_previous(&up.requests()[2].body).as_deref(),
+        Some("msg_01"),
+        "the next diagnosed turn names the turn before the gated one"
     );
     up.shutdown().await;
 }
@@ -988,6 +1398,12 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
             .as_deref(),
         Some("msg_turn")
     );
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &fixture_tail()).as_deref(),
+        Some("msg_turn"),
+        "the probes refresh the turn's tail and leave its answer there"
+    );
 
     // The next real turn names the turn before it, not a probe.
     let resp = h
@@ -998,5 +1414,310 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_diagnosed_inference_turn(&up.requests()[3], Some("msg_turn"));
+    up.shutdown().await;
+}
+
+/// `req` sent by the agent `agent` of its session.
+fn as_agent(mut req: Request<Body>, agent: &str) -> Request<Body> {
+    set_header(&mut req, "x-claude-code-agent-id", agent);
+    req
+}
+
+#[tokio::test]
+async fn a_continuation_names_the_answer_to_its_prefix_found_on_the_third_probe() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a1", "msg_a2"]).await;
+    let second = [user("u1"), assistant("a1"), user("u2")];
+
+    turn(&h, conversation_request(KEY, SONNET, "s1", &second[..1])).await;
+    assert_eq!(named(&up), Some(None), "a first turn has no answer to name");
+    settle(&h).await;
+    // Read before the second turn, whose own report writes its boundaries: the walk from its tail meets no entry
+    // at `u2` or at `a1`, and the first turn's answer at `u1`.
+    let walked = boundaries_of(&second);
+    assert!(entry_at(&h, SONNET, &walked[2]).is_none());
+    assert!(entry_at(&h, SONNET, &walked[1]).is_none());
+    assert_eq!(id_at(&h, SONNET, &walked[0]).as_deref(), Some("msg_a1"));
+
+    turn(&h, conversation_request(KEY, SONNET, "s1", &second)).await;
+    assert_eq!(named(&up), Some(Some("msg_a1".into())));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_rewind_names_the_answer_at_the_rewind_point() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a1", "msg_a2", "msg_a3", "msg_a4"]).await;
+    let third = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2"),
+        user("u3"),
+    ];
+    for depth in [1, 3, 5] {
+        turn(&h, conversation_request(KEY, SONNET, "s1", &third[..depth])).await;
+    }
+
+    // The user edits `u2` and resends: the conversation continues `a1`'s answer, not the newest one.
+    let rewound = [user("u1"), assistant("a1"), user("u2 edited")];
+    turn(&h, conversation_request(KEY, SONNET, "s1", &rewound)).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a1".into())),
+        "the memory holds msg_a3"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_forks_first_request_names_the_parents_tail_answer_at_the_fork_point() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a1", "msg_a2", "msg_f1"]).await;
+    let forked = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2"),
+        user("u3"),
+    ];
+    for depth in [1, 3] {
+        turn(
+            &h,
+            conversation_request(KEY, SONNET, "s1", &forked[..depth]),
+        )
+        .await;
+    }
+    // A request with a session header waits on its own session's report alone, so the parent's last report has to
+    // be applied before the fork's conversation climb looks for the conversation it branched from.
+    settle(&h).await;
+
+    turn(
+        &h,
+        as_agent(conversation_request(KEY, SONNET, "s2", &forked), "fork-1"),
+    )
+    .await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a2".into())),
+        "the parent's entry at `u2` carries its answer under the parent's root"
+    );
+    up.shutdown().await;
+}
+
+/// `conversation_request` under a system prompt of its own, so the upstream would read a change of it as a
+/// divergence from whichever answer the member names.
+fn under_another_system_prompt(session: &str, messages: &[serde_json::Value]) -> Request<Body> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
+    value["model"] = serde_json::Value::from(SONNET);
+    value["messages"] = serde_json::Value::Array(messages.to_vec());
+    value["system"][2]["text"] = serde_json::Value::from("You review the fork's changes.");
+    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
+    oauth_request(&native, session)
+}
+
+#[tokio::test]
+async fn a_fork_that_regenerates_its_parents_tail_names_its_own_answer_on_its_next_turn() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_p", "msg_f1", "msg_f2"]).await;
+    let next = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2 of the fork"),
+        user("u3"),
+    ];
+    turn(&h, conversation_request(KEY, SONNET, "s1", &next[..3])).await;
+    settle(&h).await;
+
+    let fork = |messages: &[serde_json::Value]| {
+        as_agent(under_another_system_prompt("s2", messages), "fork-1")
+    };
+    turn(&h, fork(&next[..3])).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_p".into())),
+        "a fork without an answer of its own names its parent's"
+    );
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &boundaries_of(&next[..3])[2]).as_deref(),
+        Some("msg_p"),
+        "the shared tail keeps the parent's answer under the parent's root"
+    );
+
+    turn(&h, fork(&next)).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_f1".into())),
+        "the fork continues its own answer at the shared tail, not the parent's"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_describe_helper_of_a_member_less_client_names_the_subagents_last_answer_and_the_next_turn_skips_its_tail(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a1", "msg_a2", "msg_h", "msg_a3"]).await;
+    let next = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2"),
+        user("u3"),
+    ];
+    let subagent = |messages: &[serde_json::Value]| {
+        as_agent(conversation_request(KEY, SONNET, "s1", messages), "sub-1")
+    };
+    for depth in [1, 3] {
+        turn(&h, subagent(&next[..depth])).await;
+    }
+
+    // The helper resends the subagent's first message with its question appended, under the same tools and
+    // markers: one boundary no turn wrote, so the memory names the subagent's last answer.
+    let helper = [user("u1 Describe your most recent action")];
+    turn(&h, subagent(&helper)).await;
+    assert_eq!(named(&up), Some(Some("msg_a2".into())));
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &boundaries_of(&helper)[0]).as_deref(),
+        Some("msg_h"),
+        "the helper's answer lands on its own tail"
+    );
+
+    turn(&h, subagent(&next)).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a2".into())),
+        "the next turn continues `a2`, which the helper's answer did not"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_first_turn_after_a_compaction_names_the_memorys_newest_answer() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a2", "msg_c1"]).await;
+    let before = [user("u1"), assistant("a1"), user("u2")];
+    turn(&h, conversation_request(KEY, SONNET, "s1", &before)).await;
+
+    let compacted = [user("Summary of the conversation so far, then u3")];
+    turn(&h, conversation_request(KEY, SONNET, "s1", &compacted)).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a2".into())),
+        "a new history matches no boundary, so the memory's newest answer is named"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_turn_that_switches_the_model_names_the_memorys_last_id_for_that_model() {
+    const OPUS: &str = "claude-opus-4-1";
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_s1", "msg_o1", "msg_o2"]).await;
+    turn(&h, conversation_request(KEY, SONNET, "s1", &[user("u1")])).await;
+
+    turn(&h, conversation_request(KEY, OPUS, "s1", &[user("u1")])).await;
+    assert_eq!(
+        named(&up),
+        Some(None),
+        "no entry under the new model and no memory for it"
+    );
+
+    let next = [user("u1"), assistant("o1"), user("u2")];
+    turn(&h, conversation_request(KEY, OPUS, "s1", &next)).await;
+    assert_eq!(named(&up), Some(Some("msg_o1".into())));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_account_move_names_the_new_accounts_memory_id_and_its_answer_replaces_the_boundaries() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a1"));
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a2"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b3"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b4"));
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let fourth = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2"),
+        user("u3"),
+        assistant("b3"),
+        user("u4"),
+    ];
+    for depth in [1, 3] {
+        let served = turn(
+            &h,
+            conversation_request(KEY, SONNET, "s1", &fourth[..depth]),
+        )
+        .await;
+        assert_eq!(served, "a");
+    }
+
+    let third = &fourth[..5];
+    let served = turn(&h, conversation_request(KEY, SONNET, "s1", third)).await;
+    assert_eq!(served, "b");
+    let sent = up.requests();
+    assert_eq!(sent.len(), 4, "a's 429 and b's answer both count");
+    assert_eq!(
+        member_of(&sent[2].body),
+        Some(Some("msg_a2".into())),
+        "a's leg names a's answer"
+    );
+    assert_eq!(
+        member_of(&sent[3].body),
+        Some(None),
+        "b's leg asks again on b, which holds no answer and no memory"
+    );
+    settle(&h).await;
+    let walked = boundaries_of(third);
+    for (index, boundary) in walked.iter().enumerate() {
+        let entry = entry_at(&h, SONNET, boundary).expect("every boundary has an entry");
+        assert_eq!(entry.account_id, "b", "boundary {index}");
+        let tail = index + 1 == walked.len();
+        assert_eq!(
+            entry.message_id.as_deref(),
+            tail.then_some("msg_b3"),
+            "boundary {index}"
+        );
+    }
+
+    let served = turn(&h, conversation_request(KEY, SONNET, "s1", &fourth)).await;
+    assert_eq!(served, "b");
+    assert_eq!(named(&up), Some(Some("msg_b3".into())));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_first_turn_whose_first_message_another_session_shares_names_nothing() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_a1", "msg_b1"]).await;
+    turn(&h, conversation_request(KEY, SONNET, "s1", &[user("u1")])).await;
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &boundaries_of(&[user("u1")])[0]).as_deref(),
+        Some("msg_a1")
+    );
+
+    turn(&h, conversation_request(KEY, SONNET, "s2", &[user("u1")])).await;
+    assert_eq!(
+        named(&up),
+        Some(None),
+        "the entry belongs to s1, and a shared first message is no fork"
+    );
     up.shutdown().await;
 }

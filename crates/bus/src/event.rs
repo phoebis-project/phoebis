@@ -55,6 +55,23 @@ impl AutoMode {
     }
 }
 
+/// Who put `diagnostics.previous_message_id` on the body the upstream compared: the client's own member, or the
+/// relay's insertion under the pool's `cache_diagnostics` switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagnosticsSource {
+    Client,
+    Router,
+}
+
+impl DiagnosticsSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiagnosticsSource::Client => "client",
+            DiagnosticsSource::Router => "router",
+        }
+    }
+}
+
 /// The relay's error code for a body refused for its shape. The ledger matches a completion's code against it to
 /// record the `BodyShape` standing, so both crates read the one spelling rather than each writing its own.
 pub const BODY_SHAPE_ERROR_CODE: &str = "body_shape";
@@ -422,6 +439,10 @@ pub struct RequestComplete {
     /// carries; `None` for a request never held. Set on a request held and then served, and on one whose hold
     /// ended in an exhaustion with no attempt dispatched.
     pub held: Option<String>,
+    /// The source of the `diagnostics` member on the body the answering leg sent, `None` for a body without one:
+    /// the gate refused it, the switch is off, a strip after a 400 removed it, the request is a token count, or
+    /// no leg answered.
+    pub diagnostics: Option<DiagnosticsSource>,
     /// The `id` of the message the committed answer carried (`message_start`, or the JSON document), as the
     /// upstream sent it; `None` for a local answer, a cut before the first event, or an answer without one.
     pub message_id: Option<String>,

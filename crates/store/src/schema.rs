@@ -80,11 +80,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (48, V48),
     (49, V49),
     (50, V50),
+    (51, V51),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 50;
+pub const SCHEMA_VERSION: u32 = 51;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -731,3 +732,8 @@ CREATE TABLE keepalive_idle_returns (
 
 // Nothing reads the day budgets once the keepalive has no daily probe cap.
 const V50: &str = "DROP TABLE keepalive_budgets;";
+
+// The upstream id of the newest answer at a message boundary, so the relay's cache diagnostics member names the
+// answer a request continues rather than the session's last one. Nullable: a static entry never carries one, nor
+// does a row from before the column.
+const V51: &str = "ALTER TABLE affinity ADD COLUMN message_id TEXT;";

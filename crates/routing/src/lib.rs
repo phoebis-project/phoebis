@@ -16,7 +16,7 @@ pub mod windows;
 
 pub use affinity::{
     AffinityChain, AffinityEntry, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
-    ConversationMatch, ConversationQuery, PurgedEntry, RungWalk, Visited,
+    ConversationMatch, ConversationQuery, PredecessorQuery, PurgedEntry, RungWalk, Visited,
 };
 pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{

@@ -2129,6 +2129,7 @@ mod tests {
             request_id: "r-1".into(),
             seq: 1,
             attempt: 1,
+            message_id: None,
         }
     }
 

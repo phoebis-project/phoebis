@@ -1,10 +1,11 @@
 import type {
-  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
+import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { aheadOf } from '@/lib/quota';
@@ -223,6 +224,16 @@ function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
     ]);
     return { ...a, cacheMissReason };
   });
+}
+
+/**
+ * Who put the diagnostics member on a row's serving body: nobody where the beta compared nothing, the router for the
+ * laptop's reduced-shape client, which the relay inserts the member for, and the client itself on the current build.
+ */
+function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null {
+  const reason = attempts[attempts.length - 1]?.cacheMissReason ?? null;
+  if (reason === null || reason === 'not_requested') return null;
+  return keyId === 'laptop' ? 'router' : 'client';
 }
 
 /**
@@ -527,6 +538,7 @@ function buildRequests(): RequestLog[] {
       durationMs,
       usage,
       costUsd: Math.round(costOf(model, usage) * 10_000) / 10_000,
+      diagnosticsSource: sourceOf(attempts, lane.keyId),
       errorCode,
       sessionId,
       agentId,
@@ -641,14 +653,15 @@ function buildRequests(): RequestLog[] {
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
     r.costUsd = Math.round(costOf(r.model, r.usage, true) * 10_000) / 10_000;
   }
-  // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
-  // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
-  // the laptop key whose captures the drawer checks read, and none of the rows above. The hour bound keeps the pick
-  // out of the routing log's hand-written hour, whose records name no canceled stream, should that hour ever hold a
-  // drawn row.
+  // A stream the client closed: its 200 head went out and no upstream error followed, so the request ends canceled
+  // with the usage it had reached, under the code the relay files a client's leaving with. One drawn row takes it, so
+  // no count another view draws moves: a single-attempt stream off the laptop key whose captures the drawer checks
+  // read, and none of the rows above. The hour bound keeps the pick out of the routing log's hand-written hour, whose
+  // records name no canceled stream, should that hour ever hold a drawn row.
   const canceled = rows.find((r) => r.keyId !== 'laptop' && r.keyId !== 'notebook' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
   if (canceled) {
     canceled.outcome = 'canceled';
+    canceled.errorCode = 'client_gone';
     canceled.attempts = canceled.attempts.map((a) => ({ ...a, outcome: 'canceled' as const }));
   }
   rows.push(...storyRequests());
@@ -886,6 +899,7 @@ function storyRow(seed: StorySeed): RequestLog {
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
     costUsd: answered ? Math.round(costOf(seed.model, usage, fast) * 10_000) / 10_000 : 0,
+    diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
     forkDepth: null,
@@ -1346,7 +1360,8 @@ function traceRequests() {
     const pool = poolById.get(r.poolId ?? '');
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
     const events = REQUEST_EVENTS.get(r.id) ?? [];
-    r.requestClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
+    const drawnClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
+    r.requestClass = drawnClass;
     r.attempts = r.attempts.map((a, i, all): Attempt => {
       const moved = events.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
@@ -1608,15 +1623,6 @@ function wastedProbes(h: Rng, probes: number, probeCostUsd: number): Pick<Hourly
 
 const ZERO_WASTE: Pick<HourlyRollup, 'wastedProbeReasons' | 'wastedProbeUsd' | 'wastedProbes'> = { wastedProbeReasons: emptyWastedProbeReasons(), wastedProbeUsd: 0, wastedProbes: 0 };
 
-/**
- * The class most of a lane-hour's requests sent. The rollups keep the class as a dimension, the fixture one per row.
- */
-function classOfRows(list: RequestLog[]): string {
-  const counts = new Map<string, number>();
-  for (const r of list) counts.set(r.requestClass ?? '-', (counts.get(r.requestClass ?? '-') ?? 0) + 1);
-  return [...counts.entries()].reduce((best, next) => (next[1] > best[1] ? next : best))[0];
-}
-
 /** The classes a synthesized hour's traffic sent, weighted toward the main conversation. */
 const HOUR_CLASSES: [string, number][] = [['auxiliary', 2], ['compaction', 1], ['main', 12], ['subagent', 5], ['workflow', 1]];
 
@@ -1696,70 +1702,93 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     const [hour, keyId, poolId, accountId, model, kind, sessionId, funding] = key.split('|') as [string, string, string, string, string, RequestKind, string, HourlyRollup['funding']];
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
-    const cacheMissReasons = emptyCacheMissReasons();
-    for (const r of list) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+    // The seeded draws are the lane hour's, taken once each in this order, so splitting its rows by effort and class
+    // below moves no drawn figure.
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
-    const kept = isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35));
+    const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
+    const moved = list.filter((r) => r.attempts.length > 1 && r.status === 200);
+    const migrations = moved.length > 0 && h.chance(0.5) ? 1 : 0;
     const probeCostUsd = isProbe ? list.reduce((s, r) => s + r.costUsd, 0) : 0;
-    out.push({
-      hour,
-      client: CLIENTS[keyId] ?? '-',
-      keyId,
-      // One hour never holds two holders of a key, since the live key starts on the hour.
-      keyGeneration: list[0].keyGeneration,
-      kind,
-      poolId,
-      accountId,
-      model,
-      requestClass: isProbe ? '-' : classOfRows(list),
-      sessionId,
-      funding,
-      // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
-      // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
-      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
-      requests: {
-        // A stream that ended short committed its 200 and still is no success, so it counts on its own.
-        incomplete: list.filter((r) => r.outcome === 'incomplete').length,
-        ok: okRows.filter((r) => r.outcome === 'succeeded').length,
-        rate_limited: list.filter((r) => r.status === 429).length,
-        // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-        overloaded: list.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
-        // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
-        // the same status filter, so the error split that subtracts it never reads negative.
-        undecodable: list.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
-        upstream_error: list.filter(upstreamFailed).length,
-      },
-      // Every attempt but the last one moved the request to another member.
-      failovers: list.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
-      migrations: list.filter((r) => r.attempts.length > 1 && r.status === 200).length > 0 && h.chance(0.5) ? 1 : 0,
-      effort: 'none',
-      tokens: {
-        uncachedInput: list.reduce((s, r) => s + r.usage.input, 0),
-        cacheRead: list.reduce((s, r) => s + r.usage.cacheRead, 0),
-        cacheWrite5m: list.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
-        cacheWrite1h: list.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
-        output: list.reduce((s, r) => s + r.usage.output, 0),
-        thinking: list.reduce((s, r) => s + r.usage.thinking, 0),
-        webFetch: list.reduce((s, r) => s + r.usage.webFetch, 0),
-        webSearch: list.reduce((s, r) => s + r.usage.webSearch, 0),
-      },
-      cacheHits: okRows.filter((r) => r.usage.cacheRead > 0).length,
-      cacheMisses: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
-      cacheMissReasons,
-      expiredBetweenTurns: okRows.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
-      uncached: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
-      costUsd: list.reduce((s, r) => s + r.costUsd, 0),
-      cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
-      // At each answer's completion, the instant its own shares price it at.
-      shares: hourShares(accountId, list[0].canonicalModel, list.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
-      histograms: histogramsOf(list),
-      keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
-      probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : { ok: 0, failed: 0, held: 0, skipped: 0 },
-      probeMigrated: isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0,
-      probeCostUsd,
-      ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
-    });
+    const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
+    const probeMigrated = isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0;
+    const waste = isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE;
+    // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
+    // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
+    const speed = (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard';
+    // The rollups file each request under its effort and class as they fold them, and a probe under no class. The
+    // story files a probe under no effort either, so a lane hour's probes stay one row with the probe figures on it.
+    const parts = new Map<string, RequestLog[]>();
+    for (const r of list) {
+      const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}`;
+      parts.set(part, [...(parts.get(part) ?? []), r]);
+    }
+    for (const [part, rows] of parts) {
+      const [effort, requestClass] = part.split('|');
+      const ok = rows.filter((r) => r.status === 200);
+      const cacheMissReasons = emptyCacheMissReasons();
+      for (const r of rows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+      const keptHere = rows.filter((r) => kept.has(r));
+      out.push({
+        hour,
+        client: CLIENTS[keyId] ?? '-',
+        keyId,
+        // One hour never holds two holders of a key, since the live key starts on the hour.
+        keyGeneration: list[0].keyGeneration,
+        kind,
+        poolId,
+        accountId,
+        model,
+        requestClass,
+        sessionId,
+        funding,
+        speed,
+        requests: {
+          // A stream that ended short committed its 200 and still is no success, so it counts on its own.
+          incomplete: rows.filter((r) => r.outcome === 'incomplete').length,
+          ok: ok.filter((r) => r.outcome === 'succeeded').length,
+          rate_limited: rows.filter((r) => r.status === 429).length,
+          // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
+          overloaded: rows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
+          // the same status filter, so the error split that subtracts it never reads negative.
+          undecodable: rows.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+          upstream_error: rows.filter(upstreamFailed).length,
+          // The ledger files a stream the client closed as failed, under the code the relay gave it.
+          client_gone: rows.filter((r) => r.errorCode === 'client_gone').length,
+        },
+        // Every attempt but the last one moved the request to another member.
+        failovers: rows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        // The lane hour draws one migration, filed with the first request that moved.
+        migrations: rows.includes(moved[0]) ? migrations : 0,
+        effort,
+        tokens: {
+          uncachedInput: rows.reduce((s, r) => s + r.usage.input, 0),
+          cacheRead: rows.reduce((s, r) => s + r.usage.cacheRead, 0),
+          cacheWrite5m: rows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
+          cacheWrite1h: rows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
+          output: rows.reduce((s, r) => s + r.usage.output, 0),
+          thinking: rows.reduce((s, r) => s + r.usage.thinking, 0),
+          webFetch: rows.reduce((s, r) => s + r.usage.webFetch, 0),
+          webSearch: rows.reduce((s, r) => s + r.usage.webSearch, 0),
+        },
+        cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
+        cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
+        cacheMissReasons,
+        expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
+        uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
+        costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
+        cost: sumSplit(rows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
+        // At each answer's completion, the instant its own shares price it at.
+        shares: hourShares(accountId, rows[0].canonicalModel, rows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        histograms: histogramsOf(rows),
+        keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
+        probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
+        probeMigrated,
+        probeCostUsd,
+        ...waste,
+      });
+    }
   }
   // The day holds one probe the router held while its ledger caught up, from the default range's first hour on, so the
   // default range draws the slice.
@@ -1877,7 +1906,7 @@ function historicalRollups(): HourlyRollup[] {
         sessionId,
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
-        requests: { incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, undecodable: 0, upstream_error: 0 },
+        requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, undecodable: 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
@@ -1929,7 +1958,7 @@ function historicalRollups(): HourlyRollup[] {
           sessionId,
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
-          requests: { incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, undecodable: 0, upstream_error: failed },
+          requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, undecodable: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
@@ -1963,7 +1992,7 @@ const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
-const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error;
+const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
 

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
     AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
-    ConversationQuery, PurgedEntry,
+    ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
     CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
@@ -1292,6 +1292,24 @@ impl ConversationLookup for RouterHandle {
             .read()
             .expect("affinity lock poisoned")
             .conversation(&query)
+    }
+
+    fn predecessor(&self, query: &PredecessorQuery<'_>) -> Option<String> {
+        let snapshot = self.snapshot();
+        let incarnation_of = |account_id: &str| snapshot.account(account_id).map(|a| a.incarnation);
+        let query = PredecessorQuery {
+            canonical_model: query.canonical_model,
+            account_id: query.account_id,
+            key_id: query.key_id,
+            key_generation: query.key_generation,
+            roots: query.roots,
+            message_boundaries: query.message_boundaries,
+            incarnation_of: &incarnation_of,
+        };
+        self.affinity
+            .read()
+            .expect("affinity lock poisoned")
+            .predecessor(&query)
     }
 }
 

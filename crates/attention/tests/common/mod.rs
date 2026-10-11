@@ -337,6 +337,7 @@ pub fn complete(
         response_bytes: None,
         response_chunks: None,
         held: None,
+        diagnostics: None,
         message_id: None,
         finished_at: at,
     })
