@@ -2136,30 +2136,39 @@ impl Relay {
                 .map(|key| self.memory.previous(key, &account.id, folded_model))
                 .unwrap_or_default();
             // The answer the request continues, on the selected account alone: the deepest boundary of its own
-            // conversation, or of the conversation it forked from, that holds an answer. The session memory's last
-            // id is the fallback, as a first turn after a compaction or a model switch has no boundary to match.
+            // conversation that holds an answer, else, while a fork has no answer of its own, of the conversation
+            // it forked from. A fork that regenerated its parent's tail holds its answer in the memory alone, as
+            // the shared boundary keeps the parent's. The session memory's last id is the fallback, as a first
+            // turn after a compaction or a model switch has no boundary to match.
             let own_root = admitted.identity.session_id.as_deref();
-            let roots: Vec<&str> = own_root
-                .into_iter()
-                .chain(admitted.identity.forked_from.as_deref())
-                .collect();
             let no_incarnation = |_: &str| None;
+            let predecessor_under = |root: &str| {
+                self.router.predecessor(&PredecessorQuery {
+                    canonical_model: &admitted.identity.canonical_model,
+                    account_id: &account.id,
+                    key_id: &admitted.key.id,
+                    key_generation: admitted.key.created_at,
+                    roots: &[root],
+                    message_boundaries: admitted
+                        .chains
+                        .map(|c| &c.message_boundaries[..])
+                        .unwrap_or(&[]),
+                    incarnation_of: &no_incarnation,
+                })
+            };
             let named: Option<Option<String>> = (admitted.diagnostics
                 && !skip.contains(&Injected::Diagnostics)
                 && !admitted.client_diagnostics)
                 .then(|| {
-                    self.router
-                        .predecessor(&PredecessorQuery {
-                            canonical_model: &admitted.identity.canonical_model,
-                            account_id: &account.id,
-                            key_id: &admitted.key.id,
-                            key_generation: admitted.key.created_at,
-                            roots: &roots,
-                            message_boundaries: admitted
-                                .chains
-                                .map(|c| &c.message_boundaries[..])
-                                .unwrap_or(&[]),
-                            incarnation_of: &no_incarnation,
+                    own_root
+                        .and_then(predecessor_under)
+                        .or_else(|| {
+                            admitted
+                                .identity
+                                .forked_from
+                                .as_deref()
+                                .filter(|_| previous.message_id.is_none())
+                                .and_then(predecessor_under)
                         })
                         .or_else(|| previous.message_id.clone())
                 });

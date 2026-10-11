@@ -52,6 +52,15 @@ test('the mock keeps a request under its class folded as the rollups file it', a
   assert.deepEqual(await listed({ requestClasses: ['-'] }), ids(expected));
 });
 
+test('the mock keeps a request under its canonical model, not its wire spelling, as the route compares it', async () => {
+  const resolved = unprobed.find((r) => r.model !== r.canonicalModel);
+  assert.ok(resolved, 'the story holds a request whose wire spelling differs from its canonical model');
+  const expected = unprobed.filter((r) => r.canonicalModel === resolved.canonicalModel);
+  narrowed(expected, `under ${resolved.canonicalModel}`);
+  assert.deepEqual(await listed({ models: [resolved.canonicalModel] }), ids(expected));
+  assert.deepEqual(await listed({ models: [resolved.canonicalModel.toUpperCase()] }), ids(expected), 'the route lowercases the selection');
+});
+
 test('the mock lists a request that names no account under the unattributed id', async () => {
   const expected = unprobed.filter((r) => r.accountId === null);
   narrowed(expected, 'without an account');

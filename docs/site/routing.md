@@ -91,7 +91,7 @@ to a token count, and never rewrites a member the client sent. The clients that 
 the reduced shape) are the case the insertion exists for. The member names the answer the request continues: the newest
 answer at the deepest message boundary the request shares with an earlier answer of its own conversation, or of the
 conversation it forked from, on the serving account, else the newest answer of the session on that account and model.
-Off by default.
+A fork names its parent's answer only until it has an answer of its own on that account and model. Off by default.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the

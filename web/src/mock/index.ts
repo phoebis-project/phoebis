@@ -296,7 +296,8 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
   // The route files a request no attempt served under the unattributed id, as the rollups do.
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
-  if (q.models?.length && !q.models.includes(r.model)) return false;
+  // The route compares the lowercased selection against the canonical id, never the client's spelling.
+  if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) return false;
   if (q.statuses?.length && (r.status === null || !q.statuses.includes(r.status))) return false;
   if (q.outcomes?.length && !q.outcomes.includes(r.outcome)) return false;
   if (q.kind && r.kind !== q.kind) return false;

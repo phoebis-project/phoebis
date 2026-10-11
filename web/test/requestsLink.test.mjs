@@ -99,6 +99,25 @@ test('a client group the rollups fold to other stays plain, since the request lo
   assert.notEqual(link({ group: { by: 'client', key: 'c'.repeat(64) } }).href, null, 'a class of 64 bytes is filed as sent');
 });
 
+test('a client pattern that matches the folded other stays plain, since the request log matches the raw class', () => {
+  for (const clientPattern of [d.OTHER_DIMENSION, 'OTHER', 'oth*', '?ther', '*e*']) {
+    for (const group of [undefined, { by: 'key', key: 'desktop' }, { by: 'model', key: 'm' }]) {
+      const answer = link({ filters: { clientPattern }, group });
+      assert.equal(answer.href, null, `${clientPattern} under ${group?.by ?? 'the totals'}`);
+      assert.match(answer.title, /raw client class/, clientPattern);
+      assert.match(answer.title, /pattern/, clientPattern);
+    }
+  }
+});
+
+test('a client pattern that misses other, or matches every class, passes through as the Requests filter', () => {
+  for (const clientPattern of ['claude-code/*', '*']) {
+    for (const group of [undefined, { by: 'key', key: 'desktop' }]) assert.equal(target(link({ filters: { clientPattern }, group }).href).client, clientPattern, clientPattern);
+  }
+  // A client row's own class takes the pattern's place, and the log files that class as sent.
+  assert.equal(target(link({ filters: { clientPattern: '*e*' }, group: { by: 'client', key: 'claude-code/cli' } }).href).client, 'claude-code/cli');
+});
+
 test('the user agent grouping and the user agent pattern leave every count plain, since the request log matches the raw header', () => {
   const grouped = link({ group: { by: 'user_agent', key: 'claude-cli/2.1.269' } });
   assert.equal(grouped.href, null);

@@ -422,6 +422,13 @@ test('the session fold keys an effort and a request class as the rollups fold th
   assert.deepEqual(d.foldGroups([unset], 'request_class').map((g) => g.key), [d.NO_CLASS], 'no class');
 });
 
+test('the session fold keys a model by its canonical id, as the rollups file it and the Models filter matches it', () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const wide = { ...row, id: 'r-wide', canonicalModel: 'claude-sonnet-5', model: 'claude-sonnet-5[1m]' };
+  const plain = { ...row, id: 'r-plain', canonicalModel: 'claude-sonnet-5', model: 'claude-sonnet-5' };
+  assert.deepEqual(d.foldGroups([wide, plain], 'model').map((g) => [g.key, g.label, g.requests]), [['claude-sonnet-5', 'claude-sonnet-5', 2]]);
+});
+
 test('the cooldown move reason reads failed over and the other seven keep their words', () => {
   assert.deepEqual(d.PIN_MIGRATION_LABEL, {
     cooldown: 'failed over',

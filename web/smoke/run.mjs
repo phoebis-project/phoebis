@@ -11757,8 +11757,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const perModel = trafficRows('model');
     const want = new Map();
     for (const r of requests.filter((x) => x.sessionId === session && x.kind !== 'probe')) {
-      const sums = want.get(r.model) ?? [0, 0];
-      want.set(r.model, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
+      const sums = want.get(r.canonicalModel) ?? [0, 0];
+      want.set(r.canonicalModel, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
     const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
     results.push({

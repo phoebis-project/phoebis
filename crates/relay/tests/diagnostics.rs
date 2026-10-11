@@ -1505,6 +1505,57 @@ async fn a_forks_first_request_names_the_parents_tail_answer_at_the_fork_point()
     up.shutdown().await;
 }
 
+/// `conversation_request` under a system prompt of its own, so the upstream would read a change of it as a
+/// divergence from whichever answer the member names.
+fn under_another_system_prompt(session: &str, messages: &[serde_json::Value]) -> Request<Body> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
+    value["model"] = serde_json::Value::from(SONNET);
+    value["messages"] = serde_json::Value::Array(messages.to_vec());
+    value["system"][2]["text"] = serde_json::Value::from("You review the fork's changes.");
+    let native = serde_json::to_vec(&value).expect("a Value always re-encodes");
+    oauth_request(&native, session)
+}
+
+#[tokio::test]
+async fn a_fork_that_regenerates_its_parents_tail_names_its_own_answer_on_its_next_turn() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = answering(&up, &["msg_p", "msg_f1", "msg_f2"]).await;
+    let next = [
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2 of the fork"),
+        user("u3"),
+    ];
+    turn(&h, conversation_request(KEY, SONNET, "s1", &next[..3])).await;
+    settle(&h).await;
+
+    let fork = |messages: &[serde_json::Value]| {
+        as_agent(under_another_system_prompt("s2", messages), "fork-1")
+    };
+    turn(&h, fork(&next[..3])).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_p".into())),
+        "a fork without an answer of its own names its parent's"
+    );
+    settle(&h).await;
+    assert_eq!(
+        id_at(&h, SONNET, &boundaries_of(&next[..3])[2]).as_deref(),
+        Some("msg_p"),
+        "the shared tail keeps the parent's answer under the parent's root"
+    );
+
+    turn(&h, fork(&next)).await;
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_f1".into())),
+        "the fork continues its own answer at the shared tail, not the parent's"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_describe_helper_of_a_member_less_client_names_the_subagents_last_answer_and_the_next_turn_skips_its_tail(
 ) {

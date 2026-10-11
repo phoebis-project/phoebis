@@ -80,7 +80,9 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   // A key id created again is another holder, so the group is the lifetime, which a `keys=` selector names too.
   if (by === 'key') return `${r.keyId ?? '-'}@${r.keyGeneration}`;
   if (by === 'kind') return r.kind;
-  if (by === 'model') return r.model;
+  // The canonical id, as the rollups file a request and the Models filter matches it, so a `[1m]` spelling or an
+  // alias joins the group of the model it resolved to.
+  if (by === 'model') return r.canonicalModel;
   if (by === 'pool') return r.poolId ?? '-';
   if (by === 'request_class') return foldRequestClass(r.requestClass);
   // A fast request refused before any attempt served still asked for fast, and the rollups file it so.
