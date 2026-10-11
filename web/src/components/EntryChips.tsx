@@ -1,5 +1,5 @@
 import type { PrefixEntry } from '@/api/types';
-import { useDescription } from '@/components/ui/primitives';
+import { Described } from '@/components/ui/primitives';
 import { hashTitle, shortHash, warmUntil } from '@/lib/routingLog';
 
 /**
@@ -8,13 +8,14 @@ import { hashTitle, shortHash, warmUntil } from '@/lib/routingLog';
  */
 export function HashChip({ entry }: { entry: PrefixEntry }) {
   const title = hashTitle(entry);
-  const described = useDescription(title);
-  // Outside every host the title alone describes the chip: a node beside it would join the cell's text.
-  const hosted = described && !described.sibling ? described.id : undefined;
   return (
-    <span className="chip mono decision-card__hash" title={title} aria-describedby={hosted}>
-      {shortHash(entry.hash)}
-    </span>
+    <Described text={title} hostedOnly>
+      {(describedBy) => (
+        <span className="chip mono decision-card__hash" title={title} aria-describedby={describedBy}>
+          {shortHash(entry.hash)}
+        </span>
+      )}
+    </Described>
   );
 }
 

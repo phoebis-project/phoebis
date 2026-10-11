@@ -456,7 +456,7 @@ export const SETTINGS_WIRE = {
   about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
   access: { admin_configured: true },
   keepalive: { max_agents: 1024, max_retained_bytes: 268_435_456, max_sessions: 128 },
-  listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
+  listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72 },
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },

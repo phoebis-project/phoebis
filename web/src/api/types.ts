@@ -1522,7 +1522,8 @@ export interface Settings {
    * it, `effectiveDate` the instant it parses to, or null when it is not a date.
    */
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
-  listeners: { metrics: string; proxy: string };
+  /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
+  listeners: { metrics: string; proxy: string; proxyTls: boolean };
   retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };

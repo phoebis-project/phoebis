@@ -51,6 +51,15 @@ export const undatedModel = (id: string) => id.replace(/-\d{8}$/, '');
  */
 export const shortModel = (id: string) => undatedModel(id).replace(/^claude-/, '');
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
+/**
+ * A figure already in percent to the whole point, a dash without one, and the sign of a lead where `signed` asks. The
+ * sign follows the rounded figure, since `toFixed` prints -0.4 as "-0" and a lead that rounds to zero is no lead.
+ */
+export const pct = (v: number | null | undefined, signed = false) => {
+  if (v === null || v === undefined) return '-';
+  const n = Math.round(v);
+  return `${signed && n > 0 ? '+' : ''}${n === 0 ? 0 : n}%`;
+};
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */

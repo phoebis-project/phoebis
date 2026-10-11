@@ -1,5 +1,5 @@
 import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy, Session } from '@/api/types';
-import { fmtPeriodEnd, fmtRelative } from './format';
+import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime } from './format';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
@@ -20,10 +20,14 @@ export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget
 export type LastResort = 'floor' | 'winding_down';
 export const LAST_RESORT_LABEL: Record<LastResort, string> = { floor: 'at the Pace floor', winding_down: 'winding down' };
 
-/** `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. */
+/**
+ * `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. `end`:
+ * the end an engine rule reads off the account, which a winding-down badge counts down to.
+ */
 export interface Placement {
   account: Account;
   deferred: boolean;
+  end: number | null;
   ineligible: Ineligible | null;
   lastResort: LastResort | null;
   pins: number;
@@ -38,6 +42,30 @@ export interface Tier {
 
 const HOUR_MS = 3_600_000;
 const WEEK_HOURS = 168;
+
+/** A Standing badge's words and the sentence its title carries. */
+export interface StandingBadge {
+  text: string;
+  title: string | undefined;
+}
+
+/** A cooldown verdict's badge: the time left on the account's own cooldown where the account names its end. */
+export function cooldownBadge(until: string | undefined, now: number): StandingBadge {
+  if (until === undefined) return { text: 'cooldown', title: undefined };
+  const left = Date.parse(until) - now;
+  return left > 0 ? { text: `cooldown ${fmtDuration(left)}`, title: `In a cooldown that ends ${fmtAbsolute(until)}` } : { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(until)}` };
+}
+
+/** An overage verdict's badge: the clock time the overage resets at where the account knows it. */
+export function overageBadge(reset: string | null): StandingBadge {
+  return reset === null ? { text: 'overage', title: 'In overage, reset unknown' } : { text: `overage until ${fmtShortTime(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` };
+}
+
+/** A winding-down member's badge: the time left before the plan's end, which the member is held back for. */
+export function windingDownBadge(end: number, now: number): StandingBadge {
+  const at = fmtAbsolute(new Date(end).toISOString());
+  return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
+}
 
 /** The end an engine rule reads: the saved end while the account is cancelled, else a trial end still ahead. */
 function endOf(account: Account, now: number): number | null {
@@ -121,6 +149,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
             // Under the kind order an account in overage already has a tier of its own, so deferring it inside
             // one would rank it behind its own siblings twice.
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse),
+            end: endOf(account, now),
             ineligible,
             lastResort: ineligible === null ? lastResort : null,
             // The engine's count, one pin per agent and model, so a session whose subagents run on another model

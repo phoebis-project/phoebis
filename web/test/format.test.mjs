@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -146,6 +146,17 @@ test('a short model id drops the claude- prefix and the date, and an id without 
   assert.equal(shortModel('claude-sonnet-5-5'), 'sonnet-5-5');
   assert.equal(shortModel('opus-4-1'), 'opus-4-1', 'an id without the prefix reads as sent');
   assert.equal(shortModel('my-claude-model'), 'my-claude-model', 'the prefix drops only at the start');
+});
+
+test('a percent figure that rounds to zero reads 0%, never -0%, and a lead above it carries its sign where asked', () => {
+  assert.equal(pct(-0.4, true), '0%', 'a lead just behind pace rounds to no lead at all');
+  assert.equal(pct(-0.4), '0%');
+  assert.equal(pct(0.4, true), '0%', 'nor does a lead just ahead take a sign');
+  assert.equal(pct(-0.6, true), '-1%');
+  assert.equal(pct(12.4, true), '+12%');
+  assert.equal(pct(12.4), '12%', 'a figure read unsigned carries no plus');
+  assert.equal(pct(null), '-');
+  assert.equal(pct(undefined, true), '-');
 });
 
 test('dollar ticks step as fmtUsd does, with one precision for every tick of an axis', () => {

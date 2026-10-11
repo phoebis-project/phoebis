@@ -115,7 +115,7 @@ export function AccountsPage() {
                       title="The router holds no account yet"
                       body="Add an account to route requests."
                       action={
-                        <Button size="sm" variant="primary" onClick={() => setAddOpen(true)}>
+                        <Button size="sm" onClick={() => setAddOpen(true)}>
                           Add account
                         </Button>
                       }
@@ -634,9 +634,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
       )}
 
       <div className="detail__grid">
-        {/* One block per account, so each opens on its own rows rather than keeping the last one's toggle. */}
         <CoolingDown
-          key={account.id}
           title="Cooling down"
           busy={busy}
           now={now}

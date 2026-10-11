@@ -2,14 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
 import { useFollow } from '@/app/useFollow';
-import { Chips } from '@/components/DecisionCard';
+import { Chips } from '@/components/ChipView';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
-import { MultiSelect } from '@/components/ui/MultiSelect';
+import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
@@ -21,7 +21,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { FOLLOW_OVERRUN } from '@/lib/follow';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
@@ -143,10 +143,10 @@ function costRowValue(unit: CostUnit) {
   switch (unit.kind) {
     case 'shares':
       return (
-        <>
+        <span className="usage-table__end">
           <Chips chips={unit.shares.map(({ key, share }) => ({ value: shareLabel(key, share) }))} />
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
-        </>
+        </span>
       );
     case 'dollars':
       return <b title={`Billed in dollars: ${FUNDING_WORD[unit.funding]}`}>{fmtUsd(unit.usd)}</b>;
@@ -159,6 +159,24 @@ function costRowValue(unit: CostUnit) {
     case 'unserved':
       return <b>{fmtUsd(unit.usd)}</b>;
   }
+}
+
+/**
+ * The Keys control's options: the live keys, then each lifetime the address names that no live key holds, under its
+ * earlier holder's label, so a link from an earlier holder's session reads whole. Until the key list lands no lifetime
+ * can be told from a live key's own, so none is listed.
+ */
+function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
+  if (keys === null) return [];
+  const live = new Map(keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+  const earlier = selected.flatMap((value) => {
+    const at = value.lastIndexOf('@');
+    if (at < 0) return [];
+    const id = value.slice(0, at);
+    const generation = Number(value.slice(at + 1));
+    return live.get(id) === generation ? [] : [{ label: earlierHolderLabel(id, generation), value }];
+  });
+  return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
 }
 
 /** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
@@ -282,7 +300,7 @@ export function RequestsPage() {
           )}
           <MultiSelect
             label="Keys"
-            options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))}
+            options={keyOptions(keys.data, filters.keys)}
             value={filters.keys}
             onChange={(v) => update({ keys: v })}
             disabled={keys.data === null && keys.error !== null}
@@ -849,7 +867,7 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
               Pretty-print
             </Button>
           )}
-          <button ref={link} type="button" className="body-block__link" onClick={() => setWide(true)}>
+          <button ref={link} type="button" className="link-btn" onClick={() => setWide(true)}>
             Open wide
           </button>
           <CopyButton text={text} />

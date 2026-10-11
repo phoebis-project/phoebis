@@ -57,6 +57,27 @@ export function useDescription(text: string | undefined): { id: string; sibling:
   return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
 }
 
+/**
+ * Describes the element `children` draws by `text` for a reader: through the card's description host where one
+ * stands, else through a hidden node after the element, as the attempt trail's is. `hostedOnly` keeps a chip's hover
+ * to its title outside a host, since a node beside a chip would join the text of the cell or the row that holds it.
+ */
+export function Described({ children, hostedOnly = false, text }: { children: (describedBy: string | undefined) => ReactNode; hostedOnly?: boolean; text: string | undefined }) {
+  const described = useDescription(text);
+  const hosted = described && !described.sibling ? described.id : null;
+  const own = described?.sibling && !hostedOnly ? described.id : null;
+  return (
+    <>
+      {children(hosted ?? own ?? undefined)}
+      {own !== null && (
+        <span id={own} className="sr-only" data-descriptions="">
+          {text}
+        </span>
+      )}
+    </>
+  );
+}
+
 export function Badge({ tone = 'neutral', children, dot = false, title, describe = true }: { children: ReactNode; describe?: boolean; dot?: boolean; title?: string; tone?: BadgeTone }) {
   // A title that only repeats the badge's text would have a reader say it twice under a host, so such a caller keeps
   // the hover and turns the description off.
@@ -97,9 +118,10 @@ export function Button({ variant = 'secondary', size = 'md', icon, children, cla
   );
 }
 
-export function Pill({ children, active = false, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
+/** A caller that passes `active` is a toggle and reads as pressed or not, and a one-shot action passes none. */
+export function Pill({ children, active, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
   return (
-    <button type="button" className={`pill ${active ? 'is-active' : ''}`} onClick={onClick} disabled={disabled} title={title} aria-pressed={onClick ? active : undefined}>
+    <button type="button" className={`pill ${active ? 'is-active' : ''}`} onClick={onClick} disabled={disabled} title={title} aria-pressed={typeof active === 'boolean' ? active : undefined}>
       {icon}
       {children}
     </button>
@@ -385,6 +407,16 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     setAsking(false);
     lastFocused.current = null;
   }, [open]);
+  // Ahead of the showModal effect, so a dialog that mounts open records the control its showModal focuses.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onFocusIn = (e: Event) => {
+      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
+    };
+    el.addEventListener('focusin', onFocusIn);
+    return () => el.removeEventListener('focusin', onFocusIn);
+  }, []);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -401,15 +433,6 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     const target = was?.isConnected && el.contains(was) && was.matches(HELD_FOCUS) && !was.matches(':disabled') ? was : el.querySelector<HTMLElement>(TABBABLE);
     target?.focus();
   }, [asking]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onFocusIn = (e: Event) => {
-      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
-    };
-    el.addEventListener('focusin', onFocusIn);
-    return () => el.removeEventListener('focusin', onFocusIn);
-  }, []);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;

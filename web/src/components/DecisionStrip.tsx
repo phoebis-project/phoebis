@@ -1,8 +1,8 @@
 import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
-import { ChipView } from '@/components/DecisionCard';
-import { Described, StripPopover } from '@/components/StripPopover';
-import { Badge } from '@/components/ui/primitives';
+import { ChipView } from '@/components/ChipView';
+import { StripPopover } from '@/components/StripPopover';
+import { Badge, Described } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
 import { anchorPlan } from '@/lib/stripFacts';

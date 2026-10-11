@@ -23,7 +23,7 @@ import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, Erro
 import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -31,7 +31,7 @@ import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failove
 import { windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -67,6 +67,17 @@ function BreakEven({ range }: { range: Range }) {
   return (
     <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
       Break-even: <RangeFigures range={range} />
+    </span>
+  );
+}
+/** A ceiling past the break-even's low end, as the router caps it: the figures it runs to, or null below the cap. */
+const cappedAt = (seconds: number, breakEven: Range): Range | null =>
+  seconds > breakEven.min ? { max: Math.min(seconds, breakEven.max), min: Math.min(seconds, breakEven.min) } : null;
+/** Beside a ceiling switched on past the break-even: the figures it is capped at, as the idle window's note reads them. */
+function CappedAt({ range }: { range: Range }) {
+  return (
+    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
+      Capped at the break-even, <RangeFigures range={range} />
     </span>
   );
 }
@@ -438,7 +449,7 @@ function CacheTtlOverrides({
             <tbody>
               {rules.models.map((m) => (
                 <tr key={m.model}>
-                  <td className="mono col-fill" title={m.model}>{m.model}</td>
+                  <td className="mono col-fill" title={m.model}>{shortModel(m.model)}</td>
                   <td className="col-fit">
                     <Select value={m.main} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
@@ -627,7 +638,7 @@ function PoolCard({
                     <td className="serving__standing col-fit" aria-describedby={whyId}>
                       <span className="chips">
                         {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
-                        {!isNext && p.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[p.lastResort]}</Badge>}
+                        {!isNext && p.lastResort && <LastResort placement={p} now={now} />}
                         {!isNext && p.deferred && <Badge tone="neutral">after plan quota</Badge>}
                         {/* The route's budget verdict says this itself; the badge stands for a member the route names
                             an earlier obstacle for. */}
@@ -812,15 +823,22 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
-  if (verdict === 'overage') return <Badge tone="serious">overage</Badge>;
+  if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null)} />;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known account'}>unavailable</Badge>;
-  const until = account?.cooldowns.find((c) => c.scope === 'account')?.until;
-  return until ? (
-    <Badge tone="warning" title={fmtAbsolute(until)}>
-      cooldown ends {fmtRelative(until, now)}
+  return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
+}
+
+/** Why an eligible member waits for the rest: at the Pace floor, or winding down with the time left to its end. */
+function LastResort({ placement, now }: { now: number; placement: Placement }) {
+  if (placement.lastResort === 'winding_down' && placement.end !== null) return <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
+  return placement.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[placement.lastResort]}</Badge>;
+}
+
+function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 'warning' }) {
+  return (
+    <Badge tone={tone} title={badge.title}>
+      {badge.text}
     </Badge>
-  ) : (
-    <Badge tone="warning">cooldown</Badge>
   );
 }
 
@@ -1095,6 +1113,9 @@ export function PoolDialog({
           min: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.min : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.min),
         }
       : null;
+  // The router caps the two ceilings at the one break-even too, so a ceiling switched on past it names the one in effect.
+  const parkedCapped = resolved && form.maxParkedOn ? cappedAt(form.maxParkedSeconds, resolved.breakEvenSeconds) : null;
+  const scheduledCapped = resolved && form.horizonOn ? cappedAt(form.horizonSeconds, resolved.breakEvenSeconds) : null;
   // The share is the router's for the saved window, so a typed window names the window the share belongs to.
   const savedIdle = pool?.keepalive.maxIdleSeconds ?? form.maxIdleSeconds;
   const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
@@ -2059,6 +2080,7 @@ export function PoolDialog({
                 <>
                   How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
                   {resolved && !form.maxParkedOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                  {parkedCapped && <CappedAt range={parkedCapped} />}
                 </>
               }
             />
@@ -2074,6 +2096,7 @@ export function PoolDialog({
                 <>
                   A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
                   {resolved && !form.horizonOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                  {scheduledCapped && <CappedAt range={scheduledCapped} />}
                 </>
               }
             />

@@ -11,7 +11,7 @@ import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
 import { ANALYTICS_CODEC, REQUESTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -293,7 +293,7 @@ export function SessionsPage() {
           label="Agents"
           value={
             o ? (
-              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap. ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.`}>
+              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}`}>
                 {`${fmtInt(Math.max(0, o.limits.agents.count - hidden))} of ${fmtInt(o.limits.agents.max)}`}
               </span>
             ) : null
@@ -695,8 +695,8 @@ function SessionRows({
                 {shown.map((a) => (
                   <div className="agents__row" key={a.agentId}>
                     <span className="mono agents__id" title={a.agentId}>{a.agentId}</span>
-                    <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
-                      {undatedModel(a.model)}
+                    <span className="mono nowrap" title={modelTitle(a.model, shortModel(a.model))}>
+                      {shortModel(a.model)}
                     </span>
                     {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>

@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import type { RoutingEvent, RoutingLogRow } from '@/api/types';
+import { ChipView, rowValue } from '@/components/ChipView';
 import { KeyValue } from '@/components/ui/primitives';
 import { detailPairs, type DetailPair, entityHref, logHref, requestLink } from '@/lib/routingLog';
-import { ChipView, rowValue } from './DecisionCard';
 
 /** The shedding round's pins, one row each in the round's order. */
 function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {

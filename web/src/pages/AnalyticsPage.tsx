@@ -23,7 +23,7 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -140,6 +140,13 @@ interface Bucket extends AnalyticsGroup {
   tokens: SplitTokens;
 }
 
+/** The groups summed with the plain output split from the thinking, as the tiles and the charts read a total. */
+const totalsOf = (groups: AnalyticsGroup[]) => {
+  const summed = sumGroups(groups);
+  return { ...summed, tokens: withPlainOutput(summed.tokens) };
+};
+const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
+
 function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
   return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
     const p = payload?.[0]?.payload as T | undefined;
@@ -166,7 +173,9 @@ function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation
   return current !== null ? source : { ...source, data: last };
 }
 
-const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));
+// Two lifetimes of one key id can share a label, so the older lists first.
+const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
+  [...(rows ?? [])].sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0)).map((g) => ({ label: g.label, value: g.key }));
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
@@ -395,14 +404,7 @@ export function AnalyticsPage() {
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
-  const buckets = useMemo<Bucket[]>(
-    () =>
-      points.map((p) => {
-        const summed = sumGroups(p.groups);
-        return { at: Date.parse(p.at), ...summed, tokens: withPlainOutput(summed.tokens) };
-      }),
-    [points],
-  );
+  const buckets = useMemo(() => bucketsOf(points), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -413,10 +415,7 @@ export function AnalyticsPage() {
     [sessionId, bySpeed.stale, bySpeed.data, rows, rangeBucketMs, fromIso, toIso, foldOptions],
   );
   const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(rows, 'effort', foldOptions)), [sessionId, byEffort.stale, byEffort.data, rows, foldOptions]);
-  const totals = useMemo(() => {
-    const summed = sumGroups(groups);
-    return { ...summed, tokens: withPlainOutput(summed.tokens) };
-  }, [groups]);
+  const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
@@ -430,20 +429,8 @@ export function AnalyticsPage() {
     if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(rows, groupBy, { ...foldOptions, funding });
     return funded || warming ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
   }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
-  const costBuckets = useMemo<Bucket[]>(
-    () =>
-      costPoints === points
-        ? buckets
-        : costPoints.map((p) => {
-            const summed = sumGroups(p.groups);
-            return { at: Date.parse(p.at), ...summed, tokens: withPlainOutput(summed.tokens) };
-          }),
-    [costPoints, points, buckets],
-  );
-  const costTotals = useMemo(() => {
-    const summed = sumGroups(costGroups);
-    return { ...summed, tokens: withPlainOutput(summed.tokens) };
-  }, [costGroups]);
+  const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
+  const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
   // Shares of one account's windows add, so the share tiles and the cache cost card read the one account the filter
@@ -1564,7 +1551,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
               lines.accounts.flatMap((a) => [
                 { color: groupSlot(a), label: `${a} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
                 { color: groupSlot(a), label: `${a} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
-                { color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) },
+                ...(weekOf(a) ? [{ color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) }] : []),
               ]),
             )}
           />
@@ -2084,14 +2071,18 @@ function AccountsSection({
   }, [pace, accounts]);
   const toggle = <Segmented value={chosen} options={windows.map((id) => ({ label: toggleLabel(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
   const legend = accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' as const }));
-  const pct = (v: number | null | undefined, signed = false) => (v === null || v === undefined ? '-' : `${signed && v > 0 ? '+' : ''}${v.toFixed(0)}%`);
   const scoreOf = (p: Record<string, number | null>, a: string) => {
     const score = p[`${a}:score`];
     return score === null || score === undefined ? '-' : score.toFixed(2);
   };
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}>
+      <ChartCard
+        title="Peak 5-hour utilization"
+        subtitle="Highest utilization seen in each bucket, per account"
+        loading={loading}
+        legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}
+      >
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />

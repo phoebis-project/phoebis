@@ -317,16 +317,16 @@ record without a pool, a pool deleted since, one of the router's own writers, a 
 the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
 [routing log](#routing-log) instead, on the pool's exhausted decisions from the moment the condition began. Four tiles
 report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them says when the
-figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled 5-hour and 7-day
-capacity is left: each subscription account is weighed by its tier's capacity on the window from the subscription cost
-model, in Max 20x windows, and listed with its own remaining share, and the line under the ring reads the windows left
-against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading
-since counts as a full allowance. An account whose tier the model does not size, or whose tier has no capacity on the
-window, is named under the ring instead, with the reason. Each account keeps one color across the Dashboard, the Quota
-view and the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the
-registry no longer lists draws muted. The 5-hour ring's subtitle opens the cost reference on its Tiers and peak band
-tab. The page ends with the most recent requests and a sessions card that leads with the router's live pins and the
-accounts they sit on.
+figures were read, by the oldest of the page's reads, or names the read whose last refresh failed and why. Two cards
+below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account is weighed by its tier's
+capacity on the window from the subscription cost model, in Max 20x windows, and listed with its own remaining share,
+and the line under the ring reads the windows left against the pooled capacity, such as 0.39 of 1.30 Max 20x windows
+left. A window whose reset has passed with no reading since counts as a full allowance. An account whose tier the model
+does not size, or whose tier has no capacity on the window, is named under the ring instead, with the reason. Each
+account keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
+cycling past eight accounts, and an account the registry no longer lists draws muted. The 5-hour ring's subtitle opens
+the cost reference on its Tiers and peak band tab. The page ends with the most recent requests and a sessions card that
+leads with the router's live pins and the accounts they sit on.
 
 ### Quota
 
@@ -341,21 +341,21 @@ rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
 A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
-window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
-reading. Each live window's meter carries a pace mark at the share of the window still to come, so a remaining share
-that reaches past the mark is behind pace and one short of it ahead, and the meter's title names the lead: 12% ahead of
-pace, 5% behind pace, or on pace. The Extra usage line reads the month's spend against its limit, in the serious tone
-while requests bill as extra usage and in the muted ink while they do not, and reads off or not reported in the muted
-ink when extra usage is disabled or the account has not reported it. The reason the provider gave for it sits inside the
-line, cut to the line's width, with the whole message on hover. The chips start with the plan, named by its tier (Max
-20x, Max 5x or Pro), then say when the plan of an account marked cancelled ends, in the serious tone inside a week, and
-when the trial of an account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last
-asked the endpoint and how it answered, a failed poll naming its reason cut to the line's width, and, while the account
-backs off, the next attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed
-poll's whole message, when the snapshot shown was read, since when the account backs off, and how many rate-limited
-answers it has had in a row. Refresh reads the endpoint now unless the account is backing off, and records the reading
-as the poll does. The page counts a card that shows an error, whose last poll failed, or that is backing off as needing
-attention.
+window whose reset has passed with no reading since reads `expired 4h 47m ago`, with no reading since the reset and the
+reset's time on hover, and draws no share and an empty meter until the next reading. Each live window's meter carries a
+pace mark at the share of the window still to come, so a remaining share that reaches past the mark is behind pace and
+one short of it ahead, and the meter's title names the lead: 12% ahead of pace, 5% behind pace, or on pace. The Extra
+usage line reads the month's spend against its limit, in the serious tone while requests bill as extra usage and in the
+muted ink while they do not, and reads off or not reported in the muted ink when extra usage is disabled or the account
+has not reported it. The reason the provider gave for it sits inside the line, cut to the line's width, with the whole
+message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then say when the plan of
+an account marked cancelled ends, in the serious tone inside a week, and when the trial of an account on the Claude Code
+trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint and how it answered, a failed
+poll naming its reason cut to the line's width, and, while the account backs off, the next attempt in the serious tone.
+The line's title carries the rest: the attempt's instant, a failed poll's whole message, when the snapshot shown was
+read, since when the account backs off, and how many rate-limited answers it has had in a row. Refresh reads the
+endpoint now unless the account is backing off, and records the reading as the poll does. The page counts a card that
+shows an error, whose last poll failed, or that is backing off as needing attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
 view. Each lane's current bar, in a neutral tint, fills from the window's start to its used share in the window's tone,
@@ -702,7 +702,8 @@ listener, the four storage paths (the price table's and the cost model's each wi
 secret's standing. About closes on a pointer: the values the configuration file sets are on the
 [installation page](installation.md), and `phoebis check-config` prints them. The page closes on the downstream client
 configuration, the environment block that points Claude Code at the router with a reason under each line. Its base URL
-is a placeholder for the URL that reaches the proxy listener, and the address the listener binds shows beside the block.
+carries the proxy listener's scheme, `https` where the listener terminates TLS, and the port it binds, on a placeholder
+host for the name that reaches it, and the address the listener binds shows beside the block.
 
 ## Conditions and gauges
 

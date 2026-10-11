@@ -407,9 +407,10 @@
 /* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
    28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
    gaps, the 120 px meter and the reset column's 114 px bound (--qwin-reset on .qcard__windows), so the grid reflows
-   before a meter shrinks under 120 px, and draws two cards in a row at 1280 and at 1440 px. Every row takes the
-   tallest card's height, so a card that holds more than the rest (an expired window's wrapped reset, a longer error)
-   moves no delimiter against its neighbors in any row. */
+   before a meter shrinks under 120 px. Two cards and the 14 px gap take 808 px, so two sit in a row once the content
+   area reaches that: the window less the 232 px sidebar (--sidebar-w) and the content's 28 px of padding each side.
+   Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's wrapped
+   reset, a longer error) moves no delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(397px, 1fr));
@@ -519,6 +520,20 @@
 
 .qcard__chips .chip {
   flex: none;
+}
+
+/* The last chip gives up its room first and ends in an ellipsis. An inline flex box draws no ellipsis, so it takes a
+   block of its own, where the label keeps its gap by margin. */
+.qcard__chips .chip:last-child {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qcard__chips .chip:last-child .chip__label {
+  margin-right: 6px;
 }
 
 /* A card whose account reports no plan keeps the Plan chip's place. */
@@ -664,7 +679,7 @@
   white-space: nowrap;
 }
 
-/* An expired window's line is longer than the column at any card width, so it wraps. */
+/* An expired window's line can run longer than the column, so it wraps rather than leave the card. */
 .qwin__reset.muted {
   white-space: normal;
 }
@@ -673,7 +688,7 @@
    card grid 343 px, short of its floor. There a card takes no more than the grid's width and never ends past the
    window. The reset label gives up its column for a row of its own under the meter, which leaves the card's body room
    for the widest chip, the 6 px gap and a meter of 120 px or more. */
-@media (max-width: 899px) {
+@media (max-width: 900px) {
   .quota-grid {
     grid-template-columns: repeat(auto-fill, minmax(min(397px, 100%), 1fr));
   }
@@ -2798,6 +2813,19 @@
   padding: 6px 4px;
 }
 
+/* The cost row's share chips and their equivalent end at the cell's edge, where the figures above them do. */
+.usage-table__end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.usage-table__end .chips {
+  justify-content: flex-end;
+}
+
 .waterfall {
   display: flex;
   flex-direction: column;
@@ -2818,6 +2846,7 @@
   height: 100%;
 }
 
+.token-bar__legend,
 .waterfall__legend {
   display: grid;
   grid-template-columns: 12px 1fr auto;
@@ -2829,6 +2858,7 @@
   list-style: none;
 }
 
+.token-bar__legend li,
 .waterfall__legend li {
   display: contents;
 }
@@ -2872,21 +2902,6 @@
   height: 100%;
 }
 
-.token-bar__legend {
-  display: grid;
-  grid-template-columns: 12px 1fr auto;
-  gap: 4px 8px;
-  align-items: center;
-  padding: 0;
-  margin: 0;
-  font-size: 12px;
-  list-style: none;
-}
-
-.token-bar__legend li {
-  display: contents;
-}
-
 .token-bar__key {
   width: 12px;
   height: 8px;
@@ -2909,32 +2924,20 @@
   color: var(--ink-2);
 }
 
-/* Grouped, so the head's spread keeps Pretty-print beside Copy rather than in the middle of the row. */
+/* Grouped, so the head's spread keeps Pretty-print beside Copy rather than in the middle of the row. A cut body's head
+   carries its note beside Pretty-print, Open wide and Copy, more than the compact drawer's row holds, so the actions
+   wrap among themselves rather than breaking a label. */
 .body-block__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
-.body-block__link {
+/* Open wide sits flush in the head's row and keeps its words on one line in the 400 px drawer. */
+.body-block__actions .link-btn {
   padding: 0;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--accent);
   white-space: nowrap;
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-
-.body-block__link:hover {
-  text-decoration: underline;
-}
-
-/* A cut body's head carries its note beside Pretty-print, Open wide and Copy, more than the compact drawer's row
-   holds, so the actions wrap among themselves rather than breaking a label. */
-.body-block__actions {
-  flex-wrap: wrap;
 }
 
 .body-block__pre,
@@ -3957,7 +3960,9 @@
   color: var(--ink-2);
 }
 
-.cost-ref__table tr.has-sub td {
+/* A model and its sub-rows read as one entry, so the hairline runs under its last sub-row alone. */
+.cost-ref__table tr.has-sub td,
+.cost-ref__table tr.cost-ref__sub:has(+ tr.cost-ref__sub) td {
   border-bottom: 0;
 }
 
@@ -4006,7 +4011,8 @@
   backdrop-filter: blur(8px);
 }
 
-/* One shape for the page's and Burn's group-by: a 160 px select after its label. */
+/* One shape for the three selects that share it, the page's group-by, Burn's group-by and the Unit select: a 160 px
+   select after its label. */
 .groupby-select {
   width: 160px;
 }

@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtShare, fmtShortTime, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -680,7 +680,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
-  const absolute = /^[A-Z][a-z]{2} \d{2}, \d{4}/;
+  const absolute = /^no reading since the reset, [A-Z][a-z]{2} \d{2}, \d{4}/;
   const drawn = {
     chip: [chip?.textContent?.trim(), chip?.classList.contains('qchip--absent'), chip?.getAttribute('title')],
     meter: meter?.classList.contains('meter--absent'),
@@ -689,10 +689,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
-    reset: ['expired 2d 0h ago, no reading since', true, true],
+    reset: ['expired 2d 0h ago', true, true],
   };
   results.push({
-    name: '/quota an expired window reads expired with no share and an empty meter',
+    name: '/quota the expired cell reads ago with the reset on its title',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn)],
   });
@@ -1169,8 +1169,26 @@ await readsAgain('/', 'getOverview');
   const failed = line()?.textContent ?? '';
   results.push({
     name: '/ the as-of line moves after a refresh and names a failed one',
-    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh failed: ledger locked') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
+    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
     missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
+  });
+  page.unmount();
+}
+{
+  // The line reads the oldest of the page's five reads, so a refresh of the sessions that fails holds the line at the
+  // sessions' last answer and names them, though the 24-hour figures refreshed.
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const line = () => page.container.querySelector('.dash__asof');
+  const first = line()?.getAttribute('title') ?? null;
+  failNextCall('listSessions', '/admin/sessions', 'store busy');
+  tick(30_000);
+  await page.settle();
+  const text = line()?.textContent ?? '';
+  const held = line()?.getAttribute('title') ?? null;
+  results.push({
+    name: '/ the as-of line names a failed read and reads the oldest of the five',
+    ok: first !== null && text.startsWith('Last refresh of the sessions failed: store busy. Showing data as of ') && held === first,
+    missing: [text || 'no line', `title ${first} then ${held}`],
   });
   page.unmount();
 }
@@ -2775,7 +2793,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(verdicts[0].badges) === '[["next","badge--accent",""]]' &&
       verdicts[0].next &&
       verdicts[0].why === 'primary: where the next fresh session lands' &&
-      verdicts[1].badges[0]?.[0]?.startsWith('cooldown ends') &&
+      /^cooldown \d+h \d+m$/.test(verdicts[1].badges[0]?.[0] ?? '') &&
       verdicts[1].badges[0]?.[1] === 'badge--warning' &&
       verdicts[2].badges[0]?.[0] === 'eligible' &&
       JSON.stringify(verdicts[3].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
@@ -2783,6 +2801,39 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: verdicts.map((v) => JSON.stringify(v)),
   });
   results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'secondary').why === 'secondary: in cooldown, skipped by selection', missing: [standing('all', 'secondary').why] });
+  {
+    // The story's pools admit overage, so no member reads the overage verdict there: the route answers it under a
+    // policy that admits none, which the stub reads into all for nightly, the account in overage. A member winding down
+    // inside a pool's window is no story member's, so that badge's words are the unit case's.
+    const accounts = await api.listAccounts();
+    const until = accounts.find((a) => a.id === 'secondary')?.cooldowns.find((c) => c.scope === 'account')?.until ?? '';
+    const reset = accounts.find((a) => a.id === 'nightly')?.overage?.reset ?? '';
+    const { listPools } = api;
+    api.listPools = async () =>
+      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'nightly' ? { ...x, eligible: 'overage' } : x)), overagePolicy: 'never' } : p));
+    const never = await mount('/pools');
+    api.listPools = listPools;
+    const badgeOf = (label) => {
+      const card = [...never.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+      const tr = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((r) => r.children[1]?.querySelector('a')?.textContent?.trim() === label);
+      const badge = tr?.children[2]?.querySelector('.badge');
+      return [badge?.textContent?.trim() ?? null, badge?.className.replace('badge ', '') ?? null, badge?.getAttribute('title') ?? null];
+    };
+    const cooled = badgeOf('secondary');
+    const over = badgeOf('nightly');
+    results.push({
+      name: '/pools the Standing badges read cooldown and overage until with their sentences on the title',
+      ok:
+        until !== '' &&
+        reset !== '' &&
+        /^cooldown \d+h \d+m$/.test(cooled[0] ?? '') &&
+        cooled[1] === 'badge--warning' &&
+        cooled[2] === `In a cooldown that ends ${fmtAbsolute(until)}` &&
+        JSON.stringify(over) === JSON.stringify([`overage until ${fmtShortTime(reset)}`, 'badge--serious', `In overage until ${fmtAbsolute(reset)}`]),
+      missing: [JSON.stringify(cooled), JSON.stringify(over)],
+    });
+    never.unmount();
+  }
   const spend = (name, label) =>
     [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
   results.push({ name: '/pools an API-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
@@ -3090,6 +3141,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
       ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
       missing: [String(past), String(zero), String(linesOf(dlg)[0])],
+    });
+    // The router caps the parked and the scheduled ceilings at the same break-even, so one switched on past it reads
+    // the figure it runs to, as the idle window does.
+    const switchOn = async (label, value) => {
+      hint(dlg)?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.click();
+      await m.settle(120);
+      const field = hint(dlg)?.querySelector(`input[aria-label="${label}"]`);
+      if (field) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(field, value);
+      field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await switchOn('Max parked (s)', '200000');
+    const parked = linesOf(dlg);
+    await switchOn('Scheduled horizon (s)', '200000');
+    const both = linesOf(dlg);
+    results.push({
+      name: '/pools a parked or a scheduled ceiling switched on past the break-even reads the break-even it runs to',
+      ok:
+        JSON.stringify(parked) === JSON.stringify(['Costs 2% of one re-write', 'Capped at the break-even, 1d 20h', 'Break-even: 1d 20h']) &&
+        JSON.stringify(both) === JSON.stringify(['Costs 2% of one re-write', 'Capped at the break-even, 1d 20h', 'Capped at the break-even, 1d 20h']),
+      missing: [...parked, ...both].map(String),
     });
     await cancel(dlg);
   }
@@ -6695,10 +6767,17 @@ m = await mount('/models');
     });
   }
   const state = await api.getModelsState();
-  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === c.querySelector('.card__title')?.textContent));
+  // A group's heading reads the short model id and carries the whole one on its title, which the block is found by.
+  const headingOf = (c) => c.querySelector('.card__title [title]');
+  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === headingOf(c)?.getAttribute('title')));
+  const headings = groups.map((c) => [headingOf(c)?.textContent, headingOf(c)?.getAttribute('title')]);
   const groupRows = groups.flatMap((c) => [...c.querySelectorAll('tbody tr')].map((tr) => cells(tr).slice(0, 2).join(' | ')));
   const answeredGroupRows = state.cooldowns.flatMap((g) => g.rows.map((r) => `${r.accountId} | ${g.model}`));
-  results.push({ name: '/models draws one cooling-down block per model, each row naming its account', ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows), missing: [JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)] });
+  results.push({
+    name: '/models draws one cooling-down block per model, each row naming its account',
+    ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(headings) === JSON.stringify(state.cooldowns.map((g) => [shortModel(g.model), g.model])) && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows),
+    missing: [JSON.stringify(headings), JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)],
+  });
   {
     // Recorded rather than sent, so the story's cooldowns stay for the checks after this one.
     const original = api.clearCooldown;
@@ -7116,7 +7195,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
   }
   if (sharedRow && sharedCell) {
-    // The chips read the shares in the cell's title order, and the equivalent follows them muted.
+    // The chips read the shares in the cell's title order, and the equivalent follows them muted in the one run that
+    // ends at the cell's edge.
     const cell = sharedCell;
     await m.navigate(`/requests/${sharedRow.id}`);
     await m.settle(300);
@@ -7127,7 +7207,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const titled = (cell.title ?? '').split(', ');
     results.push({
       name: "/requests the drawer's cost row of a subscription row reads the share chips in order with the equivalent after them",
-      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.lastElementChild?.classList.contains('muted') === true,
+      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
       missing: [sharedRow.id, JSON.stringify(chips), String(equivalent), cell.title ?? 'no title'],
     });
   }
@@ -8128,6 +8208,32 @@ m.unmount();
     missing: [trigger(applied, 'Keys'), trigger(applied, 'Status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
   });
   applied.unmount();
+  {
+    // A lifetime the address names reads by its holder: an earlier holder of an id by its deleted label, checked, while
+    // the live key's own lifetime is no deleted holder's.
+    const live = (await api.listKeys()).find((k) => k.id === 'desktop');
+    const keyOptions = async (page) => {
+      const control = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
+      control?.querySelector('.mselect__trigger')?.click();
+      await page.settle(60);
+      const options = [...(control?.querySelectorAll('.mselect__option') ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
+      control?.querySelector('.mselect__trigger')?.click();
+      await page.settle(60);
+      return options;
+    };
+    const earlier = await mount(`/requests?keys=desktop@${DELETED_HOLDER_GENERATION}`);
+    const held = await keyOptions(earlier);
+    earlier.unmount();
+    const current = await mount(`/requests?keys=desktop@${Date.parse(live?.createdAt ?? '')}`);
+    const own = await keyOptions(current);
+    current.unmount();
+    const label = earlierHolderLabel('desktop', DELETED_HOLDER_GENERATION);
+    results.push({
+      name: "/requests the Keys control lists an earlier holder's lifetime from the address as a checked option",
+      ok: label.startsWith('desktop (deleted, created ') && held.some(([l, on]) => l === label && on === 'true') && live !== undefined && own.length > 0 && !own.some(([l]) => l.includes('(deleted')),
+      missing: [label, JSON.stringify(held), JSON.stringify(own)],
+    });
+  }
 
   // The drawer is a route of its own, so a row, its Details link, Close and Escape each carry the address's filters.
   const drawerCheck = '/requests opening and closing the drawer keeps the filters in the address';
@@ -11154,6 +11260,31 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       paced.unmount();
     }
     {
+      // The story holds a 5-hour lead just behind pace in the day, which rounds to no lead at all: a hover over every
+      // bucket reads it as 0%, and no figure that rounds to zero carries a sign.
+      const sampled = await api.listAccountRollups(day.from, day.to);
+      const nearZero = sampled.filter((r) => r.windows.five_hour?.lead !== null && r.windows.five_hour?.lead !== undefined && r.windows.five_hour.lead * 100 > -0.5 && r.windows.five_hour.lead < 0).map((r) => r.accountId);
+      const paced = await mount('/analytics#accounts');
+      const pace = () => [...paced.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pace');
+      const values = new Map();
+      for (let x = 44; x <= 600; x += 8) {
+        pace()?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+        await paced.settle(40);
+        for (const row of pace()?.querySelectorAll('.chart-tip .chart-tip__row') ?? []) {
+          const label = row.querySelector('.chart-tip__label')?.textContent?.trim() ?? '';
+          const value = row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '';
+          if (!label.startsWith('Pace score')) values.set(`${label} ${value}`, [label, value]);
+        }
+      }
+      const read = [...values.values()];
+      results.push({
+        name: '/analytics a lead that rounds to zero reads 0% and never -0%',
+        ok: nearZero.length > 0 && read.some(([label, value]) => nearZero.includes(label) && value === '0%') && !read.some(([, value]) => value === '-0%' || value === '+0%'),
+        missing: [`near zero ${JSON.stringify(nearZero)}`, JSON.stringify(read.filter(([, value]) => /^[+-]?0%$/.test(value)))],
+      });
+      paced.unmount();
+    }
+    {
       // One sampled hour between two empty ones: the lines leave their null buckets unconnected, so the bucket draws
       // as a dot on the Window usage and the Pace cards alike, as the share chart draws an isolated priced bucket.
       const now = Date.now();
@@ -12702,8 +12833,8 @@ m.unmount();
     const keys = keysFilter(page);
     return {
       keyFilter: keys?.querySelector('.mselect__trigger')?.textContent?.trim() ?? null,
-      // The live-key options list bare ids, so a lifetime is a value none of them carries: the trigger still counts
-      // it and offers its Clear.
+      // The live keys' options list bare ids and an earlier holder's lifetime takes an option of its own, so a live key's
+      // own lifetime is a value no option carries: the trigger still counts it and offers its Clear.
       keyFilterSet: keys?.classList.contains('has-value') === true && keys.querySelector('.mselect__clear[aria-label="Clear Keys"]') !== null,
       keys: params.get('keys'),
       path: at.pathname,
@@ -12827,7 +12958,7 @@ m.unmount();
       atClick.select === '6h' &&
       pair.length === 2 &&
       pair[0].key !== pair[1].key &&
-      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === 0) &&
+      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === (p.historical ? 1 : 0)) &&
       pair.every((p) => (pair.find((x) => x.historical)?.unscoped ?? []).includes(p.key)),
     missing: [
       labels.join('|'),
@@ -13144,6 +13275,21 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `hidden ${hidden}`, agentsTitle || 'no Agents title'],
     });
+  }
+  {
+    // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone.
+    const ov = await api.getKeepaliveOverview();
+    const { listKeepaliveRecipes } = api;
+    api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
+    const none = await mount('/sessions');
+    const title = [...none.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
+    api.listKeepaliveRecipes = listKeepaliveRecipes;
+    results.push({
+      name: "/sessions the Agents tile's title carries one sentence at zero hidden",
+      ok: title === `The engine holds ${ov.limits?.agents.count} agent records against the cap.`,
+      missing: [title || 'no Agents title'],
+    });
+    none.unmount();
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
@@ -13613,11 +13759,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: [mainAgent || 'absent'],
     });
   }
-  results.push({
-    name: '/sessions agent rows carry their own model and account',
-    ok: (detail?.textContent ?? '').includes('claude-fable-5-1') && (detail?.textContent ?? '').includes('claude-sonnet-5') && (detail?.textContent ?? '').includes('nightly'),
-    missing: [detail?.textContent?.slice(0, 160) ?? 'absent'],
-  });
+  {
+    // A line's model reads the short id and carries the whole one on its title.
+    const models = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((r) => [r.children[1]?.textContent?.trim(), r.children[1]?.getAttribute('title')]);
+    const read = (id) => models.some(([shown, title]) => shown === shortModel(id) && title === id);
+    results.push({
+      name: '/sessions agent rows carry their own model and account',
+      ok: read('claude-fable-5-1') && read('claude-sonnet-5') && (detail?.textContent ?? '').includes('nightly'),
+      missing: [JSON.stringify(models), detail?.textContent?.slice(0, 160) ?? 'absent'],
+    });
+  }
   const agentRows = detail?.querySelectorAll('.agents__row').length ?? 0;
   results.push({ name: '/sessions expanded row lists a head plus one line per agent', ok: agentRows >= 2, missing: [String(agentRows)] });
   rows()[0]?.click();
@@ -14551,8 +14702,9 @@ m.unmount();
 }
 
 
-// A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block
-// needs no read, so it keeps its placeholder URL and only the listener hint waits for the answer.
+// A failed settings read draws About's error state with Try again rather than a skeleton for ever. Without the answer
+// the client block reads its placeholder base URL with no port, and the scheme and the port arrive with the listener
+// hint once a read lands.
 {
   failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
   const failed = await mount('/settings');
@@ -14561,7 +14713,7 @@ m.unmount();
   const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
   const block = failed.container.querySelector('pre.snippet');
   results.push({
-    name: "/settings a failed read draws About's error state with Try again and keeps the client block's placeholder",
+    name: "/settings a failed read draws About's error state with Try again and the client block's placeholder with no port",
     ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the settings' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined && about()?.querySelector('.skeleton') === null && (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && failed.container.querySelector('.snippet__hint') === null,
     missing: [about()?.textContent?.slice(0, 160) ?? 'no About card', (block?.textContent ?? 'no block').split('\n')[0], failed.container.querySelector('.snippet__hint')?.textContent?.slice(0, 60) ?? 'no hint'],
   });
@@ -14570,8 +14722,8 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
-    missing: rows,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
 }
@@ -14656,7 +14808,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -14683,9 +14835,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1'), missing: titles });
   const block = m.container.querySelector('pre.snippet');
   const hint = block?.nextElementSibling;
+  const SNIPPET_HINT =
+    'Inference is served on 127.0.0.1:8080, the address the proxy listener binds, so the base URL carries its scheme and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and it.';
   results.push({
-    name: '/settings the client block keeps the placeholder and names the proxy listener beside it with why',
-    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === 'Inference is served on 127.0.0.1:8080, the address the proxy listener binds. Replace the placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy, a port mapping or another host name can stand between Claude Code and the listener.',
+    name: "/settings the client block reads the proxy listener's scheme and port on a placeholder host and names the bind beside it with why",
+    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === SNIPPET_HINT,
     missing: [block?.textContent?.split('\n')[0] ?? 'no block', hint?.outerHTML.slice(0, 160) ?? 'no hint'],
   });
 }
@@ -14702,7 +14856,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
     name: '/settings the main snippet is the seven recommended lines',
-    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({

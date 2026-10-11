@@ -915,7 +915,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
-    listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
+    listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },

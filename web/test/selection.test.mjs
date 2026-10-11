@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fmtPeriodEnd, fmtRelative, INELIGIBLE_LABEL, poolStatusSentence, selectionOrder } from './dist/api.js';
+import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, overageBadge, poolStatusSentence, selectionOrder, windingDownBadge } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -257,6 +257,35 @@ test('pace places the floor group and a winding-down member last', () => {
     ],
     'an API-key member reads its worst reported window against the floor',
   );
+});
+
+test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {
+  const subscription = { billingType: 'monthly', derivedEndsAt: null, endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
+  const pair = [account('ending', { cancelled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
+  const [tier] = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)]), pair, [], NOW);
+  assert.deepEqual(
+    tier.placements.map((p) => [p.account.id, p.lastResort, p.end]),
+    [
+      ['fresh', null, null],
+      ['ending', 'winding_down', NOW + 10 * MINUTE],
+    ],
+  );
+});
+
+test('the Standing badges read the time left or the reset time, each with its sentence on the title', () => {
+  const until = new Date(NOW + HOUR + 11 * MINUTE).toISOString();
+  assert.deepEqual(cooldownBadge(until, NOW), { text: 'cooldown 1h 11m', title: `In a cooldown that ends ${fmtAbsolute(until)}` });
+  const passed = new Date(NOW - MINUTE).toISOString();
+  assert.deepEqual(cooldownBadge(passed, NOW), { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(passed)}` }, 'an end behind the instant reads no time left');
+  assert.deepEqual(cooldownBadge(undefined, NOW), { text: 'cooldown', title: undefined }, 'a cooldown the account names no end for reads the word alone');
+  const reset = '2026-09-18T15:42:00Z';
+  const overage = overageBadge(reset);
+  assert.deepEqual(overage, { text: `overage until ${fmtShortTime(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` });
+  assert.match(overage.text, /^overage until \d\d:\d\d$/, 'the reset reads to the minute');
+  assert.deepEqual(overageBadge(null), { text: 'overage', title: 'In overage, reset unknown' });
+  const end = NOW + 3 * 24 * HOUR;
+  assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d 0h', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });
+  assert.deepEqual(windingDownBadge(NOW - MINUTE, NOW), { text: 'winding down', title: `Winding down past the plan's end at ${fmtAbsolute(new Date(NOW - MINUTE).toISOString())}` }, 'an end behind the instant reads no time left');
 });
 
 test('a member at its budget is skipped with the reason the serving table names', () => {

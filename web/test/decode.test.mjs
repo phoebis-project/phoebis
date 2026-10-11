@@ -1325,9 +1325,15 @@ test('a recipe held under the horizon or ended at the parked limit keeps that ca
   assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
-test('the downstream snippet is the seven recommended lines with the public URL left to the operator', () => {
-  assert.equal(d.PLACEHOLDER_URL, 'https://router.example.com');
-  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
+test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {
+  const lines = (listeners) => d.snippetFor(listeners).split('\n');
+  const rest = ['CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'];
+  assert.deepEqual(lines({ proxy: '127.0.0.1:8080', proxyTls: false }), ['ANTHROPIC_BASE_URL=http://router.example.com:8080', ...rest]);
+  assert.equal(lines({ proxy: '0.0.0.0:8443', proxyTls: true })[0], 'ANTHROPIC_BASE_URL=https://router.example.com:8443', 'a listener that terminates TLS reads https');
+  assert.equal(lines({ proxy: '[::]:8080', proxyTls: false })[0], 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'the port follows the last colon, so an IPv6 bind reads its own');
+  assert.equal(lines({ proxy: '', proxyTls: false })[0], 'ANTHROPIC_BASE_URL=http://router.example.com', 'a bind with no colon names no port');
+  assert.equal(lines({ proxy: '[::1]', proxyTls: true })[0], 'ANTHROPIC_BASE_URL=https://router.example.com', 'nor does a bracketed address without one');
+  assert.deepEqual(lines(null), ['ANTHROPIC_BASE_URL=https://router.example.com', ...rest], 'without a settings answer the block reads the placeholder host with no port');
 });
 
 test('a session fold groups on the client each row named', () => {
@@ -1529,7 +1535,7 @@ test('settings decode the members the route answers and nothing more', () => {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
       apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
-      listeners: ['metrics', 'proxy'],
+      listeners: ['metrics', 'proxy', 'proxyTls'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
@@ -1538,7 +1544,8 @@ test('settings decode the members the route answers and nothing more', () => {
     },
     'each member carries what the pages read and no other key',
   );
-  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
+  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: false }, 'an answer without proxy_tls reads a listener that terminates no TLS');
+  assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
@@ -1555,7 +1562,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
   };
   assert.deepEqual(without('about'), { profile: '', version: '' });
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
-  assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
+  assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });

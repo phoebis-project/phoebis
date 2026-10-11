@@ -7,7 +7,7 @@ import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDo
 import { IconInfo } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton } from '@/components/ui/primitives';
 import { MODELS_CODEC } from '@/lib/address';
-import { fmtAbsolute } from '@/lib/format';
+import { fmtAbsolute, shortModel } from '@/lib/format';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
 import { logHref } from '@/lib/routingLog';
@@ -160,7 +160,7 @@ export function ModelsPage() {
             <CoolingDown title="Cooling down" now={now} rows={[]} />
           ) : (
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
-            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={setPending} />)
+            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={<span title={g.model}>{shortModel(g.model)}</span>} busy={busy} now={now} rows={g.rows} showAccount onClear={setPending} />)
           )}
         </>
       )}

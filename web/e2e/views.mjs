@@ -2052,7 +2052,7 @@ async function quotaChips(theme) {
       const line = parseFloat(getComputedStyle(el).lineHeight);
       return Math.round(box.height / line);
     };
-    const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' });
+    const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') ?? '' });
     const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
@@ -2089,7 +2089,7 @@ async function quotaChips(theme) {
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
-  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's legacy holds an expired window, yet no reset cell reads it");
+  if (mock && !read.resets.some((r) => /^expired .+ ago$/.test(r.text) && r.title.startsWith('no reading since the reset, '))) say("the story's legacy holds an expired window, yet no reset cell reads it with the reset on its title");
 }
 
 /**
@@ -2294,7 +2294,7 @@ async function quotaMeters(theme) {
     if (where === 'floor') {
       for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
       if (mock && !got.cards.some((c) => c.cells.some((x) => /^Fable\d+% left$/.test(x.text)))) say(`no card holds the story's widest chip ${at}`);
-      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+, no reading since$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+ ago$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
     }
     if (where === 'under') {
       if (mock && got.rows === null) say(`the story has several subscription accounts, yet fewer than two cards stand ${at}`);
@@ -3571,7 +3571,7 @@ async function wideBodyDialog(theme) {
     say('no drawer on the first page draws a captured body');
     return;
   }
-  const link = page.locator('.drawer .body-block__link', { hasText: 'Open wide' }).first();
+  const link = page.locator('.drawer .link-btn', { hasText: 'Open wide' }).first();
   if ((await link.count()) === 0) {
     say('the body block has no Open wide link');
     return;
@@ -3650,7 +3650,7 @@ async function wideBodyDialog(theme) {
         return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
       };
       const note = [...head.children].find((c) => c.textContent?.includes('cut at'));
-      const link = head.querySelector('.body-block__link');
+      const link = head.querySelector('.link-btn');
       const buttons = [...head.querySelectorAll('.body-block__actions button')];
       const box = (b) => b.getBoundingClientRect();
       return { actions: { buttons: buttons.length, stacked: buttons.some((b, i) => i > 0 && box(b).left < box(buttons[i - 1]).right) }, client: head.clientWidth, height: Math.round(head.getBoundingClientRect().height), link: link ? linesOf(link) : 0, note: note ? linesOf(note) : 0, scroll: head.scrollWidth };
