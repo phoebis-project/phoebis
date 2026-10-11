@@ -31,7 +31,7 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtShare, fmtShortTime, shortModel } from '@/lib/format';
+export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
 export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';

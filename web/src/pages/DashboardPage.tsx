@@ -23,13 +23,14 @@ const failedFirst = (read: Loaded<unknown>) => read.data === null && read.error 
 
 /**
  * The as-of line over the page's reads, each named as its card's error names it: the figures are as old as the oldest
- * answer any card draws, and a read whose last load failed is named with its error.
+ * answer any card draws, and a read whose refresh failed after an answer is named with its error. A read that never
+ * answered is left to its card, which names the error already.
  */
 function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: string; title: string } | null {
   const answered = reads.flatMap(([, r]) => (r.fetchedAt === null ? [] : [r.fetchedAt]));
   if (answered.length === 0) return null;
   const oldest = answered.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
-  const failed = reads.find(([, r]) => r.error !== null);
+  const failed = reads.find(([, r]) => r.fetchedAt !== null && r.error !== null);
   const asOf = fmtRelative(oldest, now);
   return { text: failed ? `Last refresh of the ${failed[0]} failed: ${failed[1].error}. Showing data as of ${asOf}` : `As of ${asOf}`, title: fmtAbsolute(oldest) };
 }

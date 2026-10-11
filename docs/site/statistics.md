@@ -341,21 +341,21 @@ rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
 A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
-window whose reset has passed with no reading since reads `expired 4h 47m ago`, with no reading since the reset and the
-reset's time on hover, and draws no share and an empty meter until the next reading. Each live window's meter carries a
-pace mark at the share of the window still to come, so a remaining share that reaches past the mark is behind pace and
-one short of it ahead, and the meter's title names the lead: 12% ahead of pace, 5% behind pace, or on pace. The Extra
-usage line reads the month's spend against its limit, in the serious tone while requests bill as extra usage and in the
-muted ink while they do not, and reads off or not reported in the muted ink when extra usage is disabled or the account
-has not reported it. The reason the provider gave for it sits inside the line, cut to the line's width, with the whole
-message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then say when the plan of
-an account marked cancelled ends, in the serious tone inside a week, and when the trial of an account on the Claude Code
-trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint and how it answered, a failed
-poll naming its reason cut to the line's width, and, while the account backs off, the next attempt in the serious tone.
-The line's title carries the rest: the attempt's instant, a failed poll's whole message, when the snapshot shown was
-read, since when the account backs off, and how many rate-limited answers it has had in a row. Refresh reads the
-endpoint now unless the account is backing off, and records the reading as the poll does. The page counts a card that
-shows an error, whose last poll failed, or that is backing off as needing attention.
+window whose reset has passed with no reading since reads `expired 4h 47m ago`, with the reset's time on hover, and
+draws no share and an empty meter until the next reading. Each live window's meter carries a pace mark at the share of
+the window still to come, so a remaining share that reaches past the mark is behind pace and one short of it ahead, and
+the meter's title names the lead: 12% ahead of pace, 5% behind pace, or on pace. The Extra usage line reads the month's
+spend against its limit, in the serious tone while requests bill as extra usage and in the muted ink while they do not,
+and reads off or not reported in the muted ink when extra usage is disabled or the account has not reported it. The
+reason the provider gave for it sits inside the line, cut to the line's width, with the whole message on hover. The
+chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then say when the plan of an account marked
+cancelled ends, in the serious tone inside a week, and when the trial of an account on the Claude Code trial ends. The
+poll reading takes one or two lines: when the poll last asked the endpoint and how it answered, a failed poll naming its
+reason cut to the line's width, and, while the account backs off, the next attempt in the serious tone. The line's title
+carries the rest: the attempt's instant, a failed poll's whole message, when the snapshot shown was read, since when the
+account backs off, and how many rate-limited answers it has had in a row. Refresh reads the endpoint now unless the
+account is backing off, and records the reading as the poll does. The page counts a card that shows an error, whose last
+poll failed, or that is backing off as needing attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
 view. Each lane's current bar, in a neutral tint, fills from the window's start to its used share in the window's tone,

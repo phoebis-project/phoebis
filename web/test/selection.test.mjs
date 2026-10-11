@@ -278,11 +278,22 @@ test('the Standing badges read the time left or the reset time, each with its se
   const passed = new Date(NOW - MINUTE).toISOString();
   assert.deepEqual(cooldownBadge(passed, NOW), { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(passed)}` }, 'an end behind the instant reads no time left');
   assert.deepEqual(cooldownBadge(undefined, NOW), { text: 'cooldown', title: undefined }, 'a cooldown the account names no end for reads the word alone');
-  const reset = '2026-09-18T15:42:00Z';
-  const overage = overageBadge(reset);
-  assert.deepEqual(overage, { text: `overage until ${fmtShortTime(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` });
-  assert.match(overage.text, /^overage until \d\d:\d\d$/, 'the reset reads to the minute');
-  assert.deepEqual(overageBadge(null), { text: 'overage', title: 'In overage, reset unknown' });
+  // Built on the run's local calendar, since the badge tells the reset's day apart in the viewer's zone.
+  const onLocalDay = (days, hours, minutes) => {
+    const at = new Date(NOW);
+    at.setDate(at.getDate() + days);
+    at.setHours(hours, minutes, 0, 0);
+    return at.toISOString();
+  };
+  const today = onLocalDay(0, 23, 42);
+  const overage = overageBadge(today, NOW);
+  assert.deepEqual(overage, { text: `overage until ${fmtShortTime(today)}`, title: `In overage until ${fmtAbsolute(today)}` });
+  assert.match(overage.text, /^overage until \d\d:\d\d$/, 'a reset on the same day reads to the minute');
+  const tomorrow = onLocalDay(1, 1, 42);
+  const later = overageBadge(tomorrow, NOW);
+  assert.deepEqual(later, { text: `overage until ${fmtPeriodEnd(tomorrow)}`, title: `In overage until ${fmtAbsolute(tomorrow)}` });
+  assert.match(later.text, /^overage until [A-Z][a-z]{2} \d\d, \d\d:\d\d$/, 'a reset on another day names its day, so it never reads as today');
+  assert.deepEqual(overageBadge(null, NOW), { text: 'overage', title: 'In overage, reset unknown' });
   const end = NOW + 3 * 24 * HOUR;
   assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d 0h', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });
   assert.deepEqual(windingDownBadge(NOW - MINUTE, NOW), { text: 'winding down', title: `Winding down past the plan's end at ${fmtAbsolute(new Date(NOW - MINUTE).toISOString())}` }, 'an end behind the instant reads no time left');

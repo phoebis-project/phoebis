@@ -823,7 +823,7 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
-  if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null)} />;
+  if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known account'}>unavailable</Badge>;
   return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
 }

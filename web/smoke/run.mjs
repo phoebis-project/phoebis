@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtShare, fmtShortTime, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -1189,6 +1189,19 @@ await readsAgain('/', 'getOverview');
     name: '/ the as-of line names a failed read and reads the oldest of the five',
     ok: first !== null && text.startsWith('Last refresh of the sessions failed: store busy. Showing data as of ') && held === first,
     missing: [text || 'no line', `title ${first} then ${held}`],
+  });
+  page.unmount();
+}
+{
+  // A read whose first load failed holds nothing to be as old as, and its card names the error already.
+  failNextCall('getOverview', '/admin/dashboard', 'ledger locked');
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const text = page.container.querySelector('.dash__asof')?.textContent ?? '';
+  const errors = [...page.container.querySelectorAll('.empty--error .empty__title')].map((t) => t.textContent);
+  results.push({
+    name: '/ the as-of line leaves a read that never answered to its card',
+    ok: text.startsWith('As of ') && errors.includes('Could not load the 24-hour figures'),
+    missing: [text || 'no line', JSON.stringify(errors)],
   });
   page.unmount();
 }
@@ -2793,7 +2806,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(verdicts[0].badges) === '[["next","badge--accent",""]]' &&
       verdicts[0].next &&
       verdicts[0].why === 'primary: where the next fresh session lands' &&
-      /^cooldown \d+h \d+m$/.test(verdicts[1].badges[0]?.[0] ?? '') &&
+      /^cooldown (\d+h )?\d+m$/.test(verdicts[1].badges[0]?.[0] ?? '') &&
       verdicts[1].badges[0]?.[1] === 'badge--warning' &&
       verdicts[2].badges[0]?.[0] === 'eligible' &&
       JSON.stringify(verdicts[3].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
@@ -2826,10 +2839,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok:
         until !== '' &&
         reset !== '' &&
-        /^cooldown \d+h \d+m$/.test(cooled[0] ?? '') &&
+        /^cooldown (\d+h )?\d+m$/.test(cooled[0] ?? '') &&
         cooled[1] === 'badge--warning' &&
         cooled[2] === `In a cooldown that ends ${fmtAbsolute(until)}` &&
-        JSON.stringify(over) === JSON.stringify([`overage until ${fmtShortTime(reset)}`, 'badge--serious', `In overage until ${fmtAbsolute(reset)}`]),
+        JSON.stringify(over) === JSON.stringify([`overage until ${fmtPeriodEnd(reset)}`, 'badge--serious', `In overage until ${fmtAbsolute(reset)}`]),
       missing: [JSON.stringify(cooled), JSON.stringify(over)],
     });
     never.unmount();

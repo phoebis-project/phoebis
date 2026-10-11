@@ -56,9 +56,14 @@ export function cooldownBadge(until: string | undefined, now: number): StandingB
   return left > 0 ? { text: `cooldown ${fmtDuration(left)}`, title: `In a cooldown that ends ${fmtAbsolute(until)}` } : { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(until)}` };
 }
 
-/** An overage verdict's badge: the clock time the overage resets at where the account knows it. */
-export function overageBadge(reset: string | null): StandingBadge {
-  return reset === null ? { text: 'overage', title: 'In overage, reset unknown' } : { text: `overage until ${fmtShortTime(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` };
+/**
+ * An overage verdict's badge: the time the overage resets at where the account knows it, and its date too when the
+ * reset falls on another day than `now` in the viewer's zone, so a reset days out never reads as today's.
+ */
+export function overageBadge(reset: string | null, now: number): StandingBadge {
+  if (reset === null) return { text: 'overage', title: 'In overage, reset unknown' };
+  const sameDay = new Date(reset).toDateString() === new Date(now).toDateString();
+  return { text: `overage until ${sameDay ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` };
 }
 
 /** A winding-down member's badge: the time left before the plan's end, which the member is held back for. */
