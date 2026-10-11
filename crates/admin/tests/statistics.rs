@@ -957,6 +957,8 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
             cohort: None,
             held_ms: 1_250,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         },
     ]))
     .unwrap();

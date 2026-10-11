@@ -458,6 +458,9 @@ labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `
 time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
 column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
 
+After a held request's bound runs out, the log reads the held row with its `in flight` count, then the exhausted row
+with `held`, `retry none` and `answer`, the wait and the status the client got: `answer 429` for a pool at its cap.
+
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
 page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`

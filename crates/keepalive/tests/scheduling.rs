@@ -446,6 +446,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
             lane,
             fast: false,
         })
@@ -715,6 +716,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -1218,6 +1220,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 marker: false,
                 parent_agent_id: None,
                 holds: Vec::new(),
+                dialed: false,
                 lane: lane_key(&pin.model, "standard", "none", "-"),
                 fast: false,
             })

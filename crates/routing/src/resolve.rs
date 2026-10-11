@@ -9,6 +9,15 @@ pub enum ResolveError {
     ModelNotAllowed,
 }
 
+impl ResolveError {
+    /// The word a refused decision's `code` carries beside the display reason: `model_not_allowed`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ResolveError::ModelNotAllowed => "model_not_allowed",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
     pub account_id: String,

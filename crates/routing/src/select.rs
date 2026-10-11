@@ -105,6 +105,10 @@ pub struct SelectRequest {
     /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
+    /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
+    /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
+    /// ran out, or one passed over at its cap, is attempted with nothing dialed.
+    pub dialed: bool,
     /// The cache lane the request writes to, as the relay composed it; a pin or an entry of another lane is cold.
     pub lane: String,
     /// The body carried `speed: "fast"`: fast eligibility applies.
@@ -151,9 +155,13 @@ pub struct HoldFacts {
     pub cohort: Option<String>,
     /// How long the relay waited on this hold, whether a slot freed or the bound ran out.
     pub held_ms: u64,
-    /// The wire attempt that waited: the relay keeps every hold across a failover, and only the placement of this
-    /// attempt follows the wait.
+    /// The wire attempt that waited, kept for the record's readers.
     pub attempt: u32,
+    /// The decision that held, the request's `seq` when the selector answered the hold: the placement one `seq`
+    /// past it is the one the wait led to, and a leg that failed over after the wait took a selection of its own.
+    pub seq: u32,
+    /// Whether the wait's bound ran out with no slot freed, which the relay learns when the wait ends.
+    pub ran_out: bool,
 }
 
 /// The holds before this attempt, as the trace records them.
@@ -444,12 +452,37 @@ pub enum Exhaustion {
     },
 }
 
+/// The HTTP status the relay answers an exhaustion with, which the exhausted decision's `answer` fact records too.
+/// `at_cap` is a request held at the cap, its wait run out or an account passed over, with no leg dialed: its untimed
+/// exhaustion is a pool at its in-flight cap, which frees on its own (429), rather than one only an operator can
+/// clear (503).
+pub fn exhaustion_status(exhaustion: &Exhaustion, at_cap: bool) -> u16 {
+    match exhaustion {
+        Exhaustion::Untimed if at_cap => 429,
+        Exhaustion::ModelRejected => 404,
+        Exhaustion::Untimed | Exhaustion::Pinned { .. } => 503,
+        Exhaustion::Timed { .. } | Exhaustion::FastLane { .. } | Exhaustion::FastCredits { .. } => {
+            429
+        }
+    }
+}
+
 /// Why the current registry refuses a request admitted under an older one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// The registry no longer holds the key the request was admitted on, or holds another key under its id.
     Key(KeyRefusal),
     Resolve(ResolveError),
+}
+
+impl Refusal {
+    /// The structured word a refused decision records beside the display reason.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Refusal::Key(refusal) => refusal.code(),
+            Refusal::Resolve(refusal) => refusal.code(),
+        }
+    }
 }
 
 // Boxing the selection would put an allocation on the path every request takes, to shrink a value that is
@@ -1456,19 +1489,23 @@ fn run(
                     window,
                     rec,
                 );
-                // The wait is the relay's to measure, once it has waited.
+                // The wait and whether its bound ran out are the relay's to read, once it has waited.
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
                         cohort: Some(c.account_id.clone()),
                         held_ms: 0,
                         attempt: request.attempt,
+                        seq: request.seq,
+                        ran_out: false,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
                         cohort: None,
                         held_ms: 0,
                         attempt: request.attempt,
+                        seq: request.seq,
+                        ran_out: false,
                     },
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
@@ -3662,6 +3699,7 @@ fn finish(
             outcome.kind = "refused";
             outcome.refusal = Some(RefusalFacts {
                 kind: "key",
+                code: refusal.code(),
                 reason: match refusal {
                     Refusal::Key(refusal) => refusal.to_string(),
                     Refusal::Resolve(refusal) => refusal.to_string(),
@@ -3702,6 +3740,10 @@ fn finish(
         renewal: renewal.as_ref(),
         hold_place,
         pick: pick.as_ref(),
+        exhaustion: match result {
+            SelectResult::Exhausted(exhaustion) => Some(exhaustion),
+            _ => None,
+        },
     };
     let (by, fact) = read.by_and_fact();
     let (score, runner_up) = read.scores();
@@ -3757,6 +3799,7 @@ struct Readings<'r> {
     renewal: Option<&'r Renewal>,
     hold_place: Option<&'static str>,
     pick: Option<&'r Pick>,
+    exhaustion: Option<&'r Exhaustion>,
 }
 
 fn summary_fact(key: &'static str, value: FactValue, unit: &'static str) -> SummaryFact {
@@ -3835,6 +3878,12 @@ impl Readings<'_> {
                 let Some(exhaustion) = &outcome.exhaustion else {
                     return (by("exhaustion", ""), Vec::new());
                 };
+                let run_out = self.run_out_hold();
+                let mut facts: Vec<SummaryFact> = run_out
+                    .or_else(|| self.attempt_hold())
+                    .map(held_fact)
+                    .into_iter()
+                    .collect();
                 let fact = match (&exhaustion.reason, exhaustion.deadline) {
                     (Some(reason), _) => {
                         summary_fact("cause", FactValue::Text(reason.clone()), "text")
@@ -3844,7 +3893,16 @@ impl Readings<'_> {
                     }
                     (None, None) => summary_fact("retry", FactValue::Text("none".into()), "text"),
                 };
-                (by("exhaustion", exhaustion.kind), vec![fact])
+                facts.push(fact);
+                // A hold that ran out is a request held at the cap, so the client was answered at the cap unless a
+                // leg was dialed, the reading the relay answers on too.
+                if let (Some(_), Some(answered)) = (run_out, self.exhaustion) {
+                    facts.push(answer_fact(exhaustion_status(
+                        answered,
+                        !self.request.dialed,
+                    )));
+                }
+                (by("exhaustion", exhaustion.kind), facts)
             }
             _ => {
                 let kind = outcome.refusal.as_ref().map_or("", |r| r.kind);
@@ -3987,13 +4045,20 @@ impl Readings<'_> {
             .unwrap_or_default()
     }
 
-    /// The hold this attempt waited through, if the request's last hold is this attempt's. A failover's later
-    /// attempt took its own placement and reads `None`. Both arms that name a wait read it here.
+    /// The hold this selection follows: the request's last hold, when it held at the selection just before this
+    /// one. A leg that failed over after the wait, on the wire or before it, took a selection of its own and reads
+    /// `None`, whether or not the wire attempt moved. Every arm that names a wait reads it here.
     fn attempt_hold(&self) -> Option<&HoldFacts> {
         self.request
             .holds
             .last()
-            .filter(|hold| hold.attempt == self.request.attempt)
+            .filter(|hold| hold.seq.checked_add(1) == Some(self.request.seq))
+    }
+
+    /// The request's last hold whose bound ran out, wherever it sits: a pool of several members at their cap passes
+    /// the rest over with no wait of their own, so the exhaustion it led to can follow several selections later.
+    fn run_out_hold(&self) -> Option<&HoldFacts> {
+        self.request.holds.iter().rev().find(|hold| hold.ran_out)
     }
 
     /// A placement on the session's pin: `in_flight` as a hold's, then `held` with the wait when `attempt_hold`
@@ -4030,13 +4095,23 @@ impl Readings<'_> {
     }
 }
 
-/// The `held` summary fact of the wait `hold` records, in milliseconds. Both arms that name a wait build it here.
+/// The `held` summary fact of the wait `hold` records, in milliseconds. Every arm that names a wait builds it here.
 fn held_fact(hold: &HoldFacts) -> SummaryFact {
     summary_fact(
         "held",
         FactValue::Int(i64::try_from(hold.held_ms).unwrap_or(i64::MAX)),
         "ms",
     )
+}
+
+/// The `answer` summary fact: the HTTP status the client was answered with, a bare number with no unit.
+fn answer_fact(status: u16) -> SummaryFact {
+    SummaryFact {
+        key: "answer",
+        value: FactValue::Int(i64::from(status)),
+        unit: None,
+        entity: None,
+    }
 }
 
 #[cfg(all(test, debug_assertions))]

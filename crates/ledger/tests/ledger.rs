@@ -3044,12 +3044,15 @@ fn decision(
             lane: Default::default(),
             flags: Default::default(),
             chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
             client: phoebis_routing::ClientClass::ClaudeCode,
             client_version: None,
         },
         &snapshot,
         &phoebis_routing::RefusalFacts {
             kind: "key",
+            code: "unknown",
             reason: "the key is unknown".into(),
         },
     );

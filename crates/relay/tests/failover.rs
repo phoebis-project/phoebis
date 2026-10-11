@@ -3489,9 +3489,13 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
                 summary
                     .refusal
                     .as_ref()
-                    .map(|r| (r.kind, r.reason.as_str()))
+                    .map(|r| (r.kind, r.code, r.reason.as_str()))
             ),
-            ("refused", Some(("client", trigger)))
+            ("refused", Some(("client", "drift", trigger)))
+        );
+        assert!(
+            record.request.attempted.is_empty() && record.request.holds.is_empty(),
+            "{trigger}: the refusal precedes any selection, so it names nothing tried or waited on"
         );
         assert_eq!(
             summary

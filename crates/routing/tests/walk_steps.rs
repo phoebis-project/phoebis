@@ -92,11 +92,14 @@ fn the_steps_written_without_the_recorder_are_in_the_table() {
             boundaries: 0,
             static_hash: false,
         },
+        attempted: Vec::new(),
+        holds: Vec::new(),
         client: ClientClass::ClaudeCode,
         client_version: None,
     };
     let refusal = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     let (record, _) = DecisionRecord::refused(&request, &snapshot, &refusal);

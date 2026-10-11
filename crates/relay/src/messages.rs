@@ -24,10 +24,11 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, EvidenceSource,
-    Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence, PinRef,
-    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
-    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
+    cohort_hold, exhaustion_status, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
+    EvidenceSource, Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts,
+    OverageEvidence, PinRef, Presented, Refusal, RefusalFacts, RefusedRequest, Report,
+    RequestFlags, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1727,6 +1728,7 @@ impl Relay {
                             && admitted.cache_ttl_policy.inject_when_absent),
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
+                    dialed,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
                 })
@@ -1817,6 +1819,7 @@ impl Relay {
                     // Measured here, the one place that knows: the trace of the attempt that follows names the
                     // wait, and so does the completion when no attempt follows.
                     hold.held_ms = started.elapsed().as_millis() as u64;
+                    hold.ran_out = !freed;
                     holds.push(hold);
                     trace.waited(&holds);
                     held_for.push(account_id.clone());
@@ -1889,7 +1892,7 @@ impl Relay {
         at_cap: bool,
         auth_marked: bool,
     ) -> Response {
-        let (code, response) = match exhaustion {
+        let (code, mut response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
                 (failure.code, failure.response(admitted.request_id))
@@ -1915,6 +1918,10 @@ impl Relay {
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
         };
+        // The routing log's exhausted row records this same status as its `answer`, so the client's status is
+        // read from the one mapping both share.
+        *response.status_mut() = StatusCode::from_u16(exhaustion_status(exhaustion, at_cap))
+            .expect("the exhaustion statuses are valid HTTP statuses");
         let mut outcome = self.outcome(
             admitted.trace,
             Some(admitted.key),
@@ -3478,11 +3485,14 @@ impl Relay {
                 lane: LaneFacts::default(),
                 flags: RequestFlags::default(),
                 chain: ChainFacts::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
                 client: identity.class,
                 client_version: client_version.map(str::to_string),
             },
             RefusalFacts {
                 kind: "client",
+                code: "drift",
                 reason: kind.to_string(),
             },
         );

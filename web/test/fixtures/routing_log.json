@@ -232,6 +232,7 @@
         "exhaustion": null,
         "refusal": {
           "kind": "key",
+          "code": "unknown",
           "reason": "the key is not in the registry"
         },
         "fast": false,
@@ -493,6 +494,124 @@
           "reason": null,
           "obstacle": null
         },
+        "refusal": null,
+        "fast": false,
+        "cache": null,
+        "status": null
+      },
+      {
+        "type": "decision",
+        "request_id": "r-capped",
+        "seq": 2,
+        "attempt": 1,
+        "attempt_count": null,
+        "at": 1000000,
+        "kind": "exhausted",
+        "probe": false,
+        "key_id": "desktop",
+        "pool_id": "main",
+        "session_id": null,
+        "agent_id": "main",
+        "model": "claude-sonnet-5",
+        "account_id": null,
+        "from_account_id": null,
+        "by": {
+          "kind": "exhaustion",
+          "value": "untimed",
+          "tier": null
+        },
+        "fact": [
+          {
+            "key": "held",
+            "value": 60000,
+            "unit": "ms",
+            "entity": null
+          },
+          {
+            "key": "retry",
+            "value": "none",
+            "unit": "text",
+            "entity": null
+          },
+          {
+            "key": "answer",
+            "value": 429,
+            "unit": null,
+            "entity": null
+          }
+        ],
+        "rule": null,
+        "strategy": "pace",
+        "tier": null,
+        "rung": null,
+        "score": null,
+        "runner_up": null,
+        "skipped": 0,
+        "warmth": null,
+        "hold": null,
+        "exhaustion": {
+          "kind": "untimed",
+          "deadline": null,
+          "window": null,
+          "reason": null,
+          "obstacle": null
+        },
+        "refusal": null,
+        "fast": false,
+        "cache": null,
+        "status": null
+      },
+      {
+        "type": "decision",
+        "request_id": "r-capped",
+        "seq": 1,
+        "attempt": 1,
+        "attempt_count": null,
+        "at": 1000000,
+        "kind": "held",
+        "probe": false,
+        "key_id": "desktop",
+        "pool_id": "main",
+        "session_id": null,
+        "agent_id": "main",
+        "model": "claude-sonnet-5",
+        "account_id": "business",
+        "from_account_id": null,
+        "by": {
+          "kind": "hold",
+          "value": "strategy_pick",
+          "tier": null
+        },
+        "fact": [
+          {
+            "key": "in_flight",
+            "value": "1/1",
+            "unit": "text",
+            "entity": null
+          }
+        ],
+        "rule": null,
+        "strategy": "pace",
+        "tier": [
+          0,
+          0,
+          0
+        ],
+        "rung": null,
+        "score": {
+          "account_id": "business",
+          "score": 0.005952380952380952,
+          "unit": "percent_per_hour"
+        },
+        "runner_up": null,
+        "skipped": 0,
+        "warmth": null,
+        "hold": {
+          "account_id": "business",
+          "cohort": null,
+          "bound_ms": 60000
+        },
+        "exhaustion": null,
         "refusal": null,
         "fast": false,
         "cache": null,

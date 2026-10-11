@@ -155,6 +155,7 @@ fn request(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -1046,6 +1047,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         }
@@ -1179,6 +1181,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -3202,6 +3205,11 @@ async fn a_refusal_emits_a_decision_with_a_two_line_walk() {
         ),
         ("r-1", 1, 1)
     );
+    assert_eq!(
+        summary.refusal.as_ref().map(|r| (r.kind, r.code)),
+        Some(("key", "revoked")),
+        "the refusal's structured word rides beside its display reason"
+    );
 }
 
 /// A drifted client's refusal as the relay records it: the request's one decision.
@@ -3222,11 +3230,14 @@ fn drift_refusal() -> (RefusedRequest, RefusalFacts) {
             lane: Default::default(),
             flags: Default::default(),
             chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
             client: ClientClass::ClaudeCode,
             client_version: Some("2.1.274".into()),
         },
         RefusalFacts {
             kind: "client",
+            code: "drift",
             reason: "hash".into(),
         },
     )

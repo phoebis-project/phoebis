@@ -7679,7 +7679,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "QMnHxrj4",
+      "prefix": "Ab-Omae0",
       "created_at": 1000000,
       "updated_at": 1000000,
       "revision": 4398047511104,
@@ -7747,7 +7747,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "QMnHxrj4",
+          "prefix": "Ab-Omae0",
           "created_at": 1000000,
           "updated_at": 1000000,
           "revision": 4398047511104,
@@ -7818,9 +7818,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "_9w__uzrwYp8k6qjkpuXCrdy1cMHmMqwyn7H2p2BpSw",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A52331%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=nuOnQu-pmgwzNIcu6A704QT8--Vmi86FC6V_a5PBYpA&code_challenge_method=S256&state=AHobZas1D9Ou3TQW4g5xbzmYbae4tXzhZSEENH-p0MY",
-      "redirect_uri": "http://localhost:52331/callback",
+      "id": "cj4hnPskfVhnsVJpbCJXuMJNUKDumIT8-BMoPgjTYE8",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A59107%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=6KdJjfxHQhRo6eW82jvkldczvUEApEphRKjUV0BHLF4&code_challenge_method=S256&state=jOUEDGviK5WPJd8tOswle3pcP1RnXx9Fd1sWO2pQ_8k",
+      "redirect_uri": "http://localhost:59107/callback",
       "expires_at": 1600000
     }
   },
@@ -8135,7 +8135,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "QMnHxrj4",
+              "prefix": "Ab-Omae0",
               "enabled": true
             }
           ],
@@ -9861,6 +9861,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "exhaustion": null,
           "refusal": {
             "kind": "key",
+            "code": "unknown",
             "reason": "the key is not in the registry"
           },
           "fast": false,
@@ -10122,6 +10123,124 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": null,
             "obstacle": null
           },
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-capped",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "exhausted",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "exhaustion",
+            "value": "untimed",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "held",
+              "value": 60000,
+              "unit": "ms",
+              "entity": null
+            },
+            {
+              "key": "retry",
+              "value": "none",
+              "unit": "text",
+              "entity": null
+            },
+            {
+              "key": "answer",
+              "value": 429,
+              "unit": null,
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": {
+            "kind": "untimed",
+            "deadline": null,
+            "window": null,
+            "reason": null,
+            "obstacle": null
+          },
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-capped",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "held",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "in_flight",
+              "value": "1/1",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": {
+            "account_id": "business",
+            "cohort": null,
+            "bound_ms": 60000
+          },
+          "exhaustion": null,
           "refusal": null,
           "fast": false,
           "cache": null,
@@ -11036,7 +11155,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "cZ5TY-yc0_HM9aAcxbOBAagbUR_PpdH_n3YDr8gPX6g"
+      "session_id": "57iahDEGQ2cO-WdqH5TdFkzo8wJPtXKuzOGf-jrFMOk"
     }
   },
   "sessions": {

@@ -485,6 +485,10 @@ pub struct ExhaustionFacts {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct RefusalFacts {
     pub kind: &'static str,
+    /// The refusal's structured word, which the console keys its labels on: a key refusal's variant in snake case,
+    /// `model_not_allowed` for a resolve refusal, `drift` for the relay's
+    /// refusal of a drifted client.
+    pub code: &'static str,
     pub reason: String,
 }
 
@@ -613,8 +617,8 @@ pub struct CacheMapEntry {
 /// The identity a refused request has before any selection: what the relay holds at its own refusal site and what
 /// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for the relay's refusal, the
 /// request's one decision, and `at` and the client's version are as the relay read them. The relay refuses a drifted
-/// client before it builds a selection, so its refusal leaves the parent agent, the class, the lane, the flags and the
-/// chains at their empty values, a keepalive probe's flag among them.
+/// client before it builds a selection, so its refusal leaves the parent agent, the class, the lane, the flags, the
+/// chains, the accounts attempted and the holds at their empty values, a keepalive probe's flag among them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RefusedRequest {
     pub request_id: String,
@@ -631,6 +635,8 @@ pub struct RefusedRequest {
     pub lane: LaneFacts,
     pub flags: RequestFlags,
     pub chain: ChainFacts,
+    pub attempted: Vec<String>,
+    pub holds: Vec<HoldFacts>,
     pub client: ClientClass,
     pub client_version: Option<String>,
 }
@@ -652,6 +658,8 @@ impl From<&SelectRequest> for RefusedRequest {
             lane: LaneFacts::of(&request.lane),
             flags: RequestFlags::of(request),
             chain: ChainFacts::of(request),
+            attempted: request.attempted.clone(),
+            holds: request.holds.clone(),
             client: request.client,
             client_version: None,
         }
@@ -691,8 +699,8 @@ impl DecisionRecord {
                 lane: request.lane.clone(),
                 flags: request.flags.clone(),
                 chain: request.chain.clone(),
-                attempted: Vec::new(),
-                holds: Vec::new(),
+                attempted: request.attempted.clone(),
+                holds: request.holds.clone(),
                 registry_revision: snapshot.revision,
             },
             pin: None,
@@ -1042,5 +1050,27 @@ mod tests {
         );
         assert_eq!(value["walk"][0]["facts"][0]["value"], "live");
         assert_eq!(value["pin_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_refusal_s_code_is_the_key_refusal_in_snake_case_or_the_resolve_refusal_s_word() {
+        use crate::select::Refusal;
+        use crate::{KeyRefusal, ResolveError};
+        let codes = [
+            (Refusal::Key(KeyRefusal::Disabled), "disabled"),
+            (Refusal::Key(KeyRefusal::Expired), "expired"),
+            (Refusal::Key(KeyRefusal::PoolDisabled), "pool_disabled"),
+            (Refusal::Key(KeyRefusal::PoolMissing), "pool_missing"),
+            (Refusal::Key(KeyRefusal::Replaced), "replaced"),
+            (Refusal::Key(KeyRefusal::Revoked), "revoked"),
+            (Refusal::Key(KeyRefusal::Unknown), "unknown"),
+            (
+                Refusal::Resolve(ResolveError::ModelNotAllowed),
+                "model_not_allowed",
+            ),
+        ];
+        for (refusal, code) in codes {
+            assert_eq!(refusal.code(), code, "{refusal:?}");
+        }
     }
 }

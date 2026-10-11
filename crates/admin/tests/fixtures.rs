@@ -401,6 +401,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
         })
@@ -486,7 +487,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cohort: Some("direct".into()),
                 held_ms: 1_250,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             }],
+            dialed: false,
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
         })
@@ -1335,6 +1339,7 @@ fn asked(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -1498,6 +1503,40 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         SelectResult::Held { hold, .. } => hold,
         other => panic!("the account at its cap holds the request, not {other:?}"),
     };
+
+    // Held, then exhausted: no slot frees within the pool's 60-second bound, so the relay marks the wait run out and
+    // the re-selection finds both members attempted, answered as a pool at its cap. Its id sorts below the held and
+    // exhausted stories', whose rows the console's decoder tests read first.
+    let capped = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec!["direct".into()],
+            ..asked(parts, key_generation, "r-capped", 1, None)
+        })
+        .await
+        .unwrap();
+    let capped_hold = match capped.result {
+        SelectResult::Held { hold, .. } => hold,
+        other => panic!("the account at its cap holds the request, not {other:?}"),
+    };
+    let run_out = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec!["direct".into(), "business".into()],
+            holds: vec![phoebis_routing::HoldFacts {
+                held_ms: 60_000,
+                ran_out: true,
+                ..capped_hold
+            }],
+            ..asked(parts, key_generation, "r-capped", 2, None)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        run_out.result,
+        SelectResult::Exhausted(phoebis_routing::Exhaustion::Untimed),
+        "with both members attempted the run-out exhausts the pool untimed"
+    );
     drop(busy);
     let after_hold = parts
         .router

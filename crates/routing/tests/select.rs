@@ -407,6 +407,7 @@ fn select_request(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
     }
@@ -6306,6 +6307,8 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
             cohort: Some("b".into()),
             held_ms: 0,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         },
     );
 }
@@ -6643,6 +6646,8 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
                 cohort: Some("a".into()),
                 held_ms: 1_000,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -6668,6 +6673,8 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             cohort: None,
             held_ms: 0,
             attempt: 1,
+            seq: 2,
+            ran_out: false,
         },
     );
 
@@ -6698,6 +6705,8 @@ fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_sum
         cohort: cohort.map(String::from),
         held_ms,
         attempt: 1,
+        seq: 1,
+        ran_out: false,
     };
     assert_eq!(
         cohort_hold(&[]),
@@ -8122,6 +8131,8 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "b is the one priority would have chosen"
@@ -8168,6 +8179,8 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "the round starts at a"
@@ -8226,6 +8239,8 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "with both at their cap the request is held on the one the ceiling prefers"
@@ -12535,6 +12550,7 @@ fn a_refusal_records_two_lines() {
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
     let revoked = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     let (record, summary) = DecisionRecord::refused(&RefusedRequest::from(&req), &s, &revoked);
@@ -12600,6 +12616,32 @@ fn a_refusal_records_two_lines() {
 }
 
 #[test]
+fn a_refusal_the_task_records_carries_the_request_s_attempted_accounts_and_holds() {
+    let s = snapshot(Pool::default());
+    let hold = HoldFacts {
+        account_id: "a".into(),
+        cohort: None,
+        held_ms: 1_500,
+        attempt: 1,
+        seq: 1,
+        ran_out: true,
+    };
+    let req = SelectRequest {
+        seq: 3,
+        holds: vec![hold.clone()],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &["a", "b"], T)
+    };
+    let revoked = RefusalFacts {
+        kind: "key",
+        code: "revoked",
+        reason: "the key was revoked".into(),
+    };
+    let (record, _) = DecisionRecord::refused(&RefusedRequest::from(&req), &s, &revoked);
+    assert_eq!(record.request.attempted, ["a", "b"]);
+    assert_eq!(record.request.holds, [hold]);
+}
+
+#[test]
 fn a_refusal_names_its_pin_not_looked_up() {
     let s = snapshot(Pool::default());
     let named = RefusedRequest::from(&request(&s, Some("s1"), "claude-sonnet-5", true, &[], T));
@@ -12609,6 +12651,7 @@ fn a_refusal_names_its_pin_not_looked_up() {
     };
     let revoked = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     for refused in [&named, &unnamed] {
@@ -12659,6 +12702,7 @@ fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
         &s,
         &RefusalFacts {
             kind: "key",
+            code: "revoked",
             reason: "the key was revoked".into(),
         },
     );
@@ -13266,11 +13310,14 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
     seed_affinity(&st, vec![static_row(&s, "s1", "b", 900)]);
     let _a = st.in_flight().dispatched("a", 1_000);
     let req = SelectRequest {
+        seq: 2,
         holds: vec![HoldFacts {
             account_id: "b".into(),
             cohort: Some("b".into()),
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..static_req(&s, &["s1"])
     };
@@ -13328,11 +13375,14 @@ fn summary_facts(d: &Decided) -> Vec<(&'static str, FactValue, Option<&'static s
 fn a_session_pin_placement_after_a_hold_reads_the_wait_beside_the_in_flight_count() {
     let (s, mut st, _tickets) = session_pin_at_cap();
     let req = SelectRequest {
+        seq: 2,
         holds: vec![HoldFacts {
             account_id: "a".into(),
             cohort: None,
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -13373,11 +13423,14 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
     let (s, mut st, _tickets) = session_pin_at_cap();
     let later_attempt = SelectRequest {
         attempt: 2,
+        seq: 3,
         holds: vec![HoldFacts {
             account_id: "a".into(),
             cohort: None,
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -13389,7 +13442,181 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
     assert_eq!(
         summary_facts(&d),
         vec![("in_flight", FactValue::Text("1/1".into()), Some("text"))],
-        "a failover's later attempt took its own placement, so the earlier attempt's wait is not its"
+        "a failover took a selection after the wait's, so the wait two selections back is not this placement's"
+    );
+}
+
+/// A request on members `a` and `b` that waited on `a` at its first selection, with `attempted` as the relay left it.
+fn after_a_wait_on_a(
+    s: &RegistrySnapshot,
+    seq: u32,
+    ran_out: bool,
+    attempted: &[&str],
+) -> SelectRequest {
+    SelectRequest {
+        seq,
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 2_000,
+            attempt: 1,
+            seq: 1,
+            ran_out,
+        }],
+        ..request(s, None, "claude-sonnet-5", true, attempted, T)
+    }
+}
+
+#[test]
+fn a_placement_after_a_leg_that_failed_before_the_wire_reads_no_wait() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` led to the placement at `seq` 2, whose leg failed over before it reached the wire, so the
+    // attempt never moved and `seq` 3 places afresh.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 3, false, &["a"]),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("strategy", "priority"),
+        "the wait led to the selection before this one, so it does not explain this placement"
+    );
+    assert!(
+        summary_facts(&d).iter().all(|(key, _, _)| *key != "held"),
+        "{:?}",
+        summary_facts(&d)
+    );
+}
+
+#[test]
+fn the_placement_one_selection_past_its_hold_reads_the_wait() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, false, &[]),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "a");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "strategy_pick")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("held", FactValue::Int(2_000), Some("ms"))]
+    );
+}
+
+#[test]
+fn the_exhausted_row_after_a_hold_that_ran_out_reads_the_wait_retry_none_and_answer_429() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` ran out, so `a` is attempted, and `b`, at its cap, was passed over with no wait of its own.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, true, &["a", "b"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("exhaustion", "untimed")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ],
+        "no leg was dialed, so the client is answered as a pool at its cap"
+    );
+}
+
+#[test]
+fn the_exhausted_row_after_a_hold_that_freed_reads_the_wait_alone() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, false, &["a", "b"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+        ],
+        "a slot freed within the bound, so the row names no answer the wait caused"
+    );
+}
+
+#[test]
+fn a_hold_that_ran_out_selections_before_the_exhaustion_still_reads_on_its_row() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // `b` and `c` at their cap were passed over at `seq` 2 and 3, past the bound the wait on `a` ran out.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 4, true, &["a", "b", "c"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ]
+    );
+}
+
+#[test]
+fn after_a_dialed_leg_the_exhausted_row_answers_the_untimed_503() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` ran out, then `b` freed and its leg at `seq` 2 was dialed and failed over.
+    let req = SelectRequest {
+        dialed: true,
+        ..after_a_wait_on_a(&s, 3, true, &["a", "b"])
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(503), None),
+        ],
+        "a dialed leg makes the untimed exhaustion one only an operator clears"
     );
 }
 

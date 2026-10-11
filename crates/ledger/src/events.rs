@@ -1260,12 +1260,15 @@ mod tests {
                 lane: Default::default(),
                 flags: Default::default(),
                 chain: Default::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
                 client: ClientClass::ClaudeCode,
                 client_version: None,
             },
             &snapshot,
             &RefusalFacts {
                 kind: "client",
+                code: "drift",
                 reason: "hash".into(),
             },
         );

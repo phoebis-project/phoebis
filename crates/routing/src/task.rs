@@ -2061,6 +2061,7 @@ impl Task {
             snapshot,
             &RefusalFacts {
                 kind: "key",
+                code: refusal.code(),
                 reason,
             },
         );
