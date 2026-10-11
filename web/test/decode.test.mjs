@@ -1735,7 +1735,7 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
 test('a session decodes its burn unit, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
-  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
+  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5');
   const pinned = d.decodeSession(wire);
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');

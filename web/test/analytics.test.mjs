@@ -265,7 +265,7 @@ test("the mock's burn fold prices only rows with tokens and nulls a window on an
   const failed = row('claude-sonnet-4-5', 0);
   for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share');
   assert.equal(shareOf([failed, row('claude-opus-5-5', 0)]), null, 'rows with no token alone are an idle bucket, not a share of zero');
-  const unpriced = row('claude-sonnet-5', 1_000);
+  const unpriced = row('claude-opus-5', 1_000);
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
 });
 

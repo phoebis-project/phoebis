@@ -3072,13 +3072,13 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
 
 #[tokio::test]
 async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
-    // The pin burns Sonnet 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
+    // The pin burns Opus 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
     // in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
         vec![phoebis_store::PinRow {
-            model: "claude-sonnet-5".into(),
+            model: "claude-opus-5".into(),
             ..burning_opus_pin("s1", "business", generation, now, 100.0, 100.0)
         }]
     })
