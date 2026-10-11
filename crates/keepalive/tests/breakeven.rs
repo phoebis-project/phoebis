@@ -261,7 +261,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     );
 }
 
-/// On the shipped tables `claude-sonnet-5` has a dollar row and no plan weight. A token costs the model's weight times
+/// On the shipped tables `claude-opus-5` has a dollar row and no plan weight. A token costs the model's weight times
 /// the type's multiplier, so the weight cancels from read over write and a plan recipe on it breaks even where every
 /// plan recipe does.
 #[test]
@@ -276,13 +276,13 @@ fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight
     };
     let (prices, plan) = (PriceTable::shipped(), PlanTables::shipped());
     assert_eq!(
-        both(&prices, &plan, "claude-sonnet-5"),
+        both(&prices, &plan, "claude-opus-5"),
         (Some(11_760_000), Some(158_760_000)),
         "44.1 h on the hour, not the 17.1 h of its dollar row"
     );
     assert_eq!(
-        both(&prices, &plan, "claude-sonnet-5"),
-        both(&prices, &plan, "claude-sonnet-5-5"),
+        both(&prices, &plan, "claude-opus-5"),
+        both(&prices, &plan, "claude-opus-5-5"),
         "the same figure as the weighted model beside it"
     );
     let costs = COSTS.replace(

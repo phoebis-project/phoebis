@@ -8435,10 +8435,10 @@ export const FIXTURES: Record<string, Fixture> = {
         }
       },
       "subscription_costs": {
-        "effective": "2026-10-08",
+        "effective": "2026-10-11",
         "source": "shipped",
         "content": {
-          "effective": "2026-10-08",
+          "effective": "2026-10-11",
           "unit": {
             "defined_by": {
               "band": "out_of_band",
@@ -8482,6 +8482,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-fable-5-1": 10,
             "claude-opus-5-5": 2.2,
             "claude-sonnet-5-5": 1.5,
+            "claude-sonnet-5": 1.5,
             "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
@@ -11666,10 +11667,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "subscription_costs_path": null
       },
       "subscription_costs": {
-        "effective": "2026-10-08",
+        "effective": "2026-10-11",
         "source": "shipped",
         "content": {
-          "effective": "2026-10-08",
+          "effective": "2026-10-11",
           "unit": {
             "defined_by": {
               "band": "out_of_band",
@@ -11713,6 +11714,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-fable-5-1": 10,
             "claude-opus-5-5": 2.2,
             "claude-sonnet-5-5": 1.5,
+            "claude-sonnet-5": 1.5,
             "claude-haiku-5-5": 0.1,
             "claude-haiku-4-5": 1
           },
@@ -11800,7 +11802,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "subscription_costs": {
           "path": null,
           "source": "shipped",
-          "effective": "2026-10-08"
+          "effective": "2026-10-11"
         }
       },
       "gaps": [],

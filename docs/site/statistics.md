@@ -169,11 +169,13 @@ the band, derived from the weight over the capacity:
 | `claude-fable-5-1` | 10 | 6.67% | 1.11% |
 | `claude-opus-5-5` | 2.2 | 1.47% | 0.244% |
 | `claude-sonnet-5-5` | 1.5 | 1.00% | 0.167% |
+| `claude-sonnet-5` | 1.5 | 1.00% | 0.167% |
 | `claude-haiku-5-5` | 0.1 | 0.0667% | 0.0111% |
 | `claude-haiku-4-5` | 1 | 0.667% | 0.111% |
 
-The models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`)
-have no row and price no share.
+`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The models the
+plan meter has not measured and the file leaves out (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no row
+and price no share.
 
 Every model shares one multiplier per token type: input 1, output 5, a cache write 1.25 whatever its TTL, and a cache
 read 0.025. Thinking tokens count as output. A model that breaks a shared constant takes an `overrides` row, which may
