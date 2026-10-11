@@ -12857,7 +12857,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     // The parked main inside its ceilings and the one held past its horizon, each line's state word, cause and park.
     const lines = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
-    const lineOf = (park) => lines.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
+    // The park's deadline and wake count from the story's instant, so their lines are read on a view pinned to it:
+    // on the live clock the deadline's hours depend on how long the run took to get here.
+    const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
+    [...pinned.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+    await pinned.settle(250);
+    const parks = [...pinned.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
+    const lineOf = (park) => parks.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
     const read = (line) => ({
       cause: line?.querySelector('.agents__state > .badge:nth-child(2)')?.textContent?.trim() ?? null,
       hint: line?.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? null,
@@ -12868,6 +12874,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
     const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    pinned.unmount();
     const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({
       name: '/sessions the agent line shows the state word with its cause and the park detail',

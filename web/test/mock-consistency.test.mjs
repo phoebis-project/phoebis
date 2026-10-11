@@ -13,7 +13,7 @@ const startOfHour = (ms) => Math.floor(ms / HOUR) * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
 
 /** A rollup row's requests, as the analytics routes count them. */
-const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error;
+const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -772,6 +772,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
       assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
     }
+  });
+
+  test(`the default range counts a stream the client closed as failed under the code the relay files it with, at ${at}`, async () => {
+    const s = await story;
+    const closed = s.requests.filter((r) => r.outcome === 'canceled');
+    assert.ok(closed.length > 0, 'the story holds a stream the client closed');
+    for (const r of closed) assert.equal(r.errorCode, 'client_gone', `${r.id} names the code`);
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
+    assert.equal(totals.errors.api_error ?? 0, rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length, 'and counts no closed stream as an upstream error');
   });
 }
 

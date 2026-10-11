@@ -64,7 +64,8 @@ export interface HourlyRollup {
   probes: { failed: number; held: number; ok: number; skipped: number };
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
-  requests: { incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
+  /** `client_gone` counts the streams the client closed, which the relay files as failed under that code. */
+  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
   /** The speed the hour's answers reported, else `fast` where its requests asked for it, else `standard`. */
@@ -194,7 +195,7 @@ function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier:
     cacheShares: Object.fromEntries(priced(read).flatMap(([window, r]) => { const w = write.get(window); return w === undefined || w.unpriced ? [] : [[window, { read: r.sum, write: w.sum }]]; })),
     costShares: Object.fromEntries(priced(cost).map(([window, s]) => [window, s.sum])),
     planOutputTokens: countedPlan.reduce((n, r) => n + r.tokens.output, 0),
-    planRequests: countedPlan.reduce((n, r) => n + r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error, 0),
+    planRequests: countedPlan.reduce((n, r) => n + r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone, 0),
     probeShares: Object.fromEntries(priced(probe).map(([window, s]) => [window, { cost: s.sum, wasted: ratio === null ? null : s.sum * ratio }])),
   };
 }
@@ -223,14 +224,16 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const rateLimited = sum(counted, (r) => r.requests.rate_limited);
   const overloaded = sum(counted, (r) => r.requests.overloaded);
   const upstreamError = sum(counted, (r) => r.requests.upstream_error);
+  const clientGone = sum(counted, (r) => r.requests.client_gone);
   const incomplete = sum(counted, (r) => r.requests.incomplete);
   const succeeded = sum(counted, (r) => r.requests.ok);
-  const requests = succeeded + rateLimited + overloaded + upstreamError + incomplete;
+  const requests = succeeded + rateLimited + overloaded + upstreamError + clientGone + incomplete;
   const failovers = sum(counted, (r) => r.failovers);
   const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
   if (overloaded) errors.overloaded_error = overloaded;
   if (upstreamError) errors.api_error = upstreamError;
+  if (clientGone) errors.client_gone = clientGone;
   if (incomplete) errors.stream_incomplete = incomplete;
 
   return {
@@ -247,7 +250,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     // The fixture ledger records neither an exhausted pool nor a rejected request.
     exhausted: 0,
     expiredBetweenTurns: sum(counted, (r) => r.expiredBetweenTurns),
-    failed: overloaded + upstreamError,
+    failed: overloaded + upstreamError + clientGone,
     failovers,
     histograms,
     incomplete,

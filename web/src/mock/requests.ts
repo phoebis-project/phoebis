@@ -609,14 +609,15 @@ function buildRequests(): RequestLog[] {
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
     r.costUsd = Math.round(costOf(r.model, r.usage, true) * 10_000) / 10_000;
   }
-  // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
-  // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
-  // the laptop key whose captures the drawer checks read, and none of the rows above. The hour bound keeps the pick
-  // out of the routing log's hand-written hour, whose records name no canceled stream, should that hour ever hold a
-  // drawn row.
+  // A stream the client closed: its 200 head went out and no upstream error followed, so the request ends canceled
+  // with the usage it had reached, under the code the relay files a client's leaving with. One drawn row takes it, so
+  // no count another view draws moves: a single-attempt stream off the laptop key whose captures the drawer checks
+  // read, and none of the rows above. The hour bound keeps the pick out of the routing log's hand-written hour, whose
+  // records name no canceled stream, should that hour ever hold a drawn row.
   const canceled = rows.find((r) => r.keyId !== 'laptop' && r.keyId !== 'notebook' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
   if (canceled) {
     canceled.outcome = 'canceled';
+    canceled.errorCode = 'client_gone';
     canceled.attempts = canceled.attempts.map((a) => ({ ...a, outcome: 'canceled' as const }));
   }
   rows.push(...storyRequests());
@@ -1639,8 +1640,9 @@ function rollups(): HourlyRollup[] {
           rate_limited: rows.filter((r) => r.status === 429).length,
           // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
           overloaded: rows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
-          // The ledger files a stream the client closed as failed, so it counts here beside the upstream's errors.
-          upstream_error: rows.filter((r) => (r.status !== 200 && r.status !== 429 && r.status !== 529) || r.outcome === 'canceled').length,
+          upstream_error: rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
+          // The ledger files a stream the client closed as failed, under the code the relay gave it.
+          client_gone: rows.filter((r) => r.errorCode === 'client_gone').length,
         },
         // Every attempt but the last one moved the request to another member.
         failovers: rows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
@@ -1789,7 +1791,7 @@ function historicalRollups(): HourlyRollup[] {
         sessionId,
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
-        requests: { incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
+        requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
@@ -1838,7 +1840,7 @@ function historicalRollups(): HourlyRollup[] {
           sessionId,
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
-          requests: { incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
+          requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
@@ -1871,7 +1873,7 @@ const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
-const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error;
+const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
 
