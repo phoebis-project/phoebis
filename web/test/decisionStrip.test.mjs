@@ -569,7 +569,10 @@ const readRows = (plan) => rowsOf(plan).map((r) => [r.label, r.chips.map(chipTex
 const planOf = (record, anchor) => d.anchorPlan(anchor, modelOf(record), record, undefined, NOW);
 const stationPlan = (record, id) => planOf(record, { id, kind: 'station' });
 
-/** Every popover the strip opens over `record`: each station, each leaf and each drawn terminus, with what it stands for. */
+/**
+ * Every popover the strip opens over `record`: each station, each leaf and each drawn terminus, with what it stands
+ * for.
+ */
 function popoversOf(record) {
   const m = modelOf(record);
   const firedAt = record.walk.findIndex((s) => s.step.startsWith('move:') && s.verdict === 'fired');

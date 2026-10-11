@@ -182,7 +182,8 @@ const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globa
  * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency,
  * the relative labels) happens here, in fixed steps. A step jumps to its end and fires
  * what fell due on the way there, so a timer the page starts in reply counts from the step's end however late
- * the reply lands; every run takes the same steps and draws every view at the same instants.
+ * the reply lands. Every run takes the same steps, and each view sets the clock back to the origin before it loads,
+ * so a view draws at the same instants whatever the measures before it advanced.
  */
 async function advance(ms) {
   for (let spent = 0; spent < ms; spent += CLOCK_STEP_MS) {
@@ -702,12 +703,22 @@ async function poolTooltipColumns(theme) {
       const key = box('chart-tip__key');
       const value = box('chart-tip__value');
       const label = box('chart-tip__label');
+      // The value's text ends where its text nodes' rects end, which the cell's box can run past.
+      const valueText = (() => {
+        const el = row.querySelector('.chart-tip__value');
+        if (!el) return null;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const rights = [...range.getClientRects()].map((r) => r.right);
+        return rights.length ? edge(Math.max(...rights)) : null;
+      })();
       return {
         cells: [...row.children].map((c) => c.className),
         key: key ? [edge(key.left), edge(key.width)] : null,
         label: label ? edge(label.left) : null,
         text: `${row.querySelector('.chart-tip__value')?.textContent ?? ''} ${row.querySelector('.chart-tip__label')?.textContent ?? ''}`.trim(),
         value: value ? [edge(value.left), edge(value.right)] : null,
+        valueTextEnd: valueText,
       };
     });
   });
@@ -722,7 +733,8 @@ async function poolTooltipColumns(theme) {
   if (!read.every((row) => JSON.stringify(row.cells) === order)) say(`the rows' cells read ${JSON.stringify(read.map((row) => row.cells))}, not key, value and label on every row`);
   if (new Set(read.map((row) => row.key?.[0] ?? null)).size !== 1 || read.some((row) => row.key?.[1] !== 12)) say(`the key cells read ${JSON.stringify(read.map((row) => row.key))}, not one 12 px column`);
   if (new Set(read.map((row) => row.value?.[0] ?? null)).size !== 1) say(`the value cells start at ${read.map((row) => row.value?.[0] ?? null).join(', ')} px, not on one left edge`);
-  if (read.some((row) => row.value === null || row.label === null || row.label < row.value[1])) say(`a label starts inside its row's value: ${JSON.stringify(read.map((row) => [row.value, row.label]))}`);
+  // A row whose value draws no text has no extent to compare, so it leaves the clause.
+  if (read.some((row) => row.label === null || (row.valueTextEnd !== null && row.label < row.valueTextEnd))) say(`a label starts inside its row's value text: ${JSON.stringify(read.map((row) => [row.valueTextEnd, row.label]))}`);
 }
 
 /** A rail entry of the open dialog by its exact label; a hint link can hold a rail label inside its own words. */
@@ -752,7 +764,7 @@ async function closeByEscape(dialog, label, say) {
   const asked = (await question.count()) === 1;
   if (asked) await question.getByRole('button', { name: 'Discard', exact: true }).click();
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed unchanged on Escape'}`);
+  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed without the question on Escape'}`);
 }
 
 /**
@@ -1492,8 +1504,8 @@ async function poolDialogWalk(theme, mode) {
 /**
  * The cost reference opened from the pool dialog's Cache TTL group keeps its own fixed height, so its footer stays
  * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame under it. Load
- * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the
- * clock, which every view's shot reads, so this runs after the views.
+ * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table draws once
+ * the clock has moved past the reads it waits on.
  */
 async function poolCostReference(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog Cache TTL: ${what}`);
@@ -2131,11 +2143,18 @@ async function quotaMeters(theme) {
         return tenth(parts.reduce((sum, w) => sum + w, 0) + parseFloat(s.columnGap) * Math.max(0, parts.length - 1) + edges);
       };
       // A reset label stretches to its column too, so its own width is its text's, the widths of its lines summed: an
-      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it.
+      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it. The text
+      // nodes are read one by one, since a range over the whole label also returns a child element's own box, which
+      // would count that child's text a second time.
       const textWidth = (label) => {
+        const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
         const range = document.createRange();
-        range.selectNodeContents(label);
-        return tenth([...range.getClientRects()].reduce((sum, r) => sum + r.width, 0));
+        let sum = 0;
+        for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+          range.selectNodeContents(node);
+          sum += [...range.getClientRects()].reduce((n, r) => n + r.width, 0);
+        }
+        return tenth(sum);
       };
       const content = (el) => (kind(el) === 'chip' ? chipWidth(el) : kind(el) === 'reset' ? textWidth(el) : null);
       const grid = document.querySelector('.quota-grid');
@@ -3051,11 +3070,13 @@ async function fastLane(theme, path) {
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
  * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
  * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
- * line after them (a request billed in dollars draws no chip there, which is recorded). The Phases legend lists the
- * seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request that ended with
- * no answer holds none and draws none). A request that ended with no answer draws no chip, so then the chips are
- * read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or region, so
- * there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list alone.
+ * line after them (a request billed in dollars draws no chip there, which is recorded). The mock pass reads them again
+ * on the story's plan-funded Fable answer, whose three chips read a 5-hour, a 7-day and a 7-day Fable share in that
+ * order. The Phases legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds
+ * tokens (a request that ended with no answer holds none and draws none). A request that ended with no answer draws no
+ * chip, so then the chips are read on the newest request that answered 200. The router's seeded answers name no stop
+ * reason, speed or region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot
+ * stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -3177,6 +3198,35 @@ async function requestDrawerCompact(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+  // The story's plan-funded Fable answer spends a share of all three windows, so its cost row draws the three-chip
+  // layout, in the order the pages draw the windows. A row past the first page is opened at its Details address.
+  if (mock) {
+    const fable = 'req_a6c19e73-5d2';
+    const row = page.locator('.requests__table tbody tr', { has: page.locator(`.sub.mono[title="${fable}"]`) });
+    const listed = (await row.count()) === 1;
+    measurements.push(`${theme} /requests the plan-funded Fable request ${fable} is ${listed ? 'on' : 'off'} the table's first page`);
+    if (listed) await row.getByRole('link', { name: 'Details', exact: true }).click();
+    else {
+      await page.goto(`${base}/requests/${fable}`);
+      await booted();
+    }
+    await advance(LOAD_MS);
+    for (const { height, width } of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      const where = `the Fable request's drawer at ${width} by ${height}`;
+      await page.setViewportSize({ height, width });
+      await settle();
+      const got = await read();
+      measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
+      costRow(where, got);
+      const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
+      if (JSON.stringify(windows) !== JSON.stringify(['5-hour', '7-day', '7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 5-hour, a 7-day and a 7-day Fable share in that order`);
+    }
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
   if (chips > 0) return;
   const answered = page.locator('.requests__table tbody tr', { has: page.locator('.requests__status .badge', { hasText: /^200$/ }) }).first();
   if ((await answered.count()) === 0) {
@@ -3197,8 +3247,7 @@ async function requestDrawerCompact(theme) {
 /**
  * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
  * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
- * a detail follows. Following the link moves the page clock, so the mock pass runs it on a load of its own once every
- * view's shot is taken, and it leaves the Analytics page on its Traffic tab.
+ * a detail follows. The mock pass runs it on a load of its own, and it leaves the Analytics page on its Traffic tab.
  */
 async function reasonLink(theme) {
   const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
@@ -3336,6 +3385,8 @@ async function wideBodyDialog(theme) {
     say('the body block has no Open wide link');
     return;
   }
+  // The very link clicked, which Escape hands the focus back to: another with the same class and words is not it.
+  const clicked = await link.elementHandle();
   await link.click();
   try {
     await page.waitForSelector('dialog[open].dialog--wide', { timeout: 5_000 });
@@ -3384,13 +3435,14 @@ async function wideBodyDialog(theme) {
   await settle();
   await page.keyboard.press('Escape');
   await settle();
-  const after = await page.evaluate(() => {
+  const after = await page.evaluate((el) => {
     const active = document.activeElement;
-    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: active?.classList.contains('body-block__link') && active.textContent?.trim() === 'Open wide' ? 'Open wide' : (active?.tagName ?? 'nothing') };
-  });
+    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: active === el ? 'the link' : `${active?.tagName ?? 'nothing'} ${active?.textContent?.trim().slice(0, 30) ?? ''}` };
+  }, clicked);
+  await clicked.dispose();
   if (after.dialog) say('Escape left the dialog open');
   if (!after.drawer) say('Escape closed the drawer with the dialog');
-  if (after.focus !== 'Open wide') say(`Escape left the focus on ${after.focus}, not on the Open wide link`);
+  if (after.focus !== 'the link') say(`Escape left the focus on ${after.focus}, not on the Open wide link it opened from`);
   if (!mock) return;
   // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
   await page.goto(`${base}/requests?keys=laptop`);
@@ -3866,8 +3918,11 @@ async function escapeReachesFilter(theme, what, station) {
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
   const decisions = page.locator(DECISION_ROWS);
-  // `firstDecisionOpen` has named the missing card already.
-  if ((await page.locator('.routing-log__panel .decision-strip').count()) === 0) return;
+  // Said here too, so a strip that never opened fails this measure by name rather than leaving it unread.
+  if ((await page.locator('.routing-log__panel .decision-strip').count()) === 0) {
+    say('no decision strip is open to measure');
+    return;
+  }
   const read = () =>
     page.evaluate(() => {
       const box = (el) => {
@@ -3900,6 +3955,28 @@ async function decisionCard(theme) {
                 const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
                 return leaf ? Math.round((leaf.top + leaf.bottom) / 2 - surface.getBoundingClientRect().top) : null;
               })(),
+              // The first row by the layout's rule in decisionStrip.ts, read off the drawn boxes: the deepest of 76 px
+              // under the line, half a leaf under the host's label below it, and the gap and half a leaf under any
+              // other label below it that reaches past the leaves' right edge.
+              expectedRow: (() => {
+                // decisionStrip.ts's LEAF_HALF and LABEL_GAP.
+                const LEAF_HALF = 12;
+                const LABEL_GAP = 3;
+                const at = surface.getBoundingClientRect();
+                let row = Number(surface.dataset.y0) + 76;
+                const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
+                // The fan drops from the host station's center, so its drawn line names the host.
+                const fan = surface.querySelector('.strip-path--fan')?.getBoundingClientRect();
+                if (!leaf || !fan) return row;
+                const hostX = (fan.left + fan.right) / 2;
+                for (const el of surface.querySelectorAll('.strip-station:not(.strip-station--above)')) {
+                  const box = el.getBoundingClientRect();
+                  const bottom = box.bottom - at.top;
+                  if (Math.abs((box.left + box.right) / 2 - hostX) <= 1) row = Math.max(row, bottom + LEAF_HALF);
+                  else if (box.left < leaf.right) row = Math.max(row, bottom + LABEL_GAP + LEAF_HALF);
+                }
+                return Math.round(row);
+              })(),
               drawn: surface.querySelectorAll('.strip-station').length,
               height: Math.round(surface.getBoundingClientRect().height),
               leaves: Number(surface.dataset.leaves),
@@ -3928,10 +4005,12 @@ async function decisionCard(theme) {
     if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
     if (got.strip.scroll > got.strip.client) say(`${where}: the strip runs ${got.strip.scroll}px in ${got.strip.client}px`);
     if (got.strip.svg !== Math.max(640, got.strip.client)) say(`${where}: the strip's drawing is ${got.strip.svg}px wide in a ${got.strip.client}px strip, not redrawn for its width`);
-    const { leaves, y0 } = got.surface;
-    const first = got.surface.firstRow ?? y0 + 76;
+    const { expectedRow, leaves, y0 } = got.surface;
+    if (got.surface.firstRow === null && leaves > 0) say(`${where}: the strip counts ${leaves} leaves and draws none to read its first row on`);
+    // A strip with no leaf keeps its first row where the rule puts it, which the height below counts from.
+    const first = got.surface.firstRow ?? expectedRow;
     const rows = Math.max(first + Math.max(leaves, 1) * 30 + 4, y0 + 104);
-    if (first < y0 + 76) say(`${where}: the first leaf row stands at ${first}px, above the ${y0 + 76}px it starts at under a line at ${y0}px`);
+    if (Math.abs(first - expectedRow) > 2) say(`${where}: the first leaf row stands at ${first}px, not within 2px of the ${expectedRow}px its drawn labels put it at under a line at ${y0}px`);
     if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves from a first row at ${first}px take`);
     // The record's steps and its placeholders, which the surface carries, are the stations a reader tabs through.
     if (got.surface.drawn !== got.surface.stations) say(`${where}: the strip draws ${got.surface.drawn} stations, not the ${got.surface.stations} of its record's steps and placeholders`);
@@ -5177,9 +5256,8 @@ async function copyFallback(theme) {
 
 /**
  * The Key created dialog's Copy without a clipboard, inside a modal: a key is created on the Keys view and its
- * secret copied by the command. The creation moves the page clock, so it runs after every shot on a load of its own,
- * and in the mock pass alone: the mock's story is rebuilt at the next load, where the router's registry would keep
- * the key and refuse its second creation.
+ * secret copied by the command. It runs on a load of its own, and in the mock pass alone: the mock's story is rebuilt
+ * at the next load, where the router's registry would keep the key and refuse its second creation.
  */
 async function copyFallbackModal(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -5211,8 +5289,8 @@ async function copyFallbackModal(theme) {
 
 /**
  * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
- * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin and moves only when
- * `advance` moves it.
+ * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin. From there `advance`
+ * moves it forward, and each view of the pass sets it back to the origin before its load.
  */
 async function logIn() {
   await page.clock.install({ time: clockOrigin });
@@ -5237,7 +5315,13 @@ try {
     for (const view of VIEWS) {
       if (view.mockOnly && !mock) continue;
       at = `${theme} ${view.path}`;
-      await page.goto(`${base}${view.path}`);
+      const target = `${base}${view.path}`;
+      // A goto that changes the hash alone would keep the loaded app running under the instant set below, so such a
+      // view goes through a blank page first and its bundle loads anew.
+      if (view.path.includes('#') && page.url().split('#')[0] === target.split('#')[0]) await page.goto('about:blank');
+      // Every view starts from the origin, so no earlier measure's advance moves the instant this one draws at.
+      await page.clock.setSystemTime(clockOrigin);
+      await page.goto(target);
       await booted();
       await advance(LOAD_MS);
       try {
@@ -5354,8 +5438,7 @@ try {
       if (view.path === '/settings') await copyFallback(theme);
     }
   }
-  // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
-  // and the views' shots would then draw other instants than a pass without it.
+  // Only the mock bundle routes the fixture path.
   if (mock) {
     for (const theme of ['light', 'dark']) {
       at = `${theme} /fixtures/grouped-dialog`;
@@ -5368,21 +5451,18 @@ try {
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await poolCostReference(theme);
   }
-  // A step per page moves the page clock as far as the story has pages, so the walk runs after every shot.
   for (const theme of ['light', 'dark']) {
     at = `${theme} /requests default pages`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await requestPageWidths(theme);
   }
-  // The Key created dialog's Copy creates a key and moves the page clock, so it runs after every shot, in the mock
-  // pass alone.
+  // The Key created dialog's Copy creates a key, so it runs in the mock pass alone.
   if (mock) {
     for (const theme of ['light', 'dark']) {
       at = `${theme} /keys copy by command`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await copyFallbackModal(theme);
     }
-    // Following a reasons panel link moves the page clock as well.
     for (const theme of ['light', 'dark']) {
       at = `${theme} /analytics reasons panel link`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);

@@ -111,7 +111,9 @@ const columnClasses = (table) => {
     rows: rows.length,
   };
 };
-/** Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class. */
+/**
+ * Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class.
+ */
 const columnsMarked = (name, table, fill) => {
   const read = columnClasses(table);
   results.push({
@@ -138,6 +140,46 @@ const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', 
 const discardQuestion = (root) => {
   const last = [...root.querySelectorAll('dialog[open]')].pop();
   return last && (last.textContent ?? '').includes('Discard changes?') ? last : null;
+};
+/** The open dialogs of a mount, topmost last, and their titles. */
+const openDialogs = (m) => [...m.container.querySelectorAll('dialog[open]')];
+const dialogTitles = (m) => openDialogs(m).map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+/** A click on the dialog's own element (its backdrop), then a settle. */
+const outsideOf = async (m, dialog) => {
+  clickOutside(dialog);
+  await m.settle(200);
+};
+/** The Escape key on the focused element, which the run's shim hands to the topmost open dialog. */
+const escapeOn = async (m) => {
+  document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+  await m.settle(200);
+};
+/**
+ * A Discard check: the open dialogs counted before `act` and after it, each against its expected count, so a dialog
+ * that never opened fails the check too. `extra` is the check's own reading after the click and `detail` what its
+ * failure prints beside the counts.
+ */
+const discardCounted = async (m, name, act, expected, extra = () => true, detail = () => []) => {
+  const before = openDialogs(m).length;
+  await act();
+  const after = openDialogs(m).length;
+  results.push({
+    name,
+    ok: before === expected.before && after === expected.after && extra(),
+    missing: [`${before} open before, ${after} after, ${expected.before} and ${expected.after} expected: ${dialogTitles(m).join(', ')}`, ...detail()],
+  });
+};
+/**
+ * Polls `pred` every 50 ms of wall time, up to `limit` ms, for a check that waits on what the page draws rather than
+ * on a fixed span. Answers whether it held, so a check whose wait expired fails by its own reading.
+ */
+const until = async (m, pred, limit = 3_000) => {
+  const from = performance.now();
+  while (!pred()) {
+    if (performance.now() - from >= limit) return false;
+    await m.settle(50);
+  }
+  return true;
 };
 
 /**
@@ -683,7 +725,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
   const titleOf = (name) => rows.find((r) => r.account === 'primary' && r.name === name)?.title ?? 'no title';
   results.push({
-    name: '/quota the story holds one window ahead of pace and one behind',
+    name: "/quota primary's 5h window reads ahead of pace and its 7d window behind",
     ok: titleOf('5h').endsWith('ahead of pace') && titleOf('7d').endsWith('behind pace'),
     missing: [titleOf('5h'), titleOf('7d')],
   });
@@ -1412,11 +1454,10 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
 {
   // The Add account dialog: the id derives from the label, and the OAuth kind opens the pairing with no row written.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const open = () => [...m.container.querySelectorAll('dialog[open]')];
   const openAdd = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
     await m.settle(300);
-    return open().pop() ?? null;
+    return openDialogs(m).pop() ?? null;
   };
   /** A dialog's field by its label, and the input inside it. */
   const fieldOf = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label) ?? null;
@@ -1435,7 +1476,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const names = () => [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
 
   let dlg = await openAdd();
-  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(open().length)] });
+  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(openDialogs(m).length)] });
   const oauthHint = inputOf(dlg, 'Label')?.getAttribute('placeholder') ?? null;
   await typeInto(inputOf(dlg, 'Label'), '!!!');
   results.push({
@@ -1458,19 +1499,19 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const cancels = countCalls('cancelPairing');
   primary(dlg)?.click();
   await m.settle(500);
-  const pairingDlg = open().pop() ?? null;
+  const pairingDlg = openDialogs(m).pop() ?? null;
   const pairingTitle = pairingDlg?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
   results.push({
     name: '/accounts Start pairing opens the pairing dialog with no new row in the list',
-    ok: open().length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
-    missing: [`${open().length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+    ok: openDialogs(m).length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
+    missing: [`${openDialogs(m).length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
   });
   buttonIn(pairingDlg, 'Cancel')?.click();
   await m.settle(300);
   results.push({
     name: "/accounts Cancel on a new account's pairing leaves the list unchanged",
-    ok: pairingTitle === 'Pair Fresh desk' && open().length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
-    missing: [pairingTitle || 'no pairing dialog', `${open().length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+    ok: pairingTitle === 'Pair Fresh desk' && openDialogs(m).length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
+    missing: [pairingTitle || 'no pairing dialog', `${openDialogs(m).length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
   });
   reads.restore();
   cancels.restore();
@@ -1499,16 +1540,16 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       enabled: primary(dlg)?.disabled === false,
       id: inputOf(dlg, 'Id')?.value ?? 'no Id input',
       label: inputOf(dlg, 'Label')?.value ?? 'no Label input',
-      open: open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
+      open: openDialogs(m).map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
     };
     primary(dlg)?.click();
     await m.settle(500);
-    const retried = open().pop() ?? null;
+    const retried = openDialogs(m).pop() ?? null;
     const retriedTitle = retried?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
     results.push({
       name: "/accounts a refused pairing start keeps the Add account form open with the typed label and id, the route's sentence in its callout and Start pairing enabled, and a second start reaches the pairing dialog",
-      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && open().length === 1 && retriedTitle === 'Pair Home desk',
-      missing: [JSON.stringify(refused), `${open().length} open`, retriedTitle || 'no title'],
+      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && openDialogs(m).length === 1 && retriedTitle === 'Pair Home desk',
+      missing: [JSON.stringify(refused), `${openDialogs(m).length} open`, retriedTitle || 'no title'],
     });
     buttonIn(retried, 'Cancel')?.click();
     await m.settle(300);
@@ -1551,18 +1592,18 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
   primary(dlg)?.click();
   await m.settle(500);
-  const pair = open().pop() ?? null;
+  const pair = openDialogs(m).pop() ?? null;
   const pairState = new URLSearchParams((pair?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
   await typeInto(pair?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${pairState}`);
   buttonIn(pair, 'Submit')?.click();
-  await m.settle(900);
+  const submitted = await until(m, () => buttonIn(pair, 'Confirm')?.disabled === false);
   buttonIn(pair, 'Confirm')?.click();
-  await m.settle(900);
+  const confirmed = await until(m, () => openDialogs(m).length === 0 && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk'));
   const toast = m.container.querySelector('.toast')?.textContent ?? '';
   results.push({
     name: '/accounts Confirm adds the row and selects it',
-    ok: open().length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
-    missing: [`${open().length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
+    ok: submitted && confirmed && openDialogs(m).length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
+    missing: [`Confirm enabled ${submitted}, the row selected ${confirmed}`, `${openDialogs(m).length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
   });
   // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
   // the page returns to primary for the checks that follow.
@@ -1575,7 +1616,6 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     // holding a URL no row answers, where the detail pane would draw nothing until the next refresh. On a mount of
     // its own, so the failed read's standing reaches none of the checks that follow.
     const lost = await mount('/accounts/primary');
-    const openIn = () => [...lost.container.querySelectorAll('dialog[open]')];
     const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
     const type = async (input, value) => {
       if (!input) return;
@@ -1585,23 +1625,25 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     };
     [...lost.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
     await lost.settle(300);
-    const add = openIn().pop() ?? null;
+    const add = openDialogs(lost).pop() ?? null;
     await type(fieldIn(add, 'Label'), 'Fresh lamp');
     buttonIn(add, 'Start pairing')?.click();
     await lost.settle(500);
-    const lamp = openIn().pop() ?? null;
+    const lamp = openDialogs(lost).pop() ?? null;
     const lampState = new URLSearchParams((lamp?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
     await type(lamp?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${lampState}`);
     buttonIn(lamp, 'Submit')?.click();
-    await lost.settle(900);
+    const submitted = await until(lost, () => buttonIn(lamp, 'Confirm')?.disabled === false);
     failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable', { quiet: true });
     buttonIn(lamp, 'Confirm')?.click();
-    await lost.settle(900);
+    // The address reads primary before the confirm too, so the wait holds for the closed dialog with it: the confirm
+    // moves the address to the new row's before the dialog closes, and the failed reload lands back here.
+    const landed = await until(lost, () => openDialogs(lost).length === 0 && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null);
     const listed = [...lost.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
     results.push({
       name: '/accounts a confirm whose reload fails lands on the first account with its detail drawn',
-      ok: openIn().length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
-      missing: [`${openIn().length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
+      ok: submitted && landed && openDialogs(lost).length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
+      missing: [`Confirm enabled ${submitted}, landed ${landed}`, `${openDialogs(lost).length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
     });
     lost.unmount();
     await api.deleteAccount('fresh-lamp').catch((e) => {
@@ -1611,33 +1653,43 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
 
   // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
   dlg = await openAdd();
-  clickOutside(dlg);
-  await m.settle(200);
-  results.push({ name: '/accounts Add account closes on an outside click while unchanged', ok: dlg !== null && open().length === 0, missing: [dlg ? 'opened' : 'no dialog', `${open().length} open`] });
+  await discardCounted(m, '/accounts Add account closes on an outside click while unchanged', () => outsideOf(m, dlg), { before: 1, after: 0 });
   dlg = await openAdd();
   await typeInto(inputOf(dlg, 'Label'), 'Draft');
-  clickOutside(dlg);
-  await m.settle(200);
+  await discardCounted(m, '/accounts Add account asks after a typed label', () => outsideOf(m, dlg), { before: 1, after: 2 }, () => discardQuestion(m.container) !== null && dlg?.hasAttribute('open') === true, () => [discardQuestion(m.container) ? 'asked' : 'no question']);
   const asked = discardQuestion(m.container);
-  results.push({ name: '/accounts Add account asks after a typed label', ok: open().length === 2 && asked !== null && dlg?.hasAttribute('open') === true, missing: [`${open().length} open`, asked ? 'asked' : 'no question'] });
-  buttonIn(asked, 'Keep editing')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Add account Keep editing keeps the label', ok: open().length === 1 && inputOf(dlg, 'Label')?.value === 'Draft', missing: [`${open().length} open`, inputOf(dlg, 'Label')?.value ?? 'no Label input'] });
-  clickOutside(dlg);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts Add account Keep editing keeps the label',
+    async () => {
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 1 },
+    () => inputOf(dlg, 'Label')?.value === 'Draft',
+    () => [inputOf(dlg, 'Label')?.value ?? 'no Label input'],
+  );
+  await outsideOf(m, dlg);
   const askedAgain = discardQuestion(m.container);
-  buttonIn(askedAgain, 'Discard')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Add account Discard closes it', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`] });
+  await discardCounted(
+    m,
+    '/accounts Add account Discard closes it',
+    async () => {
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 0 },
+    () => askedAgain !== null,
+    () => [askedAgain ? 'asked' : 'no question'],
+  );
 }
 {
   // The pairing dialog: the link, the paste field and the redirect on one page, the identity on the Confirm page.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const open = () => [...m.container.querySelectorAll('dialog[open]')];
   const openRepair = async () => {
     [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
     await m.settle(500);
-    return open().pop() ?? null;
+    return openDialogs(m).pop() ?? null;
   };
   const type = async (input, value) => {
     if (!input) return;
@@ -1660,7 +1712,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect("/accounts the pairing's Confirm page reads the identity", dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
     buttonIn(dlg, 'Confirm')?.click();
     await m.settle(600);
-    results.push({ name: '/accounts pairing closes after confirm', ok: open().length === 0, missing: [] });
+    results.push({ name: '/accounts pairing closes after confirm', ok: openDialogs(m).length === 0, missing: [] });
   } else {
     results.push({ name: '/accounts pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
   }
@@ -1679,31 +1731,45 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   }
   // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
   const unchanged = await openRepair();
-  clickOutside(unchanged);
-  await m.settle(300);
-  results.push({ name: '/accounts the pairing dialog closes on an outside click before anything is pasted', ok: unchanged !== null && open().length === 0, missing: [unchanged ? 'opened' : 'no pairing dialog', `${open().length} open`] });
+  await discardCounted(m, '/accounts the pairing dialog closes on an outside click before anything is pasted', () => outsideOf(m, unchanged), { before: 1, after: 0 });
   // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
   const cancels = countCalls('cancelPairing');
   const pasted = await openRepair();
   const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
   await type(pastedInput, 'abc123');
-  clickOutside(pasted);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts the pairing dialog asks once the field holds text',
+    () => outsideOf(m, pasted),
+    { before: 1, after: 2 },
+    () => discardQuestion(m.container) !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
+    () => [discardQuestion(m.container) ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  );
   const asked = discardQuestion(m.container);
-  results.push({
-    name: '/accounts the pairing dialog asks once the field holds text',
-    ok: open().length === 2 && asked !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
-    missing: [`${open().length} open`, asked ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
-  });
-  buttonIn(asked, 'Keep editing')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Keep editing keeps the pasted text in the pairing field', ok: open().length === 1 && pastedInput?.value === 'abc123', missing: [`${open().length} open`, pastedInput?.value ?? 'no field'] });
-  clickOutside(pasted);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts Keep editing keeps the pasted text in the pairing field',
+    async () => {
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 1 },
+    () => pastedInput?.value === 'abc123',
+    () => [pastedInput?.value ?? 'no field'],
+  );
+  await outsideOf(m, pasted);
   const askedAgain = discardQuestion(m.container);
-  buttonIn(askedAgain, 'Discard')?.click();
-  await m.settle(300);
-  results.push({ name: '/accounts Discard cancels the pairing and closes the dialog', ok: askedAgain !== null && open().length === 0 && cancels.calls.length === 1, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`, `cancelPairing ${cancels.calls.length}`] });
+  await discardCounted(
+    m,
+    '/accounts Discard cancels the pairing and closes the dialog',
+    async () => {
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(300);
+    },
+    { before: 2, after: 0 },
+    () => askedAgain !== null && cancels.calls.length === 1,
+    () => [askedAgain ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  );
   cancels.restore();
 }
 await m.navigate('/accounts/legacy');
@@ -2375,6 +2441,36 @@ m.unmount();
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
+}
+{
+  // The create path's toast, on a frozen mount so the toast's own timer cannot take it down before the read.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+  await page.settle(300);
+  const dlg = openDialogs(page).pop() ?? null;
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
+  await page.settle(150);
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  for (const [label, value] of [
+    ['Label', 'Toast workspace'],
+    ['API key', 'sk-ant-api03-not-a-key'],
+  ]) {
+    const input = [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    if (input) {
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await page.settle(100);
+  }
+  buttonIn(dlg, 'Add API key')?.click();
+  await page.settle(600);
+  const toast = page.container.querySelector('.toast')?.textContent ?? '';
+  results.push({ name: `/accounts a created API key's toast reads "API key added"`, ok: openDialogs(page).length === 0 && toast.includes('API key added'), missing: [`${openDialogs(page).length} open`, toast || 'no toast'] });
+  page.unmount();
+  // The story as it was, for the account lists and pickers the later checks read.
+  await api.deleteAccount('toast-workspace').catch((e) => {
+    if (e?.status !== 404) throw e;
+  });
 }
 {
   // The mock stamps the link's expiry off its load-time anchor, a moment past CLOCK_ORIGIN, while the page reads the
@@ -3107,6 +3203,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const selection = group(dlg, 'Selection');
     const strategy = selection?.querySelector('select[aria-label="Strategy"]');
     const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
+    expect('/pools the Prioritize subscription accounts hint reads "then API keys"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then API keys']);
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     const choose = async (value) => {
@@ -3595,8 +3692,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
       // closes the Move dialog alone. After another pool is picked it asks, Keep editing keeps the pick, and Discard
       // closes the Move dialog and leaves the pool dialog open.
-      const open = () => [...m.container.querySelectorAll('dialog[open]')];
-      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
       const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
       const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
       const pick = async (dialog, value) => {
@@ -3604,49 +3699,96 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
         await m.settle(120);
       };
-      const outside = async (dialog) => {
-        clickOutside(dialog);
-        await m.settle(200);
-      };
-      const escape = async () => {
-        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
-        await m.settle(200);
-      };
       let move = await openMove();
-      await outside(move);
-      results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
+      await discardCounted(m, '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', () => outsideOf(m, move), { before: 2, after: 1 }, () => dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false);
       move = await openMove();
       const openedOn = destination(move)?.value;
       const second = destination(move)?.options[1]?.value;
       await pick(move, second);
-      await outside(move);
+      await discardCounted(
+        m,
+        '/pools the Move key dialog asks before an outside click discards a changed pick',
+        () => outsideOf(m, move),
+        { before: 2, after: 3 },
+        () => openedOn === 'jobs' && second === 'work' && discardQuestion(m.container) !== null && document.activeElement === buttonIn(discardQuestion(m.container), 'Keep editing'),
+        () => [`opened on ${openedOn}, picked ${second}`],
+      );
       const asked = discardQuestion(m.container);
-      results.push({
-        name: '/pools the Move key dialog asks before an outside click discards a changed pick',
-        ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
-        missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
-      });
-      buttonIn(asked, 'Keep editing')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
-      await outside(move);
+      await discardCounted(
+        m,
+        '/pools Keep editing returns to the Move key dialog with the pick kept',
+        async () => {
+          buttonIn(asked, 'Keep editing')?.click();
+          await m.settle(200);
+        },
+        { before: 3, after: 2 },
+        () => move?.hasAttribute('open') === true && destination(move)?.value === second,
+        () => [destination(move)?.value ?? 'no select'],
+      );
+      await outsideOf(m, move);
       const askedAgain = discardQuestion(m.container);
-      buttonIn(askedAgain, 'Discard')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      await discardCounted(
+        m,
+        '/pools Discard closes the Move key dialog and leaves the pool dialog open',
+        async () => {
+          buttonIn(askedAgain, 'Discard')?.click();
+          await m.settle(200);
+        },
+        { before: 3, after: 1 },
+        () => askedAgain !== null && dlg?.hasAttribute('open') === true,
+        () => [askedAgain ? 'asked' : 'no question'],
+      );
       // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
       move = await openMove();
       await pick(move, second);
-      await escape();
-      const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
-      if (askedByEscape) await escape();
-      results.push({
-        name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
-        ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
-        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
-      });
+      let askedByEscape = false;
+      await discardCounted(
+        m,
+        '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
+        async () => {
+          await escapeOn(m);
+          askedByEscape = openDialogs(m).length === 3 && discardQuestion(m.container) !== null;
+          if (askedByEscape) await escapeOn(m);
+        },
+        { before: 2, after: 2 },
+        () => askedByEscape && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
+        () => [`asked ${askedByEscape}`, destination(move)?.value ?? 'no select'],
+      );
       footButton(move, 'Cancel')?.click();
       await m.settle(200);
+      // A move in flight holds the question as well as the close: with another pool picked the dialog is unsaved, yet
+      // an Escape while the move is out neither asks nor closes it, and the answer closes it. The key is the scratch
+      // one the pool dialog created, since the checks after this block move laptop.
+      move = await openMove('from-pool');
+      await pick(move, second);
+      const held = deferNextCall('updateKey');
+      footButton(move, 'Move key')?.click();
+      await m.settle(100);
+      await discardCounted(
+        m,
+        '/pools Escape on a Move key dialog whose move is in flight neither asks nor closes it, though another pool is picked',
+        () => escapeOn(m),
+        { before: 2, after: 2 },
+        () => held.calls.length === 1 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null,
+        () => [`updateKey held ${held.calls.length}`, discardQuestion(m.container) ? 'asked' : 'no question'],
+      );
+      await discardCounted(
+        m,
+        '/pools the Move key dialog whose move was in flight closes once the move answers',
+        async () => {
+          held.release();
+          await m.settle(600);
+        },
+        { before: 2, after: 1 },
+        () => move?.hasAttribute('open') === false && dlg?.hasAttribute('open') === true,
+      );
+      held.restore();
+      // Back into the pool it left, for the stale move check below, which reads the key there.
+      const scratch = (await api.listKeys()).find((k) => k.id === 'from-pool');
+      if (scratch) {
+        const { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes } = scratch;
+        await api.updateKey(scratch.id, { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId: 'all' });
+      }
     }
   }
 
@@ -3815,15 +3957,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // The pool dialog's outside path: unchanged, a backdrop click closes it at once. After an edit it asks, Keep
       // editing returns to the edit, and Discard closes. Every close reopens Edit pool all, so the checks after this
       // one read the open dialog they expect.
-      const open = () => [...m.container.querySelectorAll('dialog[open]')];
-      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
       const reopen = async () => {
         [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
         await m.settle(300);
-      };
-      const outside = async () => {
-        clickOutside(dlg);
-        await m.settle(200);
       };
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       const name = () => group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
@@ -3832,42 +3968,63 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
         await m.settle(120);
       };
-      const escape = async () => {
-        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
-        await m.settle(200);
-      };
       await reopen();
-      await outside();
-      results.push({ name: '/pools the pool dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+      await discardCounted(m, '/pools the pool dialog closes on an outside click while unchanged', () => outsideOf(m, dlg), { before: 1, after: 0 });
       await reopen();
       await typeName('all2');
-      await outside();
+      await discardCounted(
+        m,
+        '/pools the pool dialog asks before an outside click discards a change',
+        () => outsideOf(m, dlg),
+        { before: 1, after: 2 },
+        () => {
+          const asked = discardQuestion(m.container);
+          const askedText = asked?.textContent ?? '';
+          return asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing');
+        },
+        () => [`focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+      );
       const asked = discardQuestion(m.container);
-      const askedText = asked?.textContent ?? '';
-      results.push({
-        name: '/pools the pool dialog asks before an outside click discards a change',
-        ok: open().length === 2 && asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing'),
-        missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
-      });
-      buttonIn(asked, 'Keep editing')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Keep editing returns to the pool dialog with the typed value', ok: open().length === 1 && dlg?.hasAttribute('open') === true && name()?.value === 'all2', missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
-      await outside();
+      await discardCounted(
+        m,
+        '/pools Keep editing returns to the pool dialog with the typed value',
+        async () => {
+          buttonIn(asked, 'Keep editing')?.click();
+          await m.settle(200);
+        },
+        { before: 2, after: 1 },
+        () => dlg?.hasAttribute('open') === true && name()?.value === 'all2',
+        () => [name()?.value ?? 'no name input'],
+      );
+      await outsideOf(m, dlg);
       const askedAgain = discardQuestion(m.container);
-      buttonIn(askedAgain, 'Discard')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Discard closes the pool dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      await discardCounted(
+        m,
+        '/pools Discard closes the pool dialog',
+        async () => {
+          buttonIn(askedAgain, 'Discard')?.click();
+          await m.settle(200);
+        },
+        { before: 2, after: 0 },
+        () => askedAgain !== null,
+        () => [askedAgain ? 'asked' : 'no question'],
+      );
       // Once for the grouped dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
       await reopen();
       await typeName('all2');
-      await escape();
-      const askedByEscape = open().length === 2 && discardQuestion(m.container) !== null;
-      await escape();
-      results.push({
-        name: '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
-        ok: askedByEscape && open().length === 1 && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
-        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'],
-      });
+      let askedByEscape = false;
+      await discardCounted(
+        m,
+        '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
+        async () => {
+          await escapeOn(m);
+          askedByEscape = openDialogs(m).length === 2 && discardQuestion(m.container) !== null;
+          await escapeOn(m);
+        },
+        { before: 1, after: 1 },
+        () => askedByEscape && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
+        () => [`asked ${askedByEscape}`, name()?.value ?? 'no name input'],
+      );
       [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
       await m.settle(200);
     }
@@ -5944,17 +6101,11 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     // The edit dialog's outside path: unchanged, a backdrop click closes it at once. After a typed change it asks,
     // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
     // the checks after this one read the open dialog they expect.
-    const open = () => [...m.container.querySelectorAll('dialog[open]')];
-    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
     const reopen = async () => {
       m.container.querySelector('.menu__trigger')?.click();
       await m.settle(100);
       [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
       await m.settle(300);
-    };
-    const outside = async () => {
-      clickOutside(editDlg);
-      await m.settle(200);
     };
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const name = () => group(editDlg, 'Key')?.querySelector('input[placeholder="workstation"]');
@@ -5964,25 +6115,42 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
       await m.settle(120);
     };
     const openedAs = name()?.value ?? '';
-    await outside();
-    results.push({ name: '/keys the key dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+    await discardCounted(m, '/keys the key dialog closes on an outside click while unchanged', () => outsideOf(m, editDlg), { before: 1, after: 0 });
     await reopen();
     await typeName(`${openedAs}2`);
-    await outside();
+    await discardCounted(
+      m,
+      '/keys the key dialog asks before an outside click discards a change',
+      () => outsideOf(m, editDlg),
+      { before: 1, after: 2 },
+      () => discardQuestion(m.container) !== null && document.activeElement === buttonIn(discardQuestion(m.container), 'Keep editing'),
+      () => [`focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+    );
     const asked = discardQuestion(m.container);
-    results.push({
-      name: '/keys the key dialog asks before an outside click discards a change',
-      ok: open().length === 2 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
-      missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
-    });
-    buttonIn(asked, 'Keep editing')?.click();
-    await m.settle(200);
-    results.push({ name: '/keys Keep editing returns to the key dialog with the typed value', ok: open().length === 1 && editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`, missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
-    await outside();
+    await discardCounted(
+      m,
+      '/keys Keep editing returns to the key dialog with the typed value',
+      async () => {
+        buttonIn(asked, 'Keep editing')?.click();
+        await m.settle(200);
+      },
+      { before: 2, after: 1 },
+      () => editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`,
+      () => [name()?.value ?? 'no name input'],
+    );
+    await outsideOf(m, editDlg);
     const askedAgain = discardQuestion(m.container);
-    buttonIn(askedAgain, 'Discard')?.click();
-    await m.settle(200);
-    results.push({ name: '/keys Discard closes the key dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+    await discardCounted(
+      m,
+      '/keys Discard closes the key dialog',
+      async () => {
+        buttonIn(askedAgain, 'Discard')?.click();
+        await m.settle(200);
+      },
+      { before: 2, after: 0 },
+      () => askedAgain !== null,
+      () => [askedAgain ? 'asked' : 'no question'],
+    );
     await reopen();
   }
   {
@@ -6360,6 +6528,30 @@ await readsAgain('/keys', 'listKeys');
   results.push({ name: '/keys a refresh answering after the key dialog opened keeps the typed name', ok: held.calls.length === 1 && typed(late) === 'Laptop 2', missing: [String(typed(late)), `listPools ${held.calls.length}`] });
   held.restore();
   late.unmount();
+}
+{
+  // Create key opened before the pools land has no pool to start on, so the first pool fills the Pool select once they
+  // do, and the dialog's opening values take it too: an outside click then closes it without asking.
+  const held = deferNextCall('listPools');
+  const page = await mount('/keys');
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
+  await page.settle(200);
+  const dlg = openDialogs(page).pop() ?? null;
+  const select = () => [...(group(dlg, 'Key')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Pool')?.querySelector('select');
+  const waiting = { invalid: select()?.getAttribute('aria-invalid') ?? null, options: select()?.options.length ?? null };
+  held.release();
+  await page.settle(400);
+  const filled = { first: select()?.options[0]?.value ?? null, invalid: select()?.getAttribute('aria-invalid') ?? null, value: select()?.value ?? null };
+  await discardCounted(
+    page,
+    '/keys Create key opened before the pools land fills the first pool into its Pool select once they do',
+    () => outsideOf(page, dlg),
+    { before: 1, after: 0 },
+    () => held.calls.length > 0 && waiting.options === 0 && waiting.invalid === 'true' && filled.first !== null && filled.value === filled.first && filled.invalid === null,
+    () => [`listPools held ${held.calls.length}`, `waiting ${JSON.stringify(waiting)}`, `filled ${JSON.stringify(filled)}`],
+  );
+  held.restore();
+  page.unmount();
 }
 {
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
@@ -10409,6 +10601,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   };
   await tab(m, 'Burn');
   expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour']);
+  expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers."]);
   await tab(m, 'Traffic');
   {
     expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range']);
@@ -13052,7 +13245,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const at = (id) => lines.findIndex((l) => l.id === id);
     const long = lines.find((l) => l.id === '4f0c2a9e7b61d3c58');
     results.push({
-      name: '/sessions the recipe lines run main, busy, idle, parked, newest last request first inside a group',
+      name: '/sessions the recipe lines run main, busy, idle, parked',
       ok:
         lines[0]?.id === 'main' &&
         JSON.stringify(after.filter((l) => l.word !== 'released').map((l) => l.word)) === JSON.stringify(['busy', 'idle', 'parked']) &&
@@ -13358,6 +13551,10 @@ m.unmount();
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
       missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
+    // A sub-row's first cell carries the hover, the row itself none.
+    const titles = [fast?.children[0]?.getAttribute('title') ?? null, prompt?.children[0]?.getAttribute('title') ?? null];
+    const wantTitles = ['What an answer served in fast mode costs. A subscription account pays it from usage credits, not from its window.', `What an attempt whose prompt is longer than ${long?.over.toLocaleString('en-US')} tokens costs. The prompt is its uncached input, its cache reads and its cache writes together.`];
+    results.push({ name: '/sessions API prices title the fast-mode row and the prompt-length row with what each prices', ok: JSON.stringify(titles) === JSON.stringify(wantTitles), missing: titles.map(String) });
   }
 
   // Tiers and peak band.

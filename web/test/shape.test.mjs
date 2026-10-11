@@ -65,5 +65,7 @@ test('a window-keyed map takes any window, a request row\'s share map a null ent
   const rows = shapeOf({ requests: [{ costShares: { five_hour: 1 } }] });
   assert.deepEqual(same(rows, { requests: [{ costShares: { five_hour: 1, seven_day: null } }] }), []);
   assert.deepEqual(same(shapeOf({ request: { costShares: { five_hour: 1 } } }), { request: { costShares: { seven_day: null } } }), []);
+  // The dashboard's recent rows are request rows too.
+  assert.deepEqual(same(shapeOf({ recent: [{ costShares: { five_hour: 1 } }] }), { recent: [{ costShares: { five_hour: 1, seven_day: null } }] }), []);
   assert.deepEqual(same(want, { ...got, costShares: { five_hour: 1, seven_day: null } }), ['.costShares.seven_day: object against number']);
 });

@@ -112,6 +112,19 @@ test('Keep editing hands the focus back to the last control the dialog held when
   focusedIs(save, 'the last control the dialog held has the focus again');
 });
 
+test('a focusin on the dialog element itself is ignored, so Keep editing returns to the last control before it', () => {
+  // The dialog element is no control to hand the focus back to: recorded, it would send Keep editing to the X.
+  const { closes, element, save } = dialog(true);
+  act(() => save.focus());
+  act(() => save.blur());
+  act(() => element.dispatchEvent(new window.Event('focusin', { bubbles: true })));
+  clickOn(element);
+  assert.ok(question(), 'the dialog asks');
+  act(() => buttonIn(question(), 'Keep editing').click());
+  assert.equal(closes.count, 0);
+  focusedIs(save, 'the control the dialog held before its own focusin has the focus again');
+});
+
 test('Keep editing focuses the first control of the dialog when none held the focus', () => {
   const { close, element } = dialog(true);
   focusedIs(document.body, 'nothing holds the focus before the click');

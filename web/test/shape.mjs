@@ -27,10 +27,14 @@ const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map
- * (`.requests[n].costShares`, a request detail's `.request.costShares`) carries null for an applicable window the cost
- * model could not price, while a group's map drops such a window, so a null there is a finding.
+ * (`.requests[n].costShares`, a request detail's `.request.costShares`, the dashboard's recent rows'
+ * `.recent[n].costShares`) carries null for an applicable window the cost model could not price, while a group's map
+ * drops such a window, so a null there is a finding.
  */
-const MAP_ENTRY_KINDS = [[/(^\.request|\.requests\[\d+\])\.costShares$/, ['null', 'number']]];
+const MAP_ENTRY_KINDS = [
+  [/(^\.request|\.requests\[\d+\])\.costShares$/, ['null', 'number']],
+  [/^\.recent\[\d+\]\.costShares$/, ['null', 'number']],
+];
 
 const kindOf = (v) => (v === null || v === undefined ? 'null' : Array.isArray(v) ? 'list' : typeof v);
 

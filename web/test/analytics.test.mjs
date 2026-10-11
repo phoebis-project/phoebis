@@ -423,11 +423,22 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
 });
 
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
-  const api = new d.MockApi();
+  // The mock draws its story from the clock it loads at, so the case loads a copy of the bundle at one fixed instant
+  // and reads the same rows on every run.
+  const at = Date.UTC(2026, 8, 16, 14, 30);
+  const wall = Date.now;
+  Date.now = () => at;
+  let pinned;
+  try {
+    pinned = await import(`./dist/api.js?fast-cells=${at}`);
+  } finally {
+    Date.now = wall;
+  }
+  const api = new pinned.MockApi();
   const cells = new Map((await api.getSettings()).apiPrices.models.map((p) => [p.model, p.fast]));
   const priced = (fast, u) => (u.input * fast.inputPerM + u.cacheRead * fast.cacheReadPerM + u.cacheWrite5m * fast.cacheWrite5mPerM + u.cacheWrite1h * fast.cacheWrite1hPerM + u.output * fast.outputPerM) / 1_000_000;
   // A synthesized hour prices its tokens whole; one folded from the log sums its requests, each rounded to 1e-4.
-  const hours = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
+  const hours = pinned.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
   assert.ok(hours.length > 0);
   for (const r of hours) {
     const want = priced(cells.get(r.model), { ...r.tokens, input: r.tokens.uncachedInput });
@@ -435,7 +446,12 @@ test("the mock prices a fast hour and a fast answer at the model's fast cells", 
   }
   const { requests } = await api.listRequests({ speeds: ['fast'] });
   assert.ok(requests.length > 0);
-  for (const r of requests) assert.equal(r.costUsd, Math.round(priced(cells.get(r.model), r.usage) * 10_000) / 10_000, r.id);
+  // A price rounded to 1e-4 in two orders of operation can land one unit in the last place apart. The compare counts
+  // whole units, since a float difference of one unit can read a hair over 1e-4.
+  for (const r of requests) {
+    const want = Math.round(priced(cells.get(r.model), r.usage) * 10_000);
+    assert.ok(Math.abs(Math.round(r.costUsd * 10_000) - want) <= 1, `${r.id}: ${r.costUsd} against ${want / 10_000}`);
+  }
 });
 
 test('the session fold files a request under the speed its serving attempt reported, else fast when it asked for fast, standard otherwise', () => {

@@ -479,8 +479,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // busy one's.
     const words = rows.filter((r) => r.agentState !== 'released').map((r) => (r.agentId === 'main' ? 'main' : r.agentState));
     assert.deepEqual(words, ['main', 'busy', 'parked', 'idle']);
-    const at = (word) => Date.parse(rows.find((r) => r.agentId !== 'main' && r.agentState === word).lastRequestAt);
-    assert.ok(at('idle') > at('busy'), 'the idle row is the newer request');
+    const lastRequestOf = (word) => Date.parse(rows.find((r) => r.agentId !== 'main' && r.agentState === word).lastRequestAt);
+    assert.ok(lastRequestOf('idle') > lastRequestOf('busy'), 'the idle row is the newer request');
     const overview = await s.api.getKeepaliveOverview();
     const count = (word) => recipes.filter((r) => r.agentState === word).length;
     assert.deepEqual([overview.agents.busy, overview.agents.idle, overview.agents.parked], [count('busy'), count('idle'), count('parked')], 'the tiles count the recipe rows by lifecycle word, released ones left out');
