@@ -546,10 +546,11 @@ A `funding_required` account is tried again on its own clock, since an API-key b
 read. The retry is due five minutes after the mark lands, or after `routing.model_rejection_seconds` when that is
 shorter, and the account then takes one request at a time: the attempt the selection placed on it holds the slot until
 that attempt ends, however long its head takes. A 2xx answer to a message request clears the mark, and its
-`account_state_changed` row reads the cause `funding_retry`. Another credit-balance refusal marks the account again with
-a new retry instant, and a success from an attempt sent before that mark leaves it standing. A token count may reach the
-account under the same rule, but it holds no slot and clears nothing. The router keeps the retry instant in memory, so
-after a restart the first request tries a marked account at once. Clear funding makes the account eligible at once.
+`account_state_changed` row reads the cause `funding_retry`. A held stream that committed on an error event clears no
+mark, whatever its head's status. Another credit-balance refusal marks the account again with a new retry instant, and a
+success from an attempt sent before that mark leaves it standing. A token count may reach the account under the same
+rule, but it holds no slot and clears nothing. The router keeps the retry instant in memory, so after a restart the
+first request tries a marked account at once. Clear funding makes the account eligible at once.
 
 **fast mode** (either kind, read ahead of the two tables above)
 

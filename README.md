@@ -31,9 +31,10 @@ export PHOEBIS_ADMIN_SECRET=<the printed secret>
 target/release/phoebis
 ```
 
-`init` writes the bootstrap file and the storage key, and prints the admin secret once. The key is created once and
-never replaced: every stored credential is sealed under it and there is no re-key. `PHOEBIS_CONFIG` names the file for
-every `phoebis` call in that shell, so nothing host-specific lands in the checkout. `init` wrote the proxy on
+`init` writes the bootstrap file and the storage key, and prints the admin secret once. Every stored credential is
+sealed under the key, and a lost key is replaced through `phoebis recover-key`, which discards what the old key sealed
+on a stopped registry ([how](docs/site/operations.md#the-storage-key)). `PHOEBIS_CONFIG` names the file for every
+`phoebis` call in that shell, so nothing host-specific lands in the checkout. `init` wrote the proxy on
 `127.0.0.1:8317`, the admin listener with the console on `127.0.0.1:8081`, and metrics on `127.0.0.1:9464`, with both
 databases under `~/.config/phoebis/data/`. The build embeds the console and needs Node 20.19 or a later 20, or 22.12 or
 later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file, the key file and the

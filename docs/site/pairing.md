@@ -10,8 +10,8 @@ afterwards.
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
 account, shown as "API key" in the console, holds an Anthropic API key toward `api.anthropic.com`.
 Creating an `api_key` account verifies the key against its host at once: a rejected key answers
-`400 credential rejected by the upstream`, and a models endpoint that fails, is unreachable or answers a malformed body
-answers `502 the key check failed: ...` with the reason after the colon. Neither creates the account.
+`400 credential rejected by the upstream`, and when the models endpoint fails, is unreachable or answers a malformed
+body, the router answers `502 the key check failed: ...` with the reason after the colon. Neither creates the account.
 
 ## Through the console
 

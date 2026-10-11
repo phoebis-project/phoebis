@@ -32,7 +32,9 @@ mod's reports go here. Plain HTTP is accepted on any address, by the router and 
 Holds the router key's secret, the one shown once at creation or rotation. Put it here rather than in
 `ANTHROPIC_API_KEY`: the client gates three behaviors on a subscriber check that a credential in `ANTHROPIC_API_KEY`
 never passes, the one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429,
-and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
+and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up. The three behaviors
+hold under `CLAUDE_CODE_OAUTH_TOKEN` with or without `CLAUDE_CODE_SUBSCRIPTION_TYPE`, measured on Claude Code 2.1.296
+against a stub gateway with a null type and with `max` alike.
 
 ### CLAUDE_CODE_SUBSCRIPTION_TYPE
 
@@ -40,13 +42,18 @@ Optional, and needed for the keepalive mod's reports under `_CLAUDE_CODE_ASSUME_
 beside the token. The client builds the credential it uses from `CLAUDE_CODE_OAUTH_TOKEN` with the subscription type
 this variable names, null when it is unset, and reads the type for its policy eligibility check, which fetches the
 organization's policy limits from `api.anthropic.com` for a null, `team` or `enterprise` type and skips the fetch for
-`pro` or `max`, a consumer subscription no organization policy governs. Its two subscriber checks and its upgrade hint
-read the type too. Under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` the policy fetch goes to `api.anthropic.com` with
-the router key, answers 401, and the client then refuses every fetch a plugin makes, so the keepalive mod reports
-nothing and the Sessions view reads `none` under Companion. Without that variable the client skips the fetch for a base
-URL that is not its own. With `max` the check is skipped and the mod's reports leave the process. The client documents
-the variable nowhere, sets it itself from its own auth state when the token is its own, and a later client build may
-drop it.
+`pro` or `max`, a consumer subscription no organization policy governs. Under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
+the policy fetch goes to `api.anthropic.com` with the router key, answers 401, and the client then refuses every fetch a
+plugin makes, so the keepalive mod reports nothing and the Sessions view reads `none` under Companion. Without that
+variable the client skips the fetch for a base URL that is not its own. With `max` the check is skipped and the mod's
+reports leave the process. Measured on Claude Code 2.1.296 under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`, a null type
+has the client fetch the policy limits and the remote managed settings from `api.anthropic.com` before its first
+request, each retried five times, so a host it cannot reach holds that request back 17 to 18 seconds and the TUI warns
+"Remote managed settings failed to load". Under `max` it fetches neither. The type also changes the welcome header's
+plan label, `Claude API` against `Claude Max`, and the tools and skills the client announces: `DesignSync`,
+`RemoteTrigger` and `WebFetch` among the deferred tools, the `schedule` skill and, in the TUI only, the
+`artifact-capabilities` skill appear under `max` and not under a null type. The client documents the variable nowhere,
+sets it itself from its own auth state when the token is its own, and a later client build may drop it.
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 

@@ -467,8 +467,9 @@ labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `
 time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
 column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
 
-After a held request's bound runs out, the log reads the held row with its `in flight` count, then the exhausted row
-with `held`, `retry none` and `answer`, the wait and the status the client got: `answer 429` for a pool at its cap.
+After a held request's bound runs out, the log reads one held row per member at its cap, each with its `in flight`
+count, then the exhausted row with `held`, `retry none` and `answer`, the wait and the status the client got: `answer
+429` for a pool at its cap.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
@@ -492,32 +493,32 @@ older page turns it off.
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.
 
-Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it,
-and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
-probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
-the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
-secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
-the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
-router decided" draws the walk as a strip, a line of stations in the engine's order (the pin, every member's
-eligibility, the five partitions, the three rungs, the pick and a hold or an exhaustion, or on a pinned request the five
-move rules and the renewal, a probe or a bound where the record puts it) with its verdict on each, brackets over the
-partitions, the rungs and the moves, the path the decision took in the accent and every branch it did not take as a
-short stub ("match" on a rung, "fires" on a rule, "released" on the renewal). A branch it took runs on a track above the
-line, and a move's continuation (the cool reading, the cap filter, the partitions, the rungs and the pick) rides that
-track to the Chosen terminus. The candidates fan out under the pick in the walk's order with the chosen one tinted and
-"and N more" past eight. The three ways out stand at the line's end as termini (Chosen, Held for a slot, Refused) with
-the one the decision reached filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way
-out its outcome names. A step the record does not carry is drawn dashed before the decisive station and reads "not run"
-after it. A refusal's walk is two stations, the admission refused and the rest of the walk not run, with the reason on
-the verdict line and in the outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a
-popover: a table of the members for the eligibility, the cool reading, the cap filter and the pick (whose scores read as
-the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round,
-destinations), a rung's entry (the boundary's hash as its first eight characters with the whole hash on hover, its
-depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's place, account, slot and
-bound, a candidate's plan, tier, requests in flight, Pace and windows, the outcome's rows on the terminus the decision
-reached, and, for a rule that a fired rule cut short, the names of the rules that did not run. Every list row is a label
-with its chips, and a step that did not run says so. Tab walks the stations, the candidates and the termini in the
-record's order, Enter or Space opens the focused one's popover and moves into it, and Escape closes it and returns.
+Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it, and
+another page or another filter starts with every row shut. A decision row loads its record and draws its card, a probe
+decision's included. A card opened on a request that is still running reads its record again when Follow brings the
+answer. The verdict line names the decision with its accounts and its pool as links ("Moved secondary to primary",
+"Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or the rung, the pin's warmth
+and the cache verdict once the attempt reports usage (`cache pending` before). "How the router decided" draws the walk
+as a strip, a line of stations in the engine's order (the pin, every member's eligibility, the five partitions, the
+three rungs, the pick and a hold or an exhaustion, or on a pinned request the five move rules and the renewal, a probe
+or a bound where the record puts it) with its verdict on each, brackets over the partitions, the rungs and the moves,
+the path the decision took in the accent and every branch it did not take as a short stub ("match" on a rung, "fires" on
+a rule, "released" on the renewal). A branch it took runs on a track above the line, and a move's continuation (the cool
+reading, the cap filter, the partitions, the rungs and the pick) rides that track to the Chosen terminus. The candidates
+fan out under the pick in the walk's order with the chosen one tinted and "and N more" past eight. The three ways out
+stand at the line's end as termini (Chosen, Held for a slot, Refused) with the one the decision reached filled in its
+tone, and a pinned request's strip draws Chosen alone, or beside it the way out its outcome names. A step the record
+does not carry is drawn dashed before the decisive station and reads "not run" after it. A refusal's walk is two
+stations, the admission refused and the rest of the walk not run, with the reason on the verdict line and in the
+outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover: a table of the members
+for the eligibility, the cool reading, the cap filter and the pick (whose scores read as the candidate table's Pace
+column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round, destinations), a rung's
+entry (the boundary's hash as its first eight characters with the whole hash on hover, its depth, prefix, write, TTL
+with the warm-until time and the gate that refused it), a hold's place, account, slot and bound, a candidate's plan,
+tier, requests in flight, Pace and windows, the outcome's rows on the terminus the decision reached, and, for a rule
+that a fired rule cut short, the names of the rules that did not run. Every list row is a label with its chips, and a
+step that did not run says so. Tab walks the stations, the candidates and the termini in the record's order, Enter or
+Space opens the focused one's popover and moves into it, and Escape closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
@@ -559,7 +560,6 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 | pin released | An operator released a session's pin by hand. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
-| re-auth required | An account's refresh was refused, and routing to it stays off until it is paired again. |
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |

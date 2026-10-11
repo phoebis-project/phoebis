@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Read-only checks over the documentation site.
 
-`links` walks the built site for an internal link or image that resolves to nothing; `routes` compares the admin
-route table with the entries of the API reference page, so a route added or removed in the router fails the build
-until the page follows. `client` does the same for the proxy listener against the table on the client page.
+`links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
+names no heading or anchor on the page it lands on. `routes` compares the admin route table with the entries of the
+API reference page, so a route added or removed in the router fails the build until the page follows. `client` does
+the same for the proxy listener against the table on the client page.
 """
+import functools
 import html.parser
 import pathlib
 import re
@@ -26,8 +28,11 @@ CLIENT_MD = ROOT / "docs/site/client.md"
 # The path zensical.toml's site_url publishes the site under; a root-relative link carries it.
 PREFIX = "phoebis"
 
-# Another host's links are not this script's business, and a bare fragment stays on the page it is in.
-SKIPPED = ("http:", "https:", "mailto:", "javascript:", "data:", "tel:", "#")
+# Another host's links are not this script's business.
+SKIPPED = ("http:", "https:", "mailto:", "javascript:", "data:", "tel:")
+# The theme's skip link points at a page's first heading, and 404.html, built from no Markdown, has none, so the
+# theme writes `#__skip` there with nothing carrying that id.
+SKIP_LINK = "#__skip"
 
 METHODS = ("any", "delete", "get", "head", "options", "patch", "post", "put", "trace")
 METHOD_CALL = re.compile(r"\b(" + "|".join(METHODS) + r")\(")
@@ -50,20 +55,39 @@ RAW_PATH = re.compile(r'^r(#*)"(.*)"\1$', re.S)
 
 
 class Links(html.parser.HTMLParser):
+    """The hrefs and srcs a page carries, and the ids the site build gave its headings and anchors."""
+
     def __init__(self):
         super().__init__()
         self.found = []
+        # A `src` fragment is the theme's light and dark switch on an image, not a place on a page, so only an
+        # `href` has its fragment checked.
+        self.hrefs = []
+        self.ids = set()
 
     def handle_starttag(self, tag, attrs):
         for name, value in attrs:
             if name in ("href", "src") and value:
                 self.found.append(value)
+            if name == "href" and value:
+                self.hrefs.append(value)
+            if name == "id" and value:
+                self.ids.add(value)
 
 
-def resolves(site, page, raw):
+@functools.cache
+def ids_of(page):
+    parser = Links()
+    parser.feed(page.read_text(encoding="utf-8"))
+    return parser.ids
+
+
+def target_of(site, page, raw):
+    """The file a link lands on, a directory read as its `index.html` and a link without a path as `page`
+    itself, or None when the link resolves to nothing."""
     path = urllib.parse.unquote(urllib.parse.urlsplit(raw).path)
     if not path:
-        return True
+        return page
     site = site.resolve()
     if path.startswith("/"):
         # A root-relative link must carry the prefix site_url publishes this site under; a browser resolves
@@ -71,7 +95,7 @@ def resolves(site, page, raw):
         # of whether some other path happens to exist under site/.
         parts = path.lstrip("/").split("/", 1)
         if parts[0] != PREFIX:
-            return False
+            return None
         remainder = parts[1] if len(parts) == 2 else ""
         candidates = [site / remainder] if remainder else [site]
     else:
@@ -81,13 +105,32 @@ def resolves(site, page, raw):
         if not target.is_relative_to(site):
             continue
         if target.is_file():
-            return True
+            return target
         if target.is_dir() and (target / "index.html").is_file():
-            return True
-    return False
+            return target / "index.html"
+    return None
+
+
+def resolves(site, page, raw):
+    return target_of(site, page, raw) is not None
+
+
+def fragment_resolves(site, page, raw):
+    """A link's fragment is among the ids of the page it points at: the page itself for a bare `#x`, the resolved
+    target for `page/#x`. A link without a fragment resolves."""
+    fragment = urllib.parse.unquote(urllib.parse.urlsplit(raw).fragment)
+    if not fragment or raw == SKIP_LINK:
+        return True
+    target = target_of(site, page, raw)
+    # A link that lands nowhere is the path check's finding, and an image or a file other than a page has no ids.
+    if target is None or target.suffix != ".html":
+        return True
+    return fragment in ids_of(target)
 
 
 def check_links(site):
+    # Resolved first, so a page and the target a link resolves to share one root for the paths a finding prints.
+    site = site.resolve()
     pages = sorted(site.rglob("*.html"))
     if not pages:
         print(f"no pages under {site}; build the site first")
@@ -102,6 +145,12 @@ def check_links(site):
             if not resolves(site, page, raw):
                 print(f"{page.relative_to(site)}: {raw} resolves to nothing")
                 dangling += 1
+        for raw in parser.hrefs:
+            if raw.startswith(SKIPPED) or fragment_resolves(site, page, raw):
+                continue
+            target = target_of(site, page, raw)
+            print(f"{page.relative_to(site)}: {raw} names no heading or anchor in {target.relative_to(site)}")
+            dangling += 1
     return 1 if dangling else 0
 
 

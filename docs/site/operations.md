@@ -138,9 +138,9 @@ service layout, as root:
    `--owner` user, and prints the file's path. A key file already in place is read as the new key.
 4. Read its summary: how many OAuth credential bundles, API-key secrets and keepalive recipe bodies it discards, and how
    many oauth accounts, api_key accounts and open refresh attempts it marks.
-5. Answer `yes`. Any other answer exits 2, and a declined run writes nothing: the registry stays as it was, and the run
-   removes a key file it generated, with any directory it created for it, and names the file in its last line. `--yes`
-   skips the question for a script.
+5. Answer `yes`. Any other answer exits 2, and a declined run writes no key and discards nothing: the registry stays as
+   it was, and the run removes a key file it generated, with any directory it created for it, and names the file in its
+   last line. `--yes` skips the question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with
 `the storage key matches the registry, nothing to recover` when the key file still opens the registry's canary (or,
@@ -440,20 +440,23 @@ release:
    that must reach `healthy` within 30 seconds, serve the built console (the page from the admin listener is not the
    placeholder and one of its assets is served), answer `phoebis status` inside the container with a first line ending
    in `ready`, take a `phoebis backup` onto the volume and stop within the grace period, and a second container under a
-   certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the images it builds a
-   static binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs
-   each on its own platform (`--version`, a static link check, `init` and `check-config` in a temporary directory) and
-   packs it with the license. Once every smoke passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis`
-   under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never for a prerelease), and
-   `sha-<short commit>`, and uploads the two archives with `SHA256SUMS` to the release.
+   certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the images it builds
+   the console and checks its bundle, and fails before the static binaries build when the build emits one chunk, the
+   entry passes 500 kB, or the first paint loads Recharts code. Then it builds a static binary for
+   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs each on its own
+   platform (`--version`, a static link check, `init` and `check-config` in a temporary directory) and packs it with the
+   license. The `cross` images install the build tools without tzdata's time zone prompt, so the build runs through
+   rather than waiting for an answer. Once every smoke passes it publishes one manifest list at
+   `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never
+   for a prerelease), and `sha-<short commit>`, and uploads the two archives with `SHA256SUMS` to the release.
 
-A failed smoke, of the image or of a binary, leaves untagged digests in the registry, no tag and no archive on the
-release; a failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds
-both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile, `Cross.toml` or the
-workflow, since a pull request builds the amd64 side alone, and before the first release. The package inherits the
-repository's visibility: while the repository is private, pulling needs a token with `read:packages`. The image name is
-derived from the repository that runs the workflow, so a renamed repository publishes under its new name without a
-workflow change.
+A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
+and no archive on the release. A failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the
+dry run: it builds both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile,
+`Cross.toml` or the workflow, since a pull request builds the amd64 side alone, and before the first release. The
+package inherits the repository's visibility: while the repository is private, pulling needs a token with
+`read:packages`. The image name is derived from the repository that runs the workflow, so a renamed repository publishes
+under its new name without a workflow change.
 
 ## License
 
