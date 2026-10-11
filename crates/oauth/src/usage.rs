@@ -274,8 +274,8 @@ fn empty_snapshot(
 struct CachedEntry {
     fetched_at: i64,
     identity: Identity,
-    /// Set past `fetched_at` only by a 429, to the ladder's step or the capped `Retry-After`; any other answer
-    /// leaves it equal to `fetched_at` so the ordinary cache TTL governs the next retry.
+    /// Set past `fetched_at` only by a 429, to the ladder's step or the capped `Retry-After`. Any other answer
+    /// leaves it equal to `fetched_at`, so the next read may go out at once.
     not_before: i64,
     snapshot: UsageSnapshot,
     /// The endpoint whose 429 armed the hold, named in the held answer.
@@ -373,7 +373,6 @@ struct Inner {
     control: Arc<ControlClient>,
     profile: &'static Profile,
     store: Arc<Store>,
-    cache_ttl: Duration,
     clock: Clock,
 }
 
@@ -401,7 +400,6 @@ impl UsageService {
         manager: Arc<CredentialManager>,
         control: Arc<ControlClient>,
         profile: &'static Profile,
-        cache_ttl: Duration,
         concurrency: usize,
         clock: Clock,
     ) -> Self {
@@ -417,27 +415,15 @@ impl UsageService {
                 control,
                 profile,
                 store,
-                cache_ttl,
                 clock,
             }),
         }
     }
 
-    /// Serves the cached snapshot while it is within `cache_ttl`, with no bypass, and coalesces concurrent
-    /// misses for one account into a single fetch. The scheduled poll and the admin refresh read through `poll`
-    /// instead, under the same hold and coalescing, so a held-down refresh button cannot turn into a stream of
-    /// requests against an endpoint that rate-limits per account.
-    pub async fn snapshot(&self, account_id: &str) -> Result<UsageSnapshot, UsageError> {
-        let now = (self.inner.clock)();
-        if let Some(snapshot) = self.inner.fresh(account_id, now) {
-            return Ok(snapshot);
-        }
-        self.join_or_start(account_id).await
-    }
-
-    /// The scheduled poll's read: the endpoint regardless of the cache TTL, under the same hold, joined to a
-    /// fetch already out and written to the same cache, so the cadence never waits on `cache_ttl` and a poll
-    /// beside a manual refresh makes one request; a held account answers its last snapshot with the error set.
+    /// The scheduled poll's and the admin refresh's read: the endpoint under the account's hold, joined to a fetch
+    /// already out and written to the cache `latest` reads, so a poll beside a manual refresh makes one request and
+    /// a held-down refresh button cannot turn into a stream of requests against an endpoint that rate-limits per
+    /// account. A held account answers its last snapshot with the error set.
     pub async fn poll(&self, account_id: &str) -> Result<UsageSnapshot, UsageError> {
         let now = (self.inner.clock)();
         if let Some(held) = self.inner.held(account_id, now) {
@@ -609,29 +595,6 @@ impl UsageService {
 }
 
 impl Inner {
-    fn fresh(&self, account_id: &str, now: i64) -> Option<UsageSnapshot> {
-        let (fetched_at, identity, snapshot) = {
-            let cache = self.cache.lock().expect(LOCK_POISONED);
-            let entry = cache.get(account_id)?;
-            // A hit inside a hold answers the held snapshot, as a miss inside one does: neither is a new reading.
-            let answer = if now < entry.not_before {
-                entry.held_answer()
-            } else {
-                entry.snapshot.clone()
-            };
-            (entry.fetched_at, entry.identity, answer)
-        };
-        if now - fetched_at >= self.cache_ttl.as_millis() as i64 {
-            return None;
-        }
-        // A disconnect and re-pairing, or a delete and a new account under the id, inside the TTL window must
-        // not serve the old identity's cached windows as if they belonged to the one that replaced it.
-        if self.identity(account_id) != Some(identity) {
-            return None;
-        }
-        Some(snapshot)
-    }
-
     fn identity(&self, account_id: &str) -> Option<Identity> {
         self.store
             .account(account_id)
@@ -863,8 +826,8 @@ impl Inner {
                 let snapshot = match previous {
                     // The snapshot's timestamp says when its windows were read, and a failed attempt read
                     // none, so it keeps the one from the last success rather than passing stale quota off as
-                    // freshly fetched. The cache entry's own timestamp is this attempt's, and that is what
-                    // the TTL and the not-before are measured from.
+                    // freshly fetched. The cache entry's own timestamp is this attempt's, which the poll's
+                    // standing answers as its last attempt.
                     Some(previous) => UsageSnapshot {
                         error: Some(message),
                         ..previous

@@ -251,9 +251,11 @@ pub struct RouterConfig {
     /// The wait before a `funding_required` account is tried again: the shorter of five minutes and the model
     /// rejection interval, which the router computes from its configuration.
     pub funding_retry: Duration,
-    /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
-    /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
-    /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
+    /// Whether the loop skips the purge tick until `RouterHandle::release_purge`, so the first purge runs at the
+    /// first tick after the release: the tick that came due meanwhile, at once. The interval's first tick fires at
+    /// once, before the spawner can subscribe to the broadcast, and the first purge after a start announces the
+    /// downtime's clock resets and wind-downs. The router's start holds it until the ledger subscribed and holds the
+    /// start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
     /// The dollar table and the subscription cost model's 5-hour share table a reader prices each pin's row
@@ -1345,7 +1347,8 @@ struct Task {
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     /// Whether a registry load runs. At most one does.
     loading: bool,
-    /// The first purge waits while set. `Command::ReleasePurge` clears it.
+    /// While set the loop skips the purge tick, so no purge runs. `Command::ReleasePurge` clears it, and the first
+    /// purge runs at the first tick after it.
     purge_held: bool,
     /// Whether a purge ran since the start: the first one announces the restored state again.
     purged: bool,

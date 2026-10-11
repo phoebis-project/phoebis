@@ -1048,9 +1048,9 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
 async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_fetch() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    // The default TTL: a refresh reads the endpoint through the poll's path whatever the cache holds and answers the
-    // reading that read made, so the GET's own reads show beside it.
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    // A refresh reads the endpoint through the poll's path whatever the cache holds and answers the reading that read
+    // made, so the GET's own reads show beside it.
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     let refresh = "/admin/accounts/business/usage/refresh";
@@ -1190,10 +1190,10 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
 }
 
 #[tokio::test]
-async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_recorded() {
+async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading_it_recorded() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(1)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let asked = || {
         h.up.requests()
@@ -1202,8 +1202,7 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
             .count()
     };
     let bucket = phoebis_ledger::bucket_of(NOW);
-    // The endpoint records the read's request and holds its answer, so the clock can pass the TTL while the read
-    // is out.
+    // The endpoint records the read's request and holds its answer, so the clock moves on while the read is out.
     h.up.set_rule_after(
         0,
         "/api/oauth/usage",
@@ -1229,15 +1228,11 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
         );
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    // Past the TTL as measured from the send instant, which is what stamps the entry.
+    // Two seconds past the send instant, which is what stamps the reading.
     h.clock_cell.store(NOW + 2_000, Ordering::SeqCst);
     h.up.release();
     let refreshed = refreshing.await.unwrap();
-    assert_eq!(
-        asked(),
-        1,
-        "one endpoint request per refresh, whatever the TTL"
-    );
+    assert_eq!(asked(), 1, "one endpoint request per refresh");
     assert!(refreshed["error"].is_null(), "{refreshed}");
     assert_eq!(refreshed["fetched_at"], NOW);
     let windows = refreshed["windows"].as_array().unwrap();
@@ -1317,7 +1312,7 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
 #[tokio::test]
 async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpaired_account() {
     use common::{delete, get, json, login};
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     let answer = |v: &serde_json::Value| {
@@ -1366,7 +1361,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
 #[tokio::test]
 async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an_api_key_account() {
     use common::{get, json, login, post, NOW};
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let created = post(
         &h.app,
@@ -1437,8 +1432,8 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
 async fn an_account_held_by_a_429_lists_its_hold_deadline() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    // A zero TTL, so the refresh below reaches the endpoint and takes its 429.
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    // The refresh below reads the endpoint through the poll's path and takes its 429.
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let usage_of = |listed: &serde_json::Value| {
         listed["accounts"]
@@ -1509,7 +1504,7 @@ async fn an_account_held_by_a_429_lists_its_hold_deadline() {
 async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_the_hold_deadline() {
     use common::{get, json, login, NOW};
     use std::sync::atomic::Ordering;
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     h.up.set_rule_after(
         0,
@@ -1555,7 +1550,7 @@ async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_th
 async fn an_account_re_created_inside_a_hold_answers_the_unread_reason_beside_the_deadline() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     h.usage.poll("business").await.unwrap();
     h.up.set_rule_after(
@@ -1614,7 +1609,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
     use phoebis_routing::{
         Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
     };
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     // What a restart loads from the persisted windows, before the poll has read the account.
@@ -1689,7 +1684,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         SEVEN_DAY_FABLE,
     };
     const HOUR: i64 = 3_600_000;
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let read_at = NOW - 30 * HOUR;
     let reading = |utilization, reset| WindowReading {

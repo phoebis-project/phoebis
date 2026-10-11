@@ -598,8 +598,7 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 /// `POST .../usage/refresh`: the one manual read of the endpoint, through the poll's own path, so the reading is
 /// recorded to the ledger and handed to the router as a scheduled read is, and the answer is that reading, its
 /// error set when the read failed or the account is backing off. The hold, the concurrency cap and the coalescing
-/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate
-/// limit, and the cache TTL adds no read of its own.
+/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
 async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,

@@ -292,7 +292,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -664,7 +663,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
@@ -873,7 +872,6 @@ storage:
   encryption_key_file: {key}
   path: {db}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -968,7 +966,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -1174,7 +1171,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
         ledger = dir.path().join("ledger.sqlite").display(),
@@ -1480,7 +1477,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -1741,7 +1737,6 @@ storage:
   encryption_key_file: {key}
   path: {db}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = key.display(),
@@ -2053,7 +2048,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), prices = dir.path().join("api_prices.yaml").display(),
         costs = dir.path().join("subscription_costs.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
@@ -2434,7 +2429,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = key_path.display(),
         db = db_path.display(),
@@ -2667,6 +2662,204 @@ async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_lo
     up.shutdown().await;
 }
 
+/// The catalog hook and the first purge's release, through the running router: a listing that changed between two
+/// reads lands a `catalog_changed` row, and a pin the start found past its pool's affinity is purged once the start
+/// releases the held tick, landing a `pin_expired` row.
+#[tokio::test]
+async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expires_a_stale_pin() {
+    let listing = |ids: &[&str]| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: serde_json::to_vec(&serde_json::json!({
+            "data": ids
+                .iter()
+                .map(|id| serde_json::json!({ "id": id, "type": "model" }))
+                .collect::<Vec<_>>(),
+        }))
+        .unwrap(),
+    };
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: listing(&["claude-sonnet-4-5"]),
+    }])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    {
+        let store = phoebis_store::Store::open(
+            &db_path,
+            &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        )
+        .unwrap();
+        pair_oauth(
+            &store,
+            "a",
+            "sk-ant-oat01-catalog-hook-aaaa",
+            "00000000-0000-4000-8000-00000000000a",
+        );
+        store
+            .insert_pool(&phoebis_store::PoolRow::for_tests("main"), "test")
+            .unwrap();
+        store
+            .set_pool_members(
+                "main",
+                &[phoebis_store::MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                }],
+                "test",
+            )
+            .unwrap();
+        store
+            .insert_api_key(
+                &phoebis_store::ApiKeyRow {
+                    id: "desktop".into(),
+                    label: "Desktop".into(),
+                    notes: None,
+                    pool_id: "main".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: phoebis_store::RulesMode::Extend,
+                    long_context_twins: true,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: store.api_key_digest("phoebis-catalog-hook-secret").to_vec(),
+                    prefix: phoebis_store::key_prefix("phoebis-catalog-hook-secret"),
+                    incarnation: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    rotated_at: None,
+                    last_used_at: None,
+                    retired_secret_last_used_at: None,
+                    auto_mode_server: None,
+                },
+                "test",
+            )
+            .unwrap();
+        // Made for the key and the account as the store holds them, so the purge reads it as the holders' own, and
+        // last used at the epoch, so the pool's hour of affinity has long run out when the first purge reads it.
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "desktop".into(),
+                session_id: "stale".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-4-5".into(),
+                account_id: "a".into(),
+                epoch: 1,
+                created_at: 0,
+                last_used_at: 0,
+                key_generation: store.api_key("desktop").unwrap().unwrap().created_at,
+                incarnation: store.account("a").unwrap().unwrap().incarnation,
+                burn: phoebis_store::PinBurn::default(),
+                burn_at: None,
+                burn_banded: phoebis_store::PinBurn::default(),
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: String::new(),
+            })
+            .unwrap();
+    }
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_CATALOG_HOOK_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_CATALOG_HOOK_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    // An account's first listing names none before it, so it moves nothing and lands no row.
+    wait_json(&client, &admin("/accounts/a/catalog"), |catalog| {
+        catalog["models"]
+            .as_array()
+            .is_some_and(|models| !models.is_empty())
+    })
+    .await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        listing(&["claude-opus-5", "claude-sonnet-4-5"]),
+    );
+    let refreshed: serde_json::Value = client
+        .get(admin("/accounts/a/catalog?refresh=1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed["models"].as_array().map(Vec::len),
+        Some(2),
+        "{refreshed}"
+    );
+    let log = wait_json(
+        &client,
+        &admin("/routing-log?accounts=a&kinds=catalog_changed,pin_expired"),
+        |log| log["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let row = |kind: &str| {
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} row: {log}"))
+            .clone()
+    };
+    assert_eq!(
+        row("catalog_changed")["detail"],
+        serde_json::json!({ "added": ["claude-opus-5"], "removed": [], "count": 2 }),
+        "{log}"
+    );
+    let expired = row("pin_expired");
+    assert_eq!(
+        (&expired["session_id"], &expired["detail"]),
+        (
+            &serde_json::json!("stale"),
+            &serde_json::json!({ "agent_id": "main", "reasons": ["expired"] })
+        ),
+        "{log}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
     let dir = tempfile::tempdir().unwrap();
@@ -2693,7 +2886,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
              stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
              storage:\n  encryption_key_file: {key}\n  path: {db}\n\
              upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
-             usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+             usage:\n  refresh_concurrency: 2\n",
             ledger = ledger_path.display(),
             key = key_path.display(),
             db = db_path.display(),
@@ -3114,7 +3307,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                  stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
                  storage:\n  encryption_key_file: {key}\n  path: {db}\n\
                  upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
-                 usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+                 usage:\n  refresh_concurrency: 2\n",
                 ledger = dir.path().join(format!("{name}-ledger.sqlite")).display(),
                 key = key_path.display(),
                 db = db_path.display(),
@@ -3307,7 +3500,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3550,7 +3743,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -3647,7 +3839,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3801,25 +3993,43 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     let started = std::time::SystemTime::now();
     // Awaited, never blocked on: the router and the fake upstream are tasks on this same current-thread
     // runtime, and a blocking wait here would starve the very server the browser is talking to.
-    let pass = tokio::process::Command::new("node")
+    let mut pass = tokio::process::Command::new("node")
         .arg("e2e/views.mjs")
         .current_dir(&web)
         .env("PHOEBIS_E2E_BASE", format!("http://127.0.0.1:{admin_port}"))
         .env("PHOEBIS_E2E_SECRET", "admin-secret-001")
         .env("PHOEBIS_SCREENSHOT_DIR", &shots)
-        .output()
-        .await
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("node runs");
-    let printed = String::from_utf8_lossy(&pass.stdout);
-    print!("{printed}");
-    eprint!("{}", String::from_utf8_lossy(&pass.stderr));
+    // Each line is passed on as the pass writes it, so a pass that hangs under `--nocapture` shows the view it
+    // reached. Both pipes drain together, or a full stderr pipe would stall the pass behind a stdout read.
+    use tokio::io::AsyncBufReadExt;
+    let mut out = tokio::io::BufReader::new(pass.stdout.take().expect("piped stdout")).lines();
+    let mut err = tokio::io::BufReader::new(pass.stderr.take().expect("piped stderr")).lines();
+    let kept = async {
+        let mut kept = Vec::new();
+        while let Some(line) = out.next_line().await.expect("the pass's stdout reads") {
+            println!("{line}");
+            kept.push(line);
+        }
+        kept
+    };
+    let forwarded = async {
+        while let Some(line) = err.next_line().await.expect("the pass's stderr reads") {
+            eprintln!("{line}");
+        }
+    };
+    let (printed, ()) = tokio::join!(kept, forwarded);
+    let status = pass.wait().await.expect("node runs");
     assert!(
-        pass.status.success(),
+        status.success(),
         "the browser pass failed; its output names the view"
     );
     // The pass names how many views it ran, so a view added to it needs no count here.
     let views: usize = printed
-        .lines()
+        .iter()
         .find_map(|line| {
             let (count, _) = line
                 .strip_prefix("browser pass: ")?
@@ -3952,7 +4162,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),

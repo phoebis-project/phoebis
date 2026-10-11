@@ -290,8 +290,9 @@ async fn reload(admin_port: u16, config: &Path) -> Answer {
         .unwrap_or_else(|error| panic!("the reload call failed: {error}"))
 }
 
-/// The items `GET /admin/attention` answers, and the `attention:` line of the `status` screen over the same router.
-async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, String) {
+/// The items `GET /admin/attention` answers, and the `attention:` block of the `status` screen over the same router:
+/// the label's line, then one line per item.
+async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, Vec<String>) {
     let client = admin_client(admin_port, config);
     let answer = client
         .call(Method::GET, "/admin/attention", None)
@@ -313,12 +314,15 @@ async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, S
         &jiff::tz::TimeZone::UTC,
         false,
     );
-    let line = screen
+    let block: Vec<String> = screen
         .lines()
-        .find(|line| line.starts_with("  attention: "))
-        .unwrap_or_else(|| panic!("no attention line:\n{screen}"))
-        .to_owned();
-    (answer.body["items"].as_array().unwrap().clone(), line)
+        .skip_while(|line| !line.starts_with("  attention"))
+        .enumerate()
+        .take_while(|(at, line)| *at == 0 || line.starts_with("    "))
+        .map(|(_, line)| line.to_owned())
+        .collect();
+    assert!(!block.is_empty(), "no attention line:\n{screen}");
+    (answer.body["items"].as_array().unwrap().clone(), block)
 }
 
 /// A connection to the proxy listener whose handshake finished under a client trusting `pair`'s CA alone.
@@ -477,7 +481,7 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
         listeners[1],
         json!({"listener": "admin", "serving": "plain"})
     );
-    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    let (items, block) = attention(admin_port, &dir.path().join("config.yaml")).await;
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(
         (
@@ -497,8 +501,10 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
         "the refused reload raises the item on the listener's subject"
     );
     assert!(
-        line.starts_with("  attention: certificate_reload_failed proxy.tls since "),
-        "{line}"
+        block.len() == 2
+            && block[0] == "  attention:"
+            && block[1].starts_with("    certificate_reload_failed proxy.tls since "),
+        "{block:?}"
     );
 
     let mut next = handshaken(proxy_port, &old).await;
@@ -513,10 +519,10 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
         "{}",
         answer.body
     );
-    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    let (items, block) = attention(admin_port, &dir.path().join("config.yaml")).await;
     assert_eq!(
-        (items.len(), line.as_str()),
-        (0, "  attention: none"),
+        (items.len(), block),
+        (0, vec!["  attention: none".to_owned()]),
         "a reload that lands clears the item: {items:?}"
     );
 

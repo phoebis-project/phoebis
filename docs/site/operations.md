@@ -176,8 +176,10 @@ environment, and prints one screen:
 phoebis 0.1.0, up 3d 4h, ready
   proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
   metrics http://127.0.0.1:9464
-  ledger: 2 parked
-  attention: pool_exhausted work since 12:03;
+  ledger:
+    2 parked
+  attention:
+    pool_exhausted work since 12:03
     refresh_failed alice@example.com since 11:40
 
 pools
@@ -204,11 +206,11 @@ binary's own version and `readiness unknown`, unless the proxy is down. The list
 file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate file the loader refuses when the operator
 reads it prints the loader's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running
-router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and names
-each one: records `queued` in the writer channel, `behind` while admission refuses, `degraded` after a failed batch,
-priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes
-and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention item as
-`<kind> <subject> since <HH:MM>`, or reads `none`.
+router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and lists
+each one on its own line under it: records `queued` in the writer channel, `behind` while admission refuses, `degraded`
+after a failed batch, priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state
+writer's `deferred` writes and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention
+item on its own line under it as `<kind> <subject> since <HH:MM>`, in the items' order, or reads `attention: none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is

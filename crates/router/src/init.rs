@@ -1064,9 +1064,36 @@ mod tests {
             std::fs::write(&config, render(&plan)).unwrap();
             let loaded = crate::config::load_unresolved(&config)
                 .unwrap_or_else(|error| panic!("{name}: {error}\n{}", render(&plan)));
+            // Two absent pairs compare equal, so a shape that passes a pair proves it arrived on both sides first.
+            let (proxy_pair, admin_pair) = (
+                matches!(*name, "proxy-pair" | "container-pairs"),
+                matches!(*name, "off-loopback" | "container-pairs"),
+            );
             assert_eq!(loaded.proxy.listen, plan.proxy.listen, "{name}");
+            assert_eq!(
+                loaded.proxy.tls.is_some(),
+                plan.proxy.tls.is_some(),
+                "{name}"
+            );
+            if proxy_pair {
+                assert!(
+                    loaded.proxy.tls.is_some() && plan.proxy.tls.is_some(),
+                    "{name}"
+                );
+            }
             assert_eq!(loaded.proxy.tls, plan.proxy.tls, "{name}");
             assert_eq!(loaded.admin.listen, plan.admin.listen, "{name}");
+            assert_eq!(
+                loaded.admin.tls.is_some(),
+                plan.admin.tls.is_some(),
+                "{name}"
+            );
+            if admin_pair {
+                assert!(
+                    loaded.admin.tls.is_some() && plan.admin.tls.is_some(),
+                    "{name}"
+                );
+            }
             assert_eq!(loaded.admin.tls, plan.admin.tls, "{name}");
             assert_eq!(loaded.admin.secret_env, plan.secret_env, "{name}");
             assert_eq!(

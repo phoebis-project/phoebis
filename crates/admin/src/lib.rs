@@ -113,7 +113,6 @@ pub struct SettingsView {
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
     pub subscription_costs_path: Option<String>,
-    pub usage_cache_ttl_seconds: u64,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

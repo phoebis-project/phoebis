@@ -97,7 +97,6 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             ],
         ),
         ("subscription_costs", &["content", "effective", "source"]),
-        ("usage", &["cache_ttl_seconds"]),
     ]
     .iter()
     .map(|(name, keys)| {
@@ -117,15 +116,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             settings["sessions"]["expire_after_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str(),
             settings["listeners"]["proxy_tls"].as_bool(),
-            settings["usage"]["cache_ttl_seconds"].as_u64()
         ),
-        (
-            Some(72),
-            Some(86_400),
-            Some("127.0.0.1:9464"),
-            Some(false),
-            Some(60)
-        )
+        (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
     );
     let shipped = phoebis_ledger::PriceTable::shipped();
     let prices = &settings["api_prices"];

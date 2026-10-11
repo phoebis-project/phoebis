@@ -7685,7 +7685,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "cZwouYtu",
+      "prefix": "GqVtcpx9",
       "created_at": 1000000,
       "updated_at": 1000000,
       "revision": 4398047511104,
@@ -7753,7 +7753,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "cZwouYtu",
+          "prefix": "GqVtcpx9",
           "created_at": 1000000,
           "updated_at": 1000000,
           "revision": 4398047511104,
@@ -7824,9 +7824,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "MKi5oFGTy_-50L9gUmS1whnUDXBqVSfo78M-tj3hrbc",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A52552%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=db25YtD1Jiwgb78RCT9oLcB3Ol-Eyjr9zM6K7RhegB4&code_challenge_method=S256&state=ND0icayBeuePJorJUM6jGbdlTAU4dPT0FkdiS-iPKxM",
-      "redirect_uri": "http://localhost:52552/callback",
+      "id": "4kNU4LIkjtY4Pcs9jAMZitsXSyXbr0I4HT3RBLe1rx8",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A61326%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=MVZFRz6-JeZPPGGhfTkO6-p-4zhgKHUYGT7hqP8G4S8&code_challenge_method=S256&state=ygjFt5JgaerMBEfzUE2bKR1D8Y3AZf_Bc7DrD7a7opw",
+      "redirect_uri": "http://localhost:61326/callback",
       "expires_at": 1600000
     }
   },
@@ -8141,7 +8141,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "cZwouYtu",
+              "prefix": "GqVtcpx9",
               "enabled": true
             }
           ],
@@ -11224,7 +11224,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "session_id": "lzfEvrZRBtRUPy5qrkabeoth88x3Q8Mh6rKzqHgpNNE"
+      "session_id": "-S4mATibcJQ8vjLYM0O9zhOPUU7ta_7aGvNpDPae678"
     }
   },
   "sessions": {
@@ -11724,9 +11724,6 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "overrides": {}
         }
-      },
-      "usage": {
-        "cache_ttl_seconds": 60
       }
     }
   },

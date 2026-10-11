@@ -231,8 +231,11 @@ pub fn render(
     }
     match &reads.system {
         Ok(system) => {
-            if let Some(line) = ledger_line(system) {
-                screen.push(format!("  {line}"));
+            if let Some(figures) = ledger_lines(system) {
+                screen.push("  ledger:");
+                for figure in figures {
+                    screen.push(format!("    {figure}"));
+                }
             }
         }
         Err(reason) => screen.wrap(&format!("  system: {reason}")),
@@ -256,7 +259,10 @@ pub fn render(
             if items.is_empty() {
                 screen.push("  attention: none");
             } else {
-                screen.flow("  attention: ", &items, "; ", CARRY);
+                screen.push("  attention:");
+                for item in items {
+                    screen.push(format!("    {item}"));
+                }
             }
         }
         Err(reason) => screen.wrap(&format!("  attention: {reason}")),
@@ -311,9 +317,9 @@ pub fn render(
     out
 }
 
-/// `ledger: ...` naming each of the ledger's and the state writer's figures that is non-zero or true, or `None` when
-/// all of them read clean.
-fn ledger_line(system: &Value) -> Option<String> {
+/// Each of the ledger's figures that is non-zero or true, then each of the state writer's as `writer: ...`, one per
+/// line under `ledger:`, or `None` when all of them read clean.
+fn ledger_lines(system: &Value) -> Option<Vec<String>> {
     let ledger = &system["ledger"];
     let writer = &system["router"]["writer"];
     let count = |value: &Value, word: &str| {
@@ -323,7 +329,7 @@ fn ledger_line(system: &Value) -> Option<String> {
             .map(|n| format!("{n} {word}"))
     };
     let flag = |value: &Value, word: &str| (*value == true).then(|| word.to_owned());
-    let ledger_items: Vec<String> = [
+    let ledger_items = [
         count(&ledger["queued"], "queued"),
         flag(&ledger["behind"], "behind"),
         flag(&ledger["degraded"], "degraded"),
@@ -331,23 +337,16 @@ fn ledger_line(system: &Value) -> Option<String> {
         count(&ledger["retrying"], "retrying"),
     ]
     .into_iter()
-    .flatten()
-    .collect();
-    let writer_items: Vec<String> = [
+    .flatten();
+    let writer_items = [
         count(&writer["deferred"], "deferred"),
         flag(&writer["degraded"], "degraded"),
     ]
     .into_iter()
     .flatten()
-    .collect();
-    let mut groups = Vec::new();
-    if !ledger_items.is_empty() {
-        groups.push(ledger_items.join(", "));
-    }
-    if !writer_items.is_empty() {
-        groups.push(format!("writer: {}", writer_items.join(", ")));
-    }
-    (!groups.is_empty()).then(|| format!("ledger: {}", groups.join("; ")))
+    .map(|item| format!("writer: {item}"));
+    let figures: Vec<String> = ledger_items.chain(writer_items).collect();
+    (!figures.is_empty()).then_some(figures)
 }
 
 /// `pools`, then one block per pool by id: its status and counts, then one line per member by priority then account
@@ -1082,25 +1081,26 @@ mod tests {
                 "{screen}"
             );
         }
-        assert!(lines.contains(&"  ledger: 1 parked"), "{screen}");
+        let ledger = lines.iter().position(|line| *line == "  ledger:");
+        assert_eq!(
+            ledger.map(|at| lines[at + 1]),
+            Some("    1 parked"),
+            "{screen}"
+        );
 
-        let attention: String = lines
-            .iter()
-            .skip_while(|line| !line.starts_with("  attention: "))
-            .take_while(|line| !line.is_empty())
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ");
         let items = fixture("attention")["items"].as_array().unwrap().clone();
         assert!(!items.is_empty());
-        for item in &items {
-            let named = format!(
-                "{} {} since 00:16",
-                item["kind"].as_str().unwrap(),
-                item["subject"]["label"].as_str().unwrap()
-            );
-            assert_eq!(attention.matches(&named).count(), 1, "{named}: {screen}");
-        }
+        let named: Vec<String> = items
+            .iter()
+            .map(|item| {
+                format!(
+                    "    {} {} since 00:16",
+                    item["kind"].as_str().unwrap(),
+                    item["subject"]["label"].as_str().unwrap()
+                )
+            })
+            .collect();
+        assert_eq!(block(&lines, "  attention:"), named, "{screen}");
 
         let pools_block = block(&lines, "pools");
         let accounts = fixture("accounts");
@@ -1297,6 +1297,93 @@ mod tests {
         }
         assert_eq!(json["pools"], pools_answer);
         assert_eq!(json["errors"], json!({}));
+    }
+
+    #[test]
+    fn each_attention_item_prints_on_its_own_line_under_the_label_and_an_empty_list_reads_none() {
+        let item = |kind: &str, label: &str| {
+            json!({
+                "kind": kind,
+                "subject": {"type": "pool", "id": label, "label": label},
+                "since": 1_000_000,
+            })
+        };
+        let two = Reads {
+            attention: Ok(json!({"items": [
+                item("pool_exhausted", "Main"),
+                item("refresh_failed", "alice@example.com"),
+            ]})),
+            ..fixture_reads()
+        };
+        let screen = render(&two, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(
+            block(&lines, "  attention:"),
+            [
+                "    pool_exhausted Main since 00:16",
+                "    refresh_failed alice@example.com since 00:16",
+            ],
+            "{screen}"
+        );
+
+        let none = Reads {
+            attention: Ok(json!({"items": []})),
+            ..fixture_reads()
+        };
+        let screen = render(&none, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let attention: Vec<&str> = screen
+            .lines()
+            .filter(|line| line.starts_with("  attention"))
+            .collect();
+        assert_eq!(attention, ["  attention: none"], "{screen}");
+    }
+
+    #[test]
+    fn each_ledger_figure_prints_on_its_own_line_under_the_label_and_a_clean_ledger_prints_no_block(
+    ) {
+        let system = |parked: u64, retrying: u64, deferred: u64| {
+            json!({
+                "version": "9.9.9",
+                "ready": true,
+                "dead": [],
+                "ledger": {
+                    "queued": 0,
+                    "behind": false,
+                    "degraded": false,
+                    "parked_priced": parked,
+                    "retrying": retrying,
+                },
+                "router": {"writer": {"deferred": deferred, "degraded": false}},
+            })
+        };
+        let busy = Reads {
+            system: Ok(system(2, 1, 3)),
+            ..fixture_reads()
+        };
+        let screen = render(&busy, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let lines: Vec<&str> = screen.lines().collect();
+        let figures: Vec<&str> = lines
+            .iter()
+            .skip_while(|line| **line != "  ledger:")
+            .skip(1)
+            .take_while(|line| line.starts_with("    "))
+            .copied()
+            .collect();
+        assert_eq!(
+            figures,
+            ["    2 parked", "    1 retrying", "    writer: 3 deferred"],
+            "{screen}"
+        );
+
+        let clean = Reads {
+            system: Ok(system(0, 0, 0)),
+            ..fixture_reads()
+        };
+        let screen = render(&clean, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        assert!(
+            !screen.lines().any(|line| line.starts_with("  ledger")),
+            "{screen}"
+        );
     }
 
     /// The fixture reads with the two accounts' labels replaced.

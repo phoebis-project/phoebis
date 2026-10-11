@@ -62,7 +62,5 @@ upstream:
   # extra_ca_pem: ./lab-ca.pem
   # resolve_override: 127.0.0.1:8443
 usage:
-  # Both keys are optional: how long a cached usage snapshot answers a manual refresh, and how many accounts'
-  # usage and profile fetches run at once.
-  cache_ttl_seconds: 60
+  # Optional: how many accounts' usage and profile fetches run at once.
   refresh_concurrency: 2

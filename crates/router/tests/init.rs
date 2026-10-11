@@ -180,23 +180,8 @@ fn an_existing_configuration_refuses_before_any_question_on_a_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.yaml");
     std::fs::write(&config, "kept: as it was\n").unwrap();
-    let (mut near, far) = terminal();
-    let mut command = phoebis(dir.path());
-    command
-        .args(["init", "--config", path_arg(&config)])
-        .stdin(far.try_clone().unwrap())
-        .stderr(far)
-        .stdout(Stdio::piped());
-    let child = command.spawn().unwrap();
-    // The child now holds the far end's only descriptors, so reading the near end ends when the child does.
-    drop(command);
-    // End of input, should a question be asked: the run then ends at once rather than wait for an answer.
-    near.write_all(&[4]).unwrap();
-    let out = child.wait_with_output().unwrap();
-    let mut shown = Vec::new();
-    // Linux answers EIO, rather than end of file, once the far end has closed; what was read before it stays.
-    let _ = near.read_to_end(&mut shown);
-    let shown = String::from_utf8_lossy(&shown);
+    // No answers, so a question asked would meet the end of input at once rather than wait for an answer.
+    let (out, shown) = init_on_a_terminal(dir.path(), &["--config", path_arg(&config)], "");
     assert_eq!(out.status.code(), Some(1), "{shown}");
     assert!(
         shown.contains(&format!(

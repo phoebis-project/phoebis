@@ -938,7 +938,7 @@ async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
         &[oauth("a", A, 0)],
         (0, None),
         polled_every_50_ms(),
-        None,
+        false,
     )
     .await
 }

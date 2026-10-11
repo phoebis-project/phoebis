@@ -782,7 +782,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
         &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
         (0, None),
         LedgerConfig::default(),
-        Some(Duration::from_secs(60)),
+        true,
     )
     .await;
     let (lines, _sink) = capture_tracing();
@@ -1064,37 +1064,6 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
         "the refresh's invalid_grant landed the mark"
     );
     routing_reads_reauth_required(&h, "a").await;
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_scheduled_poll_reads_the_endpoint_inside_a_long_cache_ttl() {
-    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
-    let h = harness_on(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
-        Arc::new(LedgerDb::open_in_memory().unwrap()),
-        &up,
-        &[oauth("a", A, 0)],
-        (0, None),
-        LedgerConfig::default(),
-        Some(Duration::from_secs(3_600)),
-    )
-    .await;
-    let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 1)).await;
-    assert_eq!(
-        usage_asked(&up, A),
-        10,
-        "one request per slot, the hour's cache TTL notwithstanding"
-    );
-    resumed(h.usage.as_ref().unwrap().snapshot("a"))
-        .await
-        .unwrap();
-    assert_eq!(
-        usage_asked(&up, A),
-        10,
-        "an admin read between two slots is the cache's"
-    );
     up.shutdown().await;
 }
 

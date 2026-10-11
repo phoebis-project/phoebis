@@ -82,7 +82,7 @@ pub async fn harness(
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    harness_on(store, db, up, accounts, capture, config, None).await
+    harness_on(store, db, up, accounts, capture, config, false).await
 }
 
 /// `harness` with a `UsageService` built over the same manager and control connector, so a test can run the
@@ -95,19 +95,10 @@ pub async fn harness_with_poll(
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    harness_on(
-        store,
-        db,
-        up,
-        accounts,
-        capture,
-        config,
-        Some(Duration::from_secs(60)),
-    )
-    .await
+    harness_on(store, db, up, accounts, capture, config, true).await
 }
 
-/// `usage_cache_ttl` builds the harness's `UsageService` with that cache TTL; `None` builds none.
+/// `with_usage` builds the harness's `UsageService`, and `false` builds none.
 pub async fn harness_on(
     store: Arc<Store>,
     db: Arc<LedgerDb>,
@@ -115,7 +106,7 @@ pub async fn harness_on(
     accounts: &[Account],
     capture: (u32, Option<u32>),
     config: LedgerConfig,
-    usage_cache_ttl: Option<Duration>,
+    with_usage: bool,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -260,12 +251,11 @@ pub async fn harness_on(
     ));
     // The quota poll's own `UsageService`, over the same manager and control connector, so a fetch it makes
     // reaches the same fake upstream every other control call in this harness does.
-    let usage = usage_cache_ttl.map(|cache_ttl| {
+    let usage = with_usage.then(|| {
         Arc::new(phoebis_oauth::UsageService::new(
             manager.clone(),
             control,
             p,
-            cache_ttl,
             4,
             clock.clone(),
         ))

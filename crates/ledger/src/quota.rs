@@ -419,8 +419,8 @@ impl QuotaPoll {
         })
     }
 
-    /// One account's reading through the service's hold, concurrency cap and coalescing, past its cache TTL: a
-    /// clean snapshot is recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
+    /// One account's reading through the service's hold, concurrency cap and coalescing: a clean snapshot is
+    /// recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
     /// and, when the snapshot carries the evidence, `Report::Overage` and `Report::Credits`, before this returns.
     /// The service's answer is returned as it came, so a caller that shows it shows what was recorded: a snapshot
     /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
@@ -437,8 +437,7 @@ impl QuotaPoll {
         if let Some(router) = router {
             Self::report_landed_mark(usage, router, &account.id).await;
         }
-        // The service's hold, concurrency cap and coalescing apply and its cache TTL does not; a snapshot with
-        // an error is a stale one, and a stale sample must not be written under a fresh bucket.
+        // A snapshot with an error is a stale one, and a stale sample must not be written under a fresh bucket.
         match answer {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);

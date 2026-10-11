@@ -162,9 +162,6 @@ pub struct StorageConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsageConfig {
-    /// How long a cached usage snapshot answers a manual refresh before the endpoint is read again.
-    #[serde(default = "default_usage_cache_ttl")]
-    pub cache_ttl_seconds: u64,
     /// How many accounts' usage and profile fetches run at once.
     #[serde(default = "default_refresh_concurrency")]
     pub refresh_concurrency: usize,
@@ -302,8 +299,6 @@ pub enum ConfigError {
     Syntax(#[from] serde_norway::Error),
     #[error("proxy.upstream_gzip must be auto, on or off, not {value}")]
     UpstreamGzipInvalid { value: String },
-    #[error("usage.cache_ttl_seconds must be between 1 and 3600, not {value}")]
-    UsageCacheTtlOutOfRange { value: u64 },
 }
 
 /// Reads, parses, and validates the bootstrap file, resolving the admin secret from the environment.
@@ -375,18 +370,12 @@ impl Default for StatsConfig {
 impl Default for UsageConfig {
     fn default() -> UsageConfig {
         UsageConfig {
-            cache_ttl_seconds: default_usage_cache_ttl(),
             refresh_concurrency: default_refresh_concurrency(),
         }
     }
 }
 
 fn check_shape(config: &Config) -> Result<(), ConfigError> {
-    if !(1..=3600).contains(&config.usage.cache_ttl_seconds) {
-        return Err(ConfigError::UsageCacheTtlOutOfRange {
-            value: config.usage.cache_ttl_seconds,
-        });
-    }
     if !(1..=16).contains(&config.usage.refresh_concurrency) {
         return Err(ConfigError::RefreshConcurrencyOutOfRange {
             value: config.usage.refresh_concurrency,
@@ -671,10 +660,6 @@ fn default_subscription_costs_path() -> Option<PathBuf> {
 
 fn default_upstream_gzip() -> String {
     "auto".into()
-}
-
-fn default_usage_cache_ttl() -> u64 {
-    60
 }
 
 fn default_memory_cap() -> usize {
@@ -1142,13 +1127,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         let config = load(&file(dir.path(), "bare", "")).unwrap();
-        assert_eq!(
-            (
-                config.usage.cache_ttl_seconds,
-                config.usage.refresh_concurrency
-            ),
-            (60, 2)
-        );
+        assert_eq!(config.usage.refresh_concurrency, 2);
     }
 
     const REMOVED_COMPATIBILITY: &str =
@@ -1211,16 +1190,6 @@ mod tests {
                 "routing.cooldown_fallback_seconds must be between 1 and 3600, not 3601",
             ),
             (
-                "ttl-low",
-                "usage:\n  cache_ttl_seconds: 0\n",
-                "usage.cache_ttl_seconds must be between 1 and 3600, not 0",
-            ),
-            (
-                "ttl-high",
-                "usage:\n  cache_ttl_seconds: 3601\n",
-                "usage.cache_ttl_seconds must be between 1 and 3600, not 3601",
-            ),
-            (
                 "concurrency-low",
                 "usage:\n  refresh_concurrency: 0\n",
                 "usage.refresh_concurrency must be between 1 and 16, not 0",
@@ -1240,8 +1209,6 @@ mod tests {
                 "cooldown-hour",
                 "routing:\n  cooldown_fallback_seconds: 3600\n",
             ),
-            ("ttl-one", "usage:\n  cache_ttl_seconds: 1\n"),
-            ("ttl-hour", "usage:\n  cache_ttl_seconds: 3600\n"),
             ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
             ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
         ] {
@@ -1328,8 +1295,7 @@ mod tests {
         let yaml = format!(
             "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n\
              proxy:\n  listen: 127.0.0.1:0\n\
-             storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
-             refresh_concurrency: 2\n",
+             storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  refresh_concurrency: 2\n",
             key.display(),
             dir.join("router.sqlite").display()
         );

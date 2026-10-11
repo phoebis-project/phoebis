@@ -141,7 +141,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         manager.clone(),
         control.clone(),
         profile,
-        Duration::from_secs(config.usage.cache_ttl_seconds),
         config.usage.refresh_concurrency,
         clock.clone(),
     ));
@@ -382,29 +381,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables,
-        settings: Arc::new(SettingsView {
-            api_prices_path: config
-                .stats
-                .api_prices_path
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            body_capture_max_hours: config.stats.body_capture_max_hours,
-            cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
-            keepalive: config.keepalive.clone(),
-            ledger_path: config.stats.ledger_path.display().to_string(),
-            metrics_listen: config.stats.metrics_listen.to_string(),
-            profile: profile.name.to_string(),
-            proxy_listen: config.proxy.listen.to_string(),
-            proxy_tls: config.proxy.tls.is_some(),
-            session_expire_after_seconds: config.sessions.expire_after_seconds,
-            storage_path: config.storage.path.display().to_string(),
-            subscription_costs_path: config
-                .stats
-                .subscription_costs_path
-                .as_ref()
-                .map(|p| p.display().to_string()),
-            usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
-        }),
+        settings: Arc::new(settings_view(&config, profile)),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
         keepalive: keepalive.clone(),
@@ -740,6 +717,31 @@ fn router_config(
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
         hold_first_purge: true,
         ..phoebis_routing::RouterConfig::default()
+    }
+}
+
+fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> SettingsView {
+    SettingsView {
+        api_prices_path: config
+            .stats
+            .api_prices_path
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        body_capture_max_hours: config.stats.body_capture_max_hours,
+        cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
+        keepalive: config.keepalive.clone(),
+        ledger_path: config.stats.ledger_path.display().to_string(),
+        metrics_listen: config.stats.metrics_listen.to_string(),
+        profile: profile.name.to_string(),
+        proxy_listen: config.proxy.listen.to_string(),
+        proxy_tls: config.proxy.tls.is_some(),
+        session_expire_after_seconds: config.sessions.expire_after_seconds,
+        storage_path: config.storage.path.display().to_string(),
+        subscription_costs_path: config
+            .stats
+            .subscription_costs_path
+            .as_ref()
+            .map(|p| p.display().to_string()),
     }
 }
 
@@ -1110,6 +1112,69 @@ mod tests {
             banded > 1.0,
             "a charge inside the band weighs more than one outside it: {banded}"
         );
+    }
+
+    /// One row with a `fast` block and one without, so the fast table's rule shows on a table of the test's own.
+    const FAST_AND_PLAIN: &str = "\
+effective: 2026-01-01
+models:
+  claude-fast-1:
+    {input: 2, cache_write_5m: 3, cache_write_1h: 4, cache_read: 1, output: 10,
+     fast: {input: 12, cache_write_5m: 15, cache_write_1h: 24, cache_read: 6, output: 60}}
+  claude-plain-1: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
+";
+
+    #[test]
+    fn the_router_configs_fast_table_reads_a_rows_fast_cells_and_a_row_without_them_its_standard_cells(
+    ) {
+        let prices = phoebis_ledger::PriceTable::from_yaml(FAST_AND_PLAIN, "test").unwrap();
+        let config = router_config(
+            &prices,
+            Arc::new(phoebis_ledger::PlanTables::shipped()),
+            &RoutingConfig::default(),
+        );
+        let per_token =
+            |[input, write_5m, write_1h, read, output]: [f64; 5]| phoebis_routing::Rates {
+                input: Some(input / 1_000_000.0),
+                cache_read: Some(read / 1_000_000.0),
+                write_5m: Some(write_5m / 1_000_000.0),
+                write_1h: Some(write_1h / 1_000_000.0),
+                output: Some(output / 1_000_000.0),
+            };
+        assert_eq!(
+            config.rates.fast.rates_for("claude-fast-1", 0),
+            per_token([12.0, 15.0, 24.0, 6.0, 60.0]),
+            "a row with a fast block burns fast at its fast cells"
+        );
+        assert_eq!(
+            config.rates.dollars.rates_for("claude-fast-1", 0),
+            per_token([2.0, 3.0, 4.0, 1.0, 10.0]),
+            "the dollar table keeps the same row's standard cells"
+        );
+        assert_eq!(
+            config.rates.fast.rates_for("claude-plain-1", 0),
+            per_token([3.0, 3.75, 6.0, 0.3, 15.0]),
+            "a row without a fast block burns fast at its standard cells"
+        );
+    }
+
+    #[test]
+    fn the_settings_view_says_the_proxy_listener_terminates_tls_when_the_file_names_its_pair() {
+        let config = |proxy_lines: &str| -> Config {
+            serde_norway::from_str(&format!(
+                "admin:\n  listen: 127.0.0.1:8081\n  secret_env: TEST_SETTINGS_ADMIN\n\
+                 proxy:\n  listen: 0.0.0.0:8317\n{proxy_lines}\
+                 storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n"
+            ))
+            .unwrap()
+        };
+        let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
+        let plain = settings_view(&config(""), profile);
+        let paired = settings_view(
+            &config("  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n"),
+            profile,
+        );
+        assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
     }
 
     /// The anchor tier carries a capacity on both windows, so every model with a weight has a burn rate on each.

@@ -1525,7 +1525,6 @@ export interface Settings {
    * which then reads as the empty model too; null otherwise.
    */
   subscriptionCosts: SubscriptionCosts & { problem: string | null; source: string };
-  usage: { cacheTtlSeconds: number };
 }
 
 export interface SessionInfo {

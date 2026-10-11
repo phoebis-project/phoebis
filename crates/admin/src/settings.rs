@@ -27,7 +27,6 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             "subscription_costs_path": s.subscription_costs_path,
         },
         "subscription_costs": envelopes["subscription_costs"],
-        "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds },
     }))
     .into_response()
 }

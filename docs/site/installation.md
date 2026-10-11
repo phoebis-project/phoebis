@@ -447,9 +447,7 @@ upstream:
   # extra_ca_pem: ./lab-ca.pem
   # resolve_override: 127.0.0.1:8443
 usage:
-  # Both keys are optional: how long a cached usage snapshot answers a manual refresh, and how many accounts'
-  # usage and profile fetches run at once.
-  cache_ttl_seconds: 60
+  # Optional: how many accounts' usage and profile fetches run at once.
   refresh_concurrency: 2
 ```
 
@@ -735,27 +733,23 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Defaults whole. `cache_ttl_seconds` is how long the usage service keeps a reading as its cached snapshot. The poll and
-the refresh read the endpoint whatever the cache holds, under the account's hold, and answer the reading they made.
+Defaults whole. The poll and the refresh read the endpoint under the account's hold and answer the reading they made.
 `refresh_concurrency` is how many accounts' usage and profile fetches may run at once.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `cache_ttl_seconds` | `60` | 1 to 3600 |
 | `refresh_concurrency` | `2` | 1 to 16 |
 
 Refused with:
 
-- `cache_ttl_seconds`: `usage.cache_ttl_seconds must be between 1 and 3600, not {value}`
 - `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
 
-The checks above run in a fixed order at load, not block by block: `usage.cache_ttl_seconds`,
-`usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
-`routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
+The checks above run in a fixed order at load, not block by block: `usage.refresh_concurrency`, `storage.path`, the
+`proxy` bounds, `routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
 `routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
-`stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether
-`stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported, so fix the file top
-to bottom to find the next one.
+`stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path`
+and `storage.path` name the same file. The first failure is the one reported, so fix the file top to bottom to find the
+next one.
 
 `stats.ledger_path` and `storage.path` cannot name the same file because two schemas in one file open quietly
 and lose the ledger's columns: the ledger's tables would open inside the registry file, read its schema

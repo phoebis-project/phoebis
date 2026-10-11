@@ -185,9 +185,6 @@
         },
         "overrides": {}
       }
-    },
-    "usage": {
-      "cache_ttl_seconds": 60
     }
   }
 }
