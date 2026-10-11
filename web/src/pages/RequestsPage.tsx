@@ -244,7 +244,7 @@ export function RequestsPage() {
               </option>
             ))}
             <option value="custom" title={custom ? `${filters.range.from} to ${filters.range.to}` : undefined}>
-              {custom ? `Custom range: ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}` : 'Custom range'}
+              Custom range
             </option>
           </Select>
           {custom && (

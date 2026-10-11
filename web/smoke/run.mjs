@@ -5227,6 +5227,27 @@ localStorage.removeItem('phoebis.expertView');
     missing: [`held ${heldPools.calls.length}`, `opened ${JSON.stringify(opened)}`, `switched ${switched}`, `after release ${enabled()?.getAttribute('aria-checked') ?? 'no switch'}`, shown(q), focused()],
   });
   q.unmount();
+  // A filter chosen while the key list is still out keeps the dialog query, which opens once the list lands.
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop')?.name ?? 'laptop';
+  const heldKeys = deferNextCall('listKeys');
+  q = await mount('/keys?edit=laptop&group=access');
+  await q.settle(200);
+  const statusSelect = q.container.querySelector('.table-toolbar select[aria-label="Status"]');
+  if (statusSelect) {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(statusSelect, 'active');
+    statusSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  await q.settle(100);
+  const beforeList = [titleOf(q), q.location().search];
+  heldKeys.release();
+  heldKeys.restore();
+  await q.settle(300);
+  results.push({
+    name: '/keys a status chosen before the key list lands keeps the dialog query, and the dialog then opens on its group',
+    ok: heldKeys.calls.length > 0 && JSON.stringify(beforeList) === JSON.stringify(['no dialog', '?status=active&edit=laptop&group=access']) && titleOf(q) === `Edit ${laptop}` && shown(q) === 'Access' && q.location().search === '?status=active',
+    missing: [`held ${heldKeys.calls.length}`, JSON.stringify(beforeList), titleOf(q), shown(q), q.location().search],
+  });
+  q.unmount();
   q = await mount('/keys?edit=nope');
   await q.settle(200);
   results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
@@ -8183,7 +8204,7 @@ m.unmount();
     ok:
       range?.options.length === 4 &&
       range.value === 'custom' &&
-      (option?.textContent ?? '').startsWith('Custom range') &&
+      option?.textContent === 'Custom range' &&
       (option?.getAttribute('title') ?? '').includes(FROM) &&
       (option?.getAttribute('title') ?? '').includes(TO) &&
       JSON.stringify(bounds(linked)) === JSON.stringify(['2026-09-16T12:00', '2026-09-16T13:00']) &&
@@ -8968,13 +8989,15 @@ m.unmount();
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
+    const sessionOf = new Map(hour.rows.map((r) => [r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`, r.sessionId]));
     for (const tr of trs(m)) {
       const time = cell(tr, 'time')?.firstChild?.textContent ?? '';
       const say = (what) => wrong.push(`${time}: ${what}`);
       if (!all(cell(tr, 'time'), ['request'])) say(`time ${hrefs(cell(tr, 'time'))}`);
       const session = cell(tr, 'session')?.querySelector('a');
-      // The Sessions page reads no session key, so the link opens the view and its title names the session.
-      if (session && (session.getAttribute('href') !== '/sessions' || !session.getAttribute('title'))) say(`session ${session.getAttribute('href')}`);
+      // The Sessions page reads no session key, so the link opens the view and its title names the row's own session.
+      const own = sessionOf.get(tr.getAttribute('data-row') ?? '');
+      if (session && (session.getAttribute('href') !== '/sessions' || own == null || session.getAttribute('title') !== own)) say(`session ${session.getAttribute('href')} ${session.getAttribute('title')} for ${own}`);
       if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
       if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
       const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
@@ -10059,7 +10082,7 @@ m.unmount();
       const pairs = kvRows(detail?.querySelector(':scope > .kv'));
       const href = (label) => pairs.find((p) => p.label === label)?.dd?.querySelector('a')?.getAttribute('href') ?? null;
       const head = [['When', utc(at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
-      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])) };
+      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])), texts: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.textContent)])) };
       results.push({
         name: `/routing-log the ${kind} detail reads its pairs`,
         ok:
@@ -10074,16 +10097,18 @@ m.unmount();
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;
     const permitted = modelLinks.model_permitted;
-    // The Models page reads no model key, so each model's link opens the view itself.
-    const model = () => '/models';
+    // The Models page reads no model key, so each model's link opens the view itself and its text names the model.
+    const model = (pair, id) => JSON.stringify([pair.links, pair.texts]) === JSON.stringify([['/models'], [id]]);
+    const pairOf = (entry, label) => ({ links: entry.links[label], texts: entry.texts[label] });
     results.push({
       name: '/routing-log the model rejected and permitted details link each account and model they name',
       ok:
         rejected !== undefined && permitted !== undefined &&
+        rejected.event.detail.wire_model !== rejected.event.model &&
         JSON.stringify(permitted.links['Rejected by']) === JSON.stringify(permitted.event.detail.rejected_by.map((id) => `/accounts/${id}`)) &&
-        JSON.stringify(rejected.links['Model sent']) === JSON.stringify([model(rejected.event.detail.wire_model)]) && JSON.stringify(rejected.links['Model resolved']) === JSON.stringify([model(rejected.event.model)]) &&
-        JSON.stringify(permitted.links['Model sent']) === JSON.stringify([model(permitted.event.detail.wire_model)]) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
-      missing: [JSON.stringify(rejected?.links), JSON.stringify(permitted?.links)],
+        model(pairOf(rejected, 'Model sent'), rejected.event.detail.wire_model) && model(pairOf(rejected, 'Model resolved'), rejected.event.model) &&
+        model(pairOf(permitted, 'Model sent'), permitted.event.detail.wire_model) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
+      missing: [JSON.stringify(rejected?.links), JSON.stringify(rejected?.texts), JSON.stringify(permitted?.links), JSON.stringify(permitted?.texts)],
     });
   }
   {
@@ -12630,6 +12655,36 @@ m.unmount();
     });
     page.unmount();
   }
+  {
+    // A typed pair that does not end after it starts stays beside the address, which would read it as the preset, and
+    // an edit writes its own minute with the other bound kept to the millisecond.
+    const name = '/analytics a backward pair typed into the Custom inputs reads End must be after start. with the address unchanged, and a valid edit writes from and to';
+    const FROM = '2026-09-15T14:00:00.123Z';
+    const TO = '2026-09-15T15:59:59.999Z';
+    const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const to = () => page.container.querySelector('input[aria-label="To"]');
+    const message = () => [...page.container.querySelectorAll('.filters__range .pairing__expired')].map((e) => e.textContent?.trim()).join();
+    const sentDuring = async (text) => {
+      const spy = countCalls('getAnalyticsSeries');
+      typeIn(to(), text);
+      await page.settle(300);
+      spy.restore();
+      return { bounds: bounds(page), message: message(), query: query(page), sent: [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))] };
+    };
+    if (!to()) controlMissing(name, 'To');
+    else {
+      const backward = await sentDuring('2026-09-15T13:00');
+      const edited = await sentDuring('2026-09-15T15:30');
+      results.push({
+        name,
+        ok:
+          JSON.stringify(backward) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T13:00'], message: 'End must be after start.', query: { from: FROM, to: TO }, sent: [] }) &&
+          JSON.stringify(edited) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T15:30'], message: '', query: { from: FROM, to: '2026-09-15T15:30:00.000Z' }, sent: [`${FROM} 2026-09-15T15:30:00.000Z`] }),
+        missing: [JSON.stringify(backward), JSON.stringify(edited)],
+      });
+    }
+    page.unmount();
+  }
   // Two story sessions with requests in the default day under two keys, so each lifetime is its own.
   const inDay = (r) => r.sessionId !== null && r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 23 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN;
   const first = requests.find((r) => inDay(r) && r.keyId === 'desktop');
@@ -12665,6 +12720,32 @@ m.unmount();
         missing: [page.location().search, JSON.stringify(keyed), `total ${total(page)}`],
       });
       page.unmount();
+    }
+  }
+  {
+    // The unit is a view control, so a change reads the funded series and breakdown alone: the series, the breakdowns,
+    // the speed series, the placements and a session's fold read once, at the load, and stay.
+    const name = '/analytics a unit change on Cache reads the funded series and breakdown alone, and nothing in a session view';
+    const READS = ['analyticsPlacements', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'listRequests'];
+    const across = async (address) => {
+      const page = await mount(address, { now: CLOCK_ORIGIN });
+      const select = page.container.querySelector('#cache .analytics-section__head select[aria-label="Cost unit"]');
+      const spies = READS.map((method) => [method, countCalls(method)]);
+      if (select) await chooseIn(page, select, 'usd');
+      for (const [, spy] of spies) spy.restore();
+      const read = { calls: spies.flatMap(([method, spy]) => spy.calls.map(([q]) => [method, q?.groupBy ?? null, q?.funding ?? null].join(' ').trim())), unit: query(page).unit ?? null };
+      page.unmount();
+      return read;
+    };
+    if (first === undefined) results.push({ name, ok: false, missing: ['no desktop session in the default range'] });
+    else {
+      const unscoped = await across('/analytics#cache');
+      const session = await across(`/analytics?session=${encodeURIComponent(first.sessionId)}#cache`);
+      results.push({
+        name,
+        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsSeries key billed'], unit: 'usd' }) && JSON.stringify(session) === JSON.stringify({ calls: [], unit: 'usd' }),
+        missing: [JSON.stringify(unscoped), JSON.stringify(session)],
+      });
     }
   }
   {
@@ -12737,6 +12818,16 @@ m.unmount();
     const cleared = page.location().search;
     if (select) await chooseIn(page, select, 'laptop');
     results.push({ name, ok: firstKey !== 'laptop' && read === 'laptop' && cleared === '' && page.location().search === '?key=laptop' && select?.value === 'laptop', missing: [`first ${firstKey}`, `read ${read}`, `cleared ${cleared}`, page.location().search] });
+    page.unmount();
+  }
+  {
+    const name = '/models reads a key the list does not carry as the first key, its rules and its name';
+    const [first] = await api.listKeys();
+    const spy = countCalls('getKeyModels');
+    const page = await mount('/models?key=nope');
+    spy.restore();
+    const read = { last: spy.calls.at(-1)?.[0] ?? null, select: page.container.querySelector('select[aria-label="Key"]')?.value ?? null, title: page.container.querySelector('.models__rules .card__title')?.textContent?.trim() ?? null };
+    results.push({ name, ok: first !== undefined && JSON.stringify(read) === JSON.stringify({ last: first.id, select: first.id, title: `Processed rules for ${first.name}` }), missing: [`first ${first?.id}`, JSON.stringify(read)] });
     page.unmount();
   }
 }

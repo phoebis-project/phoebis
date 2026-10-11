@@ -1,3 +1,4 @@
+import { REQUEST_KIND_VALUES } from '@/api/decode';
 import type { AnalyticsGroupBy, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
 import { COST_UNITS } from './analytics';
 
@@ -164,7 +165,7 @@ export interface RequestsAddress {
   turnOrigins: string[];
 }
 
-const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', 'count_tokens', 'inference', 'probe'];
+const REQUEST_KINDS: readonly ('' | RequestKind)[] = ['', ...REQUEST_KIND_VALUES];
 
 export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   search: text('search'),
@@ -210,8 +211,11 @@ export interface AnalyticsAddress {
   unit: string;
 }
 
-const GROUP_BYS: readonly Exclude<AnalyticsGroupBy, 'all'>[] = ['account', 'client', 'effort', 'key', 'kind', 'model', 'pool', 'request_class', 'speed', 'user_agent'];
-const BURN_GROUPS: readonly BurnGroup[] = ['account', 'key', 'request_class', 'session'];
+// Key tables rather than lists, so a group-by or a burn group the types gain fails to compile until it is listed here.
+const GROUP_BY_KEYS = { account: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, speed: true, user_agent: true } satisfies Record<Exclude<AnalyticsGroupBy, 'all'>, true>;
+const BURN_GROUP_KEYS = { account: true, key: true, request_class: true, session: true } satisfies Record<BurnGroup, true>;
+const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as Exclude<AnalyticsGroupBy, 'all'>[];
+const BURN_GROUPS = Object.keys(BURN_GROUP_KEYS) as BurnGroup[];
 
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),

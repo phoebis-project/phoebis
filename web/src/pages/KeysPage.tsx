@@ -42,8 +42,20 @@ export function KeysPage() {
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const { filters, update } = useQueryFilters(KEYS_CODEC);
+  const { filters } = useQueryFilters(KEYS_CODEC);
   const status = filters.status as 'all' | KeyStatus;
+  // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
+  // then carries them through. Written at once, as the hook writes.
+  const update = (patch: Partial<KeysAddress>) => {
+    const params = KEYS_CODEC.toParams({ ...filters, ...patch });
+    const current = new URLSearchParams(location.search);
+    for (const name of ['edit', 'group']) {
+      const value = current.get(name);
+      if (value !== null) params.set(name, value);
+    }
+    const next = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { flushSync: true, replace: true });
+  };
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
   // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
   // the router's usual way.

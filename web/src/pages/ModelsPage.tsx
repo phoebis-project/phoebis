@@ -45,7 +45,10 @@ export function ModelsPage() {
   const keys = useAsync(() => api.listKeys(), []);
   const { filters, update } = useQueryFilters(MODELS_CODEC);
   const firstKey = keys.data?.[0]?.id;
-  const keyId = (filters.key || firstKey) ?? null;
+  // The address reads as written until the keys are read, so its key's rules load beside the list, and a key the list
+  // does not carry then reads as the first.
+  const listed = keys.data === null || keys.data.some((k) => k.id === filters.key);
+  const keyId = ((listed && filters.key) || firstKey) ?? null;
   const key = keys.data?.find((k) => k.id === keyId) ?? null;
   const models = useAsync(() => (keyId === null ? Promise.resolve(null) : api.getKeyModels(keyId)), [keyId, tick]);
   const state = useAsync(() => api.getModelsState(), [tick]);

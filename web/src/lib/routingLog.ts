@@ -673,7 +673,8 @@ export async function followPages(read: (cursor: string | undefined) => Promise<
 /** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */
 export function logHref(link: LogLink): string {
   const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
-  return `/routing-log?${ROUTING_LOG_CODEC.toParams({ accounts: link.accounts ?? [], keys: [], kinds: link.kinds ?? [], models: link.models ?? [], pools: link.pools ?? [], range, request: link.request ?? '', session: link.session ?? '' })}`;
+  const search = ROUTING_LOG_CODEC.toParams({ accounts: link.accounts ?? [], keys: [], kinds: link.kinds ?? [], models: link.models ?? [], pools: link.pools ?? [], range, request: link.request ?? '', session: link.session ?? '' }).toString();
+  return search ? `/routing-log?${search}` : '/routing-log';
 }
 
 const QUARTER_HOUR = 15 * MINUTE;

@@ -208,7 +208,16 @@ export function AnalyticsPage() {
   // or a reload lands on the position.
   const unit = a.unit as AnalyticsUnit;
   const funding = UNIT_FUNDING[unit];
-  const filters = useMemo<Record<Dim, string[]>>(() => ({ accountId: a.accounts, keyId: a.keys, model: a.models, poolId: a.pools, sessionId: a.session ? [a.session] : [] }), [a]);
+  // Keyed on the values: every address change reads new lists, and a unit change must not re-issue the reads the
+  // filters key. A list value holds no comma, since the address splits on them.
+  const accountList = a.accounts.join(',');
+  const keyList = a.keys.join(',');
+  const modelList = a.models.join(',');
+  const poolList = a.pools.join(',');
+  const filters = useMemo<Record<Dim, string[]>>(() => {
+    const split = (joined: string) => (joined ? joined.split(',') : []);
+    return { accountId: split(accountList), keyId: split(keyList), model: split(modelList), poolId: split(poolList), sessionId: a.session ? [a.session] : [] };
+  }, [accountList, keyList, modelList, poolList, a.session]);
   const [sessionText, setSessionText] = useState(a.session);
   // The field follows the address, so a link or the bare Analytics entry replaces what it shows.
   useEffect(() => setSessionText(a.session), [a.session]);
@@ -230,16 +239,16 @@ export function AnalyticsPage() {
     const at = clock.now();
     commit({ range: next === 'custom' ? { from: iso(at - 3 * 24 * HOUR), preset: 'custom', to: iso(at) } : { from: '', preset: next, to: '' } }, at);
   };
-  // An edit is the minute the operator typed.
-  const changeCustom = (next: { from: string; to: string }) => {
-    const from = Date.parse(next.from);
-    const to = Date.parse(next.to);
-    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) {
-      setDraft({ ...next, for: pair });
+  // An edit is the minute the operator typed, and the other bound keeps its instant to the millisecond.
+  const changeBound = (bound: 'from' | 'to', local: string) => {
+    const at = Date.parse(local);
+    const next = bound === 'from' ? { from: at, to: Date.parse(a.range.to) } : { from: Date.parse(a.range.from), to: at };
+    if (Number.isNaN(at) || next.to <= next.from) {
+      setDraft(bound === 'from' ? { ...custom, for: pair, from: local } : { ...custom, for: pair, to: local });
       return;
     }
     setDraft(null);
-    commit({ range: { from: iso(from), preset: 'custom', to: iso(to) } });
+    commit({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
   const changeGroupBy = (next: GroupBy) => commit({ by: next });
   const changeFilter = (dim: QueryDim, next: string[]) => {
@@ -272,15 +281,9 @@ export function AnalyticsPage() {
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const span = useMemo(() => {
-    if (range !== 'custom') {
-      const { from, to } = addressWindow(a.range, ANALYTICS_RANGES, '24h', now);
-      return { fromMs: from, toMs: to, invalid: false };
-    }
-    const from = Date.parse(a.range.from);
-    const to = Date.parse(a.range.to);
-    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return { fromMs: now - 24 * HOUR, toMs: now, invalid: true };
-    return { fromMs: from, toMs: Math.min(to, now), invalid: false };
-  }, [range, a.range, now]);
+    const { from, to } = addressWindow(a.range, ANALYTICS_RANGES, '24h', now);
+    return { fromMs: from, toMs: Math.min(to, now) };
+  }, [a.range, now]);
   const draftInvalid = draft !== null && draft.for === pair;
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
@@ -500,10 +503,10 @@ export function AnalyticsPage() {
         />
         {range === 'custom' && (
           <span className="filters__range">
-            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
+            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeBound('from', e.target.value)} aria-label="From" />
             <span className="muted">to</span>
-            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
-            {span.invalid ? <span className="pairing__expired">End must be after start. Showing the last 24h.</span> : draftInvalid && <span className="pairing__expired">End must be after start.</span>}
+            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeBound('to', e.target.value)} aria-label="To" />
+            {draftInvalid && <span className="pairing__expired">End must be after start.</span>}
           </span>
         )}
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
