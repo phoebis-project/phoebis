@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
-use phoebis_routing::{listing::row_for, Rates, FIVE_HOUR};
+use phoebis_routing::{listing::row_for, LongContextRates, Rates, FIVE_HOUR};
 use phoebis_store::{canonical_id, ModelRule};
 
 use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -64,16 +64,18 @@ pub fn break_even_ms(
 /// multipliers, the model's own override where it has one. A token costs the model's weight times the type's
 /// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike. Dollars read
 /// `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits
-/// at the fast cells, and a model the price table prices nowhere takes the tightest row of that table (the smallest
-/// break-even among the priced rows). Probe costs do not read these factors.
+/// at the fast cells, at a row's long-context rates when `prompt_tokens` is above their threshold, the set a probe's
+/// cost reads on the same prompt, and a model the price table prices nowhere takes the tightest row of that table (the
+/// smallest break-even among the priced rows). Probe costs do not read these factors.
 pub fn factors_for(
     pricing: &PriceTable,
     tables: &PlanTables,
     funding: Funding,
     canonical_model: &str,
     fast: bool,
+    prompt_tokens: u64,
 ) -> BreakEvenFactors {
-    FactorRows::of(pricing, tables).factors(funding, canonical_model, fast)
+    FactorRows::of(pricing, tables).factors(funding, canonical_model, fast, prompt_tokens)
 }
 
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
@@ -83,6 +85,10 @@ pub(crate) struct FactorRows {
     /// The dollar rows at the fast cells, a model without fast cells at its standard ones, as the price table lists
     /// them.
     fast: HashMap<String, Rates>,
+    /// Each set's long-context rates by the key of the row they belong to, which a prompt above their threshold reads
+    /// in place of the row's own. A row with fast cells has none in the fast set.
+    dollars_long: HashMap<String, LongContextRates>,
+    fast_long: HashMap<String, LongContextRates>,
     plan: HashMap<String, Rates>,
     /// The cost model's shared type multipliers, and the models that set their own.
     plan_multipliers: BreakEvenFactors,
@@ -93,8 +99,10 @@ pub(crate) struct FactorRows {
 
 impl FactorRows {
     pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
-        let dollars = pricing.rate_table().rows;
-        let fast = pricing.fast_rate_table().rows;
+        let dollar_table = pricing.rate_table();
+        let fast_table = pricing.fast_rate_table();
+        let (dollars, dollars_long) = (dollar_table.rows, dollar_table.long_context);
+        let (fast, fast_long) = (fast_table.rows, fast_table.long_context);
         let tightest_fast = tightest(fast.values().filter_map(BreakEvenFactors::of));
         let tightest = tightest(dollars.values().filter_map(BreakEvenFactors::of));
         let shared = &tables.costs.type_multiplier;
@@ -122,6 +130,8 @@ impl FactorRows {
         FactorRows {
             dollars,
             fast,
+            dollars_long,
+            fast_long,
             plan: tables.rate_table(FIVE_HOUR).rows,
             plan_multipliers,
             plan_overrides,
@@ -131,23 +141,43 @@ impl FactorRows {
     }
 
     /// The factors of `canonical_model` under `funding`, from the fast rows when `fast`: a fast recipe's probes draw
-    /// usage credits at the fast cells, whatever funds the account.
+    /// usage credits at the fast cells, whatever funds the account. A dollar row's long-context rates stand in for its
+    /// own when `prompt_tokens` is above their threshold, as `RateTable::rates_for` selects them. The plan's rows carry
+    /// no such set.
     pub(crate) fn factors(
         &self,
         funding: Funding,
         canonical_model: &str,
         fast: bool,
+        prompt_tokens: u64,
     ) -> BreakEvenFactors {
-        let dollars = if fast { &self.fast } else { &self.dollars };
+        let (dollars, long) = if fast {
+            (&self.fast, &self.fast_long)
+        } else {
+            (&self.dollars, &self.dollars_long)
+        };
         match funding {
             Funding::Plan => row_for(canonical_model, |k| self.plan.get(k))
                 .and_then(BreakEvenFactors::of)
                 .or_else(|| row_for(canonical_model, |k| self.plan_overrides.get(k)).copied()),
             Funding::ApiKey | Funding::Overage => {
-                row_for(canonical_model, |k| dollars.get(k)).and_then(BreakEvenFactors::of)
+                // One key for both maps, so a dated row without the set never reads its undated row's.
+                row_for(canonical_model, |k| {
+                    dollars.get_key_value(k).map(|(key, _)| key)
+                })
+                .and_then(|key| match long.get(key) {
+                    Some(long) if prompt_tokens > long.over => Some(&long.rates),
+                    _ => dollars.get(key),
+                })
+                .and_then(BreakEvenFactors::of)
             }
         }
         .unwrap_or_else(|| self.priced_nowhere(funding, fast))
+    }
+
+    /// The models the dollar table prices, by their row keys.
+    pub(crate) fn dollar_models(&self) -> impl Iterator<Item = &str> {
+        self.dollars.keys().map(String::as_str)
     }
 
     /// A model no row and no override names: the plan's shared multipliers, or the tightest dollar row at the recipe's
@@ -292,18 +322,20 @@ pub struct ResolvedCeilings {
 }
 
 /// `resolve` over every combination of `fundings`, the main agent's TTL for each under `cache_ttl` (both TTLs when
-/// the policy leaves the markers as sent) and the models `rules` allow, each at standard speed, the one the dialog's
-/// figures describe. The models are the dollar table's rows and the ids the TTL sets and the rules' wildcard-free
-/// entries name, since those name the catalog's dated ids where a row is keyed undated, and each is folded, judged,
-/// priced and given its TTL as a request on it would be. Rules that allow none of them leave a model priced nowhere.
-/// Tables that give no break-even fall back to the shipped tightest row, as `ceilings_for` does. `None` with no
-/// funding.
+/// the policy leaves the markers as sent) and the models `rules` allow, each at standard speed and on a prompt under
+/// any long-context threshold, the one the dialog's figures describe. The models are the dollar table's rows and the
+/// ids the TTL sets and the rules' wildcard-free entries name, and each is folded, judged, priced and given its TTL as
+/// a request on it would be. A row keyed undated that `dated` maps to the catalog's dated id is judged under that id,
+/// which is what a request on it runs under, so a deny entry naming the dated id drops the row. Rules that allow none
+/// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
+/// `ceilings_for` does. `None` with no funding.
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
     cache_ttl: &CacheTtlPolicy,
     rules: &[ModelRule],
     fundings: &[Funding],
     rows: &FactorRows,
+    dated: &HashMap<String, String>,
     timing: &KeepaliveTiming,
 ) -> Option<ResolvedCeilings> {
     let processed = process(&[], RulesMode::Extend, rules);
@@ -327,7 +359,7 @@ pub(crate) fn resolve_pool(
         .keys()
         .cloned()
         .chain(named)
-        .filter(|model| allows(&processed, model))
+        .filter(|model| allows(&processed, dated.get(model).unwrap_or(model)))
         .collect();
     models.sort_unstable();
     models.dedup();
@@ -343,7 +375,7 @@ pub(crate) fn resolve_pool(
         } else {
             models
                 .iter()
-                .map(|model| (rows.factors(funding, model, false), model.as_str()))
+                .map(|model| (rows.factors(funding, model, false, 0), model.as_str()))
                 .collect()
         };
         for (factors, model) in picks {

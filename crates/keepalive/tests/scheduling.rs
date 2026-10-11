@@ -1720,3 +1720,109 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
     );
     assert_eq!(r.status("main").canonical_model, DATED);
 }
+
+/// A tier read that keeps failing warns once per account and streak. An account deleted while its streak lasts leaves
+/// the streak at the next tick, so a later account under the same id starts its own streak with its own first line.
+#[tokio::test]
+async fn an_account_deleted_during_a_failing_tier_streak_leaves_it_and_a_later_account_warns_again()
+{
+    const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
+        on_disk: true,
+        pool: PoolSpec {
+            overage_policy: OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        ..RigSpec::default()
+    })
+    .await;
+    let registry =
+        rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
+    // The tier reads name the column, and so do the registry's reload and an account's insert, so the column is back
+    // while the account goes and comes again.
+    let unreadable = |held: bool| {
+        registry
+            .execute_batch(if held {
+                "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;"
+            } else {
+                "ALTER TABLE accounts RENAME COLUMN subscription_tier_held TO subscription_tier;"
+            })
+            .unwrap();
+    };
+    let warnings = || {
+        captured
+            .text()
+            .lines()
+            .filter(|line| line.contains("the account's tier could not be read"))
+            .count()
+    };
+    r.observe("main").await;
+    unreadable(true);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, warnings()),
+        (1, 1),
+        "the first failing read starts the streak:\n{}",
+        captured.text()
+    );
+
+    unreadable(false);
+    r.h.store.delete_account("o", "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.step().await;
+    r.h.store
+        .insert_account(&relay_common::test_account_row(&oauth(
+            "o",
+            OAUTH_SECRET,
+            0,
+        )))
+        .unwrap();
+    let incarnation = r.h.store.account("o").unwrap().unwrap().incarnation;
+    r.h.store
+        .commit_credentials(
+            "o",
+            incarnation,
+            1,
+            None,
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new(OAUTH_SECRET),
+                refresh_token: None,
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "o".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    unreadable(true);
+
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("o"));
+    assert_eq!(
+        warnings(),
+        2,
+        "the later account's first failing read warns:\n{}",
+        captured.text()
+    );
+}

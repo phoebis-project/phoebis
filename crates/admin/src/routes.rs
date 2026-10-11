@@ -1459,13 +1459,16 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
     // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
-        .then(|| {
-            state
-                .store
-                .subscription(&row.id)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
+        .then(|| match state.store.subscription(&row.id) {
+            Ok(subscription) => subscription.unwrap_or_default(),
+            Err(error) => {
+                tracing::warn!(
+                    account = %row.id,
+                    %error,
+                    "the account's tier could not be read, so the view answers without it"
+                );
+                Default::default()
+            }
         })
         .map(|s| {
             json!({

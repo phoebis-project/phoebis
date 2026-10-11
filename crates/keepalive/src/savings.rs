@@ -7,22 +7,9 @@ use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNAT
 use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::AccountKind;
 
-use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
+use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
-use crate::view::RecipeState;
-
-/// A withheld probe's skip row keys, read off its agent under the lock: the session, the key generation, the pool, the
-/// account, the model, the speed and the recipe state.
-type QueuedSkip = (
-    SessionKey,
-    i64,
-    String,
-    Option<String>,
-    String,
-    bool,
-    RecipeState,
-);
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
 /// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
@@ -229,32 +216,23 @@ impl Engine {
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_skipped(
-        &self,
-        at: i64,
-        key: &SessionKey,
-        key_generation: i64,
-        pool_id: &str,
-        account: Option<&str>,
-        canonical_model: &str,
-        fast: bool,
-        state: RecipeState,
-    ) {
+    pub(crate) fn record_skipped(&self, at: i64, skip: &Skipped) {
         let mut d = delta(
             at,
-            key,
-            key_generation,
-            pool_id,
-            account,
-            canonical_model,
+            &skip.key,
+            skip.key_generation,
+            &skip.pool_id,
+            skip.account.as_deref(),
+            &skip.canonical_model,
             "probe",
-            fast,
+            skip.fast,
         );
         d.probes_skipped = 1;
-        d.account_kind = self.account_kind_of(account);
+        d.account_kind = self.account_kind_of(skip.account.as_deref());
         self.parts.ledger.record(Record::Keepalive(d));
-        self.parts.metrics.observe_skipped(pool_id, state.as_str());
+        self.parts
+            .metrics
+            .observe_skipped(&skip.pool_id, skip.state.as_str());
     }
 
     /// Drains what the last locked section queued: the settlements of stopped recipes and the probes a gate
@@ -263,42 +241,16 @@ impl Engine {
         let now = self.now();
         let (settlements, skipped) = {
             let mut inner = self.lock();
-            let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<QueuedSkip> = Vec::new();
-            for (key, agent_id, state) in queued {
-                let Some(agent) = inner
-                    .sessions
-                    .get(&key)
-                    .and_then(|s| s.agents.get(&agent_id))
-                else {
-                    continue;
-                };
-                skipped.push((
-                    key,
-                    agent.key_generation,
-                    agent.pool_id.clone(),
-                    agent.account.clone(),
-                    agent.canonical_model.clone(),
-                    agent.current.as_ref().is_some_and(|o| o.recipe.fast),
-                    state,
-                ));
-            }
-            (std::mem::take(&mut inner.settlements), skipped)
+            (
+                std::mem::take(&mut inner.settlements),
+                std::mem::take(&mut inner.skipped),
+            )
         };
         for settlement in settlements {
             self.record_settlement(now, settlement);
         }
-        for (key, key_generation, pool_id, account, model, fast, state) in skipped {
-            self.record_skipped(
-                now,
-                &key,
-                key_generation,
-                &pool_id,
-                account.as_deref(),
-                &model,
-                fast,
-                state,
-            );
+        for skip in &skipped {
+            self.record_skipped(now, skip);
         }
     }
 }

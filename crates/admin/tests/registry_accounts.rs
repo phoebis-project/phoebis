@@ -1,6 +1,38 @@
 mod common;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
 use common::{backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests};
 use fake_upstream::Respond;
+
+/// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
 
 #[tokio::test]
 async fn creating_an_api_key_account_verifies_it_and_a_rejected_key_is_refused() {
@@ -2052,5 +2084,68 @@ async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_
         ),
         (replacement, "sk-ant-api03-NEXT".to_string()),
         "the edit read from the deleted account wrote nothing on its replacement"
+    );
+}
+
+/// A tier the store cannot read leaves the account view answering as it does for an account with none stored, and the
+/// log says why, naming the account and the error, on every read.
+#[tokio::test]
+async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz"}}"#,
+            &phoebis_store::SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    // The tier read names the column, as the stored term's read does.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    // The harness drives the request through `oneshot` on this test's own task, so a thread-local subscriber sees
+    // every line the route writes.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let viewed = get(&parts.app, "/admin/accounts/business", Some(&cookie)).await;
+    assert_eq!(viewed.status(), 200);
+    assert_eq!(
+        json(viewed).await["subscription"],
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null, "derived_ends_at": null}),
+        "the view answers as for an account with no subscription stored"
+    );
+    let text = captured.text();
+    let warned: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.contains("the account's tier could not be read, so the view answers without it")
+        })
+        .collect();
+    assert_eq!(warned.len(), 1, "{text}");
+    assert!(
+        warned[0].contains(" WARN ")
+            && warned[0].contains("account=business")
+            && warned[0].contains("no such column: subscription_tier"),
+        "{}",
+        warned[0]
     );
 }

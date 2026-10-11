@@ -216,12 +216,7 @@ async fn a_model_resolved_between_a_probe_and_the_next_request_keeps_the_warm_cr
     // Past the first request's five-minute TTL and inside the probe's entry, which runs to 570 s.
     r.advance(60_000);
     let second = r.observe("main").await;
-    r.ledger.clone().shutdown().await.unwrap();
-    let rows =
-        r.db.read_blocking(|c| {
-            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-        })
-        .unwrap();
+    let rows = final_rollups(&r).await;
     assert_eq!(
         (
             inference_rows(&rows).kept_warm_requests,
@@ -1186,6 +1181,61 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         fundings(&rows, |row| row.probes_skipped > 0),
         billed,
         "the skip: {rows:?}"
+    );
+}
+
+/// A due probe a gate withholds files one skip row under the keys its recipe held when the hold placed it, the key and
+/// its generation, the pool, the account, the model and the speed, and counts once under the pool and the state the
+/// hold leaves.
+#[tokio::test]
+async fn a_withheld_probe_files_its_skip_row_under_the_keys_its_recipe_held() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe_with("main", &priced_body()).await;
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.enabled = false;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    let generation = r.generation("desktop");
+    let rows = final_rollups(&r).await;
+    let skipped: Vec<_> = rows
+        .iter()
+        .filter(|row| row.probes_skipped > 0)
+        .map(|row| {
+            (
+                row.key_id.as_str(),
+                row.key_generation,
+                row.pool_id.as_str(),
+                row.account_id.as_str(),
+                row.canonical_model.as_str(),
+                row.speed.as_str(),
+                row.funding.as_str(),
+                row.probes_skipped,
+            )
+        })
+        .collect();
+    assert_eq!(
+        skipped,
+        [("desktop", generation, "main", "a", PRICED, "standard", "billed", 1)]
+    );
+    let counted: Vec<String> = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+        .lines()
+        .filter(|line| line.starts_with("phoebis_keepalive_skipped_total{"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        counted,
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#]
     );
 }
 
@@ -2205,6 +2255,14 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    assert_eq!(
+        payload["unanswered"][0]["unit"].as_str(),
+        Some("window_share"),
+        "the probe settled in a share of the window: {}",
+        payload["unanswered"]
+    );
     r.advance(60_000);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &body).await;
@@ -2243,10 +2301,5 @@ async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_p
     // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
     // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.
     let over = 2_000.0 * 0.5 / 1_000_000.0;
-    let standard = 2_000.0 * 0.1 / 1_000_000.0;
     assert!((cost - over).abs() < 1e-12, "{cost}");
-    assert!(
-        (cost - standard).abs() > 1e-12,
-        "a lookup that ignores the prompt prices the standard cells: {cost}"
-    );
 }

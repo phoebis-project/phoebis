@@ -16,6 +16,8 @@ use crate::recipe::valid_id;
 
 pub const PROTOCOL: u64 = 1;
 
+/// An optional member added here is checked by hand twice, in `members()` and in the `present` list of
+/// `decode_json_event`, and both have to name it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
@@ -374,6 +376,7 @@ impl Inner {
                         {
                             return Err(err("agent_exists", 409));
                         }
+                        let released = self.sessions[&key].agents[&agent_id].last_stop;
                         self.discard(&key, &agent_id, Reason::AwaitingRequest, None);
                         let agent = self
                             .sessions
@@ -382,6 +385,9 @@ impl Inner {
                             .agents
                             .get_mut(&agent_id)
                             .unwrap();
+                        // The release's label stays until the late result lands, so a probe the release orphaned
+                        // settles under it rather than under nothing.
+                        agent.last_stop = released;
                         agent.set_state(AgentState::Busy);
                         agent.last_activity = now;
                         agent.idle_ticks = 0;

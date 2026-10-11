@@ -10,14 +10,15 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use phoebis_ledger::Speed;
+use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
-    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, UnansweredProbe, Wasted,
-    MAIN_AGENT,
+    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe,
+    Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -560,7 +561,8 @@ fn session_row(
     })
 }
 
-/// One agent row as the store keeps it: the payload, and the recipe's prompt and columns when one is retained.
+/// One agent row as the store keeps it: the payload, the recipe's columns when one is retained, and its prompt only
+/// when the recipe changed since the last landed save that carried it.
 fn agent_row(
     key: &PersistKey,
     agent: &Agent,
@@ -568,6 +570,11 @@ fn agent_row(
 ) -> Result<KeepaliveAgentRow, serde_json::Error> {
     let recipe = agent.current.as_ref().map(|o| &o.recipe);
     let no_headers: &[(String, String)] = &[];
+    let body_write = match recipe {
+        Some(recipe) if agent.body_dirty => BodyWrite::Seal(recipe.body.clone()),
+        None if agent.body_saved => BodyWrite::Clear,
+        _ => BodyWrite::Keep,
+    };
     Ok(KeepaliveAgentRow {
         key_id: key.0.clone(),
         key_generation: key.1,
@@ -575,7 +582,8 @@ fn agent_row(
         agent_id: agent.id.clone(),
         record_version: RECORD_VERSION,
         payload: serde_json::to_string(&PersistedAgent::of(agent))?,
-        body: recipe.map(|r| r.body.clone()),
+        body: None,
+        body_write,
         headers: serde_json::to_string(recipe.map_or(no_headers, |r| r.headers.as_slice()))?,
         body_size: recipe.map_or(0, |r| r.size),
         dispatched_ms: agent.current.as_ref().and_then(|o| o.dispatched_ms),
@@ -588,8 +596,13 @@ fn agent_row(
 #[derive(Default)]
 pub(crate) struct Snapshot {
     pub batch: KeepaliveBatch,
+    /// The settlements the load held for a save, taken under the lock this snapshot was read under: a save that lands
+    /// releases them, and one that fails puts them back in front of whatever the load queued since.
+    pub settled: Vec<Settlement>,
     sessions: Vec<(PersistKey, u64)>,
     agents: Vec<((PersistKey, String), u64)>,
+    /// The agent rows whose body this save seals (true) or clears (false), at the revision each was read at.
+    bodies: Vec<((PersistKey, String), u64, bool)>,
     removed_sessions: Vec<(PersistKey, u64)>,
     removed_agents: Vec<((PersistKey, String), u64)>,
     pools: Vec<(String, u64)>,
@@ -714,11 +727,15 @@ impl Inner {
         self.dirty.removed_agents.insert(row, revision);
     }
 
-    /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at. Nothing
-    /// is cleared here: `acknowledge` does that once the save has landed. A dirty row whose record left the map without
-    /// a removal, which only `close` does, is carried by nothing and retired with the rest.
-    pub(crate) fn persist_snapshot(&self, now: i64) -> Snapshot {
-        let mut snapshot = Snapshot::default();
+    /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at, and the
+    /// settlements the load held for a save. No dirty entry is cleared here: `acknowledge` does that once the save has
+    /// landed. A dirty row whose record left the map without a removal, which only `close` does, is carried by nothing
+    /// and retired with the rest.
+    pub(crate) fn persist_snapshot(&mut self, now: i64) -> Snapshot {
+        let mut snapshot = Snapshot {
+            settled: std::mem::take(&mut self.settlements_after_save),
+            ..Snapshot::default()
+        };
         for (row, revision) in &self.dirty.sessions {
             if let Some(session) = self.session_of(row) {
                 match session_row(row, session, now) {
@@ -736,7 +753,21 @@ impl Inner {
                 .and_then(|session| session.agents.get(agent_id))
             {
                 match agent_row(row, agent, now) {
-                    Ok(agent_row) => snapshot.batch.agents.push(agent_row),
+                    Ok(agent_row) => {
+                        let sealed = match agent_row.body_write {
+                            BodyWrite::Keep => None,
+                            BodyWrite::Clear => Some(false),
+                            BodyWrite::Seal(_) => Some(true),
+                        };
+                        if let Some(sealed) = sealed {
+                            snapshot.bodies.push((
+                                (row.clone(), agent_id.clone()),
+                                *revision,
+                                sealed,
+                            ));
+                        }
+                        snapshot.batch.agents.push(agent_row);
+                    }
                     Err(error) => {
                         tracing::warn!(key = %row.0, session = %row.2, agent = %agent_id, %error, "a keepalive agent could not be written")
                     }
@@ -777,16 +808,32 @@ impl Inner {
         snapshot
     }
 
-    /// The settlements held for a landed save go to the ledger's queue, which the flush drains once the lock is
+    /// The settlements a landed save carried go to the ledger's queue, which the flush drains once the lock is
     /// released.
-    pub(crate) fn release_settled(&mut self) {
-        let held = std::mem::take(&mut self.settlements_after_save);
-        self.settlements.extend(held);
+    pub(crate) fn release_settled(&mut self, settled: Vec<Settlement>) {
+        self.settlements.extend(settled);
     }
 
     /// Retires what a landed save carried: an entry leaves only while its revision is the one saved, so a change
-    /// since the snapshot keeps it dirty for the next flush.
+    /// since the snapshot keeps it dirty for the next flush. The body the save sealed or cleared is the registry's
+    /// whatever moved since, while the mark asking for a seal leaves only with its row's entry, since a recipe set
+    /// after the snapshot is a body this save did not carry.
     pub(crate) fn acknowledge(&mut self, snapshot: &Snapshot) {
+        for ((row, agent_id), revision, sealed) in &snapshot.bodies {
+            let unchanged =
+                self.dirty.agents.get(&(row.clone(), agent_id.clone())) == Some(revision);
+            if let Some(agent) = self
+                .sessions
+                .get_mut(&(row.0.clone(), row.2.clone()))
+                .filter(|session| session.key_generation == row.1)
+                .and_then(|session| session.agents.get_mut(agent_id))
+            {
+                agent.body_saved = *sealed;
+                if unchanged {
+                    agent.body_dirty = false;
+                }
+            }
+        }
         fn retire<K: Ord>(dirty: &mut BTreeMap<K, u64>, saved: &[(K, u64)]) {
             for (key, revision) in saved {
                 if dirty.get(key) == Some(revision) {
@@ -961,10 +1008,13 @@ impl Inner {
             });
             let mut session = payload.restore(now);
             for (agent_row, decoded) in agents {
-                let Some((agent, observation)) = decoded else {
+                let Some((mut agent, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
+                // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
+                // agent's next save.
+                agent.body_saved = agent_row.body_size > 0;
                 if self.agents >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
@@ -1121,31 +1171,34 @@ impl Engine {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let now = self.now();
-        let snapshot = self.lock().persist_snapshot(now);
+        let mut snapshot = self.lock().persist_snapshot(now);
         self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
         self.persist_progress.notify_waiters();
+        let settled = std::mem::take(&mut snapshot.settled);
         // Nothing to write means the registry already holds every row, which releases the held settlements too.
         if snapshot.is_empty() {
-            self.lock().release_settled();
+            self.lock().release_settled(settled);
             return;
         }
         if snapshot.batch.is_empty() {
             let mut inner = self.lock();
             inner.acknowledge(&snapshot);
-            inner.release_settled();
+            inner.release_settled(settled);
             return;
         }
         match self.parts.store.save_keepalive(&snapshot.batch) {
             Ok(()) => {
                 let mut inner = self.lock();
                 inner.acknowledge(&snapshot);
-                inner.release_settled();
+                inner.release_settled(settled);
                 if std::mem::take(&mut inner.persist_failing) {
                     tracing::info!("the keepalive's state reaches the registry again");
                 }
             }
             Err(error) => {
                 let mut inner = self.lock();
+                let queued = std::mem::replace(&mut inner.settlements_after_save, settled);
+                inner.settlements_after_save.extend(queued);
                 if !inner.persist_failing {
                     inner.persist_failing = true;
                     tracing::warn!(%error, "the keepalive's state could not be written to the registry, so the engine keeps it and retries at every flush");
@@ -1210,8 +1263,9 @@ impl Engine {
         }
     }
 
-    /// Every session and agent as the next save would write it, dirty or not, for a test that holds what a restart
-    /// restored against what was saved. Compiled only under `debug-hooks`.
+    /// Every session and agent as the next save would write it, dirty or not, with each agent's prompt and body as a
+    /// load reads them back, for a test that holds what a restart restored against what was saved. Compiled only under
+    /// `debug-hooks`.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn persist_rows(&self) -> (Vec<KeepaliveSessionRow>, Vec<KeepaliveAgentRow>) {
         let now = self.now();
@@ -1226,7 +1280,11 @@ impl Engine {
             );
             sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
             for agent in session.agents.values() {
-                agents.push(agent_row(&row, agent, now).expect("an agent payload serializes"));
+                agents.push(KeepaliveAgentRow {
+                    body: agent.current.as_ref().map(|o| o.recipe.body.clone()),
+                    body_write: BodyWrite::Keep,
+                    ..agent_row(&row, agent, now).expect("an agent payload serializes")
+                });
             }
         }
         (sessions, agents)

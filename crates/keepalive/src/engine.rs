@@ -14,7 +14,7 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtlPolicy, Relay};
-use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
+use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -345,10 +345,10 @@ fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usi
     }
 }
 
-/// The pool a window counts under, read once at its open: the pool the session's key is in now, read as
-/// `refresh_policy` reads it, else the agent's own pool id, else the pinned account's own id for an account outside
-/// every pool, so no window counts under the empty key, which no pool row reads. The key comes first because the
-/// agent's pool id is a copy only an admitted selection or a retained recipe's tick refreshes.
+/// The pool a window counts under, read once at its open: the pool of the session's key in the snapshot, else the
+/// agent's own pool id, else the pinned account's own id for an account outside every pool, so no window counts under
+/// the empty key, which no pool row reads. The key comes first because the agent's pool id is a copy only an admitted
+/// selection or a retained recipe's tick refreshes.
 fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
     snapshot
         .key(&agent.key_id)
@@ -525,6 +525,12 @@ pub(crate) struct Agent {
     pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
+    /// The recipe was set or replaced since the last landed save that carried its body, so the next save seals it.
+    pub body_dirty: bool,
+    /// Whether the registry may hold a sealed body under this agent's row, so a save without a recipe clears it. A new
+    /// record starts true, since it can take over a row an earlier record sealed a body into, and an acknowledged seal
+    /// or clear sets it to what the registry then holds.
+    pub body_saved: bool,
     /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
     pub expires: Option<i64>,
     /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
@@ -606,6 +612,8 @@ impl Agent {
             last_prefix: None,
             generation: 0,
             current: None,
+            body_dirty: false,
+            body_saved: true,
             expires: None,
             jitter_frac: 0.0,
             retry_at: None,
@@ -817,16 +825,30 @@ pub(crate) struct Settlement {
     pub fast: bool,
 }
 
-/// A due probe a lapsed entry withheld, with the keys its skip row files under, read while the recipe still held
-/// its speed.
-struct Skipped {
-    key: SessionKey,
-    key_generation: i64,
-    pool_id: String,
-    account: Option<String>,
-    canonical_model: String,
-    fast: bool,
-    state: RecipeState,
+/// A due probe a gate or a lapsed entry withheld, with the keys its skip row files under, read while the recipe still
+/// held its speed.
+pub(crate) struct Skipped {
+    pub key: SessionKey,
+    pub key_generation: i64,
+    pub pool_id: String,
+    pub account: Option<String>,
+    pub canonical_model: String,
+    pub fast: bool,
+    pub state: RecipeState,
+}
+
+impl Skipped {
+    fn of(key: &SessionKey, agent: &Agent, state: RecipeState) -> Skipped {
+        Skipped {
+            key: key.clone(),
+            key_generation: agent.key_generation,
+            pool_id: agent.pool_id.clone(),
+            account: agent.account.clone(),
+            canonical_model: agent.canonical_model.clone(),
+            fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+            state,
+        }
+    }
 }
 
 /// One probe the next real request has not answered yet: what it cost and the unit it settled in, the lineage a
@@ -917,10 +939,9 @@ pub(crate) struct Inner {
     /// The settlements the load queued, held until a save has dropped their probes from the agents: a failed save
     /// then sends nothing to the ledger, and a restart before a landed save settles each probe once rather than twice.
     pub settlements_after_save: Vec<Settlement>,
-    /// Due probes a gate withheld this tick, ledgered as skipped, each with the recipe state the hold left, read under
-    /// the lock that placed it: a real request between the tick and the flush would otherwise file a gate's skip
-    /// under the state it moved the recipe to.
-    pub skipped: Vec<(SessionKey, String, RecipeState)>,
+    /// The probes a gate withheld this locked section, with the keys their skip rows file under, read while the
+    /// recipe still held its speed.
+    pub skipped: Vec<Skipped>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that
@@ -1036,8 +1057,9 @@ impl Engine {
     /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
     /// member.
     /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an API-key
-    /// member the dollar rows.
-    pub fn resolve_pool_ceilings(
+    /// member the dollar rows. The router's catalog names the dated id each undated dollar row resolves to, and a
+    /// router that cannot answer leaves every row judged under its own id.
+    pub async fn resolve_pool_ceilings(
         &self,
         pool: &PoolRow,
         accounts: &[AccountRow],
@@ -1049,12 +1071,32 @@ impl Engine {
                 fundings.push(funding);
             }
         }
+        let rows = FactorRows::of(&self.parts.pricing.current(), &self.parts.tables);
+        let undated: Vec<String> = rows
+            .dollar_models()
+            .filter(|model| listing::undated(model).is_none())
+            .map(str::to_string)
+            .collect();
+        let dated: HashMap<String, String> = self
+            .parts
+            .router
+            .canonicals(undated.clone())
+            .await
+            .map(|answered| {
+                undated
+                    .into_iter()
+                    .zip(answered)
+                    .filter(|(model, dated)| model != dated)
+                    .collect()
+            })
+            .unwrap_or_default();
         resolve_pool(
             &KeepalivePolicy::from_json(&pool.keepalive_json),
             &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
             &pool.model_rules,
             &fundings,
-            &FactorRows::of(&self.parts.pricing.current(), &self.parts.tables),
+            &rows,
+            &dated,
             &self.parts.timing,
         )
     }
@@ -1270,8 +1312,7 @@ impl Inner {
         agent.hold_counted = counted || was_due;
         if !counted && was_due {
             let state = recipe_state(reason, agent.paused);
-            self.skipped
-                .push((key.clone(), agent_id.to_string(), state));
+            self.skipped.push(Skipped::of(key, agent, state));
         }
         if began {
             self.set_reason(key, agent_id, reason);
@@ -1338,16 +1379,12 @@ impl Inner {
         tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
             "a keepalive recipe lapsed before its probe, so the probe was skipped");
         if !agent.hold_counted {
-            lapsed.push(Skipped {
-                key: key.clone(),
-                key_generation: agent.key_generation,
-                pool_id: agent.pool_id.clone(),
-                account: agent.account.clone(),
-                canonical_model: agent.canonical_model.clone(),
-                fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
-                // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
-                state: recipe_state(Reason::Expired, agent.paused),
-            });
+            // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
+            lapsed.push(Skipped::of(
+                key,
+                agent,
+                recipe_state(Reason::Expired, agent.paused),
+            ));
         }
         self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
         true
@@ -2043,14 +2080,14 @@ impl Engine {
             return;
         }
         inner.retained += recipe.size;
-        inner
+        let agent = inner
             .sessions
             .get_mut(&key)
             .unwrap()
             .agents
             .get_mut(&agent_id)
-            .unwrap()
-            .current = Some(Observation {
+            .unwrap();
+        agent.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
             started: now,
@@ -2062,6 +2099,9 @@ impl Engine {
             poisoned,
             dispatched_ms: None,
         });
+        agent.body_dirty = true;
+        // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
+        inner.touch_agent(&key, &agent_id);
         inner.pending.insert(observed.request_id, (key, agent_id));
     }
 
@@ -2484,6 +2524,10 @@ impl Engine {
                 return;
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
+            // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
+            inner
+                .unreadable_tiers
+                .retain(|id| view.snapshot.account(id).is_some());
             inner.follow_resolutions(&view.canonical);
             let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
@@ -2702,16 +2746,7 @@ impl Engine {
         };
         self.flush();
         for skip in lapsed {
-            self.record_skipped(
-                now,
-                &skip.key,
-                skip.key_generation,
-                &skip.pool_id,
-                skip.account.as_deref(),
-                &skip.canonical_model,
-                skip.fast,
-                skip.state,
-            );
+            self.record_skipped(now, &skip);
         }
         for (job, token) in jobs {
             let engine = self.clone();
@@ -2929,7 +2964,12 @@ pub(crate) fn ceilings_for(
     let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
     resolve(
         &agent.policy,
-        rows.factors(funding, &agent.canonical_model, fast),
+        rows.factors(
+            funding,
+            &agent.canonical_model,
+            fast,
+            agent.current.as_ref().map_or(0, |o| o.expected),
+        ),
         ttl_ms,
         timing,
     )
@@ -3221,6 +3261,46 @@ mod tests {
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
         gate(view, &mut agent, "s").err()
+    }
+
+    /// A recipe's ceilings read the price set its prompt selects, its length the tokens the cache evidence counted: the
+    /// fixture's body is under a hundred bytes, and its 2,000 tokens put it over the threshold.
+    #[test]
+    fn a_recipes_ceilings_read_the_price_set_its_prompt_tokens_select() {
+        let pricing = phoebis_ledger::PriceTable::from_yaml(
+            r#"
+effective: 2026-01-01
+models:
+  claude-opus-5-5:
+    input: 4
+    cache_write_5m: 1.25
+    cache_write_1h: 2
+    cache_read: 0.1
+    output: 20
+    long_context: {over: 1000, input: 8, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 40}
+"#,
+            "test",
+        )
+        .unwrap();
+        let rows = FactorRows::of(&pricing, &PlanTables::shipped());
+        let timing = KeepaliveTiming::default();
+        let mut agent = Agent::new("main", "k", 1, 0, timing);
+        agent.account = Some("a".into());
+        agent.canonical_model = "claude-opus-5-5".into();
+        agent.current = Some(observation(false));
+        let break_even =
+            |agent: &Agent| ceilings_for(agent, &pool_view(false), &rows, &timing).break_even_ms;
+        assert_eq!(
+            break_even(&agent),
+            960_000,
+            "over the threshold the long-context cells' 0.5 against 2.5 break even after 16 minutes"
+        );
+        agent.current.as_mut().unwrap().expected = 1_000;
+        assert_eq!(
+            break_even(&agent),
+            2_760_000,
+            "at the threshold the standard cells' 0.1 against 1.25 break even after 46 minutes"
+        );
     }
 
     #[test]

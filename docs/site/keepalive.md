@@ -175,9 +175,10 @@ The break-even of a recipe is the pause length at which its chain of probes cost
 funding. A plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs
 the model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight, and
 a model the cost model leaves unweighted breaks even where a weighted one does. A dollar-funded recipe reads its model's
-row of the price table, and a model the price table does not price reads its tightest row. The cadence is the TTL's: 15
-probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded recipe
-breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
+row of the price table, and a model the price table does not price reads its tightest row. On a row priced by prompt
+length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The cadence is the
+TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded
+recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
 
 A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
 number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range
@@ -191,9 +192,11 @@ pool's combinations. An OAuth member brings the cost model's factors and an API-
 cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent brings both
 TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules' entries
 without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules
-that allow none of them leave a model priced nowhere. A deny entry naming a dated id leaves the model's undated price
-row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no request on the
-pool reaches. A pool with no member answers `null`.
+that allow none of them leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is
+judged under that id, as a request on the model is, so a deny entry naming the dated id drops the row. On a router
+without a catalog reading the row is judged under its own id, and a deny entry naming a dated id leaves the model's
+undated price row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no
+request on the pool reaches. A pool with no member answers `null`.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before
 a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probes in a row pause the recipe until a real

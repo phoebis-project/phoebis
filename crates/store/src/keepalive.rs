@@ -17,9 +17,19 @@ pub struct KeepaliveSessionRow {
     pub updated_at: i64,
 }
 
+/// What a flush does with the stored recipe body: nothing (the body is as saved), clear it (the recipe ended), or
+/// seal a new one. A body is sealed only when it changed since the last acknowledged save.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BodyWrite {
+    Keep,
+    Clear,
+    Seal(Vec<u8>),
+}
+
 /// One agent row: its identity, the engine's versioned payload of the agent's fields, and the retained prompt the
-/// probe replays beside it. `body` is the plaintext on both sides of the store, sealed only at rest, and `None` for an
-/// agent that retains nothing or whose stored body no longer opens.
+/// probe replays beside it, sealed only at rest. `body` is the plaintext a load opened, `None` for an agent that
+/// retains nothing or whose stored body no longer opens. A save reads `body_write` alone, and a load answers it as
+/// `Keep`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeepaliveAgentRow {
     pub key_id: String,
@@ -29,6 +39,7 @@ pub struct KeepaliveAgentRow {
     pub record_version: u32,
     pub payload: String,
     pub body: Option<Vec<u8>>,
+    pub body_write: BodyWrite,
     /// The header block the probe sends, as the engine's JSON.
     pub headers: String,
     pub body_size: usize,
@@ -93,14 +104,15 @@ pub fn keepalive_aad(
 }
 
 impl Store {
-    /// One transaction of upserts and deletes, each body sealed under the storage key with the AAD `keepalive_aad`.
-    /// The removals land first, and the engine never names one row in both halves of a batch.
+    /// One transaction of upserts and deletes, each new body sealed under the storage key with the AAD `keepalive_aad`.
+    /// The removals land first, and the engine never names one row in both halves of a batch. A row that keeps its body
+    /// leaves the stored blob and nonce as they are, and a row that clears it leaves neither.
     pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed = Vec::with_capacity(batch.agents.len());
         for row in &batch.agents {
-            sealed.push(match &row.body {
-                Some(body) => {
+            sealed.push(match &row.body_write {
+                BodyWrite::Seal(body) => {
                     let aad = keepalive_aad(
                         &row.key_id,
                         row.key_generation,
@@ -110,7 +122,7 @@ impl Store {
                     let (nonce, blob) = crypto::seal(&self.key, &aad, body)?;
                     (Some(blob), Some(nonce))
                 }
-                None => (None, None),
+                BodyWrite::Keep | BodyWrite::Clear => (None, None),
             });
         }
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
@@ -160,9 +172,14 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
                  ON CONFLICT(key_id, key_generation, session_id, agent_id) DO UPDATE SET \
                  record_version = excluded.record_version, payload = excluded.payload, \
-                 body_sealed = excluded.body_sealed, body_nonce = excluded.body_nonce, headers = excluded.headers, \
+                 body_sealed = COALESCE(excluded.body_sealed, body_sealed), \
+                 body_nonce = COALESCE(excluded.body_nonce, body_nonce), headers = excluded.headers, \
                  body_size = excluded.body_size, dispatched_ms = excluded.dispatched_ms, fast = excluded.fast, \
                  updated_at = excluded.updated_at",
+            )?;
+            let mut clear = tx.prepare_cached(
+                "UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL, body_size = 0 \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
             )?;
             for (row, (blob, nonce)) in batch.agents.iter().zip(&sealed) {
                 stmt.execute(params![
@@ -180,6 +197,14 @@ impl Store {
                     row.fast,
                     row.updated_at
                 ])?;
+                if row.body_write == BodyWrite::Clear {
+                    clear.execute(params![
+                        row.key_id,
+                        row.key_generation,
+                        row.session_id,
+                        row.agent_id
+                    ])?;
+                }
             }
         }
         {
@@ -247,6 +272,7 @@ impl Store {
                         record_version: r.get(4)?,
                         payload: r.get(5)?,
                         body: None,
+                        body_write: BodyWrite::Keep,
                         headers: r.get(8)?,
                         body_size: r.get::<_, i64>(9)?.max(0) as usize,
                         dispatched_ms: r.get(10)?,

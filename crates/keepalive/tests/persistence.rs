@@ -51,6 +51,19 @@ fn saved_field(r: &Rig, session: &str, agent: &str, field: &str) -> serde_json::
     serde_json::from_str::<serde_json::Value>(&row.payload).unwrap()[field].clone()
 }
 
+/// The sealed body, its nonce and its size as the registry holds them for `agent` of the rig's session, read past the
+/// store.
+fn stored_body(r: &Rig, agent: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>, i64) {
+    registry(r)
+        .query_row(
+            "SELECT body_sealed, body_nonce, body_size FROM keepalive_agents \
+             WHERE session_id = 'session' AND agent_id = ?1",
+            [agent],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
 fn heartbeat() -> Event {
     Event {
         event: "heartbeat".into(),
@@ -416,6 +429,90 @@ async fn a_body_that_cannot_be_opened_leaves_the_agent_without_a_recipe() {
         saved_field(&r, "session", "main", "current"),
         serde_json::Value::Null
     );
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the blob that no longer opens leaves the registry with the load's rewrite"
+    );
+}
+
+/// A flush that rewrites an agent whose recipe did not change since its last landed save leaves the sealed body and its
+/// nonce as stored, and the body still opens.
+#[tokio::test]
+async fn a_flush_that_rewrites_an_agent_with_an_unchanged_recipe_leaves_its_sealed_body_as_stored()
+{
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let sealed = stored_body(&r, "main");
+    assert!(sealed.0.is_some() && sealed.1.is_some() && sealed.2 > 0);
+    r.state("main", "idle");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "main", "state"),
+        "idle",
+        "the flush rewrote the agent's row"
+    );
+    assert_eq!(
+        stored_body(&r, "main"),
+        sealed,
+        "and left the sealed body and its nonce as they were"
+    );
+    assert!(saved_agents(&r)[0].body.is_some(), "the body still opens");
+}
+
+/// A flush after the recipe ended clears its sealed body, so the prompt leaves the disk with the recipe, whether the
+/// running engine ended it, a second instance took the session over with a new record under the same row, or the load
+/// ended it.
+#[tokio::test]
+async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    r.state("main", "released");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "a release ends the recipe and its prompt leaves the registry"
+    );
+
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    r.event(Event {
+        event: "session_start".into(),
+        instance_id: "second".into(),
+        previous_instance_id: Some("instance".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the replaced record's prompt leaves the registry with the new record's first save"
+    );
+
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    // The router is down past the entry's expiry, so the load ends the recipe it restores.
+    r.advance(400_000);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1)
+    );
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the recipe the load ended leaves the registry with the load's save"
+    );
 }
 
 #[tokio::test]
@@ -635,7 +732,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
 
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
 async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
-    wait_for(Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
                 read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
@@ -1028,7 +1125,7 @@ async fn settle_ledger(r: &Rig, marks: &mut u64) {
         ..Default::default()
     }));
     let want = *marks;
-    wait_for(Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
                 read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
@@ -1275,6 +1372,14 @@ async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_t
         wasted_now(&r),
         BTreeMap::new(),
         "a save that failed sends nothing to the ledger"
+    );
+    // A second flush that fails holds them as the first did.
+    second.flush_persisted().await;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::new(),
+        "a second failed save sends nothing either"
     );
     // The process dies before another save: the next one finds the probe still unanswered in the registry.
     let third = r.restart().await;

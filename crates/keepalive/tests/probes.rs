@@ -723,6 +723,78 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     );
 }
 
+/// A release stops the recipe while its probe is in flight, and the mod starts the agent again before the probe
+/// answers. The late result still settles under the release, once, and leaves the revived agent's bookkeeping alone:
+/// the worker slot comes back, no probe is left unanswered, and the next request arms the record again.
+#[tokio::test]
+async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_release() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.state("main", "released");
+    let generation = r.agent("main").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("main".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .expect("a released agent starts again under the generation its release named");
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.in_flight, status.unanswered),
+        (false, 0),
+        "the late result gave the slot back and kept nothing: {status:?}"
+    );
+    r.observe("main").await;
+    assert!(
+        r.status("main").next_probe_at.is_some(),
+        "the next request arms the revived record"
+    );
+    let reasons = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let mut reasons = std::collections::BTreeMap::new();
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            for (reason, n) in &row.wasted_probe_reasons {
+                *reasons.entry(reason.clone()).or_insert(0) += n;
+            }
+        }
+        (!reasons.is_empty()).then_some(reasons)
+    })
+    .await;
+    assert_eq!(
+        reasons,
+        std::collections::BTreeMap::from([("released".to_string(), 1)]),
+        "the orphaned probe settles once, under the release that left it"
+    );
+}
+
 #[tokio::test]
 async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_flight_flag() {
     let mut r = rig(RigSpec::default()).await;
@@ -1074,7 +1146,7 @@ async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it()
 /// A probe that read nothing and rewrote the whole prefix covers from its own write, and the cold streak still
 /// counts it: a rewrite every probe is a prefix never kept warm, so two in a row pause the recipe at the limit.
 #[tokio::test]
-async fn an_uncovered_rewrite_still_counts_toward_the_cold_probe_limit() {
+async fn a_rewrite_still_counts_toward_the_cold_probe_limit() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         timing: KeepaliveTiming {

@@ -8,6 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, CanaryRead, KeepaliveAgentRow,
     KeepaliveBatch, KeepaliveSessionRow, NewBundle, Secret, StateCause, StorageKey, Store,
@@ -157,6 +158,7 @@ fn agent(agent_id: &str, body: Option<&[u8]>) -> KeepaliveAgentRow {
         record_version: 1,
         payload: "{}".into(),
         body: body.map(<[u8]>::to_vec),
+        body_write: body.map_or(BodyWrite::Keep, |body| BodyWrite::Seal(body.to_vec())),
         headers: "[]".into(),
         body_size: body.map_or(0, <[u8]>::len),
         dispatched_ms: None,

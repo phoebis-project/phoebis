@@ -1,6 +1,7 @@
 //! The keepalive engine's rows: three tables in one transaction, the retained prompt sealed under the storage key and
 //! bound to the row it was written for, and the refusal of a registry a newer build stamped.
 
+use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
     StorageKey, Store, StoreError, SCHEMA_VERSION,
@@ -34,11 +35,20 @@ fn agent(
         record_version: 1,
         payload: format!(r#"{{"id":"{agent_id}"}}"#),
         body: body.map(<[u8]>::to_vec),
+        body_write: body.map_or(BodyWrite::Keep, |body| BodyWrite::Seal(body.to_vec())),
         headers: r#"[["anthropic-beta","test-beta"]]"#.into(),
         body_size: body.map_or(0, <[u8]>::len),
         dispatched_ms: body.map(|_| 300_000),
         fast: false,
         updated_at: 2_000,
+    }
+}
+
+/// A written row as `load_keepalive` answers it, which reads every body back as kept.
+fn as_loaded(row: &KeepaliveAgentRow) -> KeepaliveAgentRow {
+    KeepaliveAgentRow {
+        body_write: BodyWrite::Keep,
+        ..row.clone()
     }
 }
 
@@ -166,7 +176,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
         sorted(store.load_keepalive().unwrap()),
         sorted((
             batch.sessions.clone(),
-            batch.agents.clone(),
+            batch.agents.iter().map(as_loaded).collect(),
             batch.counters.clone()
         )),
         "every row reads back as it was written, each body opened"
@@ -245,7 +255,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             .collect::<Vec<_>>(),
         vec![(1, "1:s", "a"), (1, "s", "main"), (11, "s", "a")]
     );
-    assert_eq!(agents[2], replaced);
+    assert_eq!(agents[2], as_loaded(&replaced));
     assert_eq!(
         counters
             .iter()
@@ -253,6 +263,64 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             .collect::<Vec<_>>(),
         vec![(0, 3, 1), (1, 5, 2)]
     );
+}
+
+/// A row that keeps its body leaves the sealed body and its nonce as stored while the rest of the row moves, and a row
+/// that clears it leaves no body, no nonce and no size behind.
+#[test]
+fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: vec![session(1, "s")],
+            agents: vec![agent(1, "s", "main", Some(PROMPT))],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let sealed = blob(&conn, 1, "s", "main");
+
+    let mut kept = agent(1, "s", "main", Some(PROMPT));
+    kept.body = None;
+    kept.body_write = BodyWrite::Keep;
+    kept.payload = r#"{"id":"main","newer":true}"#.into();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            agents: vec![kept],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        blob(&conn, 1, "s", "main"),
+        sealed,
+        "the sealed body and its nonce stay as stored"
+    );
+    let (_, agents, _) = store.load_keepalive().unwrap();
+    assert_eq!(
+        (agents[0].payload.as_str(), agents[0].body.as_deref()),
+        (r#"{"id":"main","newer":true}"#, Some(PROMPT)),
+        "the row moved and its body still opens"
+    );
+
+    let mut cleared = agent(1, "s", "main", None);
+    cleared.body_write = BodyWrite::Clear;
+    store
+        .save_keepalive(&KeepaliveBatch {
+            agents: vec![cleared],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let stored: (Option<Vec<u8>>, Option<Vec<u8>>, i64) = conn
+        .query_row(
+            "SELECT body_sealed, body_nonce, body_size FROM keepalive_agents WHERE agent_id = 'main'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, (None, None, 0), "a clear leaves no body behind");
+    assert_eq!(opened(&store, 1, "s", "main"), None);
 }
 
 #[test]
