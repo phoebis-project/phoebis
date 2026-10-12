@@ -6,8 +6,9 @@ names no heading or anchor on the page it lands on. `client` compares the proxy 
 on the client page, so a route added or removed in the router fails the build until the page follows.
 
 `check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
-the refusal codes the `x-phoebis-error-code` header carries with the client page's table, `example` the installation
-page's quoted example with the file, and `prose` holds the mechanical content rules of the site's prose.
+the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the client page's table,
+`example` the installation page's quoted example with the file, and `prose` holds the mechanical content rules of the
+site's prose.
 """
 import functools
 import html.parser
@@ -29,8 +30,9 @@ CLIENT_MD = ROOT / "docs/site/client.md"
 MAIN_RS = ROOT / "crates/router/src/main.rs"
 INSTALLATION_MD = ROOT / "docs/site/installation.md"
 EXAMPLE_YAML = ROOT / "deploy/config.example.yaml"
-# Every file whose refusals carry a code in the `x-phoebis-error-code` header, and the bus constant the body-shape
-# code is spelled by. A file listed here that does not exist fails the check rather than narrowing it.
+# Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy listener, and the bus
+# constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather than
+# narrowing it.
 CODE_FILES = [
     ROOT / "crates/bus/src/event.rs",
     ROOT / "crates/ledger/src/usage.rs",
@@ -337,11 +339,22 @@ def between(lines, begin, end, path):
     return begins[0] + 2, lines[begins[0] + 1 : ends[0]]
 
 
+def missing(paths):
+    """Whether any of `paths` is not a file, after printing each one that is not: a moved file is a finding that
+    names it, never a traceback."""
+    absent = [path for path in paths if not path.is_file()]
+    for path in absent:
+        print(f"{path} is missing")
+    return bool(absent)
+
+
 EXAMPLE_FENCE = '```yaml title="deploy/config.example.yaml"'
 
 
 def check_example(example_yaml, installation_md):
     """The installation page's quoted example against the file, line for line, a trailing newline aside."""
+    if missing([example_yaml, installation_md]):
+        return 1
     expected = example_yaml.read_text(encoding="utf-8").splitlines()
     lines = installation_md.read_text(encoding="utf-8").splitlines()
     opens = [i for i, line in enumerate(lines) if line.strip() == EXAMPLE_FENCE]
@@ -426,6 +439,8 @@ def fragments_in(fragments, text):
 def check_check_config(main_rs, installation_md):
     """The lines `phoebis check-config` prints, read from the binary's source without building it, against the
     installation page's list: the unconditional lines in order, every conditional line somewhere after them."""
+    if missing([main_rs, installation_md]):
+        return 1
     code, blanked = tokenized(main_rs.read_text(encoding="utf-8"))
     arm = code.find(CHECK_CONFIG_ARM)
     if arm < 0:
@@ -547,8 +562,8 @@ def code_expressions(code, blanked):
 
 
 def check_codes(code_files, client_md):
-    """Every code the `x-phoebis-error-code` header carries against the client page's refusal table, both ways. A
-    code expression the check cannot read is a finding, never a silent pass."""
+    """Every code the `x-phoebis-error-code` header carries on the proxy listener against the client page's refusal
+    table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
     consts, answered, pending, findings = {}, set(), [], 0
     for path in code_files:
         if not path.is_file():

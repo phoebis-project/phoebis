@@ -205,7 +205,7 @@ prints, in order:
 8. `ledger at {config.stats.ledger_path}`
 9. `api prices: {path} (file, effective {date}, {n} models)` when `stats.api_prices_path` names a file that exists,
    `api prices: built in (effective {date}, {n} models), since {path} was not found` when it names a file that is
-   missing, or `api prices: built in (effective {date}, {n} models)` when the key is unset
+   missing, or `api prices: built in (effective {date}, {n} models)` when the key is set to `null`
 10. `subscription costs: {path} (file, effective {date}, {n} models, {n} tiers)`, in the same three shapes, from
     `stats.subscription_costs_path`
 11. `retention {n days|forever}, rollups {n days|forever}`

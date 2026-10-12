@@ -257,7 +257,8 @@ out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) 
 out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
 echo "$out" | grep -q "has no row for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
 
-# The quoted example: equal passes, a changed line names both line numbers, no block and two blocks fail.
+# The quoted example: equal passes, a changed line names both line numbers, and a block one line short of the file, no
+# block, two blocks and a missing file fail.
 mkdir -p "$tmp/example"
 printf 'a: 1\n# a comment\nb: 2\n' > "$tmp/example/config.example.yaml"
 cat > "$tmp/example/page.md" <<'MD'
@@ -273,12 +274,17 @@ python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.m
 sed -i 's/^# a comment$/# another comment/' "$tmp/example/page.md"
 out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a changed example line passed"
 echo "$out" | grep -q "page.md:5: differs from config.example.yaml:2" || fail "the changed line did not name both line numbers: $out"
+printf '# Page\n\n```yaml title="deploy/config.example.yaml"\na: 1\n# a comment\n```\n' > "$tmp/example/page.md"
+out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "an example block one line short of the file passed"
+echo "$out" | grep -q "page.md:4: the block has 2 lines and config.example.yaml 3" || fail "the short block did not report both lengths: $out"
 printf '# Page\n\nno block\n' > "$tmp/example/page.md"
 out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a page without the example block passed"
 echo "$out" | grep -q "0 fenced blocks titled deploy/config.example.yaml" || fail "the missing block did not report: $out"
 printf '```yaml title="deploy/config.example.yaml"\na: 1\n```\n\n```yaml title="deploy/config.example.yaml"\na: 1\n```\n' > "$tmp/example/page.md"
 out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a page with two example blocks passed"
 echo "$out" | grep -q "2 fenced blocks titled deploy/config.example.yaml" || fail "the second block did not report: $out"
+out=$(python3 "$check" example "$tmp/example/gone.yaml" "$tmp/example/page.md" 2>&1) && fail "an example file that does not exist passed"
+echo "$out" | grep -q "gone.yaml is missing" || fail "the missing example file did not report: $out"
 
 # The check-config list: the arm's lines read statically, the unconditional ones in order, a conditional one later.
 mkdir -p "$tmp/check-config"
@@ -341,6 +347,12 @@ echo "$out" | grep -q "extra.md:9: item 5 matches no line the binary prints" || 
 grep -v 'check-config: ' "$tmp/check-config/page.md" > "$tmp/check-config/unmarked.md"
 out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/unmarked.md" 2>&1) && fail "a page without the markers passed"
 echo "$out" | grep -q "expected one <!-- check-config: begin --> before one <!-- check-config: end -->, found 0 and 0" || fail "the missing markers did not report: $out"
+sed '/^[34]\. /d' "$tmp/check-config/page.md" > "$tmp/check-config/two.md"
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/two.md" 2>&1) && fail "a list short its last two items passed"
+echo "$out" | grep -q "two.md: no item for the line 'ledger at {}', which the binary prints as line 3" || fail "the list short an unconditional line did not name it: $out"
+echo "$out" | grep -q "two.md: no item for the conditional line 'registry at {} does not exist yet'" || fail "the list short a conditional line did not name it: $out"
+out=$(python3 "$check" check-config "$tmp/check-config/gone.rs" "$tmp/check-config/page.md" 2>&1) && fail "a main.rs that does not exist passed"
+echo "$out" | grep -q "gone.rs is missing" || fail "the missing main.rs did not report: $out"
 out=$(python3 "$check" check-config "$tmp/check-config/main.rs" 2>&1) && fail "check-config with one argument passed"
 status=$?
 [ "$status" = 2 ] || fail "check-config with one argument exited $status rather than 2: $out"

@@ -347,8 +347,8 @@ reads the session's prefix as cold (see [Selection](routing.md#selection)).
 
 Every refusal the relay answers on the proxy listener is in Anthropic's error shape, `{"type": "error", "error":
 {"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code and `Retry-After` where
-the row says so. The keepalive mod's route answers in its own shape, described on [The relay](relay.md). One row per
-code, with every message the code is answered with.
+the row says so. The keepalive mod's route answers a refused key the same way and its other refusals in its own shape,
+described on [The relay](relay.md). One row per code, with every message the code is answered with.
 
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |
@@ -356,11 +356,11 @@ code, with every message the code is answered with.
 | `account_cancelled` | 503 | `api_error` | `the bound account was disconnected while the request was in flight` | Send the request again. It lands on another account. |
 | `accounts_at_cap` | 429 | `rate_limit_error` | `every account in this pool is at its in-flight cap` | Wait out the `Retry-After` (1 to 19 seconds) and send it again, or raise the cap ([in-flight caps](routing.md#in-flight-caps)). |
 | `accounts_exhausted` | 429 | `rate_limit_error` | `every account in this pool is rate limited` | Wait out the `Retry-After`, or add an account to the pool ([when nothing can serve](routing.md#when-nothing-can-serve)). |
-| `accounts_unavailable` | 503 | `api_error` | `no account in this pool can serve requests`, `the bound account cannot serve requests` | Read the pool's members on the Pools view ([when nothing can serve](routing.md#when-nothing-can-serve)). |
+| `accounts_unavailable` | 503 | `api_error` | `no account in this pool can serve requests`, `the bound account cannot serve requests` | Read the pool's members on the Pools view ([when nothing can serve](routing.md#when-nothing-can-serve)). A key moved to another pool while the request was in flight gets the same answer with `Retry-After: 1`. Send the request again. |
 | `auth_ambiguous` | 401 | `authentication_error` | `present exactly one key` | Send the key in one header, `Authorization: Bearer` or `x-api-key`, never both. |
 | `auth_malformed` | 401 | `authentication_error` | `the key header is malformed` | Send the key as `Authorization: Bearer <secret>` or `x-api-key: <secret>`. |
 | `auth_missing` | 401 | `authentication_error` | `a key is required` | Set `CLAUDE_CODE_OAUTH_TOKEN` to the key's secret. |
-| `auth_unknown` | 401 | `authentication_error` | `the presented key is not valid` | The key is unknown, revoked, retired or expired. Ask the operator for a new one. |
+| `auth_unknown` | 401 | `authentication_error` | `the presented key is not valid` | The key is unknown, revoked, retired, disabled or expired, or its pool is disabled or gone. Ask the operator. |
 | `body_budget_exhausted` | 503 | `api_error` | `the router holds as many request bytes as it allows` | Send the request again. The bodies in flight held `proxy.body_budget_bytes`. |
 | `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no metadata.user_id the account can be bound to`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
 | `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to ([The relay](relay.md)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
