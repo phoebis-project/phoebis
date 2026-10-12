@@ -343,6 +343,53 @@ the entry as one more message of the conversation, so an effort change under thi
 lane; on a model the client sends no such entry for, the effort is part of the cache lane and a change of it
 reads the session's prefix as cold (see [Selection](routing.md#selection)).
 
+## Refusal codes
+
+Every refusal the relay answers on the proxy listener is in Anthropic's error shape, `{"type": "error", "error":
+{"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code and `Retry-After` where
+the row says so. The keepalive mod's route answers in its own shape, described on [The relay](relay.md). One row per
+code, with every message the code is answered with.
+
+<!-- refusal-codes: begin -->
+| Code | Status | Type | Messages | What to do |
+| --- | --- | --- | --- | --- |
+| `account_cancelled` | 503 | `api_error` | `the bound account was disconnected while the request was in flight` | Send the request again. It lands on another account. |
+| `accounts_at_cap` | 429 | `rate_limit_error` | `every account in this pool is at its in-flight cap` | Wait out the `Retry-After` (1 to 19 seconds) and send it again, or raise the cap ([in-flight caps](routing.md#in-flight-caps)). |
+| `accounts_exhausted` | 429 | `rate_limit_error` | `every account in this pool is rate limited` | Wait out the `Retry-After`, or add an account to the pool ([when nothing can serve](routing.md#when-nothing-can-serve)). |
+| `accounts_unavailable` | 503 | `api_error` | `no account in this pool can serve requests`, `the bound account cannot serve requests` | Read the pool's members on the Pools view ([when nothing can serve](routing.md#when-nothing-can-serve)). |
+| `auth_ambiguous` | 401 | `authentication_error` | `present exactly one key` | Send the key in one header, `Authorization: Bearer` or `x-api-key`, never both. |
+| `auth_malformed` | 401 | `authentication_error` | `the key header is malformed` | Send the key as `Authorization: Bearer <secret>` or `x-api-key: <secret>`. |
+| `auth_missing` | 401 | `authentication_error` | `a key is required` | Set `CLAUDE_CODE_OAUTH_TOKEN` to the key's secret. |
+| `auth_unknown` | 401 | `authentication_error` | `the presented key is not valid` | The key is unknown, revoked, retired or expired. Ask the operator for a new one. |
+| `body_budget_exhausted` | 503 | `api_error` | `the router holds as many request bytes as it allows` | Send the request again. The bodies in flight held `proxy.body_budget_bytes`. |
+| `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no metadata.user_id the account can be bound to`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
+| `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to ([The relay](relay.md)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
+| `client_not_allowed` | 403 | `permission_error` | `this key admits Claude Code clients only`, `the pool has no API-key member to serve a client that is not Claude Code` | Use Claude Code with this key, or ask the operator for a key whose pool admits your client ([clients](routing.md#clients)). |
+| `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
+| `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
+| `invalid_body` | 400 | `invalid_request_error` | `the request body is not valid gzip`, `the request body nests deeper than the relay reads`, `the request body is not a valid Messages request` | Send a Messages request as Claude Code sends it. |
+| `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |
+| `invalid_model` | 400 | `invalid_request_error` | `the request body's model is not a usable model name` | Set a model the listing names ([the models listing](#the-models-listing)). |
+| `key_body_reads` | 429 | `rate_limit_error` | `this key has as many request bodies arriving as it allows` | Wait one second (`Retry-After: 1`) and send it again. |
+| `ledger_behind` | 503 | `api_error` | `the router is not accepting requests right now` | Wait out the `Retry-After` of 5 seconds. The operator reads the writer's standing on [Statistics](statistics.md#the-ledger-writer). |
+| `method_not_allowed` | 405 | `invalid_request_error` | `the method is not supported on this route` | Use the method the table in [What the proxy accepts](#what-the-proxy-accepts) names. |
+| `missing_model` | 400 | `invalid_request_error` | `the request body has no model` | Set `model` in the body. |
+| `model_not_allowed` | 404 | `not_found_error` | `model not allowed for this key` | The key's or the pool's model rules refuse the model ([model rules](routing.md#model-rules)). |
+| `model_not_found` | 404 | `not_found_error` | `model: {id}` | `GET /v1/models/{id}` named a model the listing lacks. |
+| `model_rejected` | 404 | `not_found_error` | `every account in this pool rejected the model` | Every member answered 404 for the model. Pick one the accounts serve. |
+| `not_found` | 404 | `not_found_error` | `the requested resource was not found` | Use a path the table in [What the proxy accepts](#what-the-proxy-accepts) names. |
+| `request_incomplete` | 400 | `invalid_request_error` | `the request body ended before it was complete` | The connection closed before the body did. Send the request again. |
+| `request_timeout` | 408 | `invalid_request_error` | `the request body did not arrive in time` | The body took longer than `proxy.body_read_seconds`. Send the request again. |
+| `request_too_large` | 413 | `request_too_large` | `the request body is too large` | The body is over `proxy.max_request_bytes`, before or after inflation. |
+| `router_unavailable` | 503 | `api_error` | `the router is not available` | Send the request again. The operator reads the router's log. |
+| `unsupported_content_encoding` | 415 | `invalid_request_error` | `the request body's content-encoding is not supported. Send gzip or identity` | Send the body as gzip or identity. |
+| `upstream_cut` | 502 | `api_error` | `the upstream response could not be read after its head` | Send the request again. |
+| `upstream_stalled` | 502 | `api_error` | `the upstream stalled after its head` | The upstream sent nothing for 600 seconds. Send the request again. |
+| `upstream_undecodable` | 502 | `api_error` | `the upstream response could not be decoded after its head` | Send the request again. |
+| `upstream_unreachable` | 502 | `api_error` | `the upstream did not answer` | Send the request again. The operator reads the attempt on the Requests view. |
+| `usage_unavailable` | 500 | `api_error` | `the usage ledger could not be read` | `GET /v1/usage` could not read the ledger. Send it again. |
+<!-- refusal-codes: end -->
+
 ## Your key's usage
 
 `GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens,

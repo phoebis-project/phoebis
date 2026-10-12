@@ -192,6 +192,7 @@ no socket; it reads the key file, the registry's canary, the registry's and the 
 listener's certificate pair read-only, so it is safe to run against a production file while the router is up. It
 prints, in order:
 
+<!-- check-config: begin -->
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
    {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
@@ -202,12 +203,18 @@ prints, in order:
 6. `profile {the build's profile}`
 7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
 8. `ledger at {config.stats.ledger_path}`
-9. `retention {n days|forever}, rollups {n days|forever}`
-10. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
-11. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
+9. `api prices: {path} (file, effective {date}, {n} models)` when `stats.api_prices_path` names a file that exists,
+   `api prices: built in (effective {date}, {n} models), since {path} was not found` when it names a file that is
+   missing, or `api prices: built in (effective {date}, {n} models)` when the key is unset
+10. `subscription costs: {path} (file, effective {date}, {n} models, {n} tiers)`, in the same three shapes, from
+    `stats.subscription_costs_path`
+11. `retention {n days|forever}, rollups {n days|forever}`
+12. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
+13. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
     registry is not there yet, or `registry at {config.storage.path} has no key canary yet. A sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
-12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
+14. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
+<!-- check-config: end -->
 
 Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
 than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
-# checker case runs against a throwaway tree, never the real site. The favicon case at the end reads the real tree.
+# checker case runs against a throwaway tree, never the real site. The four content checks run against throwaway
+# files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
+# drifted, and prose that breaks a rule. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -254,6 +256,218 @@ out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) 
 : > "$tmp/client-char.md"
 out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
 echo "$out" | grep -q "has no row for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
+
+# The quoted example: equal passes, a changed line names both line numbers, no block and two blocks fail.
+mkdir -p "$tmp/example"
+printf 'a: 1\n# a comment\nb: 2\n' > "$tmp/example/config.example.yaml"
+cat > "$tmp/example/page.md" <<'MD'
+# Page
+
+```yaml title="deploy/config.example.yaml"
+a: 1
+# a comment
+b: 2
+```
+MD
+python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" >/dev/null || fail "an equal example block was refused"
+sed -i 's/^# a comment$/# another comment/' "$tmp/example/page.md"
+out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a changed example line passed"
+echo "$out" | grep -q "page.md:5: differs from config.example.yaml:2" || fail "the changed line did not name both line numbers: $out"
+printf '# Page\n\nno block\n' > "$tmp/example/page.md"
+out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a page without the example block passed"
+echo "$out" | grep -q "0 fenced blocks titled deploy/config.example.yaml" || fail "the missing block did not report: $out"
+printf '```yaml title="deploy/config.example.yaml"\na: 1\n```\n\n```yaml title="deploy/config.example.yaml"\na: 1\n```\n' > "$tmp/example/page.md"
+out=$(python3 "$check" example "$tmp/example/config.example.yaml" "$tmp/example/page.md" 2>&1) && fail "a page with two example blocks passed"
+echo "$out" | grep -q "2 fenced blocks titled deploy/config.example.yaml" || fail "the second block did not report: $out"
+
+# The check-config list: the arm's lines read statically, the unconditional ones in order, a conditional one later.
+mkdir -p "$tmp/check-config"
+cat > "$tmp/check-config/main.rs" <<'RS'
+fn main() {
+    match cli.command {
+        Some(Command::CheckConfig) => {
+            println!("{}", describe("proxy"));
+            println!(
+                "proxy: body budget {} bytes, max request {} bytes, \
+                 upstream gzip {}",
+                a, b, c
+            );
+            println!("ledger at {}", path);
+            match canary {
+                Canary::Missing => println!("registry at {} does not exist yet", path),
+                Canary::Present => {}
+            }
+            if !overlaps.is_empty() {
+                for overlap in &overlaps {
+                    println!("{overlap}");
+                }
+            }
+            Ok(())
+        }
+        Some(Command::Other) => {
+            println!("never read");
+        }
+    }
+}
+RS
+cat > "$tmp/check-config/page.md" <<'MD'
+It prints, in order:
+
+<!-- check-config: begin -->
+1. `proxy listens on {addr}`
+2. `proxy: body budget {n} bytes, max request {n} bytes,
+   upstream gzip {auto|on|off}`
+3. `ledger at {path}`
+4. `registry at {path} does not exist yet`, when the registry is missing
+<!-- check-config: end -->
+MD
+python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/page.md" >/dev/null || fail "a matching check-config list was refused"
+sed '/^3\. /d' "$tmp/check-config/page.md" > "$tmp/check-config/short.md"
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/short.md" 2>&1) && fail "a list short an unconditional line passed"
+echo "$out" | grep -q "short.md:7: item 3 does not match the line 'ledger at {}'" || fail "the short list did not report item 3: $out"
+cat > "$tmp/check-config/order.md" <<'MD'
+<!-- check-config: begin -->
+1. `proxy listens on {addr}`
+2. `ledger at {path}`
+3. `proxy: body budget {n} bytes, max request {n} bytes, upstream gzip {auto|on|off}`
+4. `registry at {path} does not exist yet`, when the registry is missing
+<!-- check-config: end -->
+MD
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/order.md" 2>&1) && fail "a list out of order passed"
+echo "$out" | grep -q "order.md:3: item 2 does not match the line 'proxy: body budget" || fail "the reordered list did not report item 2: $out"
+sed 's/^<!-- check-config: end -->$/5. `something the binary never prints`\n<!-- check-config: end -->/' "$tmp/check-config/page.md" > "$tmp/check-config/extra.md"
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/extra.md" 2>&1) && fail "a list with an unmatched item passed"
+echo "$out" | grep -q "extra.md:9: item 5 matches no line the binary prints" || fail "the unmatched item did not report: $out"
+grep -v 'check-config: ' "$tmp/check-config/page.md" > "$tmp/check-config/unmarked.md"
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" "$tmp/check-config/unmarked.md" 2>&1) && fail "a page without the markers passed"
+echo "$out" | grep -q "expected one <!-- check-config: begin --> before one <!-- check-config: end -->, found 0 and 0" || fail "the missing markers did not report: $out"
+out=$(python3 "$check" check-config "$tmp/check-config/main.rs" 2>&1) && fail "check-config with one argument passed"
+status=$?
+[ "$status" = 2 ] || fail "check-config with one argument exited $status rather than 2: $out"
+echo "$out" | grep -qF "check-config [MAIN_RS INSTALLATION_MD]" || fail "check-config with one argument did not print the new usage: $out"
+
+# The refusal codes: a literal, a raw literal, a const resolved across files, an anthropic_error( call, an auth_*
+# tuple, the self.code forward, and an expression the check cannot read.
+mkdir -p "$tmp/codes"
+cat > "$tmp/codes/shape.rs" <<'RS'
+/// The one spelling both crates read.
+pub const SHAPE_CODE: &str = "body_shape";
+Failure { code: "ledger_behind", message: "the router is not accepting requests right now" }
+Failure { code: r"raw_code", message: "a raw literal reads the same" }
+RS
+cat > "$tmp/codes/errors.rs" <<'RS'
+let (code, message) = match error {
+    AuthError::Missing => ("auth_missing", "a key is required"),
+};
+Failure { status, error_type: "invalid_request_error", code: other::SHAPE_CODE, message: "x" }
+// code: "in_a_comment",
+no_store(anthropic_error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", "usage_unavailable", "z", id))
+pub fn anthropic_error(status: StatusCode, error_type: &str, code: &str, message: &str) {}
+let forwarded = anthropic_error(self.status, self.error_type, self.code, self.message, id);
+RS
+cat > "$tmp/codes/client.md" <<'MD'
+<!-- refusal-codes: begin -->
+| Code | Status | Type | Messages | What to do |
+| --- | --- | --- | --- | --- |
+| `auth_missing` | 401 | `authentication_error` | `a key is required` | Set the key. |
+| `body_shape` | 400 | `invalid_request_error` | `x` | Send Claude Code's shape. |
+| `ledger_behind` | 503 | `api_error` | `the router is not accepting requests right now` | Wait. |
+| `raw_code` | 500 | `api_error` | `a raw literal reads the same` | Retry. |
+| `usage_unavailable` | 500 | `api_error` | `z` | Retry. |
+<!-- refusal-codes: end -->
+MD
+python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" >/dev/null || fail "a matching refusal table was refused"
+sed -i '/`body_shape`/d' "$tmp/codes/client.md"
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a table missing a code passed"
+echo "$out" | grep -q "client.md has no row for body_shape" || fail "the missing code did not report: $out"
+sed -i '/refusal-codes: end/i | `body_shape` | 400 | `invalid_request_error` | `x` | y |' "$tmp/codes/client.md"
+python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" >/dev/null || fail "the restored body_shape row was refused"
+sed -i '/refusal-codes: end/i | `made_up` | 400 | `x` | `y` | z |' "$tmp/codes/client.md"
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a table naming a code no file answers passed"
+echo "$out" | grep -q "client.md lists made_up, which the proxy listener does not answer" || fail "the stray code did not report: $out"
+sed -i '/`made_up`/d' "$tmp/codes/client.md"
+echo 'Failure { code: NOWHERE, message: "q" }' >> "$tmp/codes/errors.rs"
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a code that resolves to no const passed"
+echo "$out" | grep -q "errors.rs:9: code NOWHERE resolves to no const in the files read" || fail "the unresolved code did not report: $out"
+echo 'Failure { code: format!("{kind}_refused"), message: "u" }' >> "$tmp/codes/errors.rs"
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a code expression the check cannot read passed"
+echo "$out" | grep -qF 'errors.rs:10: unsupported code expression format!("{kind}_refused")' || fail "the unreadable code did not report: $out"
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" 2>&1) && fail "codes with one argument passed"
+status=$?
+[ "$status" = 2 ] || fail "codes with one argument exited $status rather than 2: $out"
+echo "$out" | grep -qF "codes [RS_FILE... CLIENT_MD]" || fail "codes with one argument did not print the new usage: $out"
+
+# The prose rules: each rule fires outside a code span and a fenced block and stays quiet inside them, a fence
+# closes only on its own character and length, and a span wrapped across two lines is code on both.
+mkdir -p "$tmp/prose"
+{
+  echo '# A page'
+  echo
+  echo 'A `code; span`, an `api_key` in a span, a `task` in a span and the shape a client sends all pass.'
+  printf '| %s |\n' "$(printf 'x%.0s' $(seq 1 117))"
+  echo '<!-- a comment; with a semicolon and a task -->'
+  echo
+  echo '```sh'
+  echo 'echo "a fenced line; with a semicolon, an em-dash — and a task"'
+  echo '```'
+  echo '````markdown'
+  echo '```sh'
+  echo 'a line; inside a four-backtick block, with a task'
+  echo '```'
+  echo '````'
+  echo 'A span that wraps `git'
+  echo 'worktree list; with a semicolon` and ends.'
+} > "$tmp/prose/pass.md"
+[ "$(sed -n 4p "$tmp/prose/pass.md" | wc -c)" = 122 ] || fail "the table row case is not 121 columns"
+python3 "$check" prose "$tmp/prose/pass.md" >/dev/null || fail "prose refused a page that obeys every rule"
+{
+  echo 'A prose line; with a semicolon.'
+  printf '%s\n' "$(printf 'x%.0s' $(seq 1 121))"
+  echo 'An em-dash — here.'
+  echo 'An en-dash – here.'
+  echo 'An api_key account.'
+  echo 'A span that wraps `git'
+  echo 'worktree list` and then; a semicolon after the close.'
+} > "$tmp/prose/fail.md"
+out=$(python3 "$check" prose "$tmp/prose/fail.md" 2>&1) && fail "prose passed a page that breaks the rules"
+for finding in 'fail.md:1: semicolon:' 'fail.md:2: columns: 121' 'fail.md:3: dash:' 'fail.md:4: dash:' 'fail.md:5: api_key:' 'fail.md:7: semicolon:'; do
+  echo "$out" | grep -q "$finding" || fail "prose did not report $finding: $out"
+done
+echo "$out" | grep -q 'fail.md:6:' && fail "prose reported the line that opens a wrapped span: $out"
+for word in sub-project subproject ruling rulings task tasks finding findings worktree worktrees workstream 'item 12' 'shape B' 'option 2'; do
+  echo "The $word is named here." > "$tmp/prose/word.md"
+  out=$(python3 "$check" prose "$tmp/prose/word.md" 2>&1) && fail "prose passed the word $word in prose"
+  echo "$out" | grep -q "word.md:1: vocabulary:" || fail "prose did not report $word as vocabulary: $out"
+  echo "The \`$word\` is named here." > "$tmp/prose/word.md"
+  python3 "$check" prose "$tmp/prose/word.md" >/dev/null || fail "prose refused the word $word inside a code span"
+done
+# A span left open ends with its paragraph: a blank line or a fence line closes it, so the prose after either is read.
+{
+  echo 'A span opened here `and never closed'
+  echo
+  echo 'A prose line after the blank; with a semicolon.'
+} > "$tmp/prose/open-span.md"
+out=$(python3 "$check" prose "$tmp/prose/open-span.md" 2>&1) && fail "prose passed the semicolon after a span left open before a blank line"
+echo "$out" | grep -q 'open-span.md:3: semicolon:' || fail "prose did not report the line after a blank that ends an open span: $out"
+{
+  echo 'A span opened here `and never closed'
+  echo '```sh'
+  echo 'echo fenced'
+  echo '```'
+  echo 'A prose line after the block; with a semicolon.'
+} > "$tmp/prose/open-span-fence.md"
+out=$(python3 "$check" prose "$tmp/prose/open-span-fence.md" 2>&1) && fail "prose passed the semicolon after a span left open before a fence"
+echo "$out" | grep -q 'open-span-fence.md:5: semicolon:' || fail "prose did not report the line after a block that ends an open span: $out"
+# A fence line with an info string inside an open block is content, so only a bare fence line closes the block.
+{
+  echo '```markdown'
+  echo '```sh'
+  echo 'a line inside the block'
+  echo '```'
+  echo 'A prose line after the block; with a semicolon.'
+} > "$tmp/prose/inner-fence.md"
+out=$(python3 "$check" prose "$tmp/prose/inner-fence.md" 2>&1) && fail "prose passed the prose after a block holding a fence line with an info string"
+echo "$out" | grep -q 'inner-fence.md:5: semicolon:' || fail "prose did not report the line after the block's bare closing fence: $out"
 
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
