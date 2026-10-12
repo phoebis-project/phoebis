@@ -114,7 +114,7 @@ set to `ready`, and a session started with `new` creates the row `ready` with it
 one write. The confirm reads the usage endpoint right after answering, so the windows show within seconds. An account
 stays bound to the upstream account it was first paired to, so moving it elsewhere means deleting it: confirming another
 upstream account answers `409 this slot is already paired to a different upstream account`, and an upstream account
-paired to another slot `409 that upstream account is already paired to another slot`.
+already paired to another of the router's accounts `409 that upstream account is already paired to another slot`.
 
 `GET /admin/accounts` lists the accounts with their `kind`, `state` and the rest of each row, and
 `GET /admin/accounts/{id}/usage` answers the poll's latest snapshot of the account's usage windows and the poll's

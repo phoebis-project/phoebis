@@ -74,9 +74,10 @@ A router that already runs from a file in your home directory moves under the un
 `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
 creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
 `/etc/phoebis/storage.key` and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
-and everything moved into it to `phoebis` (`chown -R phoebis:phoebis /var/lib/phoebis`, since a moved file keeps its
-owner), and edit the five path keys `init` wrote absolute to those places, since `ProtectHome=true` keeps the service
-out of `/home`: `storage.encryption_key_file: /etc/phoebis/storage.key`, `storage.path: /var/lib/phoebis/router.sqlite`,
+and everything moved into it to `phoebis` (`chown phoebis:phoebis /etc/phoebis/storage.key` and
+`chown -R phoebis:phoebis /var/lib/phoebis`, since a moved file keeps its owner), and edit the five path keys `init`
+wrote absolute to those places, since `ProtectHome=true` keeps the service out of `/home`:
+`storage.encryption_key_file: /etc/phoebis/storage.key`, `storage.path: /var/lib/phoebis/router.sqlite`,
 `stats.ledger_path: /var/lib/phoebis/ledger.sqlite`, `stats.api_prices_path: /etc/phoebis/api_prices.yaml` and
 `stats.subscription_costs_path: /etc/phoebis/subscription_costs.yaml`. The registry opens under the key that sealed it
 wherever the file names it, and the environment file is `deploy/phoebis.env.example` with the secret you export today in
@@ -319,9 +320,8 @@ connection per call, and share five flags:
 
 `--url` defaults to the scheme `admin.tls` gives and the address of `admin.listen`, on the loopback of its family when
 the listener is bound on every interface, as `health` reaches the proxy. With `--url` and `--secret-env` both given the
-file is not read, so the binary reads a router on another machine: `status` then has no proxy listener to probe, prints
-`proxy: not probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without
-both, the file at `--config` must load. Every account, pool and key is created and edited in the console.
+file is not read, which [Is it up?](operations.md#is-it-up) describes for a router on another machine, and without both,
+the file at `--config` must load. Every account, pool and key is created and edited in the console.
 
 `backup` copies the registry and the ledger into the directory `--to` names, each through SQLite's online backup API as
 one consistent snapshot while the router serves or while it is stopped, writes `manifest.json` last and leaves the key

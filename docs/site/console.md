@@ -248,7 +248,7 @@ end named where the pace runs to the subscription's end), and in the expert view
 dragged or moved with the arrow keys. In the expert view, Load shedding closes on a "Preview" line, the round's dry run
 as the fields stand: "No round runs while shed ahead of pace is off." while the switch is off, `No member is ahead of
 pace by the margin: the closest is {account}, {lead} to its end at {time}.` while none is (the end named as in the hover
-above), and otherwise `{n} members run ahead of pace by the margin: {account} ({window}, {lead} to its end at {time})`
+above), and otherwise `{n} members run ahead of pace by the margin: {account} ({window}, {lead} to its end at {time}).`
 followed by `A round there would move {n} sessions ({n} warm), {pct} of the hot members' recent burn together, in window
 share, to a cool sibling.`, or by `A round there would mark {n} sessions ({n} warm), {pct} of the hot members' recent
 burn together, in window share, but no sibling reads under the margin less 5 points, so the sessions would be marked and
