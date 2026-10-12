@@ -1,10 +1,10 @@
-import { Fragment, type RefObject, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { OptionList, type Option, type Preset, walkRows } from '@/components/ui/OptionList';
 import { PATTERN_GRAMMAR } from '@/components/ui/PatternInput';
 import { Popover } from '@/components/ui/Popover';
 import { IconCheck, IconChevronLeft, IconPlus } from '@/components/ui/icons';
 import { Button, Input } from '@/components/ui/primitives';
-import { chipText, chipValues, type Dimension, emptyValue, hasValue } from '@/lib/filterBar';
+import { chipText, type Dimension, emptyValue, hasValue } from '@/lib/filterBar';
 
 export interface AddFilterProps {
   /** The "Add filter" button, for the chip line's focus fallback. */
@@ -27,9 +27,8 @@ const SEARCHED = 12;
 /** A dimension's value in the chip's words without the dimension, "on" for a flag, and nothing while it holds none. */
 function valueWords(dimension: Dimension, value: unknown, options: Option[]): string {
   if (!hasValue(dimension, value)) return '';
-  if (dimension.kind === 'flag') return 'on';
-  const { text } = dimension.text ? dimension.text(value, options) : chipText(dimension, value, options);
-  return chipValues({ label: dimension.word, text }) ?? text;
+  const { values } = dimension.text ? dimension.text(value, options) : chipText(dimension, value, options);
+  return values ?? 'on';
 }
 
 /** The 32 px secondary button (IconPlus at 14, "Add filter", aria-haspopup dialog, aria-expanded) and its Popover: step one the "Filter by" field over the grouped rows, step two by kind. */
@@ -74,6 +73,16 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     (body.querySelector<HTMLElement>(own) ?? body.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
   }, [kind, open, step]);
 
+  // A list writes on each click with the box open, and the chip it hangs from can leave the layout under it: with its
+  // last value, or folded away as the write resets the line's expansion. The box then moves to Add filter and stays
+  // open, rather than hang from a chip no longer drawn. A write arrives as new `filters`, so they are a dependency
+  // though the body never reads them.
+  useLayoutEffect(() => {
+    if (!open || !fromChip || anchor === null || (anchor.isConnected && anchor.closest('[hidden]') === null)) return;
+    setAnchor(buttonRef.current);
+    setFromChip(false);
+  }, [anchor, buttonRef, filters, fromChip, open]);
+
   const close = (to: HTMLElement | null) => {
     to?.focus({ preventScroll: true });
     setOpen(false);
@@ -84,14 +93,6 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
   // Closing first draws both changes in one commit, where the line finds the focus dropped to the body.
   const write = (d: Dimension, next: unknown) => {
     close(fromChip && !hasValue(d, next) ? null : anchor);
-    update({ [d.field]: next });
-  };
-  const change = (d: Dimension, next: string[]) => {
-    // The chip the box hangs from leaves with its last value, so the box moves to Add filter and stays open.
-    if (fromChip && next.length === 0) {
-      setAnchor(buttonRef.current);
-      setFromChip(false);
-    }
     update({ [d.field]: next });
   };
   const toggle = () => {
@@ -166,7 +167,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
             </button>
           )}
         </div>
-        {d.kind === 'list' && <OptionList key={d.field} autoFocus label={d.label} mono={d.mono} onChange={(next) => change(d, next)} options={known} presets={presets[d.field]} searchable={known.length > SEARCHED} value={Array.isArray(value) ? value : []} />}
+        {d.kind === 'list' && <OptionList key={d.field} autoFocus label={d.label} mono={d.mono} onChange={(next) => update({ [d.field]: next })} options={known} presets={presets[d.field]} searchable={known.length > SEARCHED} value={Array.isArray(value) ? value : []} />}
         {(d.kind === 'id' || d.kind === 'pattern') && (
           <>
             <Input

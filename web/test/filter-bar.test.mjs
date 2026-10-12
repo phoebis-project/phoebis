@@ -11,36 +11,41 @@ const ACCOUNTS = [
 ];
 
 test('a list chip prints up to three option labels then +N, every label in its title, and a value with no option as itself', () => {
-  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2'], ACCOUNTS), { text: 'account: primary, nightly', title: 'primary, nightly' });
-  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2', 'acc_3', 'acc_4'], ACCOUNTS), { text: 'account: primary, nightly, backup +1', title: 'primary, nightly, backup, spare' });
-  assert.deepEqual(d.chipText(list({ field: 'keys', label: 'Key', word: 'key' }), ['laptop@3'], []), { text: 'key: laptop@3', title: 'laptop@3' }, 'an earlier holder no option names prints itself');
+  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2'], ACCOUNTS), { text: 'account: primary, nightly', title: 'primary, nightly', values: 'primary, nightly' });
+  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2', 'acc_3', 'acc_4'], ACCOUNTS), { text: 'account: primary, nightly, backup +1', title: 'primary, nightly, backup, spare', values: 'primary, nightly, backup +1' });
+  assert.deepEqual(d.chipText(list({ field: 'keys', label: 'Key', word: 'key' }), ['laptop@3'], []), { text: 'key: laptop@3', title: 'laptop@3', values: 'laptop@3' }, 'an earlier holder no option names prints itself');
 });
 
 test('a pattern chip prints the pattern, an id chip its first eight characters and an ellipsis with the whole id in the title', () => {
   const pattern = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
-  assert.deepEqual(d.chipText(pattern, 'claude-cli/2.1.*'), { text: 'user agent: claude-cli/2.1.*', title: 'claude-cli/2.1.*' });
+  assert.deepEqual(d.chipText(pattern, 'claude-cli/2.1.*'), { text: 'user agent: claude-cli/2.1.*', title: 'claude-cli/2.1.*', values: 'claude-cli/2.1.*' });
   const id = { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' };
   const whole = 'd7167642-3f1a-4c2e-9b8d-5e6f7a8b9c0d';
   assert.equal(whole.length, 36);
-  assert.deepEqual(d.chipText(id, whole), { text: 'session: d7167642…', title: whole });
+  assert.deepEqual(d.chipText(id, whole), { text: 'session: d7167642…', title: whole, values: 'd7167642…' });
 });
 
-test('a choice chip prints its option label, a flag its word alone, and a choice at its default draws no chip', () => {
+test('a choice chip prints its option label, a flag its word alone with no values, and a choice at its default draws no chip', () => {
   const kind = { anyLabel: 'Any kind', field: 'kind', group: 'Request', kind: 'choice', label: 'Kind', word: 'kind' };
-  assert.deepEqual(d.chipText(kind, 'inference', [{ label: 'Inference', value: 'inference' }]), { text: 'kind: Inference', title: 'Inference' });
+  assert.deepEqual(d.chipText(kind, 'inference', [{ label: 'Inference', value: 'inference' }]), { text: 'kind: Inference', title: 'Inference', values: 'Inference' });
   const held = { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' };
-  assert.deepEqual(d.chipText(held, true), { text: 'held only', title: 'held only' });
+  assert.deepEqual(d.chipText(held, true), { text: 'held only', title: 'held only', values: null }, 'a flag has no values');
   const status = d.KEYS_DIMENSIONS.find((x) => x.field === 'status');
   const options = { status: [{ label: 'Disabled', value: 'disabled' }] };
   assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: [], search: '', status: 'all' }, options), [], 'the Keys status at all draws no chip');
-  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: [], search: '', status: 'disabled' }, options), [{ field: 'status', label: 'status', mono: false, text: 'status: Disabled', title: 'Disabled' }]);
+  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: [], search: '', status: 'disabled' }, options), [{ field: 'status', label: 'status', mono: false, text: 'status: Disabled', title: 'Disabled', values: 'Disabled' }]);
   assert.deepEqual([d.hasValue(status, 'all'), d.hasValue(status, 'disabled'), d.hasValue(kind, ''), d.hasValue(held, false), d.hasValue(list(), [])], [false, true, false, false, false]);
 });
 
 test('the status chip prints the codes alone, with the labels in its title', () => {
   const options = { statuses: [{ label: '429 Rate limited', value: '429' }, { label: '500 Server error', value: '500' }] };
   const [chip] = d.chipsOf(d.REQUESTS_DIMENSIONS, { statuses: ['429', '500'] }, options);
-  assert.deepEqual(chip, { field: 'statuses', label: 'status', mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error' });
+  assert.deepEqual(chip, { field: 'statuses', label: 'status', mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error', values: '429, 500' });
+});
+
+test("a dimension's own text supplies the values the chip carries, whatever its text reads", () => {
+  const kinds = { field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', text: (value) => ({ text: value.join(', '), title: value.join(', '), values: value.join(', ') }), word: 'kinds' };
+  assert.deepEqual(d.chipsOf([kinds], { kinds: ['moved', 'held'] }, {}), [{ field: 'kinds', label: 'kinds', mono: false, text: 'moved, held', title: 'moved, held', values: 'moved, held' }]);
 });
 
 test("the chips stand in the dimension list's order whatever the filters' key order", () => {
@@ -51,7 +56,7 @@ test("the chips stand in the dimension list's order whatever the filters' key or
 });
 
 test('the fold keeps five chips at most, fewer when they do not fit, one when none fits, and names the folded words', () => {
-  const chips = ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'].map((word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x' }));
+  const chips = ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'].map((word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x', values: 'x' }));
   const five = d.foldChips(chips, () => true);
   assert.deepEqual([five.shown.length, five.folded.map((c) => c.label), five.title], [5, ['effort', 'speed'], 'Folded: effort, speed']);
   const two = d.foldChips(chips, (count) => count <= 2);

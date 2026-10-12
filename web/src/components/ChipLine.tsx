@@ -22,14 +22,20 @@ export interface ChipLineProps {
  * `div.chip-line` under the row, drawn while a chip stands: the shown chips, a dashed `button.chip.chip--more` reading
  * "+N more" with the fold's title, "Show fewer" while expanded, and "Clear all" (`.link-btn`) from two chips on. The
  * expanded state resets when the address changes. A remove moves focus to the next chip's body, else to
- * `addFilterRef`.
+ * `addFilterRef`, and a chip folded away with the focus on it hands the focus to the fold chip. The bar keeps the line
+ * mounted with no chips: it draws nothing then, and the focus hand-off after Clear all or the last chip's x runs in its
+ * effects.
  */
 export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onRemove }: ChipLineProps): JSX.Element | null {
   const lineRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(MOST);
-  // The expansion belongs to the address it was opened on, so a new address reads as folded with no reset to render.
+  // The expansion is the bar's own and resets with the address. Clearing it as the address moves, rather than only
+  // comparing, keeps a later return to that address folded.
   const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  if (expandedFor !== null && expandedFor !== address) setExpandedFor(null);
   const expanded = expandedFor === address;
+  // The chip body that last took the focus, which a write from the expanded line can fold away with the focus on it.
+  const focusedBody = useRef<HTMLElement | null>(null);
   const { folded, shown, title } = foldChips(chips, (count) => count <= fit);
   const drawn = expanded ? chips : chips.slice(0, MOST);
 
@@ -86,10 +92,18 @@ export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onR
     const at = document.activeElement;
     if (at !== null && at !== document.body && at.isConnected) return;
     const gone = was.findIndex((c) => !chips.some((n) => n.field === c.field));
-    if (gone < 0) return;
+    const line = lineRef.current;
+    if (gone < 0) {
+      // A chip that stays but left the drawn set (a write from the expanded line resets the expansion) took the focus
+      // with it, and the fold chip now stands for it.
+      const body = focusedBody.current;
+      if (body === null || (body.isConnected && body.closest('[hidden]') === null)) return;
+      focusedBody.current = null;
+      ((line === null ? undefined : childrenOf(line, 'chip--more')[0]) ?? addFilterRef.current)?.focus({ preventScroll: true });
+      return;
+    }
     const next = was.slice(gone + 1).find((c) => chips.some((n) => n.field === c.field));
     const index = next === undefined ? -1 : chips.findIndex((c) => c.field === next.field);
-    const line = lineRef.current;
     if (index < 0 || line === null) {
       addFilterRef.current?.focus({ preventScroll: true });
       return;
@@ -101,7 +115,17 @@ export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onR
 
   if (chips.length === 0) return null;
   return (
-    <div ref={lineRef} className={expanded ? 'chip-line is-expanded' : 'chip-line'}>
+    <div
+      ref={lineRef}
+      className={expanded ? 'chip-line is-expanded' : 'chip-line'}
+      onFocus={(e) => {
+        focusedBody.current = e.target instanceof HTMLElement && e.target.classList.contains('chip__body') ? e.target : null;
+      }}
+      onBlur={(e) => {
+        // A focus that moved on to another control is no longer the line's to hand off.
+        if (e.relatedTarget !== null) focusedBody.current = null;
+      }}
+    >
       {drawn.map((chip, i) => (
         <FilterChip key={chip.field} chip={chip} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field)} />
       ))}

@@ -6,6 +6,17 @@ const GAP = 8;
 // Native fields count, so a box whose first control is a search field opens onto it.
 const TABBABLE = 'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
+/**
+ * The first stop after `anchor` in the page's Tab order, outside the box: where Tab would land if the box stood beside
+ * its anchor rather than at the end of the body or the dialog.
+ */
+function stopAfter(anchor: HTMLElement, box: HTMLElement): HTMLElement | undefined {
+  const scope = anchor.closest('dialog[open]') ?? document;
+  return [...scope.querySelectorAll<HTMLElement>(TABBABLE)].find(
+    (el) => (anchor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !anchor.contains(el) && !box.contains(el) && el.closest('[hidden]') === null && (el.checkVisibility?.() ?? true),
+  );
+}
+
 /** The context a bar provides: every Popover under it reports its open state, so the page can pause auto reload while a menu or a popover is open. */
 export const PopoverHost = createContext<{ add: (id: string) => void; remove: (id: string) => void } | null>(null);
 
@@ -27,14 +38,25 @@ export interface PopoverProps {
   role?: 'dialog' | 'menu';
 }
 
-/** StripPopover's rules on any anchor: createPortal at position fixed, visibility hidden until placed, kept 8 px inside the window, flipped above when it would pass the window's foot, placed again on resize and any scroll, aria-modal false, focus moved to the first tabbable (else the box) on open. */
+/** StripPopover's rules on any anchor: createPortal at position fixed, visibility hidden until placed, kept 8 px inside the window, flipped above when it would pass the window's foot, placed again on resize and any scroll, closed once its anchor has left the document, aria-modal false, focus moved to the first tabbable (else the box) on open. Tab past the last stop moves on to the stop after the anchor and Shift+Tab before the first returns to the anchor, each closing the box. */
 export function Popover({ anchor, children, className, id, label, labelledBy, onClose, open, placeKey, role = 'dialog' }: PopoverProps): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
   const host = useContext(PopoverHost);
   const shown = open && anchor !== null;
+  // Read through a ref, so an opener's new close function each render places nothing again.
+  const closeRef = useRef(onClose);
+  useLayoutEffect(() => {
+    closeRef.current = onClose;
+  });
   const place = useCallback(() => {
     const el = ref.current;
     if (el === null || anchor === null) return;
+    // A box over an anchor that has left the document would hang from the window's corner, so it closes as the
+    // decision strip's popover does.
+    if (!anchor.isConnected) {
+      closeRef.current();
+      return;
+    }
     // A classic scrollbar stands inside the window's inner box but outside the fixed box's containing block.
     const wide = document.documentElement.clientWidth;
     const tall = document.documentElement.clientHeight;
@@ -99,11 +121,25 @@ export function Popover({ anchor, children, className, id, label, labelledBy, on
     if (to !== null && !e.currentTarget.contains(to) && !anchor.contains(to)) onClose();
   };
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Escape') return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      anchor.focus({ preventScroll: true });
+      onClose();
+      return;
+    }
+    // The box stands at the end of the body, so Tab off either end would leave the page or land at its far end, with
+    // the box left open behind. The keys take the walk back beside the anchor.
+    if (e.key !== 'Tab') return;
+    const root = e.currentTarget;
+    const stops = [...root.querySelectorAll<HTMLElement>(TABBABLE)];
+    const atEdge = e.shiftKey ? e.target === root || e.target === stops[0] : e.target === (stops.length > 0 ? stops[stops.length - 1] : root);
+    if (!atEdge) return;
     e.preventDefault();
-    e.stopPropagation();
-    anchor.focus({ preventScroll: true });
-    onClose();
+    const to = e.shiftKey ? anchor : (stopAfter(anchor, root) ?? anchor);
+    to.focus({ preventScroll: to === anchor });
+    // Focus leaving for anything but the anchor has closed the box already.
+    if (to === anchor) onClose();
   };
   return createPortal(
     // Hidden until `place` has put it under its anchor, so a frame painted before then shows nothing. React writes a

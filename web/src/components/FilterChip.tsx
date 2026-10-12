@@ -1,5 +1,5 @@
 import { IconX } from '@/components/ui/icons';
-import { type Chip, chipValues } from '@/lib/filterBar';
+import type { Chip } from '@/lib/filterBar';
 
 /**
  * `span.chip.chip--filter.chip--removable[title]` holding `button.chip__body` (the word, a colon, the values, 240 px at
@@ -7,7 +7,7 @@ import { type Chip, chipValues } from '@/lib/filterBar';
  * button, so the two stand side by side in the pill. `hidden` keeps a chip the line folds drawn but out of view.
  */
 export function FilterChip({ chip, hidden, onOpen, onRemove }: { chip: Chip; hidden?: boolean; onOpen: (anchor: HTMLElement) => void; onRemove: () => void }): JSX.Element {
-  const values = chipValues(chip);
+  const { values } = chip;
   return (
     <span className="chip chip--filter chip--removable" title={chip.title} hidden={hidden}>
       <button type="button" className="chip__body" onClick={(e) => onOpen(e.currentTarget)}>

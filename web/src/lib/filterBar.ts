@@ -18,7 +18,7 @@ export interface Dimension {
   label: string;
   /** The chip's values and the option rows in the mono face. */
   mono?: boolean;
-  /** The chip's text and title for a value, in place of chipText's forms. */
+  /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
   text?: (value: unknown, options: Option[]) => ChipText;
   /** The word before the colon: the label in lower case unless named ("kinds", "client"). */
   word: string;
@@ -27,6 +27,8 @@ export interface Dimension {
 export interface ChipText {
   text: string;
   title: string;
+  /** The text past the word and its colon, which the chip draws in the value ink. Null for a flag, whose text is the word alone. */
+  values: string | null;
 }
 
 /** A standing filter as the chip line draws it. `label` is the dimension's chip word, which the x and the fold name. */
@@ -36,6 +38,7 @@ export interface Chip {
   mono: boolean;
   text: string;
   title: string;
+  values: string | null;
 }
 
 /** The values a list chip prints before it counts the rest. */
@@ -47,6 +50,7 @@ const ID_SHOWN = 8;
 
 const labelOf = (value: string, options: Option[]) => options.find((o) => o.value === value)?.label ?? value;
 const listed = (words: string[]) => `${words.slice(0, LISTED).join(', ')}${words.length > LISTED ? ` +${words.length - LISTED}` : ''}`;
+const worded = (word: string, values: string, title = values): ChipText => ({ text: `${word}: ${values}`, title, values });
 
 /** A non-empty list or text, a true flag, a choice off its `defaultValue` (the empty string unless set). */
 export function hasValue(dimension: Dimension, value: unknown): boolean {
@@ -82,31 +86,23 @@ export function emptyValue(dimension: Dimension): unknown {
 export function chipText(dimension: Dimension, value: unknown, options: Option[] = []): ChipText {
   const { word } = dimension;
   switch (dimension.kind) {
-    case 'choice': {
-      const label = labelOf(value as string, options);
-      return { text: `${word}: ${label}`, title: label };
-    }
+    case 'choice':
+      return worded(word, labelOf(value as string, options));
     case 'flag':
-      return { text: word, title: word };
+      return { text: word, title: word, values: null };
     case 'id': {
       const id = value as string;
-      return { text: `${word}: ${id.length > ID_SHOWN ? `${id.slice(0, ID_SHOWN)}…` : id}`, title: id };
+      return worded(word, id.length > ID_SHOWN ? `${id.slice(0, ID_SHOWN)}…` : id, id);
     }
     case 'list': {
       // A value no option names prints itself, so an earlier key holder or a status code only a loaded row carries
       // still reads.
       const labels = (value as string[]).map((v) => labelOf(v, options));
-      return { text: `${word}: ${listed(labels)}`, title: labels.join(', ') };
+      return worded(word, listed(labels), labels.join(', '));
     }
     case 'pattern':
-      return { text: `${word}: ${value as string}`, title: value as string };
+      return worded(word, value as string);
   }
-}
-
-/** The values of a chip's text without its word, or null for a flag's text, which is the word alone. */
-export function chipValues(chip: Pick<Chip, 'label' | 'text'>): string | null {
-  const head = `${chip.label}: `;
-  return chip.text.startsWith(head) ? chip.text.slice(head.length) : null;
 }
 
 /** The view's chips in the dimension list's order, one per dimension that has a value. */
@@ -116,8 +112,8 @@ export function chipsOf(dimensions: Dimension[], filters: Record<string, unknown
     .map((d) => {
       const value = filters[d.field];
       const known = options[d.field] ?? [];
-      const { text, title } = d.text ? d.text(value, known) : chipText(d, value, known);
-      return { field: d.field, label: d.word, mono: d.mono ?? false, text, title };
+      const { text, title, values } = d.text ? d.text(value, known) : chipText(d, value, known);
+      return { field: d.field, label: d.word, mono: d.mono ?? false, text, title, values };
     });
 }
 
@@ -151,7 +147,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
     label: 'Status',
     text: (value, options) => {
       const codes = value as string[];
-      return { text: `status: ${listed(codes)}`, title: codes.map((code) => labelOf(code, options)).join(', ') };
+      return worded('status', listed(codes), codes.map((code) => labelOf(code, options)).join(', '));
     },
     word: 'status',
   },

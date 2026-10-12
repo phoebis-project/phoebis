@@ -40,8 +40,8 @@ const render = (node) => {
   return { container, render: (next) => act(() => root.render(next)) };
 };
 
-const press = (key, target = document.activeElement) => {
-  const event = new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key });
+const press = (key, target = document.activeElement, init = {}) => {
+  const event = new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...init });
   act(() => target.dispatchEvent(event));
   return event;
 };
@@ -59,14 +59,14 @@ const type = (input, text) =>
 const box = () => document.querySelector('.popover');
 
 /** A Button that opens a popover on itself, with a button elsewhere on the page to move focus to. */
-function Opened({ children, labelledBy = 'head', onClose, rectOf = '40,70,96,30' }) {
+function Opened({ children, labelledBy = 'head', onClose, placeKey, rectOf = '40,70,96,30' }) {
   const [anchor, setAnchor] = useState(null);
   return h(
     'div',
     null,
     h(Button, { 'data-rect': rectOf, ref: setAnchor }, 'Open'),
     h('button', { className: 'elsewhere', type: 'button' }, 'Elsewhere'),
-    h(Popover, { anchor, id: 'pop', labelledBy, onClose, open: true }, children),
+    h(Popover, { anchor, id: 'pop', labelledBy, onClose, open: true, placeKey }, children),
   );
 }
 const content = () => [h('span', { id: 'head', key: 'head' }, 'Title'), h('input', { 'aria-label': 'Field', key: 'field' }), h('button', { key: 'go', type: 'button' }, 'Go')];
@@ -153,10 +153,65 @@ test('focus leaving for an element outside closes the box, and focus moving to t
   assert.deepEqual(closes, ['close'], 'an element outside closes it');
 });
 
+test('Tab past the last stop moves on to the stop after the anchor and Shift+Tab before the first returns to the anchor, each closing the box once', () => {
+  const closes = [];
+  const { container } = render(h(Opened, { onClose: () => closes.push('close') }, content()));
+  const [field, go] = [box().querySelector('input'), box().querySelector('button')];
+  const inside = press('Tab', field);
+  assert.ok(!inside.defaultPrevented && closes.length === 0, "a Tab between the stops is the browser's own");
+  focus(go);
+  const out = press('Tab', go);
+  assert.ok(out.defaultPrevented && document.activeElement === container.querySelector('.elsewhere'), 'Tab off the last stop lands on the stop after the anchor, not past the page');
+  assert.deepEqual(closes, ['close']);
+  act(() => roots.pop().unmount());
+  closes.length = 0;
+  const again = render(h(Opened, { onClose: () => closes.push('close') }, content()));
+  const back = press('Tab', box().querySelector('input'), { shiftKey: true });
+  assert.ok(back.defaultPrevented && document.activeElement === again.container.querySelector('.btn'), 'Shift+Tab off the first stop lands on the anchor');
+  assert.deepEqual(closes, ['close']);
+});
+
+test('a box whose anchor has left the document closes on its next placement', () => {
+  const closes = [];
+  function Leaving() {
+    const [anchor, setAnchor] = useState(null);
+    const [drawn, setDrawn] = useState(true);
+    return h(
+      'div',
+      null,
+      drawn && h('button', { ref: (el) => el && setAnchor(el), type: 'button' }, 'Open'),
+      h('button', { className: 'drop', onClick: () => setDrawn(false), type: 'button' }, 'Drop'),
+      h(Popover, { anchor, id: 'pop', label: 'Box', onClose: () => closes.push('close'), open: true }, h('button', { type: 'button' }, 'In')),
+    );
+  }
+  const { container } = render(h(Leaving));
+  click(container.querySelector('.drop'));
+  assert.deepEqual(closes, [], 'nothing places the box until the window moves');
+  act(() => window.dispatchEvent(new window.Event('resize')));
+  assert.deepEqual(closes, ['close'], 'the placement closes a box that hangs from nothing');
+});
+
+test('a box opened from inside an open dialog portals into the dialog', () => {
+  function InDialog() {
+    const [anchor, setAnchor] = useState(null);
+    return h('dialog', { open: true }, h('button', { ref: setAnchor, type: 'button' }, 'Open'), h(Popover, { anchor, id: 'pop', label: 'Box', onClose() {}, open: true }, h('button', { type: 'button' }, 'In')));
+  }
+  render(h(InDialog));
+  assert.ok(box()?.parentElement === document.querySelector('dialog'), 'the box stands inside the dialog, which leaves the rest of the document inert');
+});
+
+test('a new placeKey places the box again for the content it now holds', () => {
+  const page = render(h(Opened, { onClose() {}, placeKey: 'list', rectOf: '40,600,96,30' }, content()));
+  assert.equal(box().style.top, '638px', 'a short box stands under its anchor');
+  boxSize = { height: 300, width: 200 };
+  page.render(h(Opened, { onClose() {}, placeKey: 'values', rectOf: '40,600,96,30' }, content()));
+  assert.equal(box().style.top, '292px', 'the taller step flips above the anchor');
+});
+
 test('a filter chip draws its word and values spans inside the body under the filter class, the x after them', () => {
   const opened = [];
   const removed = [];
-  const chip = { field: 'models', label: 'model', mono: true, text: 'model: claude-opus-5, claude-sonnet-5', title: 'claude-opus-5, claude-sonnet-5' };
+  const chip = { field: 'models', label: 'model', mono: true, text: 'model: claude-opus-5, claude-sonnet-5', title: 'claude-opus-5, claude-sonnet-5', values: 'claude-opus-5, claude-sonnet-5' };
   const { container } = render(h(FilterChip, { chip, onOpen: (anchor) => opened.push(anchor), onRemove: () => removed.push('x') }));
   const root = container.firstElementChild;
   assert.deepEqual([root.tagName, root.className, root.title], ['SPAN', 'chip chip--filter chip--removable', 'claude-opus-5, claude-sonnet-5']);
@@ -169,11 +224,14 @@ test('a filter chip draws its word and values spans inside the body under the fi
   click(x);
   assert.ok(opened[0] === body && removed.length === 1, 'the body opens the chip anchored to itself, the x removes it');
   act(() => roots.pop().unmount());
-  const flag = render(h(FilterChip, { chip: { field: 'held', label: 'held only', mono: false, text: 'held only', title: 'held only' }, onOpen() {}, onRemove() {} }));
+  const flag = render(h(FilterChip, { chip: { field: 'held', label: 'held only', mono: false, text: 'held only', title: 'held only', values: null }, onOpen() {}, onRemove() {} }));
   assert.deepEqual([...flag.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'held only']], 'a flag draws its word alone');
+  act(() => roots.pop().unmount());
+  const kinds = render(h(FilterChip, { chip: { field: 'kinds', label: 'kinds', mono: false, text: 'moved, held, placed +5', title: 'moved, held, placed, ...', values: 'moved, held, placed +5' }, onOpen() {}, onRemove() {} }));
+  assert.deepEqual([...kinds.container.querySelector('.chip__body').children].map((el) => [el.className, el.textContent]), [['chip__word', 'kinds:'], ['chip__values', 'moved, held, placed +5']], "the values come from the chip, whatever its text reads");
 });
 
-const chipOf = (word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x' });
+const chipOf = (word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x', values: 'x' });
 const SEVEN = ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'].map(chipOf);
 const lineOf = (props) => h(ChipLine, { addFilterRef: { current: null }, address: 'a', onClearAll() {}, onOpen() {}, onRemove() {}, ...props });
 const shownWords = (container) => [...container.querySelectorAll('.chip--filter')].filter((el) => !el.hidden).map((el) => el.querySelector('.chip__word').textContent);
@@ -197,7 +255,7 @@ test('the chip line draws nothing without chips, five chips then a dashed +N mor
   assert.ok(line.lastElementChild === line.querySelector('.link-btn') && more.nextElementSibling === line.lastElementChild, 'Clear all ends the line after the fold');
 });
 
-test('+N more shows every chip with Show fewer at the end, and a new address folds the line again', () => {
+test('+N more shows every chip with Show fewer at the end, and a new address folds the line again, a return to the old one too', () => {
   const page = render(lineOf({ chips: SEVEN }));
   const more = page.container.querySelector('.chip--more');
   focus(more);
@@ -210,6 +268,8 @@ test('+N more shows every chip with Show fewer at the end, and a new address fol
   click(more);
   page.render(lineOf({ address: 'b', chips: SEVEN }));
   assert.deepEqual([shownWords(page.container).length, page.container.querySelector('.chip--more').textContent], [5, '+2 more'], 'a new address folds the line with the same chips');
+  page.render(lineOf({ address: 'a', chips: SEVEN }));
+  assert.deepEqual([shownWords(page.container).length, page.container.querySelector('.chip-line').className], [5, 'chip-line'], 'a return to the address it was expanded on stays folded');
 });
 
 test("a removed chip hands focus to the next chip's body, the last one to Add filter, and Clear all to Add filter", () => {
@@ -261,7 +321,7 @@ const OPTIONS = {
 const EMPTY = { accounts: [], agent: '', held: false, keys: [], kind: '', session: '' };
 
 /** A bar's wiring: the filters in state, Add filter and the chip line over them, a chip's click opening its step. */
-function bar(initial, { dimensions = DIMENSIONS, disabled } = {}) {
+function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS } = {}) {
   const addRef = { current: null };
   const writes = [];
   function Bar() {
@@ -271,11 +331,11 @@ function bar(initial, { dimensions = DIMENSIONS, disabled } = {}) {
       writes.push(patch);
       setFilters((f) => ({ ...f, ...patch }));
     };
-    const chips = chipsOf(dimensions, filters, OPTIONS);
+    const chips = chipsOf(dimensions, filters, options);
     return h(
       'div',
       null,
-      h(AddFilter, { buttonRef: addRef, dimensions, disabled, edit, filters, onEditDone: () => setEdit(null), options: OPTIONS, update }),
+      h(AddFilter, { buttonRef: addRef, dimensions, disabled, edit, filters, onEditDone: () => setEdit(null), options, update }),
       h(ChipLine, {
         addFilterRef: addRef,
         address: JSON.stringify(filters),
@@ -391,6 +451,41 @@ test("a chip's click opens step two anchored at the chip, and Remove clears the 
   assert.deepEqual([b.writes.at(-1), b.chipBody('account'), box() !== null, box().contains(document.activeElement)], [{ accounts: [] }, undefined, true, true], 'emptying the list from its chip keeps the box open with the focus in it');
   press('Escape');
   assert.ok(box() === null && document.activeElement === b.button(), 'the box hangs from Add filter once its chip has left');
+});
+
+const XY = [
+  { label: 'x', value: 'x' },
+  { label: 'y', value: 'y' },
+];
+const listOf = (field) => ({ field, group: 'G', kind: 'list', label: field.toUpperCase(), word: field });
+const KIND = { anyLabel: 'Any kind', field: 'kind', group: 'G', kind: 'choice', label: 'Kind', word: 'kind' };
+/** Seven chips on one line, the seventh `last`, expanded so the seventh can be clicked. */
+function expandedBar(last) {
+  const dimensions = [...['a', 'b', 'c', 'd', 'e'].map(listOf), ...(last === KIND ? [listOf('f'), KIND] : [KIND, last])];
+  const options = { ...Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((f) => [f, XY])), kind: OPTIONS.kind };
+  const b = bar({ a: ['x'], b: ['x'], c: ['x'], d: ['x'], e: ['x'], f: ['x'], g: ['x'], kind: 'probe' }, { dimensions, options });
+  click(b.container.querySelector('.chip--more'));
+  assert.equal(b.container.querySelector('.chip-line').className, 'chip-line is-expanded');
+  return b;
+}
+
+test("a choice made from the expanded line's seventh chip folds the line and hands the focus to the fold chip that now holds it", () => {
+  const b = expandedBar(KIND);
+  click(b.chipBody('kind'));
+  click([...box().querySelectorAll('[role="radio"]')].find((r) => r.textContent === 'Inference'));
+  const more = b.container.querySelector('.chip--more');
+  assert.deepEqual([box(), b.writes.at(-1), b.container.querySelector('.chip-line').className, b.chipBody('kind')], [null, { kind: 'inference' }, 'chip-line', undefined], 'the write folds the line and the chip with it');
+  assert.ok(document.activeElement === more && more.textContent === '+2 more', 'the fold chip takes the focus');
+});
+
+test("a list edited from the expanded line's seventh chip moves the box to Add filter as the line folds, with the focus kept in it", () => {
+  const b = expandedBar(listOf('g'));
+  click(b.chipBody('g'));
+  assert.equal(box()?.querySelector('.popover__title')?.textContent, 'G');
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'y'));
+  assert.deepEqual([b.writes.at(-1), b.chipBody('g'), box() !== null, box().contains(document.activeElement), b.button().getAttribute('aria-expanded')], [{ g: ['x', 'y'] }, undefined, true, true, 'true'], 'the box stays open on Add filter with the focus in it');
+  press('Escape');
+  assert.ok(box() === null && document.activeElement === b.button(), 'Escape closes it onto Add filter');
 });
 
 test('a list step with no option to show keeps the focus in the box on Back, so Escape still closes it', () => {
