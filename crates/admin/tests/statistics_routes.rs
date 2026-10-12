@@ -2,7 +2,7 @@
 mod common;
 use std::time::Duration;
 
-use common::{delete, get, json, login, post, wait_json};
+use common::{delete, get, json, login, post, priced_row, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::Delivery;
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
@@ -48,39 +48,6 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
         }],
         bodies: None,
     }
-}
-
-/// One seeded request's row as the readers price it: at the start of its hour, at the cells its prompt selects, with
-/// no account tier, which the 20x window equivalent never reads.
-fn priced_row(
-    model: &str,
-    funding: phoebis_ledger::Funding,
-    at: i64,
-    usage: phoebis_routing::PinUsage,
-) -> phoebis_ledger::Priced {
-    let prices = phoebis_ledger::PriceRevisions::shipped();
-    let hour = at.div_euclid(HOUR) * HOUR;
-    let prompt = phoebis_ledger::prompt_tokens(
-        usage.input,
-        usage.cache_read,
-        usage.write_5m,
-        usage.write_1h,
-    );
-    phoebis_ledger::price_row(
-        &prices,
-        &phoebis_ledger::PlanTables::shipped(),
-        &phoebis_ledger::RowKey {
-            model,
-            speed: phoebis_ledger::Speed::Standard,
-            band: prices.in_force(hour).band_of(model, prompt),
-            funding,
-            kind: "inference",
-            tier: None,
-            at: hour,
-            band_at: None,
-        },
-        usage,
-    )
 }
 
 /// A priced row's dollars, zero for a model the revision lacks.
@@ -1104,6 +1071,8 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         billed > 0.0 && billed < dollars && five_hour > 0.0 && seven_day > 0.0,
         "the seed prices both sides: {billed} of {dollars}, {five_hour} and {seven_day}"
     );
+    // Whether the shipped cost model weighs the seeded model is its own fact, read rather than assumed.
+    let estimated = seeded.iter().any(|p| p.estimated);
     let traffic = json(
         get(
             &parts.app,
@@ -1150,7 +1119,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 &summed(&|b| b["equivalent"]["seven_day"].as_f64().unwrap()),
                 seven_day
             )
-            && buckets.iter().all(|b| b["estimated"] == false),
+            && buckets.iter().any(|b| b["estimated"] == true) == estimated,
         "the buckets carry the overage row's dollars as billed and the plan rows' equivalent: {traffic}"
     );
     let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
@@ -1159,7 +1128,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             && close_to(&pool["billed_24h"], billed)
             && close_to(&pool["equivalent_24h"]["five_hour"], five_hour)
             && close_to(&pool["equivalent_24h"]["seven_day"], seven_day)
-            && pool["estimated_24h"] == false,
+            && pool["estimated_24h"] == estimated,
         "the pool's day answers its billed dollars and its 20x equivalent beside its dollars: {pool}"
     );
     let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
@@ -1168,7 +1137,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             && close_to(&board["billed_24h"], billed)
             && close_to(&board["equivalent_24h"]["five_hour"], five_hour)
             && close_to(&board["equivalent_24h"]["seven_day"], seven_day)
-            && board["estimated_24h"] == false,
+            && board["estimated_24h"] == estimated,
         "the dashboard's day answers the same figures: {board}"
     );
     let hourly = board["hourly"].as_array().unwrap();
@@ -1805,6 +1774,33 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             week_share
         ),
         "the model week's share among them: {one_account}"
+    );
+    let twice = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=key&accounts=business,business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let twice_opus = bucket_at(twice["points"].as_array().unwrap(), hour);
+    assert!(
+        twice_opus["unit"] == "window_share"
+            && close_to(&twice_opus["five_hour_share"], five_hour)
+            && close_to(&twice_opus["seven_day_share"], seven_day),
+        "a name given twice counts once, so the filter still names one account: {twice_opus}"
+    );
+    let by_all = get(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=all",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(by_all.status(), 400, "the burn groups by no `all`");
+    assert_eq!(
+        json(by_all).await["error"],
+        "group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent"
     );
     let by_pool = get(
         &parts.app,

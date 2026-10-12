@@ -12,12 +12,12 @@ revisions:
       defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
       units_per_window: 150000000
 
-    capacity:  # units per window, keyed by the tier the profile reports; a Pro subscription reports default_claude_ai
+    capacity:  # units per window, keyed by the tier the profile reports, default_claude_ai for a Pro subscription
       default_claude_ai:      {five_hour: 7500000, seven_day: 90000000}
       default_claude_max_5x:  {five_hour: 37500000, seven_day: 450000000}
       default_claude_max_20x: {five_hour: 150000000, seven_day: 900000000}
 
-    peak:  # hours and weekdays read in `zone`; a request completing inside them meets this fraction of the capacity
+    peak:  # hours and weekdays read in `zone`: a request completing inside them meets this fraction of the capacity
       zone: America/Los_Angeles
       weekdays: true
       from_hour: 5
@@ -26,7 +26,7 @@ revisions:
 
     type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
 
-    model_weight:  # units per plain input token, by undated id; a dated id reads its undated row
+    model_weight:  # units per plain input token, by undated id, which a dated id reads too
       claude-fable-5-1:   10    # 2026-09-30, Max 20x out of band, 6.647 +/- 0.012 percent per 1M input
       claude-opus-5-5:    2.2   # 2026-10-04, Max 20x out of band, 1.467 +/- 0.0027 percent per 1M input
       claude-sonnet-5-5:  1.5   # 2026-09-30, Max 20x out of band, 0.9998 +/- 0.0013 percent per 1M input
@@ -37,8 +37,8 @@ revisions:
     model_windows:  # a window only some models carry, sized against a shared one
       seven_day_fable: {of: seven_day, capacity_factor: 0.5}
 
-    # For a model that breaks a shared constant. Nothing measured so far needs one; the hook exists so a deviation
-    # is written next to the model rather than by bending the shared numbers. Example shape, not a row:
+    # For a model that breaks a shared constant. Nothing measured so far needs one. The hook exists so a deviation is
+    # written next to the model rather than by bending the shared numbers. Example shape, not a row:
     #   overrides:
     #     claude-example-6: {type_multiplier: {cache_read: 0.1}, weight_by_window: {seven_day: 2.4}}
     overrides: {}

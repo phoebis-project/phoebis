@@ -868,3 +868,22 @@ impl Captured {
         String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
 }
+
+/// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's list:
+/// a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
+pub fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
+    phoebis_ledger::breakdown(
+        rows,
+        "all",
+        true,
+        &phoebis_ledger::LiveKeys::default(),
+        &[],
+        None,
+        &r.pricing,
+        &r.tables,
+    )
+    .first()
+    .map_or((0.0, 0.0), |group| {
+        (group.probe_cost_usd, group.wasted_probe_usd)
+    })
+}

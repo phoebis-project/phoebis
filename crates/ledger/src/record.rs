@@ -151,8 +151,8 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    /// Whether the attempt carries any of the five priced token counts: what the fold prices, and what a retried
-    /// leg's earlier, answer-less passes lack.
+    /// Whether the attempt carries any of the five priced token counts: what the fold sums and a reader prices, and
+    /// what a retried leg's earlier, answer-less passes lack.
     pub fn has_usage(&self) -> bool {
         self.input_tokens.is_some()
             || self.output_tokens.is_some()

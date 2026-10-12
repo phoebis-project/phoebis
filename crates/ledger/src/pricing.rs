@@ -160,7 +160,7 @@ impl PriceRevisions {
         &self.revisions[self.revisions.len() - 1]
     }
 
-    /// The first entry dated after `now_ms`, held until its instant.
+    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant.
     pub fn pending(&self, now_ms: i64) -> Option<&PriceTable> {
         self.revisions.get(pending_index(&self.instants, now_ms))
     }
@@ -236,9 +236,35 @@ pub(crate) fn in_force_index(instants: &[i64], at_ms: i64) -> usize {
         .saturating_sub(1)
 }
 
-/// The index of the first instant after `now_ms`, the list's length when none is.
+/// The index of the first instant after `now_ms` that `in_force_index` does not already answer, the list's length when
+/// none is: before the first instant the first entry is in force, so the entry held then is the second.
 pub(crate) fn pending_index(instants: &[i64], now_ms: i64) -> usize {
-    instants.partition_point(|instant| *instant <= now_ms)
+    instants
+        .partition_point(|instant| *instant <= now_ms)
+        .max(1)
+}
+
+fn band_in(row: &ModelRow, prompt_tokens: u64) -> Band {
+    if row
+        .long_context
+        .as_ref()
+        .is_some_and(|l| prompt_tokens > l.over)
+    {
+        Band::LongContext
+    } else {
+        Band::Standard
+    }
+}
+
+/// The one cell selection `price_at` and `estimate_banded` share, so the cells a test reads are the ones production
+/// prices at: the `fast` block for a fast answer on a row that has one, else the long-context cells for
+/// `LongContext` on a row that carries them, else the standard cells.
+fn cells(row: &ModelRow, speed: Speed, band: Band) -> &ModelPrice {
+    match (speed, row.fast.as_ref(), band, row.long_context.as_ref()) {
+        (Speed::Fast, Some(fast), _, _) => fast,
+        (_, _, Band::LongContext, Some(long)) => &long.cells,
+        _ => &row.standard,
+    }
 }
 
 fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
@@ -320,28 +346,14 @@ impl PriceTable {
         speed: Speed,
         prompt_tokens: u64,
     ) -> Option<&ModelPrice> {
-        self.entry(canonical_model).map(|(_, row)| {
-            match (speed, row.fast.as_ref(), row.long_context.as_ref()) {
-                (Speed::Fast, Some(fast), _) => fast,
-                (_, _, Some(long)) if prompt_tokens > long.over => &long.cells,
-                _ => &row.standard,
-            }
-        })
+        self.entry(canonical_model)
+            .map(|(_, row)| cells(row, speed, band_in(row, prompt_tokens)))
     }
 
     /// `LongContext` when the row carries `long_context` and the prompt is longer than its `over`, else `Standard`.
     pub fn band_of(&self, canonical_model: &str, prompt_tokens: u64) -> Band {
-        match self.entry(canonical_model) {
-            Some((_, row))
-                if row
-                    .long_context
-                    .as_ref()
-                    .is_some_and(|l| prompt_tokens > l.over) =>
-            {
-                Band::LongContext
-            }
-            _ => Band::Standard,
-        }
+        self.entry(canonical_model)
+            .map_or(Band::Standard, |(_, row)| band_in(row, prompt_tokens))
     }
 
     /// The cells `speed` and `band` select in `price_at`'s order: the `fast` block for a fast answer, else the
@@ -354,11 +366,7 @@ impl PriceTable {
         counts: phoebis_routing::PinUsage,
     ) -> Option<(f64, CostSplit)> {
         let (_, row) = self.entry(canonical_model)?;
-        let p = match (speed, row.fast.as_ref(), band, row.long_context.as_ref()) {
-            (Speed::Fast, Some(fast), _, _) => fast,
-            (_, _, Band::LongContext, Some(long)) => &long.cells,
-            _ => &row.standard,
-        };
+        let p = cells(row, speed, band);
         let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
         let split = CostSplit {
             input_usd: per_m(counts.input, p.input),
@@ -444,6 +452,8 @@ impl PriceTable {
             .collect()
     }
 
+    /// The entry point for one attempt's counts: the band `band_of` reads from the prompt they sum to, then
+    /// `estimate_banded`.
     #[allow(clippy::too_many_arguments)]
     pub fn estimate(
         &self,
@@ -769,6 +779,24 @@ mod tests {
         let in_2099 = effective_instant("2099-01-01").unwrap();
         assert_eq!(revisions.in_force(in_2099).effective, "2099-01-01");
         assert_eq!(revisions.pending(in_2099), None);
+    }
+
+    /// Before its date the first entry is already in force, since an instant before the list reads the first, so a
+    /// restart before it changes nothing: the entry held is the second, and a list of one entry holds none.
+    #[test]
+    fn a_list_dated_wholly_after_now_holds_its_second_entry_and_a_list_of_one_holds_none() {
+        let revisions =
+            PriceRevisions::from_yaml(&dated(&["2098-01-01", "2099-01-01"]), "file").unwrap();
+        assert_eq!(revisions.in_force(JANUARY_2026).effective, "2098-01-01");
+        assert_eq!(
+            revisions
+                .pending(JANUARY_2026)
+                .map(|r| r.effective.as_str()),
+            Some("2099-01-01")
+        );
+        let alone = PriceRevisions::from_yaml(&dated(&["2099-01-01"]), "file").unwrap();
+        assert_eq!(alone.in_force(JANUARY_2026).effective, "2099-01-01");
+        assert_eq!(alone.pending(JANUARY_2026), None);
     }
 
     /// An entry is in force from 00:00 UTC of its date, and an instant before the first entry reads the first.

@@ -40,27 +40,8 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
     })
 }
 
-/// The cost the ledger's probe rows carry, once the engine's delta has landed: the probe's own request row reaches
-/// the rollups with no cost on it, ahead of that delta, so the wait names the cost rather than the row.
-/// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's list:
-/// a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
-fn read_dollars(r: &Rig, rows: &[phoebis_ledger::RollupRow]) -> (f64, f64) {
-    phoebis_ledger::breakdown(
-        rows,
-        "all",
-        true,
-        &phoebis_ledger::LiveKeys::default(),
-        &[],
-        None,
-        &r.pricing,
-        &r.tables,
-    )
-    .first()
-    .map_or((0.0, 0.0), |group| {
-        (group.probe_cost_usd, group.wasted_probe_usd)
-    })
-}
-
+/// The dollars a reader prices the probe rows at, once the probe's own request row has landed with its counts: the
+/// wait names the cost rather than a row.
 async fn ledger_probe_cost(r: &Rig) -> f64 {
     wait_for(std::time::Duration::from_secs(5), || {
         let rows =

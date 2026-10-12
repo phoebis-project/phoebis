@@ -29,8 +29,8 @@ use crate::LedgerError;
 const DAY_MS: i64 = 86_400_000;
 
 /// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<date>", "bands": {"<model>":
-/// <over>}}]}`, `since` the instant the first mark was written (the first start after the migration) and the list
-/// every revision's thresholds as the last start loaded them. Requests received before `since` landed under the
+/// <over or null>}}]}`, `since` the instant the first mark was written (the first start after the migration) and the
+/// list every revision's thresholds as the last start loaded them. Requests received before `since` landed under the
 /// migration's `standard` and are never re-folded: nothing is backfilled.
 pub const PRICE_BANDS_KEY: &str = "price_bands";
 
@@ -40,11 +40,13 @@ pub const PRICE_BANDS_KEY: &str = "price_bands";
 /// target, whatever the file holds now, then compares the finished mark with the loaded list as usual.
 pub const PRICE_BANDS_REFOLD_KEY: &str = "price_bands_refold";
 
-/// One revision's thresholds: the models whose row carries a long-context block, each with its `over`.
+/// One revision's thresholds: every model it lists, each with its long-context block's `over`, `None` for a row
+/// without one. A row without the block is kept, since a dated row without it beside an undated row with it bands by
+/// its own row, and leaving it out would resolve it to the undated row's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Thresholds {
     effective: String,
-    bands: BTreeMap<String, u64>,
+    bands: BTreeMap<String, Option<u64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,7 +214,12 @@ fn thresholds_of(prices: &PriceRevisions) -> Vec<Thresholds> {
             bands: table
                 .models
                 .iter()
-                .filter_map(|(model, row)| Some((model.clone(), row.long_context.as_ref()?.over)))
+                .map(|(model, row)| {
+                    (
+                        model.clone(),
+                        row.long_context.as_ref().map(|long| long.over),
+                    )
+                })
                 .collect(),
         })
         .collect()
@@ -233,8 +240,8 @@ fn revisions_of(list: &[Thresholds]) -> Result<PriceRevisions, LedgerError> {
                         ModelRow {
                             standard: ModelPrice::default(),
                             fast: None,
-                            long_context: Some(LongContext {
-                                over: *over,
+                            long_context: over.map(|over| LongContext {
+                                over,
                                 cells: ModelPrice::default(),
                             }),
                         },
@@ -506,6 +513,43 @@ mod tests {
             (Some(first), Some(2_000)),
             "the mark keeps its first start and holds the loaded thresholds"
         );
+    }
+
+    /// A dated id the file lists without a long-context block, beside its undated id with one, bands by its own row,
+    /// so a threshold that moves on the undated id leaves the dated id's request where it landed.
+    #[test]
+    fn a_dated_row_without_a_block_keeps_its_band_when_its_undated_rows_threshold_moves() {
+        const DATED: &str = "claude-haiku-5-5-20260101";
+        let with_dated = |over: u64| {
+            let mut table = list(Some(over)).in_force(NEW_YEAR).clone();
+            let mut row = table.models[HAIKU].clone();
+            row.long_context = None;
+            table.models.insert(DATED.into(), row);
+            PriceRevisions::new(vec![table], "test").expect("one entry")
+        };
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
+        assert_eq!(refold_bands(&db, &with_dated(1_000), 0, first).unwrap(), 0);
+        let (mut request, attempts) = haiku("r", first + 1_000, 1_500);
+        request.model = DATED.into();
+        request.canonical_model = DATED.into();
+        land(&db, &(request, attempts), &with_dated(1_000));
+        let before = bands(&db);
+        assert_eq!(
+            before,
+            [(
+                crate::rollup::hour_of(first + 1_000),
+                STANDARD_BAND.to_string(),
+                1,
+                1_500
+            )]
+        );
+        assert_eq!(
+            refold_bands(&db, &with_dated(2_000), 0, now).unwrap(),
+            0,
+            "no request moved"
+        );
+        assert_eq!(bands(&db), before);
     }
 
     /// A first start writes the mark with `since` at its clock and moves nothing, and the same list again moves

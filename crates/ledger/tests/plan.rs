@@ -5,8 +5,8 @@
 
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    funding_of, price_equivalent, price_shares, CostRevisions, Funding, LedgerError, PlanTables,
-    SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
+    effective_instant, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
+    LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -570,17 +570,32 @@ fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as
 }
 
 // The worked figures on the shipped file, each derived from its members rather than written down, so a revision edits
-// no test: one million input tokens of Opus 5.5 and of Fable 5.1, one million Opus 5.5 output tokens, and the Opus 5.5
-// request as a share of a Pro account's own 5-hour window.
+// no test: one million input tokens of Opus 5.5 out of the band and inside it and of Fable 5.1, one million Opus 5.5
+// output tokens, and the Opus 5.5 request as a share of a Pro account's own 5-hour window.
 #[test]
 fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share_scales_it_by_the_capacities(
 ) {
-    let costs = CostRevisions::shipped().in_force(OUT_OF_BAND).clone();
-    assert_eq!(
-        costs.band_factor(FIVE_HOUR, OUT_OF_BAND),
-        1.0,
-        "out of band"
-    );
+    let shipped = CostRevisions::shipped();
+    let costs = shipped.latest().clone();
+    // The instants are found inside the latest entry rather than written down, so its date and weekday edit no test:
+    // the first half hour after its date outside the band, and the first inside it.
+    let from = effective_instant(&costs.effective).expect("the entry's date");
+    let half_hours = (0..7 * 48).map(|n| from + n * 1_800_000 + 900_000);
+    let out_of_band = half_hours
+        .clone()
+        .find(|at| costs.band_factor(FIVE_HOUR, *at) == 1.0)
+        .expect("an instant out of band");
+    let in_band = half_hours
+        .clone()
+        .find(|at| costs.band_factor(FIVE_HOUR, *at) > 1.0)
+        .expect("the band falls inside a week");
+    for at in [out_of_band, in_band] {
+        assert_eq!(
+            shipped.in_force(at).effective,
+            costs.effective,
+            "the entry is in force at {at}"
+        );
+    }
     for model in [OPUS, FABLE] {
         assert!(
             !costs.overrides.contains_key(model),
@@ -598,12 +613,17 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
     let opus = units(OPUS, multiplier.input);
     let opus_equivalent = opus / five_hour;
     assert_share(
-        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), OUT_OF_BAND),
+        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), out_of_band),
         opus_equivalent,
         "Opus 5.5 input on the 5-hour window",
     );
     assert_share(
-        costs.equivalent_at(SEVEN_DAY, OPUS, input(million), OUT_OF_BAND),
+        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), in_band),
+        opus_equivalent / costs.peak.capacity_factor.five_hour,
+        "Opus 5.5 input on the 5-hour window inside the band",
+    );
+    assert_share(
+        costs.equivalent_at(SEVEN_DAY, OPUS, input(million), out_of_band),
         opus / seven_day,
         "Opus 5.5 input on the week",
     );
@@ -614,19 +634,19 @@ fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share
         (SEVEN_DAY_FABLE, fable / seven_day / fable_week),
     ] {
         assert_share(
-            costs.equivalent_at(window, FABLE, input(million), OUT_OF_BAND),
+            costs.equivalent_at(window, FABLE, input(million), out_of_band),
             want,
             &format!("Fable 5.1 input on {window}"),
         );
     }
     assert_share(
-        costs.equivalent_at(FIVE_HOUR, OPUS, output(million), OUT_OF_BAND),
+        costs.equivalent_at(FIVE_HOUR, OPUS, output(million), out_of_band),
         units(OPUS, multiplier.output) / five_hour,
         "Opus 5.5 output on the 5-hour window",
     );
     let pro = costs.capacity[PRO].five_hour.unwrap();
     assert_share(
-        costs.share_at(FIVE_HOUR, PRO, OPUS, input(million), OUT_OF_BAND),
+        costs.share_at(FIVE_HOUR, PRO, OPUS, input(million), out_of_band),
         opus_equivalent * five_hour / pro,
         "the Pro share is the equivalent times the anchor's capacity over Pro's",
     );
@@ -720,7 +740,8 @@ fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_w
 
 // Per token on the anchor's 5-hour window of 100: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
 // (1, 0.2, 2, 2, 10) with its cache read override. Opus 5 (a null weight) and Opus 4.8 (a model tier entry alone)
-// take Opus 5.5's 2 and the shared multipliers, and the Mystery model tier has no weighted model.
+// take Opus 5.5's 2 and the shared multipliers, and the Mystery model tier has no weighted model, so Mystery 2's row
+// carries no rate.
 #[test]
 fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a_weighted_tier() {
     let rates = first().rate_table(FIVE_HOUR);
@@ -750,7 +771,10 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
             "{model} at Opus 5.5's weight: {row:?}"
         );
     }
-    assert_eq!(rates.rows.get("claude-mystery-2"), None);
+    assert_eq!(
+        rates.rows.get("claude-mystery-2").copied().map(per_type),
+        Some([None; 5])
+    );
     assert_eq!(per_type(rates.fallback), [None; 5]);
     assert_eq!(
         per_type(rates.rates_for("claude-opus-5-5-20260401", 0)),
@@ -795,6 +819,30 @@ fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter
     for model in ["claude-mystery-9", "gpt-5"] {
         assert_eq!(per_type(rates.rates_for(model, 0)), [None; 5], "{model}");
     }
+}
+
+// A file can list an id under a model tier other than the one its id names. Opus 7 listed under the Mystery model
+// tier, which has no weighted model, is unpriced on the meter, so its rate row carries no rate where its id's own
+// model tier would rate it.
+#[test]
+fn a_listed_id_its_model_tier_leaves_unpriced_takes_no_rate_from_the_model_tier_its_id_names() {
+    let text = SUBSCRIPTION_COSTS.replace(
+        "      claude-mystery-2: mystery\n",
+        "      claude-mystery-2: mystery\n      claude-opus-7: mystery\n",
+    );
+    assert_ne!(text, SUBSCRIPTION_COSTS);
+    let costs = CostRevisions::from_yaml(&text)
+        .unwrap()
+        .in_force(JANUARY_2026)
+        .clone();
+    assert_eq!(
+        costs.share_at(FIVE_HOUR, MAX_20X, "claude-opus-7", input(1), OUT_OF_BAND),
+        None,
+        "the meter leaves it unpriced"
+    );
+    let rates = costs.rate_table(FIVE_HOUR);
+    assert_eq!(per_type(rates.rates_for("claude-opus-7", 0)), [None; 5]);
+    assert_eq!(rates.price("claude-opus-7", input(1), 0), None);
 }
 
 /// The test table with the first `from` replaced by `to`, refused: the `Plan` message. Both revisions carry most

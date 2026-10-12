@@ -212,11 +212,15 @@ fn a_key_file_readable_by_group_or_other_warns_naming_the_path_and_0600() {
 fn the_summary_names_the_routing_keys() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path(), "defaults", "");
+    // The binary reads its clock between these two, so a midnight that starts an entry while it runs leaves its lines
+    // equal to the ones built at one of them.
+    let before = jiff::Timestamp::now().as_millisecond();
     let out = phoebis()
         .args(["check-config", "--config"])
         .arg(&config)
         .output()
         .unwrap();
+    let after = jiff::Timestamp::now().as_millisecond();
     assert!(
         out.status.success(),
         "{}",
@@ -225,43 +229,45 @@ fn the_summary_names_the_routing_keys() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     // Neither default path has a file under the test's working directory, so both lines read the shipped lists. Each
-    // expected line is built from its list as the loader reads it at the binary's clock, so a new revision edits no
-    // test. The counts' rule is proven over the hand-counted tables below.
-    let now = jiff::Timestamp::now().as_millisecond();
+    // expected line is built from its list as the loader reads it, so a new revision edits no test. The counts' rule
+    // is proven over the hand-counted tables below.
     let listed = |revisions: usize, in_force: &str, next: Option<&str>, counts: String| {
         let plural = if revisions == 1 { "" } else { "s" };
         let next = next.map_or(String::new(), |date| format!(", next {date}"));
         format!("{revisions} revision{plural}, in force {in_force}{next}, {counts}")
     };
     let prices = phoebis_ledger::PriceRevisions::shipped();
-    let price = prices.in_force(now);
-    let api_prices = format!(
-        "api prices: built in ({}), since ./api_prices.yaml was not found",
-        listed(
-            prices.len(),
-            &price.effective,
-            prices.pending(now).map(|next| next.effective.as_str()),
-            format!("{} models", price.models.len())
-        )
-    );
     let costs = phoebis_ledger::CostRevisions::shipped();
-    let cost = costs.in_force(now);
-    let subscription_costs = format!(
-        "subscription costs: built in ({}), since ./subscription_costs.yaml was not found",
-        listed(
-            costs.len(),
-            &cost.effective,
-            costs.pending(now).map(|next| next.effective.as_str()),
-            format!(
-                "{} weighted models, {} more by model tier, {} account tiers",
-                cost.weighted_model_count(),
-                cost.by_tier_count(),
-                cost.sized_tier_count()
+    let tables_at = |now: i64| {
+        let price = prices.in_force(now);
+        let api_prices = format!(
+            "api prices: built in ({}), since ./api_prices.yaml was not found",
+            listed(
+                prices.len(),
+                &price.effective,
+                prices.pending(now).map(|next| next.effective.as_str()),
+                format!("{} models", price.models.len())
             )
-        )
-    );
+        );
+        let cost = costs.in_force(now);
+        let subscription_costs = format!(
+            "subscription costs: built in ({}), since ./subscription_costs.yaml was not found",
+            listed(
+                costs.len(),
+                &cost.effective,
+                costs.pending(now).map(|next| next.effective.as_str()),
+                format!(
+                    "{} weighted models, {} more by model tier, {} account tiers",
+                    cost.weighted_model_count(),
+                    cost.by_tier_count(),
+                    cost.sized_tier_count()
+                )
+            )
+        );
+        [api_prices, subscription_costs]
+    };
     assert_eq!(
-        lines.get(4..10),
+        lines.get(4..8),
         Some(
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
@@ -269,11 +275,17 @@ fn the_summary_names_the_routing_keys() {
                 "profile claude-code-2.1.269-linux-x64",
                 "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
                 "ledger at ./data/ledger.sqlite",
-                api_prices.as_str(),
-                subscription_costs.as_str(),
             ][..]
         ),
         "{stdout}"
+    );
+    let printed = lines.get(8..10);
+    let (at_before, at_after) = (tables_at(before), tables_at(after));
+    assert!(
+        [&at_before, &at_after]
+            .iter()
+            .any(|tables| printed == Some(&[tables[0].as_str(), tables[1].as_str()][..])),
+        "{stdout}\nwant {at_before:?} or {at_after:?}"
     );
     assert_eq!(
         lines.get(10..12),
@@ -391,6 +403,48 @@ fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_
                 subscription_costs.as_str(),
             ][..]
         ),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// A file whose one entry is dated after now still prices today, since an instant before the list reads its first
+/// entry, so the line names that entry in force and no next date: a restart before it changes nothing.
+#[test]
+fn files_whose_one_entry_is_dated_after_now_name_it_in_force_and_no_next_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    let costs = dir.path().join("subscription_costs.yaml");
+    let ahead_prices = COUNTED_PRICES.replace("effective: 2026-02-01", "effective: 2099-02-01");
+    let ahead_costs = COUNTED_COSTS.replace("effective: 2026-03-01", "effective: 2099-03-01");
+    assert!(ahead_prices != COUNTED_PRICES && ahead_costs != COUNTED_COSTS);
+    std::fs::write(&prices, ahead_prices).unwrap();
+    std::fs::write(&costs, ahead_costs).unwrap();
+    let config = config_file(
+        dir.path(),
+        "ahead",
+        &format!(
+            "stats:\n  api_prices_path: {}\n  subscription_costs_path: {}\n",
+            prices.display(),
+            costs.display()
+        ),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let api_prices = format!(
+        "api prices: {} (file, 1 revision, in force 2099-02-01, 2 models)",
+        prices.display()
+    );
+    let subscription_costs = format!(
+        "subscription costs: {} (file, 1 revision, in force 2099-03-01, 4 weighted models, 1 more by model tier, \
+         3 account tiers)",
+        costs.display()
+    );
+    assert_eq!(
+        lines.get(8..10),
+        Some(&[api_prices.as_str(), subscription_costs.as_str()][..]),
         "{}",
         printed(&out)
     );

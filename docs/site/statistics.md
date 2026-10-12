@@ -167,8 +167,8 @@ each band at its own cells.
 
 A keepalive probe's own row is priced from the table in dollars, whatever the account's funding, at the cells the
 answer's reported speed selects. A probe on a model the table does not list prices at the dearest standard cell of each
-type the table carries, never at zero, so a probe that consumed quota is never booked as free. On a model priced by
-prompt length, a probe prices at the set its own prompt selects.
+type the table carries, never at zero, so a probe that consumed quota never reads as free. On a model priced by prompt
+length, a probe prices at the set its own prompt selects.
 
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
 entry's date, the model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the
@@ -195,12 +195,12 @@ a token costs its model's weight times its type's multiplier in units on every w
 units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
 capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
 the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. The admin routes answer
-the unit as the 20x window equivalent beside the dollars, with an `estimated` flag: the share of a Max 20x window the
-same tokens would spend, so figures of different account tiers compare and add. It comes in up to three columns, the
-5-hour window with the peak band's weight, the 7-day window with the week's factor, and a model week over its capacity
-factor, and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5 are
-2,200,000 units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on
-a Pro account reads 29.3% of its own 5-hour window.
+the unit as the 20x window equivalent beside the dollars: the share of a Max 20x window the same tokens would spend, so
+figures of different account tiers compare and add, with an `estimated` flag beside it. It comes in up to three members,
+the 5-hour window with the peak band's weight, the 7-day window with the week's factor, and a model week over its
+capacity factor, and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5
+are 2,200,000 units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same
+request on a Pro account reads 29.3% of its own 5-hour window.
 
 The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
 subscription reports `default_claude_ai`):
@@ -228,9 +228,9 @@ share of a Max 20x window one million input tokens spend outside the band, deriv
 | `claude-haiku-4-5` | 1 | 2026-10-05 | 0.667% | 0.111% |
 
 `claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The priced
-models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no weight row and
-read the weight of the latest weighed model of their model tier as an estimate, Fable 5 that of Fable 5.1 and the two
-Opus models that of Opus 5.5.
+models the plan meter has not measured and the file leaves out (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`)
+have no weight row and read the weight of the latest weighed model of their model tier as an estimate, Fable 5 that of
+Fable 5.1 and the two Opus models that of Opus 5.5.
 
 Every model shares one multiplier per token type: input 1, output 5, a cache write 1.25 whatever its TTL, and a cache
 read 0.025. Thinking tokens count as output. A model that breaks a shared constant takes an `overrides` row, which may
@@ -255,8 +255,8 @@ Fable request's share of it is twice its 7-day share.
 
 A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
 prediction charges it, the shedding round ranks its pin by that estimate, and every route that answers its figure
-answers `estimated` true beside it. Once the model has served a request since the start, the ledger raises the
-`model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out
+answers `estimated` true beside it. Once the model has served a plan-funded request since the start, the ledger raises
+the `model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out
 until the console can show it. A model of no model tier, or of a model tier with no weighed model, prices no share: the
 prediction adds no charge, the shedding round ranks the pin after every priced one, the analytics list the share under
 model unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there

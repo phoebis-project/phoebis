@@ -1587,7 +1587,7 @@ async fn sleep_until(deadline: Option<i64>, clock: &Clock) {
     }
 }
 
-/// One `PricedAttempt` per attempt with usage of each request in the batch: what the fold prices, the signal the
+/// One `PricedAttempt` per attempt with usage of each request in the batch: what the fold sums, the signal the
 /// member spend refresh reacts to. A request without a pool names no member, so its pool reads empty.
 fn priced_attempts(batch: &[Record]) -> Vec<PricedAttempt> {
     batch

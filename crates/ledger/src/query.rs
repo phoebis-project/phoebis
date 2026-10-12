@@ -1352,8 +1352,9 @@ fn holds_one_account(group_by: &str, accounts: &[String]) -> bool {
     group_by == "account" || names_one_account(accounts)
 }
 
-/// Whether a filter names exactly one account, a name given twice counting once.
-fn names_one_account(accounts: &[String]) -> bool {
+/// Whether a filter names exactly one account, a name given twice counting once. The burn route gates its `unit` on
+/// it, so the unit and the shares answer under one condition.
+pub fn names_one_account(accounts: &[String]) -> bool {
     accounts.iter().collect::<BTreeSet<_>>().len() == 1
 }
 
@@ -1949,25 +1950,34 @@ impl ShareSums {
     /// Folds one plan-funded row in: the request side's shares when `counted`, as the request dollars take the row,
     /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier`.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
-        self.add_priced(row, counted, |usage| {
+        self.add_priced(row, counted, None, |usage| {
             let at = row.hour * 1_000;
             price_shares(tables, tier, &row.canonical_model, usage, at, at).shares
         });
     }
 
-    /// `add` in the 20x equivalent, which reads no account tier.
-    fn add_equivalent(&mut self, row: &RollupRow, costs: &PlanTables, counted: bool) {
-        self.add_priced(row, counted, |usage| {
+    /// `add` in the 20x equivalent, which reads no account tier. `whole` is the row's own usage already priced
+    /// there (`price_row`'s `equivalent`), so only the cache halves and the wasted counts are priced again.
+    fn add_equivalent(
+        &mut self,
+        row: &RollupRow,
+        costs: &PlanTables,
+        counted: bool,
+        whole: Option<WindowShares>,
+    ) {
+        self.add_priced(row, counted, whole, |usage| {
             let at = row.hour * 1_000;
             price_equivalent(costs, &row.canonical_model, usage, at, at).shares
         });
     }
 
-    /// `add` with the pricer passed in, so a test can count the pricings a row costs.
+    /// `add` with the pricer passed in, so a test can count the pricings a row costs. `whole`, where the caller
+    /// priced the row's usage already, stands in for `price(row.usage())`.
     fn add_priced(
         &mut self,
         row: &RollupRow,
         counted: bool,
+        whole: Option<WindowShares>,
         price: impl Fn(PinUsage) -> WindowShares,
     ) {
         let usage = row.usage();
@@ -1986,7 +1996,7 @@ impl ShareSums {
         if tokens_of(usage) == 0 {
             return;
         }
-        let priced = price(usage);
+        let priced = whole.unwrap_or_else(|| price(usage));
         if counted {
             for (window, share) in &priced {
                 self.cost.entry(*window).or_default().add(*share);
@@ -2192,18 +2202,20 @@ struct PlanSums {
 
 impl PlanSums {
     /// Folds one plan-funded row in: its counts and its split when `counted`, as the request dollars take the row,
-    /// its equivalent as `ShareSums` folds a share, and `estimated`, the mark `price_row` set on its counts.
-    fn add(&mut self, row: &RollupRow, estimated: bool, costs: &PlanTables, counted: bool) {
+    /// its equivalent as `ShareSums` folds a share from the figures `price_row` answered on its counts, and
+    /// `estimated`, the mark it set on them.
+    fn add(&mut self, row: &RollupRow, priced: Priced, costs: &PlanTables, counted: bool) {
         if counted {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
         }
-        self.equivalent.add_equivalent(row, costs, counted);
+        self.equivalent
+            .add_equivalent(row, costs, counted, priced.equivalent);
         let usage = row.usage();
         if tokens_of(usage) == 0 {
             return;
         }
-        self.estimated |= estimated;
+        self.estimated |= priced.estimated;
         if counted {
             self.split
                 .add(costs, &row.canonical_model, usage, row.hour * 1_000);
@@ -2265,8 +2277,8 @@ impl GroupSums {
             shares: None,
             plan: PlanSums::default(),
         });
-        let Priced { usd, estimated, .. } = priced(row, prices, costs);
-        let usd = usd.unwrap_or_default();
+        let row_priced = priced(row, prices, costs);
+        let usd = row_priced.usd.clone().unwrap_or_default();
         let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
         if row.kind == PROBE_KIND {
             entry.probes.add(row);
@@ -2288,7 +2300,7 @@ impl GroupSums {
             entry.plan.estimated |= plan && wasted.estimated;
         }
         if plan {
-            entry.plan.add(row, estimated, costs, counted);
+            entry.plan.add(row, row_priced, costs, counted);
         }
         // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
         // account tier it recorded.
@@ -3470,8 +3482,8 @@ pub struct BurnPoint {
     pub five_hour_unpriced: bool,
     #[serde(skip)]
     pub seven_day_unpriced: bool,
-    /// Every token of the bucket's rows, all five types: zero for a bucket with no traffic the ledger can attribute,
-    /// since `price_usage` adds nothing for a row whose account is no longer registered.
+    /// Every token of the bucket's rows, all five types, whatever the tables priced: zero for an idle bucket, so a
+    /// reader tells an idle bucket from one whose traffic no table priced.
     pub tokens: u64,
     pub uncached_tokens: u64,
     pub usd: f64,
@@ -4245,7 +4257,7 @@ mod tests {
         };
         let whole = std::cell::Cell::new(0);
         let mut sums = ShareSums::default();
-        sums.add_priced(&row, true, |priced| {
+        sums.add_priced(&row, true, None, |priced| {
             if priced == usage {
                 whole.set(whole.get() + 1);
             }
@@ -4260,6 +4272,53 @@ mod tests {
         };
         assert_eq!(sums_of(&sums.cost), sums_of(&sums.probe_cost));
         assert_eq!(sums.cost.len(), 2, "both shared windows priced");
+    }
+
+    /// A plan row's equivalent over its whole usage is the one `price_row` answered on its counts, so the group's sums
+    /// price only its cache halves again.
+    #[test]
+    fn a_plan_rows_whole_equivalent_comes_from_its_priced_row_and_is_not_priced_again() {
+        let tables = crate::test_tables::subscription_costs();
+        let model = "claude-sonnet-5-5";
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.cache_read_tokens = 500;
+        row.output_tokens = 100;
+        let usage = row.usage();
+        let at = HOUR * 1_000;
+        let whole = price_equivalent(&tables, model, usage, at, at).shares;
+        let priced_whole = std::cell::Cell::new(0);
+        let mut sums = ShareSums::default();
+        sums.add_priced(&row, true, Some(whole.clone()), |priced| {
+            if priced == usage {
+                priced_whole.set(priced_whole.get() + 1);
+            }
+            price_equivalent(&tables, model, priced, at, at).shares
+        });
+        assert_eq!(priced_whole.get(), 0, "the whole usage is not priced again");
+        let cost: Vec<_> = sums.cost.iter().map(|(w, sum)| (*w, sum.sum)).collect();
+        let want: Vec<_> = whole
+            .iter()
+            .map(|(w, share)| (*w, share.unwrap()))
+            .collect();
+        assert_eq!(cost, want);
     }
 
     /// The hour of a date's midnight, in seconds.

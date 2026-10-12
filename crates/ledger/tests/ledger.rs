@@ -2606,51 +2606,6 @@ const VERSION_32_ATTEMPTS: &str = "ALTER TABLE attempts DROP COLUMN tier; \
      ALTER TABLE attempts ADD COLUMN input_usd REAL; ALTER TABLE attempts ADD COLUMN cache_read_usd REAL; \
      ALTER TABLE attempts ADD COLUMN cache_write_usd REAL; ALTER TABLE attempts ADD COLUMN output_usd REAL;";
 
-/// The rollup table as version 33 held it, rebuilt over a file the current schema built: the band, the tier and the
-/// wasted counts out and the eight dollar columns back at zero, so a replay from an earlier version runs the older
-/// rebuilds, which name the dollar columns, and then migration 34 over the table it was written for. SQLite cannot
-/// drop a primary-key column in place, so the table is rebuilt as the migrations rebuild it.
-const VERSION_33_ROLLUPS: &str = "CREATE TABLE rollups_hourly_v33 (hour INTEGER NOT NULL, key_id TEXT NOT NULL, \
-     key_generation INTEGER NOT NULL DEFAULT 0, pool_id TEXT NOT NULL, account_id TEXT NOT NULL, \
-     canonical_model TEXT NOT NULL, kind TEXT NOT NULL, user_agent TEXT NOT NULL, client TEXT NOT NULL DEFAULT '-', \
-     effort TEXT NOT NULL DEFAULT 'none', request_class TEXT NOT NULL DEFAULT '-', \
-     speed TEXT NOT NULL DEFAULT 'standard', funding TEXT NOT NULL DEFAULT 'plan', requests INTEGER NOT NULL, \
-     succeeded INTEGER NOT NULL, rate_limited INTEGER NOT NULL, failed INTEGER NOT NULL, exhausted INTEGER NOT NULL, \
-     rejected INTEGER NOT NULL, attempts INTEGER NOT NULL, failovers INTEGER NOT NULL, cache_hits INTEGER NOT NULL, \
-     cache_misses INTEGER NOT NULL, uncached_requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, \
-     cache_read_tokens INTEGER NOT NULL, cache_write_5m_tokens INTEGER NOT NULL, \
-     cache_write_1h_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, \
-     thinking_tokens INTEGER NOT NULL DEFAULT 0, web_search_requests INTEGER NOT NULL DEFAULT 0, \
-     web_fetch_requests INTEGER NOT NULL DEFAULT 0, estimated_usd REAL NOT NULL, input_usd REAL NOT NULL, \
-     cache_read_usd REAL NOT NULL, cache_write_usd REAL NOT NULL, output_usd REAL NOT NULL, \
-     kept_warm_requests INTEGER NOT NULL, kept_warm_tokens INTEGER NOT NULL, saved_usd_gross REAL NOT NULL, \
-     probe_cost_usd REAL NOT NULL, probe_migrated INTEGER NOT NULL, wasted_probes INTEGER NOT NULL, \
-     wasted_probe_usd REAL NOT NULL, wasted_probe_reasons_json TEXT NOT NULL, \
-     probes_skipped INTEGER NOT NULL DEFAULT 0, ttfb_hist BLOB NOT NULL, ttfc_hist BLOB NOT NULL, \
-     duration_hist BLOB NOT NULL, output_tps_hist BLOB NOT NULL, errors_json TEXT NOT NULL, \
-     cache_miss_reasons_json TEXT NOT NULL, incomplete INTEGER NOT NULL DEFAULT 0, \
-     probes_held INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (hour, key_id, key_generation, pool_id, account_id, \
-     canonical_model, kind, user_agent, client, effort, request_class, speed, funding)); \
-     INSERT INTO rollups_hourly_v33 (hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, \
-     user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, \
-     rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, \
-     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, \
-     web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, \
-     kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, \
-     wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, \
-     cache_miss_reasons_json, incomplete, probes_held) SELECT hour, key_id, key_generation, pool_id, account_id, \
-     canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, \
-     rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, \
-     input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, \
-     web_search_requests, web_fetch_requests, 0.0, 0.0, 0.0, 0.0, 0.0, kept_warm_requests, kept_warm_tokens, 0.0, \
-     0.0, probe_migrated, wasted_probes, 0.0, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, \
-     duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held \
-     FROM rollups_hourly; \
-     DROP TABLE rollups_hourly; \
-     ALTER TABLE rollups_hourly_v33 RENAME TO rollups_hourly; \
-     CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour); \
-     CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);";
-
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
 
@@ -3371,7 +3326,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         fresh
             .write(|c| {
                 c.execute_batch(VERSION_33_ROLLUPS)?;
-            c.execute_batch(VERSION_32_ATTEMPTS)?;
+                c.execute_batch(VERSION_32_ATTEMPTS)?;
                 c.execute_batch(
                     "ALTER TABLE attempts DROP COLUMN written_at; \
                      ALTER TABLE requests DROP COLUMN diagnostics_source; \
@@ -4566,6 +4521,20 @@ fn plant_funded(
     .unwrap();
 }
 
+/// A million Opus 5 input tokens at the shipped standard and fast cells in force at `plant_funded`'s hour, read
+/// through the loader so a revision edits no test.
+fn opus_5_million() -> (f64, f64) {
+    let shipped = PriceRevisions::shipped();
+    let table = shipped.in_force(ms(2026, 1, 15, 1, 0));
+    let input = |speed| {
+        table
+            .price_at("claude-opus-5", speed, 0)
+            .expect("the shipped list prices Opus 5")
+            .input
+    };
+    (input(Speed::Standard), input(Speed::Fast))
+}
+
 /// The five funding cases on one member in one hour: overage in use, the plan, and three fast answers, one with no
 /// overage reading, one whose head said overage was not in use and one whose head said it was.
 fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, &str)) {
@@ -4645,14 +4614,14 @@ fn member_spends_sums_the_metered_rows_alone_when_asked() {
         .unwrap()[0]
             .spent_usd
     };
-    assert_eq!(
-        spent(false),
-        5.0 + 5.0 + 10.0 + 10.0 + 10.0,
-        "every row: two million standard input tokens at $5 and three million fast at $10"
+    let (standard, fast) = opus_5_million();
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-9;
+    assert!(
+        close(spent(false), 2.0 * standard + 3.0 * fast),
+        "every row: two million standard input tokens and three million fast"
     );
-    assert_eq!(
-        spent(true),
-        5.0 + 10.0 + 10.0 + 10.0,
+    assert!(
+        close(spent(true), standard + 3.0 * fast),
         "the overage row and the three fast answers; the plan's own traffic is no spend"
     );
 }
@@ -4691,11 +4660,12 @@ async fn a_subscription_members_spend_reads_its_metered_rows_alone() {
         Some((of("a")?, of("b")?))
     })
     .await;
-    assert_eq!(
-        spent,
-        (5.0 + 10.0 + 10.0 + 10.0, 5.0 + 5.0 + 10.0 + 10.0 + 10.0),
+    let (standard, fast) = opus_5_million();
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-9;
+    assert!(
+        close(spent.0, standard + 3.0 * fast) && close(spent.1, 2.0 * standard + 3.0 * fast),
         "the subscription member's month reads its overage row and its fast answers and never its plan row; the \
-         API-key member's reads every row"
+         API-key member's reads every row: {spent:?}"
     );
     up.shutdown().await;
 }

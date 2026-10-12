@@ -68,8 +68,8 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
     }
 }
 
-/// What `insert_request` books for one `attempt` on `model`: its counts at the shipped revision in force at `at`, the
-/// request's receipt.
+/// What a reader prices one `attempt` on `model` at: its counts at the shipped revision in force at `at`, the request's
+/// receipt.
 fn attempt_usd(model: &str, at: i64) -> f64 {
     phoebis_ledger::PriceRevisions::shipped()
         .in_force(at)

@@ -1368,7 +1368,8 @@ mod tests {
     }
 
     /// The start log names the price list's entry in force and its revision count, and a held entry's date only while
-    /// one is held, so an operator reads in the log what a restart changes.
+    /// one is held, so an operator reads in the log what a restart changes. A lone entry dated after the start is
+    /// already in force, so nothing is held.
     #[test]
     fn the_start_log_names_the_price_revisions_and_a_held_entrys_date_only_while_one_is_held() {
         let captured = Captured::default();
@@ -1386,9 +1387,12 @@ mod tests {
         .expect("the list with a held entry parses");
         let alone = phoebis_ledger::PriceRevisions::new(vec![held.in_force(START).clone()], "test")
             .expect("one entry");
+        let ahead = phoebis_ledger::PriceRevisions::new(vec![held.latest().clone()], "test")
+            .expect("one entry");
         tracing::subscriber::with_default(subscriber, || {
             log_ledger_opened(std::path::Path::new("ledger.sqlite"), &held, START);
             log_ledger_opened(std::path::Path::new("ledger.sqlite"), &alone, START);
+            log_ledger_opened(std::path::Path::new("ledger.sqlite"), &ahead, START);
         });
         let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         assert_eq!(
@@ -1397,6 +1401,7 @@ mod tests {
                 "INFO ledger opened ledger=ledger.sqlite pricing=2026-01-01 pricing_revisions=2 \
                  pricing_next=2099-01-01",
                 "INFO ledger opened ledger=ledger.sqlite pricing=2026-01-01 pricing_revisions=1",
+                "INFO ledger opened ledger=ledger.sqlite pricing=2099-01-01 pricing_revisions=1",
             ]
         );
     }

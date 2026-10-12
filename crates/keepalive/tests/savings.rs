@@ -7,31 +7,12 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
-use phoebis_ledger::{hour_of, read_rollups, LiveKeys, RollupRow, RollupSelect};
+use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 use phoebis_routing::PinUsage;
 
 /// The five counts summed.
 fn tokens(usage: PinUsage) -> u64 {
     usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output
-}
-
-/// The probe dollars and the wasted dollars a reader answers over `rows`, each row's counts priced on the rig's
-/// list: a probe's cost is its own request row's counts, and a settlement's waste the probe's counts it carries.
-fn read_dollars(r: &Rig, rows: &[RollupRow]) -> (f64, f64) {
-    phoebis_ledger::breakdown(
-        rows,
-        "all",
-        true,
-        &LiveKeys::default(),
-        &[],
-        None,
-        &r.pricing,
-        &r.tables,
-    )
-    .first()
-    .map_or((0.0, 0.0), |group| {
-        (group.probe_cost_usd, group.wasted_probe_usd)
-    })
 }
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
@@ -113,6 +94,29 @@ async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
         r.db.request(id).await.unwrap().map(|(row, _)| row)
     })
     .await
+}
+
+/// A probe's counts sit on its own request row, so one that migrated nothing adds no keepalive row: a row of zeros
+/// under the probe's credit key would read as an empty group of its own.
+#[tokio::test]
+async fn a_probe_that_migrates_nothing_adds_no_keepalive_row_of_its_own() {
+    let mut r = rig(RigSpec::default()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    // The credit lands after the probe's own record, so once it shows, anything the probe recorded has landed too.
+    r.advance(60_000);
+    r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| {
+        inference_rows(rows).kept_warm_requests == 1 && tokens(probe_rows(rows).usage()) > 0
+    })
+    .await;
+    assert_eq!(probe_rows(&rows).probe_migrated, 0);
+    let empty: Vec<&RollupRow> = rows.iter().filter(|row| row.holds_nothing()).collect();
+    assert!(empty.is_empty(), "rows holding nothing: {empty:?}");
 }
 
 #[tokio::test]
@@ -1306,10 +1310,11 @@ async fn a_withheld_probe_files_its_skip_row_under_the_keys_its_recipe_held() {
     );
 }
 
-/// The account a probe served under leaves the registry while the probe is in flight: the credit files under the
-/// kind the answer carried, beside the request row, and asks the registry nothing.
+/// The account a probe served under leaves the registry while the probe is in flight: the probe's row files under the
+/// kind the answer carried and asks the registry nothing.
 #[tokio::test]
-async fn a_probe_whose_account_is_deleted_in_flight_files_its_credit_beside_its_request_row() {
+async fn a_probe_whose_account_is_deleted_in_flight_files_its_row_under_the_kind_its_answer_carried(
+) {
     let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -1330,43 +1335,24 @@ async fn a_probe_whose_account_is_deleted_in_flight_files_its_credit_beside_its_
     r.up.release();
     r.engine.wait_idle().await;
     r.pump(None).await;
-    // The probe's request row, and its credit row: the deletion cuts the answer's body short in this rig, so the
-    // credit prices nothing and is told by its empty request and waste counts rather than by a cost.
+    // The probe's own request row: a probe that migrated nothing adds no keepalive row beside it.
     let probe_rows_of_a = |rows: &[RollupRow]| {
         rows.iter()
-            .filter(|row| {
-                row.kind == "probe"
-                    && row.account_id == "a"
-                    && (row.requests > 0 || (row.wasted_probes == 0 && row.probes_skipped == 0))
-            })
-            .map(|row| {
-                (
-                    if row.requests > 0 {
-                        "request"
-                    } else {
-                        "credit"
-                    },
-                    row.funding.clone(),
-                )
-            })
+            .filter(|row| row.kind == "probe" && row.account_id == "a" && row.requests > 0)
+            .map(|row| row.funding.clone())
             .collect::<Vec<_>>()
     };
-    let rows = rollups(&r, |rows| probe_rows_of_a(rows).len() == 2).await;
-    let mut fundings = probe_rows_of_a(&rows);
-    fundings.sort();
+    let rows = rollups(&r, |rows| !probe_rows_of_a(rows).is_empty()).await;
     assert_eq!(
-        fundings,
-        [
-            ("credit", "billed".to_string()),
-            ("request", "billed".to_string())
-        ],
-        "both rows of the probe file under the api_key account's billing: {rows:?}"
+        probe_rows_of_a(&rows),
+        ["billed".to_string()],
+        "the probe's row files under the api_key account's billing: {rows:?}"
     );
 }
 
-/// The two rollup rows of one probe on `o` by role, sorted, after a probe placed with the account in overage or on
-/// the plan as `in_overage` says, whose answer carried the unified overage header at `head_flag`.
-async fn probe_row_fundings(in_overage: bool, head_flag: &str) -> Vec<(&'static str, String)> {
+/// The funding of the request row of one probe on `o`, after a probe placed with the account in overage or on the
+/// plan as `in_overage` says, whose answer carried the unified overage header at `head_flag`.
+async fn probe_row_funding(in_overage: bool, head_flag: &str) -> String {
     let mut r = rig(plan_funded_spec()).await;
     if in_overage {
         r.enter_overage("o", r.now() + 10_000_000).await;
@@ -1406,65 +1392,46 @@ async fn probe_row_fundings(in_overage: bool, head_flag: &str) -> Vec<(&'static 
     assert_eq!(r.status("main").probes, 1, "one covering probe");
     let probe_rows_of_o = |rows: &[RollupRow]| {
         rows.iter()
-            .filter(|row| row.kind == "probe" && row.account_id == "o")
-            .map(|row| {
-                (
-                    if row.requests == 0 {
-                        "credit"
-                    } else {
-                        "request"
-                    },
-                    row.funding.clone(),
-                )
-            })
+            .filter(|row| row.kind == "probe" && row.account_id == "o" && row.requests > 0)
+            .map(|row| row.funding.clone())
             .collect::<Vec<_>>()
     };
-    let rows = rollups(&r, |rows| probe_rows_of_o(rows).len() == 2).await;
-    let mut fundings = probe_rows_of_o(&rows);
-    fundings.sort();
-    fundings
+    let rows = rollups(&r, |rows| !probe_rows_of_o(rows).is_empty()).await;
+    let fundings = probe_rows_of_o(&rows);
+    assert_eq!(fundings.len(), 1, "one request row: {rows:?}");
+    fundings[0].clone()
 }
 
-/// A probe's request row files under the overage fact its answer's head reported, and its credit row files beside
-/// it: with the account in overage and the head agreeing, both rows read `overage`.
+/// A probe's request row files under the overage fact its answer's head reported: with the account in overage and the
+/// head agreeing, it reads `overage`.
 #[tokio::test]
-async fn an_overage_probe_s_request_and_credit_rows_file_under_the_overage_its_answer_reported() {
+async fn an_overage_probe_s_request_row_files_under_the_overage_its_answer_reported() {
     assert_eq!(
-        probe_row_fundings(true, "true").await,
-        [
-            ("credit", "overage".to_string()),
-            ("request", "overage".to_string())
-        ],
-        "both rows of the probe file under the overage its answer reported"
+        probe_row_funding(true, "true").await,
+        "overage",
+        "the probe's row files under the overage its answer reported"
     );
 }
 
-/// The head decides for both rows. A probe placed on the plan whose answer reports overage in use (the account
-/// entered overage between the selection and the answer) files its credit under `overage` beside its request row,
-/// never under the plan the selection stood on.
+/// The head decides. A probe placed on the plan whose answer reports overage in use (the account entered overage
+/// between the selection and the answer) files its row under `overage`, never under the plan the selection stood on.
 #[tokio::test]
-async fn a_probe_placed_on_the_plan_whose_answer_reports_overage_files_both_rows_under_overage() {
+async fn a_probe_placed_on_the_plan_whose_answer_reports_overage_files_its_row_under_overage() {
     assert_eq!(
-        probe_row_fundings(false, "true").await,
-        [
-            ("credit", "overage".to_string()),
-            ("request", "overage".to_string())
-        ],
-        "the credit follows the head, not the selection"
+        probe_row_funding(false, "true").await,
+        "overage",
+        "the row follows the head, not the selection"
     );
 }
 
 /// And the other way: a probe placed in overage whose answer reports the plan paying (the window reset between the
-/// selection and the answer) files both rows under `plan`.
+/// selection and the answer) files its row under `plan`.
 #[tokio::test]
-async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_both_rows_under_plan() {
+async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_its_row_under_plan() {
     assert_eq!(
-        probe_row_fundings(true, "false").await,
-        [
-            ("credit", "plan".to_string()),
-            ("request", "plan".to_string())
-        ],
-        "the credit follows the head, not the selection"
+        probe_row_funding(true, "false").await,
+        "plan",
+        "the row follows the head, not the selection"
     );
 }
 
@@ -2648,7 +2615,7 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
 
 /// A plan-funded probe on a model the cost model leaves unweighted settles in the window share when its model tier
 /// has a weighted model, at that model's weight: the test table leaves Opus 5 null beside Opus 5.5 at 2, so the
-/// share the settlement books for the probe's own counts on Max 20x is Opus 5.5's.
+/// share the settlement prices for the probe's own counts on Max 20x is Opus 5.5's.
 #[tokio::test]
 async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_in_the_share_at_its_tiers_weight(
 ) {
@@ -2710,9 +2677,9 @@ async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_i
             at,
         )
     };
-    let booked = share("claude-opus-5").expect("the settlement prices the share");
-    assert!(booked > 0.0, "{booked}");
-    assert_eq!(Some(booked), share(donor), "at Opus 5.5's weight");
+    let priced = share("claude-opus-5").expect("the settlement prices the share");
+    assert!(priced > 0.0, "{priced}");
+    assert_eq!(Some(priced), share(donor), "at Opus 5.5's weight");
 }
 
 const OPUS: &str = "claude-opus-5-5";
@@ -2790,7 +2757,7 @@ async fn a_long_context_probe_settled_wasted_the_next_day_files_under_its_own_ho
 /// A probe costs at the cells its own prompt selects: on a row priced by prompt length, a probe whose answer reads
 /// back more than the threshold costs at the long-context cache read.
 #[tokio::test]
-async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_prompt_selects() {
+async fn a_probe_on_a_model_with_long_context_cells_costs_at_the_cells_its_own_prompt_selects() {
     let mut r = rig(RigSpec {
         pricing: phoebis_ledger::test_tables::api_prices(),
         ..RigSpec::default()

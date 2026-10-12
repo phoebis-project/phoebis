@@ -1091,6 +1091,93 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
     );
 }
 
+/// The day, week and lifetime totals read through the end of the current hour, so a request landed on the hour's
+/// first millisecond counts while the clock still reads that millisecond.
+#[tokio::test]
+async fn a_request_on_the_hours_first_millisecond_counts_in_the_key_pool_and_account_totals() {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
+    let hour = (common::NOW / 3_600_000 + 1) * 3_600_000;
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((hour - common::NOW) as u64),
+    );
+    // The step outlasts the admin session's idle bound.
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "on-the-hour".into(),
+            received_at: hour,
+            finished_at: Some(hour),
+            key_id: Some("desktop".into()),
+            key_generation,
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "on-the-hour".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            started_at: hour,
+            outcome: "succeeded".into(),
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    common::wait_json(&parts.app, "/admin/requests/on-the-hour", &cookie, |v| {
+        v["request"]["id"] == "on-the-hour"
+    })
+    .await;
+    let key = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await["keys"][0].clone();
+    assert_eq!(
+        (
+            key["usage_7d"]["requests"].as_u64(),
+            key["lifetime"]["requests"].as_u64()
+        ),
+        (Some(1), Some(1)),
+        "{key}"
+    );
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(pool["requests_24h"].as_u64(), Some(1), "{pool}");
+    let accounts = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
+    let direct = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "direct")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            direct["requests"]["last_24h"].as_u64(),
+            direct["requests"]["last_7d"].as_u64(),
+            direct["requests"]["lifetime"].as_u64()
+        ),
+        (Some(1), Some(1), Some(1)),
+        "{direct}"
+    );
+}
+
 #[tokio::test]
 async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
@@ -1125,8 +1212,6 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
                 attempts: 1,
                 ..Default::default()
             },
-            // The fold prices every attempt's counts from the shipped table when the request lands (see `fold_request`
-            // in `crates/ledger/src/rollup.rs`), so the assertions below use the table's own rate.
             attempts: vec![AttemptRecord {
                 request_id: id.into(),
                 attempt: 1,
@@ -1149,8 +1234,23 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     })
     .await;
     let key = keys["keys"][0].clone();
-    // claude-sonnet-5 prices at 2.0/input and 10.0/output per million tokens: one request of 100 input and 50
-    // output tokens costs 0.0002 + 0.0005 = 0.0007, and two of them cost 0.0014.
+    // A reader prices each row's counts at read time on the shipped list, so the dollars are read through it.
+    let cost_at = |at: i64| {
+        common::priced_row(
+            "claude-sonnet-5",
+            phoebis_ledger::Funding::ApiKey,
+            at,
+            phoebis_routing::PinUsage {
+                input: 100,
+                output: 50,
+                ..phoebis_routing::PinUsage::default()
+            },
+        )
+        .usd
+        .expect("the shipped list prices Sonnet 5")
+        .total()
+    };
+    let (r1, r2) = (cost_at(now - 60_000), cost_at(now - 2 * 86_400_000));
     assert_eq!(
         (
             key["usage_7d"]["requests"].as_u64(),
@@ -1158,7 +1258,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         ),
         (Some(2), Some(300))
     );
-    assert!((key["lifetime"]["cost_usd"].as_f64().unwrap() - 0.0014).abs() < 1e-9);
+    assert!(r1 > 0.0 && (key["lifetime"]["cost_usd"].as_f64().unwrap() - (r1 + r2)).abs() < 1e-9);
     let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
     assert_eq!(
         (
@@ -1168,8 +1268,8 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         ),
         (Some("active"), Some(1), Some(0))
     );
-    // Only r1 falls in the last 24h; r2 is two days old. One request costs 0.0007, per the note above.
-    assert!((pool["cost_24h"].as_f64().unwrap() - 0.0007).abs() < 1e-9);
+    // Only r1 falls in the last 24 hours, since r2 is two days old.
+    assert!((pool["cost_24h"].as_f64().unwrap() - r1).abs() < 1e-9);
     let hour = phoebis_ledger::hour_of(now);
     let requests = |traffic: &[serde_json::Value]| {
         traffic
@@ -1235,23 +1335,10 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         }],
         bodies: None,
     });
-    let prices = phoebis_ledger::PriceRevisions::shipped();
-    let plan_hour = plan_at.div_euclid(3_600_000) * 3_600_000;
-    let plan = phoebis_ledger::price_row(
-        &prices,
-        &phoebis_ledger::PlanTables::shipped(),
-        &phoebis_ledger::RowKey {
-            model: "claude-opus-5",
-            speed: phoebis_ledger::Speed::Standard,
-            band: prices
-                .in_force(plan_hour)
-                .band_of("claude-opus-5", usage.input),
-            funding: phoebis_ledger::Funding::Plan,
-            kind: "inference",
-            tier: None,
-            at: plan_hour,
-            band_at: None,
-        },
+    let plan = common::priced_row(
+        "claude-opus-5",
+        phoebis_ledger::Funding::Plan,
+        plan_at,
         usage,
     );
     let plan_usd = plan.usd.as_ref().unwrap().total();
@@ -1292,6 +1379,15 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             && close(&pool["equivalent_24h"]["seven_day"], seven_day)
             && pool["estimated_24h"] == true,
         "the pool's day: its billed dollars below its dollars, and the estimated equivalent: {pool}"
+    );
+    let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
+    let cost = board["cost_24h"].as_f64().unwrap();
+    assert!(
+        close(&board["billed_24h"], cost - plan_usd)
+            && close(&board["equivalent_24h"]["five_hour"], five_hour)
+            && close(&board["equivalent_24h"]["seven_day"], seven_day)
+            && board["estimated_24h"] == true,
+        "the dashboard's day marks the estimated equivalent as the pool's does: {board}"
     );
     assert_eq!(
         post(

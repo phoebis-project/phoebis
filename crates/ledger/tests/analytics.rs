@@ -60,7 +60,7 @@ fn usage(input: u64, output: u64) -> PinUsage {
     }
 }
 
-/// What `insert_request` books for one attempt: its counts at the shipped revision in force at `at`.
+/// What a reader prices one attempt at: its counts at the shipped revision in force at `at`.
 fn shipped_usd(at: i64, model: &str, speed: Speed, counts: PinUsage) -> f64 {
     PriceRevisions::shipped()
         .in_force(at)
@@ -1330,7 +1330,7 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares_an
         probes
             .get(FIVE_HOUR)
             .is_some_and(|s| (s.cost - probe_cost).abs() < 1e-12 && s.wasted.is_none()),
-        "the probe row's share apart from the request side, and no probe dollars to read a waste from: \
+        "the probe row's share apart from the request side, and no waste while no wasted probe is recorded: \
          {probes:?} vs {probe_cost}"
     );
     assert_eq!(
@@ -2138,6 +2138,13 @@ async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_acco
         (Some(1), Some(100)),
         "and still counts the plan row its equivalent is summed over: {t:?}"
     );
+    let equivalent = equivalent_of("claude-fable-5-1", usage(1_000, 100), WEEKDAY_OFF_PEAK);
+    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        assert!(
+            close(t.cost_equivalent.get(window), equivalent[window].unwrap()),
+            "the equivalent reads no account tier, so the tierless row prices on {window}: {t:?}"
+        );
+    }
     let u = group(&groups, "u");
     let own = fable_shares(&tables, usage(1_000, 100))[FIVE_HOUR].unwrap();
     assert!(
@@ -4811,17 +4818,24 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
             )
         })
         .unwrap();
-    assert_eq!(
-        rows[0].spent_usd,
-        5.0 + 10.0,
-        "a million Opus 5 input tokens at the $5 standard cell and a million at the $10 fast cell"
+    let shipped = PriceRevisions::shipped();
+    let table = shipped.in_force(ms(2026, 1, 15, 1, 0));
+    let input = |speed| {
+        table
+            .price_at("claude-opus-5", speed, 0)
+            .expect("the shipped list prices Opus 5")
+            .input
+    };
+    assert!(
+        (rows[0].spent_usd - (input(Speed::Standard) + input(Speed::Fast))).abs() < 1e-9,
+        "a million Opus 5 input tokens at the shipped standard cell and a million at the fast cell: {}",
+        rows[0].spent_usd
     );
 }
 
-/// A request and its one attempt, for a pool member's spend: the fold books the attempt at the shipped list, so a
-/// test that reads the sum back at its own table's price for the seeded token count (not the booked figure) proves
-/// `member_spends` recomputes at read time for a model priced one way rather than trusting what the attempt was
-/// booked at.
+/// A request and its one attempt, for a pool member's spend: the rollup row carries the counts alone, so a test that
+/// reads the sum back at its own table's price for the seeded token count proves `member_spends` prices at read
+/// time.
 #[allow(clippy::too_many_arguments)]
 fn plant_spend(
     db: &LedgerDb,
@@ -4904,8 +4918,8 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
     assert_eq!(
         (day[0].spent_usd, day[0].period_start, day[0].period_end),
         (250.0, ms(2026, 1, 15, 0, 0), ms(2026, 1, 16, 0, 0)),
-        "the row before the day is left out; the probe counts like any other write; the price is the \
-         table's, not the dollars the fold booked at the shipped list"
+        "the row before the day is left out, the probe counts like any other write, and the price is the \
+         table's the read passes, not the shipped list's"
     );
 
     // The month bound over the same rows: every request of January counts, the probe included.

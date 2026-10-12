@@ -182,7 +182,6 @@ pub(crate) enum Applied {
 
 /// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
 /// priced. Only the unit is kept, since the credit reads its presence and the ledger prices the probe's counts.
-#[allow(clippy::too_many_arguments)]
 fn settled_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,

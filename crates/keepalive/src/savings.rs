@@ -107,9 +107,14 @@ fn delta(
 
 impl Engine {
     /// Every probe the upstream served lands here, landed on its recipe or not: the probe is the pool's whatever
-    /// happened to the recipe while it was in flight. The delta carries no dollar, since the probe's own request row
-    /// carries its counts, which a reader prices.
+    /// happened to the recipe while it was in flight. A probe that migrated its session counts on its key. The delta
+    /// carries no dollar and no token, since the probe's own request row carries its counts, which a reader prices.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
+        // The migration is all the delta carries, so any other probe's would fold a row of zeros under the credit key,
+        // which reads as an empty group of its own.
+        if record.outcome != ProbeOutcome::Migrated {
+            return;
+        }
         let mut d = delta(
             now,
             &record.key,
@@ -122,9 +127,7 @@ impl Engine {
         );
         d.account_kind = record.kind;
         d.overage_in_use = Some(record.in_overage);
-        if record.outcome == ProbeOutcome::Migrated {
-            d.probe_migrated = 1;
-        }
+        d.probe_migrated = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 

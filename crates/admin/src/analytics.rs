@@ -1,6 +1,6 @@
 //! Rollup reads: the series bucketed to the range, the breakdown per group, and the account rollups.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -9,9 +9,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
-    lead_over_pace, moves_by_reason, parse_range, read_account_rollups, rewrite_series,
-    series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
-    LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    lead_over_pace, moves_by_reason, names_one_account, parse_range, read_account_rollups,
+    rewrite_series, series_paged, session_burn_series, AccountRollupRow, FundingFilter,
+    HourlyWindowSample, LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -849,8 +849,8 @@ pub(crate) struct BurnPoint {
 // point whose shares answer knows its account's funding, so `unit` follows the same gate. The 20x equivalents add
 // across accounts and tiers, so they answer under every grouping. A bucket holding a row the table cannot price
 // reads null on that window, so a partial sum never reads as its share. Each point's `tokens` counts every token
-// type, zero for a bucket with no traffic the ledger can attribute (a deregistered account's traffic adds none), so
-// for a registered account a reader tells an empty bucket from one whose traffic no table priced.
+// type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic no
+// table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
@@ -879,9 +879,7 @@ pub(crate) async fn burn(
         Err(r) => return r,
     };
     let accounts = list(&q, "accounts");
-    // A name given twice counts once, as the ledger's gate counts it.
-    let one_account =
-        (accounts.iter().collect::<BTreeSet<_>>().len() == 1).then(|| accounts[0].clone());
+    let one_account = names_one_account(&accounts).then(|| accounts[0].clone());
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);
     let filter = SeriesFilter {
