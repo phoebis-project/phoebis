@@ -23,14 +23,40 @@ fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/fixtures")
 }
 
-/// Keys only, recursively; the first element stands for an array. Values are not compared: ids and secrets
-/// are random, and a value change is the decoder tests' business.
-fn shape(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), shape(v))).collect()),
-        Value::Array(a) => Value::Array(a.first().map(shape).into_iter().collect()),
-        _ => Value::Null,
+/// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
+/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: ids and secrets
+/// are random, and a value change is the decoder tests' business. The order and the kinds are compared, since an
+/// answer rebuilt from a struct could move a key, turn an absence into a `null` or an integer into a float and
+/// still hold the key set.
+fn shape(v: &Value) -> Vec<String> {
+    fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
+        let kind = match v {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(n) if n.is_f64() => "float",
+            Value::Number(_) => "integer",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        out.push(format!("{path}: {kind}"));
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    walk(v, &format!("{path}.{k}"), out);
+                }
+            }
+            Value::Array(a) => {
+                if let Some(first) = a.first() {
+                    walk(first, &format!("{path}[0]"), out);
+                }
+            }
+            _ => {}
+        }
     }
+    let mut out = Vec::new();
+    walk(v, "$", &mut out);
+    out
 }
 
 /// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
@@ -75,7 +101,22 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
             panic!("{name}.json is missing; run with PHOEBIS_WRITE_FIXTURES=1")
         }))
         .unwrap();
-    assert_eq!(shape(&committed["body"]), shape(&captured["body"]), "{name}: the committed fixture's shape differs from the live answer; re-capture and update the decoder");
+    let committed = shape(&committed["body"]);
+    let live = shape(&captured["body"]);
+    if committed != live {
+        let at = committed
+            .iter()
+            .zip(live.iter())
+            .position(|(c, l)| c != l)
+            .unwrap_or(committed.len().min(live.len()));
+        panic!(
+            "{name}: the committed fixture's shape differs from the live answer at line {at}: committed {:?}, live {:?}. \
+             A moved key, a null for an absence or a float for an integer is a defect of the route's answer. A new or \
+             dropped key needs a re-capture and a decoder update.",
+            committed.get(at),
+            live.get(at)
+        );
+    }
 }
 
 /// A value past its field's type fails the body's parse, and that sentence names no bound, so such a probe keeps
