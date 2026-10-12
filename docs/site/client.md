@@ -29,9 +29,10 @@ it by. The block above is a listener bound to `127.0.0.1:8317` without TLS. The 
 to replace: "Inference is served on `{proxy}`, the address the proxy listener binds, so the base URL carries its scheme
 and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where
 a TLS proxy or a port mapping stands between Claude Code and it." The second line reads `<key>` because the router
-stores a hash of the secret and shows it once, in the Key created dialog: "Set it as `CLAUDE_CODE_OAUTH_TOKEN` on the
-client. The Settings page has the full snippet." The eighth line is yours to add when the listener's certificate comes
-from a private CA: the path of a copy of the CA's PEM. A public CA needs nothing here.
+stores a hash of the secret and shows it once, in the Key created or Key rotated dialog: "Set it as
+`CLAUDE_CODE_OAUTH_TOKEN` on the client. The Settings page has the full snippet." The eighth line is yours to add when
+the listener's certificate comes from a private CA: the path of a copy of the CA's PEM. A public CA needs nothing
+here.
 
 The block has two homes, the `env` block of the client's settings file or the shell that launches the client. When the
 same variable is set in both, the settings file's value applies in most sessions of Claude Code 2.1.296, as its
@@ -51,11 +52,12 @@ on any address, and a listener with a certificate pair speaks TLS alone
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
-Holds the key's secret, the one the Key created dialog shows once. Put it here rather than in `ANTHROPIC_API_KEY`:
-Claude Code treats the token as a subscription credential, which keeps three behaviors that a credential in
-`ANTHROPIC_API_KEY` switches off, the one-hour cache TTL for the main conversation, the parsing of the unified
-rate-limit headers on a `429`, and the automatic continue after a usage window resets. The three hold with or without
-`CLAUDE_CODE_SUBSCRIPTION_TYPE`. Without a key the proxy listener refuses every request `401` `auth_missing`.
+Holds the key's secret, the one the Key created or Key rotated dialog shows once. Put it here rather than in
+`ANTHROPIC_API_KEY`: Claude Code treats the token as a subscription credential, which keeps three behaviors that a
+credential in `ANTHROPIC_API_KEY` switches off, the one-hour cache TTL for the main conversation, the parsing of the
+unified rate-limit headers on a `429`, and the automatic continue after a usage window resets. The three hold with or
+without `CLAUDE_CODE_SUBSCRIPTION_TYPE`. Without a key the proxy listener refuses every request to a route that takes
+one `401` `auth_missing`.
 
 ### CLAUDE_CODE_SUBSCRIPTION_TYPE
 
@@ -66,14 +68,15 @@ organization's policy limits from `api.anthropic.com` for a null, `team` or `ent
 `pro` or `max`, a consumer subscription no organization policy governs. Under the first-party flag the fetch goes to
 `api.anthropic.com` with the router key, answers `401`, and the client then refuses every fetch a plugin makes, so the
 keepalive mod reports nothing and the Sessions view reads `none` under Companion. Without the flag the client skips
-the fetch for a base URL that is not its own. Under the flag a null type also has the client fetch the remote managed
-settings from `api.anthropic.com` before its first request, each fetch retried five times, so a host it cannot reach
-holds that request back 17 to 18 seconds and the client warns `Remote managed settings failed to load`. Under `max` it
-fetches neither. The type also sets the welcome header's plan label, `Claude API` against `Claude Max`, and the tools
-and skills the client announces: `DesignSync`, `RemoteTrigger` and `WebFetch` among the deferred tools, the `schedule`
-skill and, in the terminal only, the `artifact-capabilities` skill appear under `max` and not under a null type. The
-client documents the variable nowhere, sets it itself from its own auth state when the token is its own, and a future
-build may drop it.
+the fetch for a base URL that is not its own. With or without the flag, a null type's settings lookup at start goes to
+`api.anthropic.com` with the key's secret, under either telemetry switch, fails there, and the client tolerates that.
+Under the flag that lookup and the policy fetch run before the first request, each retried five times, so a host it
+cannot reach holds that request back 17 to 18 seconds and the client warns `Remote managed settings failed to load`.
+Under `max` it fetches neither. The type also sets the welcome header's plan label, `Claude API` against `Claude Max`,
+and the tools and skills the client announces: `DesignSync`, `RemoteTrigger` and `WebFetch` among the deferred tools,
+the `schedule` skill and, in the terminal only, the `artifact-capabilities` skill appear under `max` and not under a
+null type. The client documents the variable nowhere, sets it itself from its own auth state when the token is its
+own, and a future build may drop it.
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
@@ -83,9 +86,9 @@ first-party betas, the cache diagnostics beta included ([The betas](relay.md#the
 nothing and the request log reads the turn origin and the hints as the client sent them. It also stops the client
 reading the router's models listing, which it otherwise uses to size its context window by the id
 ([The models listing](#the-models-listing)). Without it the client sends the reduced shape, and the router fills in,
-toward `api.anthropic.com`, every field the attribution line lacks, each only when absent and never a field the client
-sent ([The restoration](relay.md#the-restoration)). Two checks guard that line against a client build the router is
-not pinned to and refuse the request as `client_drift` before any account is chosen
+toward `api.anthropic.com`, the fields the restoration names that the line lacks, each only when absent and never a
+field the client sent ([The restoration](relay.md#the-restoration)). Two checks guard that line against a client
+build the router is not pinned to and refuse the request as `client_drift` before any account is chosen
 ([Client drift](relay.md#client-drift)). The variable is an internal one that a future build may drop.
 
 ### CLAUDE_CODE_GATEWAY_HINT_HEADERS
@@ -109,8 +112,8 @@ without one is relayed the same way, and `0` stops them on every connection.
 
 Optional. Set to `1`, it stops the client's telemetry batches, which it posts to `api.anthropic.com` with the
 credential it holds, behind the router the key's secret. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and
-also stops update checks and the bootstrap lookup. The policy and remote managed settings lookups are
-[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type)'s, and this line leaves them alone.
+also stops update checks and the bootstrap lookup. Neither switch stops the settings lookup a null subscription type
+makes at start, which [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type) describes.
 
 ### CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK
 
@@ -195,8 +198,9 @@ takes one of its key's body-read slots.
 as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries `key` (`id`, `label`, `pool_id`),
 `now`, and `windows` with `24h` and `7d`, each `from`, `to`, `requests`, `succeeded`, `failed`, `incomplete`, `tokens`
 (`input`, `output`, `cache_read`, `cache_write`), `cost_usd` and `models` (per canonical model: `model`, `requests`,
-`tokens`, `cost_usd`). What the figures cover, how the route refuses, and the HTML page are under
-[Your key's usage](#your-keys-usage).
+`tokens`, `cost_usd`). What the figures cover, the key refusal and the HTML page are under
+[Your key's usage](#your-keys-usage), and a ledger the route cannot read is the `usage_unavailable` row of
+[Refusal codes](#refusal-codes).
 
 ## Refusal codes
 
@@ -246,16 +250,16 @@ with.
 | `usage_unavailable` | 500 | `api_error` | `the usage ledger could not be read` | `GET /v1/usage` could not read the ledger. Send it again. |
 <!-- refusal-codes: end -->
 
-`body_shape` names the member the relay has to find or edit and could not. A top-level `metadata`, `model`,
-`safeguards`, `stream` or `system` carried more than once, a first `system` block whose `text` or a `metadata` whose
-`user_id` appears twice, raw or escaped, is refused since the relay edits the first spelling and a last-wins parser
-upstream would read the other. So is a `safeguards` member the relay cannot cut while the key's server-side auto mode
-is off (carried twice, or spelled with an escape), a `cache_control` marker the pool's cache TTL policy cannot reach (a
-key on the marker's path spelled with an escape), a billing stamp the relay can neither check nor restamp (a key on its
-path, the billing line's header name or its `cch=` spelled with an escape, or a second stamped `text` in the first
-`system` block), a body with no top-level `model`, and one without the `metadata.user_id` an account is bound into.
-Each is refused before anything reaches the upstream, whether or not the request needs an edit. A body that nests
-deeper than the relay reads, or is not a JSON object, is `invalid_body` instead.
+`body_shape` names the member the relay has to find or edit and could not. A top-level `metadata`, `model`, `stream`
+or `system` carried more than once, a first `system` block whose `text` or a `metadata` whose `user_id` appears twice,
+raw or escaped, is refused since the relay edits the first spelling and a last-wins parser upstream would read the
+other. So is a `safeguards` member the relay cannot cut while the key's server-side auto mode is off (carried twice,
+or spelled with an escape), a `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's
+path spelled with an escape), a billing stamp the relay can neither check nor restamp (a key on its path, the billing
+line's header name or its `cch=` spelled with an escape, or a second stamped `text` in the first `system` block), and
+a body without the `metadata.user_id` an account is bound into. Each is refused before anything reaches the upstream,
+whether or not the request needs an edit. A body that nests deeper than the relay reads, or is not a JSON object, is
+`invalid_body` instead.
 
 Four rows rest on the proxy listener's bounds ([proxy](installation.md#proxy)). A body that does not finish arriving
 within `proxy.body_read_seconds` of its authentication (60 by default) is `request_timeout`. A body past
@@ -297,7 +301,8 @@ wrong or missing key is refused exactly as `/v1/messages` refuses it, in the Ant
 ## The models listing
 
 `GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every
-enabled account of the key's pool is asked for its catalog through the router's cache ([Catalogs](routing.md#catalogs)),
+enabled account of the key's pool in state `ready` is asked for its catalog through the router's cache
+([Catalogs](routing.md#catalogs)),
 the same cache the router derives a model's dated id from, so a request naming an undated id is routed, priced and
 recorded under the newest dated snapshot the listing holds for it. The pool's and the key's
 [model rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in priority
