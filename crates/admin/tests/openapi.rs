@@ -83,7 +83,8 @@ const TAGS: [&str; 17] = [
 ];
 
 /// Each operation's refusal statuses, as its Refuses line names them, with the shared `500` and `503` where the code
-/// reaches them. One row per operation, so an operation the document gains without a row fails the test.
+/// reaches them, and any other status the code reaches. One row per operation, so an operation the document gains
+/// without a row fails the test.
 const REFUSALS: &[(&str, &[u16])] = &[
     ("session_show", &[]),
     ("session_login", &[400, 401, 429]),

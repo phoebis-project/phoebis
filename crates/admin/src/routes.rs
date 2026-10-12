@@ -698,21 +698,20 @@ fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &
     }
 }
 
-/// Read the poll's latest usage snapshot.
+/// Answer the poll's latest snapshot and the poll's standing without reading the endpoint.
 ///
-/// Answers the poll's latest snapshot and the poll's standing without reading the endpoint. When the snapshot holds
-/// no windows, the windows the router holds answer in their place (persisted from the last run, or read since), so
-/// `error` is set only when no windows exist at all. The windows the router holds are the last reading carried
-/// forward by the router's own requests since it, so their utilization can read above that reading's while
-/// `fetched_at` names the reading's instant. Before the poll first reads an account that holds none, `error` reads
-/// `the poll has not read this account yet` and `fetched_at` is null. A disconnected or unpaired account, which the
-/// poll never reads, answers `no credential is stored for this account, so pair it to load quota` with `poll` null
+/// When the snapshot holds no windows, the windows the router holds answer in their place (persisted from the last
+/// run, or read since), so `error` is set only when no windows exist at all. The windows the router holds are the last
+/// reading carried forward by the router's own requests since it, so their utilization can read above that reading's
+/// while `fetched_at` names the reading's instant. Before the poll first reads an account that holds none, `error`
+/// reads `the poll has not read this account yet` and `fetched_at` is null. A disconnected or unpaired account, which
+/// the poll never reads, answers `no credential is stored for this account, so pair it to load quota` with `poll` null
 /// while the router holds no windows for it, and otherwise the windows of its last reading with `error` and `poll`
-/// null. `GET /admin/accounts` carries the same `error`, `fetched_at`, `held_until` and `poll` on each `oauth` row,
-/// as its `usage` block. While the account waits out a 429, `error` is the latest snapshot's (while no windows
-/// exist, `usage request rate-limited` after a usage 429 and `no usage fetched yet` after a profile 429 before any
-/// reading), `poll.last_error` and the `error` a refresh answers inside the hold name the endpoint and no instant,
-/// and the hold's instant rides `held_until` on the usage block and `next_attempt_at` on the poll.
+/// null. `GET /admin/accounts` carries the same `error`, `fetched_at`, `held_until` and `poll` on each `oauth` row, as
+/// its `usage` block. While the account waits out a 429, `error` is the latest snapshot's (while no windows exist,
+/// `usage request rate-limited` after a usage 429 and `no usage fetched yet` after a profile 429 before any reading),
+/// `poll.last_error` and the `error` a refresh answers inside the hold name the endpoint and no instant, and the hold's
+/// instant rides `held_until` on the usage block and `next_attempt_at` on the poll.
 #[utoipa::path(
     get,
     path = "/admin/accounts/{id}/usage",
