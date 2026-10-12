@@ -89,9 +89,10 @@ export function RoutingLogPage() {
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const { fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
     address,
     compare: compareRows,
+    error: log.error,
     identity: identityOf,
     list: log.data,
     on: follow && cursor === undefined,
@@ -262,8 +263,8 @@ export function RoutingLogPage() {
               {!log.loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={9}>
-                    {log.error ? (
-                      <ErrorState title="Could not load the routing log" body={log.error} action={<Button onClick={log.reload}>Try again</Button>} />
+                    {error ? (
+                      <ErrorState title="Could not load the routing log" body={error} action={<Button onClick={log.reload}>Try again</Button>} />
                     ) : (
                       <EmptyState title="No decisions or events in this range." body="Widen the range or clear a filter." />
                     )}

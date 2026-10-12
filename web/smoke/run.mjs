@@ -8700,7 +8700,8 @@ m.unmount();
     polls.restore();
     const first = requestRows(page)[0];
     const sent = polls.calls[0]?.[0] ?? {};
-    const landed = { calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, to: sent.to };
+    // The first page brings the new row, so the poll reads the second, which brings none.
+    const landed = { calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, second: polls.calls[1]?.[0]?.cursor, to: sent.to };
     first?.click();
     await page.settle();
     const paused = countCalls('listRequests');
@@ -8723,11 +8724,79 @@ m.unmount();
       name: '/requests Follow merges a new row under the fresh tint, keeps it under the drawer and stops on Next',
       ok:
         before !== newest.id &&
-        landed.calls === 1 && landed.cursor === undefined && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
+        landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
         drawer.open && drawer.calls === 0 && drawer.id === newest.id &&
         after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
         stopped.checked === 'false' && stopped.rows > 0,
       missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(stopped)],
+    });
+    page.unmount();
+  }
+  {
+    // The ledger writes a request when it finishes, so one that ran long lands below rows the list already shows. The
+    // list's tenth row finishes after the page loaded, and the newest row arrives above the list, which puts the late
+    // row on the poll's second page.
+    const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
+    const loaded = Date.parse(newest.at) - 2_000;
+    const before = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 11, to: isoAt(loaded) })).requests;
+    const late = before[9];
+    const slot = requests.findIndex((r) => r.id === late.id);
+    const [held] = requests.splice(slot, 1);
+    const page = await mount('/requests?rows=10', { now: loaded });
+    const listed = requestRows(page).map(idOf);
+    // The late request finishes, so the ledger holds its row from here on.
+    requests.splice(slot, 0, held);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const end = isoAt(loaded + 5_000);
+    const all = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 30, to: end })).requests.map((r) => r.id);
+    const expected = all.slice(0, all.indexOf(before[10].id) + 1);
+    const drawn = requestRows(page).map(idOf);
+    const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+    const sent = polls.calls.map((c) => c[0]);
+    results.push({
+      name: '/requests Follow reads on past a page that brought a new row and lands a request that finished late in its place',
+      ok:
+        JSON.stringify(listed) === JSON.stringify([...before.slice(0, 9), before[10]].map((r) => r.id)) && all.indexOf(late.id) >= 10 &&
+        JSON.stringify(drawn) === JSON.stringify(expected) && tinted.includes(late.id) && tinted.includes(newest.id) &&
+        sent.length === 3 && sent[0].cursor === undefined && sent.every((q) => q.to === end),
+      missing: [`late ${late.id} at ${all.indexOf(late.id)}`, `listed ${listed.join(' | ')}`, `drawn ${drawn.join(' | ')}`, `expected ${expected.join(' | ')}`, `tinted ${tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+    });
+    page.unmount();
+  }
+  {
+    // The list's own read fails and leaves the page on its error, so the first poll that answers stands in for it: its
+    // rows drawn untinted, the error gone, and Next walking on from the poll's page under the end the poll read to.
+    failNextCall('listRequests', '/admin/requests', 'ledger locked');
+    const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
+    const errorOf = () => page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
+    const failed = { error: errorOf(), rows: requestRows(page).map(idOf).filter((id) => id !== null).length };
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const end = isoAt(CLOCK_ORIGIN + 5_000);
+    const answer = await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 10, to: end });
+    const drawn = requestRows(page).map(idOf);
+    const stood = { calls: polls.calls.length, error: errorOf(), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length };
+    const next = countCalls('listRequests');
+    nextPage(page)?.click();
+    await page.settle();
+    next.restore();
+    const read = next.calls.map((c) => c[0]);
+    results.push({
+      name: '/requests a Follow poll that answers after the list read failed draws its rows with no error, and Next reads on from them',
+      ok:
+        failed.error === 'Could not load the request log' && failed.rows === 0 &&
+        stood.calls === 1 && stood.error === null && stood.tinted === 0 && answer.requests.length === 10 && JSON.stringify(drawn) === JSON.stringify(answer.requests.map((r) => r.id)) &&
+        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === end,
+      missing: [JSON.stringify(failed), JSON.stringify(stood), `${drawn.length} drawn of ${answer.requests.length}`, `cursor ${answer.nextCursor}`, JSON.stringify(read.map((q) => [q.cursor, q.to]))],
     });
     page.unmount();
   }
@@ -9202,6 +9271,8 @@ m.unmount();
     await page.settle();
     const first = trs(page)[0];
     const call = polls.calls[0]?.[0] ?? {};
+    // The first page brings the new row, so the poll reads the second, which brings none. The next poll brings nothing
+    // and reads the first page alone.
     const landed = { calls: polls.calls.length, cursor: call.cursor, isNew: first?.classList.contains('is-new') ?? false, time: cell(first, 'time')?.firstChild?.textContent ?? '', to: call.to };
     tick(5_000);
     await page.settle();
@@ -9211,8 +9282,8 @@ m.unmount();
       name: '/routing-log Follow polls every 5 s with the range\'s end at now and lands a new row in the accent tint',
       ok:
         firstBefore !== clockText(top.at) && label() === 'polling every 5 s, the range ends now' &&
-        landed.calls === 1 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
-        after.calls === 2 && after.isNew === 0,
+        landed.calls === 2 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
+        after.calls === 3 && after.isNew === 0,
       missing: [firstBefore, label(), JSON.stringify(landed), JSON.stringify(after)],
     });
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
@@ -9257,11 +9328,12 @@ m.unmount();
     await page.settle(100);
     held.release();
     await page.settle();
-    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    // The held page brings the new row, so the poll reads its second page, and no later poll starts a first one.
+    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', pages: held.calls.map((c) => c[0]?.cursor === undefined), tinted: tinted(page) };
     held.restore();
     results.push({
       name: '/routing-log a poll that answers after Follow is turned off lands nothing',
-      ok: after.calls === 1 && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
+      ok: after.calls === 2 && JSON.stringify(after.pages) === JSON.stringify([true, false]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
       missing: [JSON.stringify(after)],
     });
     page.unmount();
@@ -9338,10 +9410,11 @@ m.unmount();
     const arrived = all.filter((r) => Date.parse(r.at) > CLOCK_ORIGIN - HOUR).length;
     const expected = all.slice(0, arrived + listed).map(rowKey);
     const drawn = drawnKeys(page);
+    // The poll reads every page an arrival is on, then the first page that brings none.
     results.push({
       name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
       ok:
-        listed > 0 && arrived > 50 && sent.length === 3 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        listed > 0 && arrived > 50 && sent.length === Math.ceil(arrived / 25) + 1 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
         JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
       missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
     });
@@ -13207,6 +13280,31 @@ m.unmount();
           JSON.stringify(backward) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T13:00'], message: 'End must be after start.', query: { from: FROM, to: TO }, sent: [] }) &&
           JSON.stringify(edited) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T15:30'], message: '', query: { from: FROM, to: '2026-09-15T15:30:00.000Z' }, sent: [`${FROM} 2026-09-15T15:30:00.000Z`] }),
         missing: [JSON.stringify(backward), JSON.stringify(edited)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // A From typed past the To stays in the draft, and the To typed next ends the pair that From began.
+    const name = '/analytics a From typed past the To and a To typed after it write both new instants';
+    const FROM = '2026-09-12T10:00:00.123Z';
+    const TO = '2026-09-13T10:00:00.999Z';
+    const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const input = (label) => page.container.querySelector(`input[aria-label="${label}"]`);
+    if (!input('From') || !input('To')) controlMissing(name, input('From') ? 'To' : 'From');
+    else {
+      typeIn(input('From'), '2026-09-14T10:00');
+      await page.settle(300);
+      const drafted = { bounds: bounds(page), query: query(page) };
+      typeIn(input('To'), '2026-09-15T10:00');
+      await page.settle(300);
+      const written = { bounds: bounds(page), query: query(page) };
+      results.push({
+        name,
+        ok:
+          JSON.stringify(drafted) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-13T10:00'], query: { from: FROM, to: TO } }) &&
+          JSON.stringify(written) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-15T10:00'], query: { from: '2026-09-14T10:00:00.000Z', to: '2026-09-15T10:00:00.000Z' } }),
+        missing: [JSON.stringify(drafted), JSON.stringify(written)],
       });
     }
     page.unmount();

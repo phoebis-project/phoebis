@@ -250,11 +250,13 @@ export function AnalyticsPage() {
     const at = clock.now();
     commit({ range: next === 'custom' ? { from: iso(at - 3 * 24 * HOUR), preset: 'custom', to: iso(at) } : { from: '', preset: next, to: '' } }, at);
   };
-  // An edit is the minute the operator typed, and the other bound keeps its instant to the millisecond.
+  // An edit is the minute the operator typed. The other bound is the one an earlier edit left in the draft, else the
+  // address's instant, kept to the millisecond.
   const changeBound = (bound: 'from' | 'to', local: string) => {
     const at = Date.parse(local);
-    const next = bound === 'from' ? { from: at, to: Date.parse(a.range.to) } : { from: Date.parse(a.range.from), to: at };
-    if (Number.isNaN(at) || next.to <= next.from) {
+    const kept = (side: 'from' | 'to') => (custom[side] === toLocalInput(Date.parse(a.range[side])) ? Date.parse(a.range[side]) : Date.parse(custom[side]));
+    const next = bound === 'from' ? { from: at, to: kept('to') } : { from: kept('from'), to: at };
+    if (Number.isNaN(next.from) || Number.isNaN(next.to) || next.to <= next.from) {
       setDraft(bound === 'from' ? { ...custom, for: pair, from: local } : { ...custom, for: pair, to: local });
       return;
     }

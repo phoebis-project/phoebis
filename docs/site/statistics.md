@@ -433,11 +433,15 @@ entry, the last entry's level, else the request's top-level `output_config.effor
 still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
 it, so paging does not shift as new ones arrive; Refresh brings it up to now.
 
-Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes every row that arrived
-since the read before, up to eight pages of them. When more arrived than that, a line above the table reads "More rows
-arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched. A new row
-lands at the top in the accent tint until the next read, a filter change keeps Follow on, paging to an older page turns
-it off, and the open drawer pauses it until it closes.
+Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes the newest page and
+each page after it until a page brings no row the table lacks, so it takes every row that arrived since the read before,
+up to eight pages of them. When more arrived than that, a line above the table reads "More rows arrived than Follow
+could fetch. Reload to read them.", and Next reads on from the last row Follow fetched. A new row lands at the top in
+the accent tint until the next read. The log lists a request by when it was received and records it when it finishes, so
+a long request can finish below rows already shown: it lands in its place, in the same tint, when every page above it
+brought a new row, and Refresh shows it otherwise. A filter change keeps Follow on, paging to an older page turns it
+off, and the open drawer pauses it until it closes. When the table's own read failed, the first read Follow answers
+takes its place, and Next reads on from there.
 
 The drawer opens on the answer's facts: the status, the outcome, the serving account and model, the answer's stop
 reason, geography (global, us, or not available for a model that takes no geography) and service tier, and the cache
@@ -501,7 +505,8 @@ Follow, off by default, reads the list every 5 seconds with the range ending now
 arrived since the read before, up to eight pages of them. When more arrived than that, a line above the list reads
 "More rows arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched.
 A new row lands at the top in the accent tint until the next read, a filter change keeps Follow on, and paging to an
-older page turns it off.
+older page turns it off. When the list's own read failed, the first read Follow answers takes its place, and Next
+reads on from there.
 
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.

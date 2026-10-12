@@ -386,7 +386,7 @@ test('a Follow poll reads every page that arrived down to a row the list holds',
   // The list holds the oldest 25, and 100 more arrived before the poll.
   const route = arrivals(125);
   const shown = route.rows.slice(100);
-  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf);
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf, (r) => d.compareRows(r, shown.at(-1)) > 0);
   assert.deepEqual(route.reads, [undefined, '25', '50', '75', '100'], 'the fifth page reaches the rows the list holds');
   assert.equal(polled.overrun, null);
   assert.deepEqual(d.merged(shown, polled.rows, d.identityOf, d.compareRows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
@@ -396,7 +396,7 @@ test('a Follow poll stops at eight pages and names the cursor that reaches the r
   // 300 arrived over the 25 the list holds: eight pages bring the newest 200.
   const route = arrivals(325);
   const shown = route.rows.slice(300);
-  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf);
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf, (r) => d.compareRows(r, shown.at(-1)) > 0);
   assert.equal(route.reads.length, d.FOLLOW_PAGES);
   assert.equal(d.FOLLOW_PAGES, 8);
   assert.deepEqual(polled.rows.map(d.identityOf), route.rows.slice(0, 200).map(d.identityOf));

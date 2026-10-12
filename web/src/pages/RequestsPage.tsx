@@ -239,9 +239,10 @@ export function RequestsPage() {
   };
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, so the poll waits for it to close.
-  const { fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
     address,
     compare: newestFirst,
+    error: requests.error,
     identity: (r) => r.id,
     list: requests.data && listed(requests.data),
     on: follow && cursor === undefined && !requestId,
@@ -495,8 +496,8 @@ export function RequestsPage() {
                 {!requests.loading && rows.length === 0 && (
                   <tr>
                     <td colSpan={shown.size + 1}>
-                      {requests.error ? (
-                        <ErrorState title="Could not load the request log" body={requests.error} action={<Button onClick={requests.reload}>Try again</Button>} />
+                      {error ? (
+                        <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
                       ) : (
                         <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
                       )}
