@@ -3902,7 +3902,8 @@ const SESSION_BURN_LIMIT: usize = 20;
 /// `top_sessions_by_tokens`' statement and its binds, spelled once so the plan test explains the statement the read
 /// runs. A request is admitted within an hour of any attempt's start, so the request's own index carries the range.
 /// The index is named: the ledger keeps no planner statistics, and without them SQLite prices a scan of every attempt
-/// below this range search. Named accounts rank by their own attempts alone, the attempts the series then prices.
+/// below this range search. Named accounts rank by their own attempts alone, the attempts the series then prices, and
+/// the unary plus keeps them off the attempts' account index so the requests' range stays the outer loop.
 fn top_sessions_statement(
     from: i64,
     to: i64,
@@ -3916,7 +3917,7 @@ fn top_sessions_statement(
             .map(|i| format!("?{}", i + 4))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(" AND a.account_id IN ({marks})")
+        format!(" AND +a.account_id IN ({marks})")
     };
     let sql = format!(
         "SELECT r.session_id FROM attempts a \
@@ -4168,17 +4169,27 @@ mod tests {
     /// which no index leads with, so the request side seeks the range rather than walking every retained session.
     #[test]
     fn the_session_burn_reads_search_the_requests_by_their_received_range() {
+        // The requests' range is the outer loop and each of its requests looks its attempts up by id: an attempts index
+        // leading the join would walk the whole request range once per attempt it found.
         let ranged = |plan: &[String]| {
-            plan.iter().any(|step| {
-                step.starts_with("SEARCH r USING ")
+            let mut loops = plan
+                .iter()
+                .filter(|step| step.starts_with("SEARCH") || step.starts_with("SCAN"));
+            loops.next().is_some_and(|step| {
+                step.starts_with("SEARCH r USING INDEX ")
                     && step.contains("received_at>?")
                     && step.contains("received_at<?")
+            }) && loops.next().is_some_and(|step| {
+                step.starts_with("SEARCH a USING ") && step.contains("request_id=?")
             }) && !plan.iter().any(|step| step.starts_with("SCAN"))
         };
         for accounts in [Vec::new(), vec!["a".to_string(), "b".to_string()]] {
             let (sql, binds) = top_sessions_statement(0, 3_600_000, 20, &accounts);
             let top = plan_of(&sql, binds);
-            assert!(ranged(&top), "{accounts:?}: {top:?}");
+            assert!(
+                ranged(&top) && top[0].starts_with("SEARCH r USING INDEX requests_received "),
+                "{accounts:?}: {top:?}"
+            );
         }
         let (sql, binds) =
             session_attempts_statement(0, 3_600_000, &["s1".to_string(), "s2".to_string()]);
