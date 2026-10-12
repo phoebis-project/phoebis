@@ -65,9 +65,10 @@ does not hold the file, since Claude Code resolves a relative path against that 
 and cannot read its mode, so keeping that file private (mode `0600`) falls to you.
 
 The backoff, the heartbeat interval and the presence throttle are constants, and the mod has no other setting. A report
-that did not get through, for a transport failure, a 5xx or a limit, goes out again along a fixed backoff. A heartbeat
-goes out at a share of the remaining lease, within fixed bounds. Both figures are on
-[The relay](relay.md#the-keepalive-protocol). A presence report goes out at most once a minute ([Presence](#presence)).
+that did not get through, for a transport failure, a 5xx or a limit, goes out again along a fixed backoff, whose steps
+are on [The relay](relay.md#the-keepalive-protocol). The answer to a `session_start` or a `heartbeat` arms the next
+heartbeat at a third of the remaining lease, between 1 and 25 seconds. A presence report goes out at most once a minute
+([Presence](#presence)).
 
 ## What the mod reports
 
