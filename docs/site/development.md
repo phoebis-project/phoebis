@@ -19,8 +19,9 @@ its bindings need clang, cmake, libclang and pkg-config on the host.
 The console is embedded at build time. The UI crate's build script builds `web/dist` when the bundle is missing or older
 than its sources: it checks `node --version` against `^20.19.0 || >=22.12.0` and stops with
 `the console build needs Node ^20.19.0 || >=22.12.0, and {found} was found` outside that range, then runs
-`npm ci --no-audit --no-fund` and `npm run build` in `web/`. `web/.nvmrc` names 20.19, the version the workflows
-install. When the bundle cannot be built, the script discards `web/dist` and warns
+`npm ci --no-audit --no-fund` in `web/` unless `node_modules` carries the stamp of an install at least as new as the
+lockfile, and `npm run build`. `web/.nvmrc` names 20.19, the version the workflows install. When the bundle cannot be
+built, the script discards `web/dist` and warns
 `the web bundle could not be built, so web/dist was discarded and the router will serve the placeholder page. Set
 PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is.`, since a build that quietly embeds the previous console
 reports nothing wrong and ships the wrong one. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it
@@ -158,8 +159,8 @@ binary the profile was measured from:
 
 `phoebis` links BoringSSL through the `boring` and `boring-sys` crates, both pinned at 5.2.0. `boring-sys` vendors its
 own copy of BoringSSL under `deps/boringssl/` rather than linking a system build, and that vendored tree carries no
-upstream revision id. `include/openssl/base.h` in it declares `BORINGSSL_API_VERSION 41`, the only revision marker the
-vendored source carries.
+revision id of the BoringSSL project: no commit file exists anywhere under it. `include/openssl/base.h` in it declares
+`BORINGSSL_API_VERSION 41`, the only revision marker the vendored source carries.
 
 Every fixture under `crates/profile/fixtures/` was captured from a client binary running against loopback receivers
 with dummy credentials, never against `api.anthropic.com`. The inference and control fixtures come from a 2026-09-13
@@ -235,21 +236,24 @@ the table after any accepted re-pin.
 
 ## Re-pinning
 
-A profile is a fixed set of constants measured from one Claude Code release: the version and build tag, the two user agents, the Stainless
-headers, the three beta lists (one per credential shape), the control-plane URLs and client id, and the TLS curves and
-cipher list, each a field of the `Profile` value in `crates/profile/src/lib.rs`, graded against the fixtures under
-`crates/profile/fixtures/` whose manifest is above. The router does not follow a newer client build by itself: the
-fields it restores and the beta edits are the pinned profile's, as [The relay](relay.md#the-betas) describes, and a
-request the profile cannot reproduce is refused until the router runs a build re-pinned to the client. To re-pin the
-profile against a new build:
+A profile records the measured build's wire constants: its version and build tag, its two user agents, its Stainless
+headers, its three beta lists (one per credential mode), the control-plane URLs and client id, and the TLS curves and
+cipher list, each a field of the `Profile` value in `crates/profile/src/lib.rs`, with the fixtures under
+`crates/profile/fixtures/` as its record. The router's own calls send part of it: the control-plane calls go to the
+profile's URLs with its client id and its SDK user agent, and the connections toward the upstream offer its curves,
+with its cipher list on the control plane. The Stainless headers and the beta lists are what the fixture suites
+compare against, and the relay emits none of them: headers travel as the client sends them, and the beta edits and the
+restored fields are the relay's fixed rules ([The betas](relay.md#the-betas) and
+[The restoration](relay.md#the-restoration)), which do not follow a newer build. A request the profile cannot
+reproduce is refused until the router runs a build re-pinned to the client. To re-pin the profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real
    `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN` in the environment
-   (`refusing to run with a real ANTHROPIC_API_KEY set`) and where `unshare -rn` does not work, and otherwise
-   re-executes itself in the loopback-only namespace, drives the four credential modes and a gzip-forced run past the
-   recording receiver (the forced run records a plain body, since the 2.1.286 client gzips toward `api.anthropic.com`
-   alone), records the ClientHello through the CONNECT receiver, and ends with
+   (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`) and where `unshare -rn` does not work,
+   and otherwise re-executes itself in the loopback-only namespace, drives the four credential modes and a gzip-forced
+   run past the recording receiver (the forced run records a plain body, since the 2.1.286 client gzips toward
+   `api.anthropic.com` alone), records the ClientHello through the CONNECT receiver, and ends with
    `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status. The system prompt the
    client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints a
    bounded diff per body so that shows as a date difference rather than a shape change.
@@ -321,20 +325,21 @@ read rather than dropping it:
   its list of words no page carries, and a bare `api_key` outside a code span. It drops fenced blocks and code spans
   before it reads.
 
-`bash scripts/tests/check-docs.sh` runs the checker's own cases, each against a throwaway tree, so the checker fails on
-what it exists to catch.
+`bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case at the
+end against the real one, so the checker fails on what it exists to catch.
 
 ## Continuous checks
 
 Two GitHub Actions workflows run on every pull request and every push to `main`. `Tests` runs the `rust` and `web` jobs
 of [The tests](#the-tests) and a third job, also named `Tests`, that reports the two as the one check the branch
-protection on `main` requires, a cancelled or skipped job included. A newer push to a pull request cancels its older
+protection on `main` requires, a canceled or skipped job included. A newer push to a pull request cancels its older
 run. `Documentation` builds and checks this site ([Publishing the site](#publishing-the-site)). The third workflow,
 `Release`, runs on a release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
 ([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
 
-The release workflow's jobs run with a read-only token except `build` and `publish`, which write packages, and `smoke`,
-which reads them. The `Tests` jobs read alone, and in `Documentation` only the deploy job writes, to Pages.
+The release workflow's jobs run with a read-only token except `build`, which writes packages, `publish`, which writes
+packages and the release's archives, and `smoke`, which reads packages. The `Tests` jobs read alone, and in
+`Documentation` only the deploy job writes, to Pages.
 
 ## Publishing the site
 
