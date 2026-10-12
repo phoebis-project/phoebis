@@ -58,12 +58,11 @@ export function AccountsPage() {
   // leaves that URL alone for the span of that read. The guard follows the read's loading flag rather than the list
   // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh.
   const [created, setCreated] = useState<{ id: string; reading: boolean } | null>(null);
-  useEffect(() => {
-    if (created === null) return;
+  if (created !== null) {
     if (accounts.loading) {
       if (!created.reading) setCreated({ ...created, reading: true });
     } else if (created.reading) setCreated(null);
-  }, [accounts.loading, created]);
+  }
   // A deleted account's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
   // /accounts does rather than to a detail that never loads.
   useEffect(() => {
@@ -220,7 +219,11 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   // A save's answer until `onChanged`'s reload replaces the row, so an editor opened in between opens on the row the
   // save wrote rather than the one it replaced.
   const [answered, setAnswered] = useState<Account | null>(null);
-  useEffect(() => setAnswered(null), [account]);
+  const [answeredFor, setAnsweredFor] = useState(account);
+  if (answeredFor !== account) {
+    setAnsweredFor(account);
+    setAnswered(null);
+  }
   const current = answered ?? account;
   // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
   // navigates away inside its action, so the detail can unmount before `busy` clears.
@@ -769,14 +772,17 @@ function AddAccountDialog({ open, existingIds, onClose, onDone }: { existingIds:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A reopened dialog starts blank: the id it last created is taken, and the router refuses a second account under it.
-  useEffect(() => {
-    if (!open) return;
-    setKind('oauth');
-    setLabel('');
-    setCustomId(null);
-    setSecret('');
-    setError(null);
-  }, [open]);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setKind('oauth');
+      setLabel('');
+      setCustomId(null);
+      setSecret('');
+      setError(null);
+    }
+  }
 
   const derived = derivedId(label);
   const custom = customId?.trim() ?? '';
@@ -905,18 +911,28 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   const [preview, setPreview] = useState<PairingPreview | null>(null);
   const now = useNow(1_000);
 
-  // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing.
+  // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing. An
+  // opening, or a new start while open, resets the steps in the render that brings it.
   const startKey = JSON.stringify(start);
+  const opening = open ? startKey : null;
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (openedFor !== opening) {
+    setOpenedFor(opening);
+    if (opening !== null) {
+      setSession('session' in start ? start.session : null);
+      setStep(1);
+      setCallback('');
+      setError(null);
+      setPreview(null);
+    }
+  }
   useEffect(() => {
     if (!open) return;
+    // Read back from the key the effect runs on, so the start it pairs is the one that key names.
+    const target = JSON.parse(startKey) as PairingTarget;
+    if ('session' in target) return;
     let alive = true;
-    setSession('session' in start ? start.session : null);
-    setStep(1);
-    setCallback('');
-    setError(null);
-    setPreview(null);
-    if ('session' in start) return;
-    api.startPairing(start).then(
+    api.startPairing(target).then(
       (s) => {
         // A pairing that lands after the dialog closed would hold the account until its own deadline.
         if (alive) setSession(s);

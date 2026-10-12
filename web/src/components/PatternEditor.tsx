@@ -62,11 +62,16 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
   const summaryId = useId();
   const refusalId = useId();
   // A key per row that travels with it, so a row moved up or down keeps its node and the button keeps focus.
-  const keys = useRef<number[]>([]);
-  const nextKey = useRef(0);
+  const [rows, setRows] = useState(() => ({ keys: value.map((_, i) => i), next: value.length }));
   const focusKey = useRef<number | null>(null);
-  while (keys.current.length < value.length) keys.current.push(nextKey.current++);
-  keys.current.length = value.length;
+  // Rows the value gains from outside take fresh keys, and rows it drops give theirs up.
+  let keys = rows.keys;
+  if (keys.length !== value.length) {
+    let next = rows.next;
+    keys = keys.slice(0, value.length);
+    while (keys.length < value.length) keys.push(next++);
+    setRows({ keys, next });
+  }
   // A row added by the button takes the focus once it is drawn, so the operator types the pattern straight away.
   useEffect(() => {
     if (focusKey.current === null) return;
@@ -76,23 +81,23 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
     input.focus();
   });
 
-  const commit = (rules: ModelRule[], order: number[]) => {
-    keys.current = order;
+  const commit = (rules: ModelRule[], order: number[], next = rows.next) => {
+    setRows({ keys: order, next });
     onChange(rules);
   };
   const update = (i: number, rule: ModelRule) => onChange(value.map((r, j) => (j === i ? rule : r)));
   const move = (i: number, j: number) => {
     const rules = [...value];
-    const order = [...keys.current];
+    const order = [...keys];
     [rules[i], rules[j]] = [rules[j], rules[i]];
     [order[i], order[j]] = [order[j], order[i]];
     commit(rules, order);
   };
-  const remove = (i: number) => commit(value.filter((_, j) => j !== i), keys.current.filter((_, j) => j !== i));
+  const remove = (i: number) => commit(value.filter((_, j) => j !== i), keys.filter((_, j) => j !== i));
   const add = () => {
-    const key = nextKey.current++;
+    const key = rows.next;
     focusKey.current = key;
-    commit([...value, { not: false, pattern: '' }], [...keys.current, key]);
+    commit([...value, { not: false, pattern: '' }], [...keys, key], key + 1);
   };
 
   const refusals = value.map((r) => checkPattern(r.pattern));
@@ -112,7 +117,7 @@ export function PatternEditor({ inherited = [], label, onChange, suggestions, va
       {(value.length > 0 || inherited.length > 0) && (
         <ol className="pattern-editor__rows">
           {value.map((rule, i) => {
-            const key = keys.current[i];
+            const key = keys[i];
             const refusal = refusals[i];
             const n = i + 1;
             return (

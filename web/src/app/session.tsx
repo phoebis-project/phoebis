@@ -111,7 +111,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         <Brand />
       </main>
     );
-  if (!value)
+  if (!session)
     return (
       <LoginScreen
         notice={notice}

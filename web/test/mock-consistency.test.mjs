@@ -1166,7 +1166,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.
-const firstHour = (loading = loading.then(() => storyAt('2026-09-16T09:30:00Z')));
+const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 
 test("the hour a full day back counts toward the accounts' and pools' day totals and a pool's first bucket, and toward no dashboard figure", async () => {
   const s = await firstHour;

@@ -48,12 +48,13 @@ const atMinute = (minutes: number) => `${(minutes / 1440) * 100}%`;
  *  today's band (the next band day's on a day the band is off) falls in it, with the zone the file defines it in, now,
  *  and its weight per window. */
 export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number }) {
-  const version = useFormatVersion();
+  // Called for the redraw alone: the clock reads the time format from module state, so a format change redraws the
+  // caption and the next change, which are read on every draw.
+  useFormatVersion();
   const zone = viewingZone();
   const week = useMemo(() => bandWeek(costs, now, zone), [costs, now, zone]);
-  // The clock reads the time format from module state, so the setting's version is what redraws these two lines.
-  const caption = useMemo(() => bandCaption(costs, now, zone, minuteClock), [costs, now, zone, version]);
-  const change = useMemo(() => nextLocalChange(costs, now, zone, minuteClock), [costs, now, zone, version]);
+  const caption = bandCaption(costs, now, zone, minuteClock);
+  const change = nextLocalChange(costs, now, zone, minuteClock);
   const nowMinute = useMemo(() => {
     const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', minute: 'numeric', timeZone: zone }).formatToParts(now);
     return Number(parts.find((p) => p.type === 'hour')?.value) * 60 + Number(parts.find((p) => p.type === 'minute')?.value);

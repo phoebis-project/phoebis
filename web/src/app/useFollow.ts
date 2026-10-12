@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react';
+import { type Dispatch, type SetStateAction, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from '@/lib/clock';
 import { FOLLOW_MS, type Followed, followPages, merged } from '@/lib/follow';
@@ -20,7 +20,9 @@ export function useFollow<R>(input: { address: string; base: R[] | null; compare
   const overrun = following?.overrun ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
   const latest = useRef({ address, compare, identity, overrun, read, shown });
-  latest.current = { address, compare, identity, overrun, read, shown };
+  useLayoutEffect(() => {
+    latest.current = { address, compare, identity, overrun, read, shown };
+  });
   // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
   // notice down, as `useAsync`'s refresh does.
   const streak = useRef({ failing: false, paths: new Set<string>() });

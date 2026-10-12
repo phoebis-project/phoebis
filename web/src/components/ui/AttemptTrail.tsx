@@ -98,6 +98,7 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
   }, [at]);
   // A refresh that re-sorts the rows moves the count with no scroll or resize to report it.
   useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- only the drawn row says where the count stands, so each draw reads it before paint
     if (open && moved()) hide();
   });
   useEffect(() => {

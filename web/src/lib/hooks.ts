@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
@@ -42,9 +42,15 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
-  // The refresh effect outlives renders, so it reads the current load, deps and stamp through refs.
+  // The effects outlive renders, so they read the current load, deps and stamp through refs.
   const latest = useRef({ deps, load });
-  latest.current = { deps, load };
+  useLayoutEffect(() => {
+    latest.current = { deps, load };
+  });
+  // The deps the load effect keys on, replaced only when an element differs, so a caller's new array with the same
+  // values reads nothing again.
+  const [held, setHeld] = useState(deps);
+  if (!sameDeps(held, deps)) setHeld(deps);
   const fetched = useRef<string | null>(null);
   // The load effect's run for the current deps: a refresh that lands after the deps changed or the page left is
   // dropped by it, as the load's own answer is.
@@ -67,7 +73,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The deps the streak's routes failed for.
   const failedFor = useRef(deps);
 
-  const landed = (value: T, answered: readonly unknown[]) => {
+  const landed = useCallback((value: T, answered: readonly unknown[]) => {
     const at = stamp();
     for (const path of failedPaths.current) reportRecovery(path);
     failedPaths.current.clear();
@@ -77,7 +83,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     setLoadedFor(answered);
     setError(null);
     setFetchedAt(at);
-  };
+  }, []);
   const failed = (err: unknown) => {
     failing.current = true;
     if (err instanceof ApiError && err.path !== null) failedPaths.current.add(err.path);
@@ -87,19 +93,20 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   useEffect(() => {
     // A read for other deps answers other routes, so its success must not report the old streak's routes recovered; a
     // reload of the same deps keeps them, so its success still takes the streak's notice down.
-    if (!sameDeps(failedFor.current, deps)) {
+    if (!sameDeps(failedFor.current, held)) {
       failedPaths.current.clear();
-      failedFor.current = deps;
+      failedFor.current = held;
     }
     const current = { alive: true };
     run.current = current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a read for new deps starts here, and the page draws its loading state until it lands
     setLoading(true);
     started.current += 1;
     const seq = started.current;
-    load().then(
+    latest.current.load().then(
       (value) => {
         if (!current.alive || !lands(seq)) return;
-        landed(value, deps);
+        landed(value, held);
         setLoading(false);
       },
       (err: unknown) => {
@@ -111,8 +118,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     return () => {
       current.alive = false;
     };
-    // Callers pass load inline, a new closure each render, so the deps alone decide when the effect reads again.
-  }, [...deps, nonce]);
+    // Callers pass load inline, a new closure each render, so it is read through `latest` and the deps alone decide
+    // when the effect reads again.
+  }, [held, landed, nonce]);
 
   useEffect(() => {
     if (!refreshMs || paused) return;
@@ -153,7 +161,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     };
     // The load is read through `latest` when the period fires, so the effect re-arms only when the period or the pause
     // changes.
-  }, [refreshMs, paused]);
+  }, [landed, paused, refreshMs]);
 
   return { data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
 }
@@ -213,8 +221,8 @@ export function useQueryFilters<F>(codec: Codec<F>): { address: string; filters:
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  // The codec is the caller's constant, so the address alone decides when the filters are read again.
-  const filters = useMemo(() => codec.fromParams(searchParams), [searchParams]);
+  // Callers pass a module-level codec, so only a new address reads the filters again.
+  const filters = useMemo(() => codec.fromParams(searchParams), [codec, searchParams]);
   // Written at once rather than in the router's transition: a click that follows typing blurs a field first, and its
   // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
   const replace = (next: F) => {
@@ -259,14 +267,17 @@ export function useLocalStorage<T extends string>(key: string, fallback: T): [T,
       return fallback;
     }
   });
-  const set = (v: T) => {
-    setValue(v);
-    try {
-      localStorage.setItem(key, v);
-    } catch {
-      // Private mode or blocked storage: the in-memory value still applies.
-    }
-  };
+  const set = useCallback(
+    (v: T) => {
+      setValue(v);
+      try {
+        localStorage.setItem(key, v);
+      } catch {
+        // Private mode or blocked storage: the in-memory value still applies.
+      }
+    },
+    [key],
+  );
   return [value, set];
 }
 

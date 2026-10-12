@@ -55,7 +55,7 @@ test('the viewer draws the rows in view and 20 rows above and below them, each a
   // Ten rows tall, scrolled to line 50: lines 50 to 59 are in view.
   let top = 0;
   Object.defineProperty(pre, 'clientHeight', { configurable: true, get: () => 180 });
-  Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => (top = to) });
+  Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => { top = to; } });
   pre.scrollTop = 900;
   act(() => pre.dispatchEvent(new window.Event('scroll')));
   assert.equal(frames.size, 1, 'the scroll asks for one frame');

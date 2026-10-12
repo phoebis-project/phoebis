@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
@@ -208,6 +208,7 @@ export function PoolsPage() {
       notify(`Pool ${edit} not found`);
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once both lists land, in the pass that takes it out of the address
     setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
   }, [accounts.data, location, navigate, notify, pools.data]);
 
@@ -1031,7 +1032,7 @@ export function PoolDialog({
   const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
   // The values the dialog opened with, which the discard question compares the form against.
-  const opened = useRef(form);
+  const [opened, setOpened] = useState(form);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
@@ -1047,18 +1048,25 @@ export function PoolDialog({
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveTo, setMoveTo] = useState('');
-  const openedMoveTo = useRef('');
+  const [openedMoveTo, setOpenedMoveTo] = useState('');
   const [moving, setMoving] = useState<ApiKey | null>(null);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   // Held apart from the form so a priority keystroke cannot move the row under the cursor.
   const [memberOrder, setMemberOrder] = useState<string[]>([]);
+  // The reset reads the accounts through a ref: the parent hands down a fresh array on every render, and reacting to
+  // that would wipe the form mid-edit.
+  const accountsNow = useRef(accounts);
+  useLayoutEffect(() => {
+    accountsNow.current = accounts;
+  });
   useEffect(() => {
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the reset runs after the dialog's open effect, which turns the mode on for an expert-only group before the reset names it
     setForm(next);
-    opened.current = next;
-    setMemberOrder(orderedAccountIds(accounts, next.members));
+    setOpened(next);
+    setMemberOrder(orderedAccountIds(accountsNow.current, next.members));
     setLocalKeys([]);
     setMoveError(null);
     setMoved(new Set());
@@ -1068,19 +1076,18 @@ export function PoolDialog({
     setAttempted(false);
     setStale(null);
     setChosen(initialGroup ?? 'identity');
-    // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
-    // that would wipe the form mid-edit.
   }, [open, pool, initialGroup]);
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
-  useEffect(() => setError(null), [form]);
-  // The reset effect seeds the order once per open from the list it found, so a list that lands later, a slow first
-  // read or Try again after a failed one, seeds an order still empty. Keyed on the list alone: every member edit
-  // re-sorts the order through its own handler. The updater reads the order the reset effect queued in the same
-  // commit, since this render's form is still the one from before the open.
-  useEffect(() => {
-    if (open && accounts.length > 0) setMemberOrder((order) => (order.length > 0 ? order : orderedAccountIds(accounts, form.members)));
-  }, [open, accounts]);
+  const [refusedFor, setRefusedFor] = useState(form);
+  if (refusedFor !== form) {
+    setRefusedFor(form);
+    setError(null);
+  }
+  // The reset seeds the order once per open from the list it found, so a list that lands later, a slow first read or
+  // Try again after a failed one, seeds an order still empty. Every member edit re-sorts the order through its own
+  // handler.
+  if (open && accounts.length > 0 && memberOrder.length === 0) setMemberOrder(orderedAccountIds(accounts, form.members));
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
   const setShedAhead = (value: number | null) => set('shedAhead', value);
@@ -1217,7 +1224,7 @@ export function PoolDialog({
 
   const startMove = (k: ApiKey) => {
     const to = otherPools[0]?.id ?? '';
-    openedMoveTo.current = to;
+    setOpenedMoveTo(to);
     setMoveTo(to);
     setMoveError(null);
     setMoving(k);
@@ -2173,7 +2180,7 @@ export function PoolDialog({
         open={open}
         onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
-        unsaved={!sameForm(form, opened.current)}
+        unsaved={!sameForm(form, opened)}
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
@@ -2228,7 +2235,7 @@ export function PoolDialog({
         }}
         title={moving ? `Move key ${moving.name}` : 'Move key'}
         // False while the move is out, so an outside click or Escape reaches the hold above rather than a question.
-        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo.current}
+        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo}
         subtitle="A key reaches only its own pool's members, so moving it ends its current session pins."
         width={440}
         footer={

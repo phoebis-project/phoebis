@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
@@ -59,10 +59,13 @@ export function KeysPage() {
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
   // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
   // the router's usual way.
-  const replaceFromEffect = (patch: Partial<KeysAddress>) => {
-    const next = KEYS_CODEC.toParams({ ...filters, ...patch }).toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { replace: true });
-  };
+  const replaceFromEffect = useCallback(
+    (patch: Partial<KeysAddress>) => {
+      const next = KEYS_CODEC.toParams({ ...filters, ...patch }).toString();
+      navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { replace: true });
+    },
+    [filters, location.hash, location.pathname, navigate],
+  );
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
@@ -91,6 +94,7 @@ export function KeysPage() {
       notify(`Key ${edit} not found`);
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once the key list lands, in the pass that takes it out of the address
     setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
   }, [keys.data, location, navigate, notify]);
 
@@ -108,8 +112,7 @@ export function KeysPage() {
     if (filters.pools.length === 0 || !pools.data || poolIds.length > 0) return;
     if (new URLSearchParams(location.search).has('edit')) return;
     replaceFromEffect({ pools: [] });
-    // The writer changes on every render, and the address it writes from reruns the effect.
-  }, [filters.pools, location.search, poolIds, pools.data]);
+  }, [filters.pools, location.search, poolIds, pools.data, replaceFromEffect]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
@@ -142,8 +145,7 @@ export function KeysPage() {
     landed.current = location.hash;
     scrollToElement(row);
     row.focus({ preventScroll: true });
-    // The writer changes on every render, and the rows follow every filter it clears, so they rerun the effect.
-  }, [keys.data, location.hash, rows]);
+  }, [keys.data, location.hash, replaceFromEffect, rows]);
 
   const totals = keys.data
     ? {
@@ -469,15 +471,19 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
   // The values the dialog opened with, which the discard question compares the fields against.
-  const opened = useRef(keyFormOf(null, ''));
+  const [opened, setOpened] = useState(() => keyFormOf(null, ''));
 
-  // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
-  // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
-  useEffect(() => {
-    if (!open) return;
+  // Once per opening, in the render that brings it: the address can open the dialog before the pool list lands, and a
+  // reset on its arrival would discard every edit made meanwhile and put back the group the dialog opened on, the
+  // focus left in a hidden one.
+  const [resetFor, setResetFor] = useState<{ existing: ApiKey | null; initialGroup: KeyGroup | null; initialPoolId: string | undefined } | null>(null);
+  const resetDue = open && (resetFor === null || resetFor.existing !== existing || resetFor.initialGroup !== initialGroup || resetFor.initialPoolId !== initialPoolId);
+  if (!open && resetFor !== null) setResetFor(null);
+  if (resetDue) {
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
-    opened.current = form;
+    setResetFor({ existing, initialGroup, initialPoolId });
+    setOpened(form);
     setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
@@ -494,22 +500,23 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setBusy(false);
     setError(null);
     setStale(null);
-  }, [open, existing, initialPoolId, initialGroup]);
-  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do. An updater,
-  // so it never replaces the pool the reset above queued in the same render. The fill is no edit of the operator's,
-  // so the opening values take it too where they hold no pool yet.
-  useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) {
-      setPoolId((current) => (current === '' ? pools[0].id : current));
-      if (opened.current.poolId === '') opened.current = { ...opened.current, poolId: pools[0].id };
-    }
-  }, [existing, open, poolId, pools]);
-
-  // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
-  useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
+  }
+  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do, after the
+  // render that resets. The fill is no edit of the operator's, so the opening values take it too where they hold no
+  // pool yet.
+  if (open && !resetDue && existing === null && poolId === '' && pools.length > 0) {
+    setPoolId(pools[0].id);
+    if (opened.poolId === '') setOpened({ ...opened, poolId: pools[0].id });
+  }
 
   const moving = existing !== null && poolId !== existing.poolId;
   const current = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+  // The server's words leave with the next edit to any field. A failed save changes none, so they stand until then.
+  const [edited, setEdited] = useState(current);
+  if ((Object.keys(current) as (keyof typeof current)[]).some((field) => current[field] !== edited[field])) {
+    setEdited(current);
+    setError(null);
+  }
 
   const submit = async () => {
     setBusy(true);
@@ -728,7 +735,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
-      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened.current))}
+      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened))}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}

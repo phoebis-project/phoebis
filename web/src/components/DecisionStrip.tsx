@@ -90,6 +90,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
       const height = Math.round(button.getBoundingClientRect().height);
       if (id !== undefined && height > 0 && height !== counted.labels[id]?.height) next[id] = height;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the drawn heights exist only once the strip is drawn, so the layout reads them before paint
     if (!sameHeights(next, measured)) setMeasured(next);
   }, [counted, measured]);
   // `focus` is true when a key opened the popover, which then takes focus. A hover or a click leaves focus where it is.
@@ -104,20 +105,28 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
         const next = typeof update === 'function' ? update(mine) : update;
         // A close here leaves another strip's popover open, and an unchanged one keeps the store as it is.
         if (next === mine) return o;
-        return next === null ? null : { ...next, stripId: id };
+        if (next === null) return null;
+        // A hover and the click that pins it name one anchor by two objects, so the store keeps the first, and the
+        // plan below is read again for a new anchor alone.
+        const anchor = mine !== null && keyOf(mine.anchor) === keyOf(next.anchor) ? mine.anchor : next.anchor;
+        return { ...next, anchor, stripId: id };
       }),
     [id],
   );
   useEffect(() => () => popoverStore.set((o) => (o !== null && o.stripId === id ? null : o)), [id]);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   // The anchor's button from the last draw: one the new draw leaves out closes its popover as it leaves the document.
+  // eslint-disable-next-line react-hooks/refs -- the buttons register through their ref callbacks, so the last draw's map is the one place that holds them
   const anchorEl = open === null ? undefined : buttons.current.get(keyOf(open.anchor));
+  // The button is looked up when the close runs, so a pin that keeps the anchor keeps this callback and the popover's
+  // placement.
   const close = useCallback(
     (returnFocus: boolean) => {
-      if (returnFocus) anchorEl?.focus({ preventScroll: true });
+      const own = popoverStore.get();
+      if (returnFocus && own !== null && own.stripId === id) buttons.current.get(keyOf(own.anchor))?.focus({ preventScroll: true });
       setOpen(null);
     },
-    [anchorEl, setOpen],
+    [id, setOpen],
   );
   const anchorRef = (anchor: StripAnchor) => (el: HTMLButtonElement | null) => {
     if (el === null) buttons.current.delete(keyOf(anchor));
@@ -170,11 +179,11 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
         e.preventDefault();
         e.stopPropagation();
       }
-      close(inPopover || Boolean(anchorEl?.contains(at)));
+      close(inPopover || Boolean(buttons.current.get(keyOf(open.anchor))?.contains(at)));
     };
     document.addEventListener('keydown', onEscape, true);
     return () => document.removeEventListener('keydown', onEscape, true);
-  }, [anchorEl, close, open, popoverId]);
+  }, [close, open, popoverId]);
   const picked = pinned === null ? null : keyOf(pinned);
   // Only a pinned popover marks its anchor expanded: one a hover opened closes as the pointer leaves, out of a reader's
   // reach.
@@ -189,9 +198,8 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   const stacked = model.branch?.kind === 'move';
   const opened = open?.anchor;
   const openedKey = opened === undefined ? null : keyOf(opened);
-  // A hover and the click that pins it name one anchor by two objects, so the plan is kept by the anchor's key, and
-  // the popover places itself again for a new plan or a redrawn strip alone.
-  const plan = useMemo(() => (opened === undefined ? null : anchorPlan(opened, model, record, row, now)), [openedKey, model, record, row, now]);
+  // The popover places itself again for a new plan or a redrawn strip alone.
+  const plan = useMemo(() => (opened === undefined ? null : anchorPlan(opened, model, record, row, now)), [model, now, opened, record, row]);
   const popover = open === null || anchorEl === undefined || plan === null ? null : { anchor: anchorEl, focus: open.focus, pinned: open.pinned, plan };
   return (
     <div className="decision-strip" ref={ref}>

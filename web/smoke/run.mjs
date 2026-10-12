@@ -4299,7 +4299,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // jsdom lays nothing out, so the body keeps its scroll position by hand: what the dialog writes is what it reads.
   let scrolled = 0;
   if (body) {
-    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => scrolled, set: (top) => (scrolled = top) });
+    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => scrolled, set: (top) => { scrolled = top; } });
     body.scrollTo = (to) => (scrolled = to.top ?? scrolled);
     body.scrollTop = 1_200;
   }
@@ -7712,9 +7712,9 @@ await m.navigate(`/requests/${laptopRow.id}`);
     return split.apply(this, rest);
   };
   let frozen;
-  let first = { ...serialized };
-  let opened = { ...serialized };
-  let drawer = { blocks: 0, drawn: -1 };
+  let first;
+  let opened;
+  let drawer;
   try {
     frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
     api.getCapturedBodies = original;
@@ -7887,7 +7887,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
     if (pre) {
       Object.defineProperty(pre, 'clientHeight', { configurable: true, get: () => box });
       Object.defineProperty(pre, 'scrollHeight', { configurable: true, get: () => 20_000 * ROW_PX });
-      Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => (top = to) });
+      Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => { top = to; } });
       pre.scrollTop = pre.scrollHeight - pre.clientHeight;
       pre.dispatchEvent(new window.Event('scroll'));
     }
@@ -9610,7 +9610,7 @@ m.unmount();
   const onTrack = (s) => s?.button.classList.contains('strip-station--track') ?? false;
   const pairsOf = (card) => stationsOf(card).map((s) => [s.step, s.verdict]);
   /** The pairs the model gives, the line's before the track's, for a record whose sequence a check does not spell. */
-  const modelPairs = (record, row) => {
+  const modelPairs = (record) => {
     const { stations } = stationModel(record, CLOCK_ORIGIN);
     return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
   };
@@ -9690,7 +9690,7 @@ m.unmount();
    * least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16, which jsdom's empty
    * boxes floor at 0.
    */
-  const popoversOpen = async (what, page, card, record, row) => {
+  const popoversOpen = async (what, page, card, record) => {
     const model = stationModel(record, CLOCK_ORIGIN);
     const buttons = [...(card?.querySelectorAll('.decision-strip .strip-station, .decision-strip .strip-candidate, .decision-strip .strip-terminus') ?? [])];
     const wrong = [];
@@ -9722,10 +9722,10 @@ m.unmount();
   };
 
   {
-    const { card, page, panel, record, row: summary } = await story('req_f8085653-422');
+    const { card, page, panel, record } = await story('req_f8085653-422');
     scan('renewal', card);
     stripDrawn('renewal', card, RENEWAL_STATIONS);
-    await popoversOpen('renewal', page, card, record, summary);
+    await popoversOpen('renewal', page, card, record);
     const stations = stationsOf(card);
     // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
     const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
@@ -9803,10 +9803,10 @@ m.unmount();
   }
   {
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
-    const { card, page, record, row } = await story('req_b2bed817-a58');
+    const { card, page, record } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    stripDrawn('static placement', card, modelPairs(record, row));
-    await popoversOpen('static placement', page, card, record, row);
+    stripDrawn('static placement', card, modelPairs(record));
+    await popoversOpen('static placement', page, card, record);
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
@@ -9852,10 +9852,10 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_da52d141-a5a');
+    const { card, page, record } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    stripDrawn('spent move', card, modelPairs(record, row));
-    await popoversOpen('spent move', page, card, record, row);
+    stripDrawn('spent move', card, modelPairs(record));
+    await popoversOpen('spent move', page, card, record);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
     const cool = stations.find((s) => s.step === 'Cool reading');
@@ -9887,13 +9887,13 @@ m.unmount();
   }
   {
     // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
-    const { card, page, record, row } = await story('req_868264bc-611');
+    const { card, page, record } = await story('req_868264bc-611');
     scan('shed move', card);
     stripDrawn('shed move', card, [
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
       ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
     ]);
-    await popoversOpen('shed move', page, card, record, row);
+    await popoversOpen('shed move', page, card, record);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
     // The fired rule's popover reads its round in the Round group.
     const fired = groupOfPopover(await popoverOf(page, shed?.button), 'Round');
@@ -9910,7 +9910,7 @@ m.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
     stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
-    await popoversOpen('shedding round', round.page, round.card, round.record, round.row);
+    await popoversOpen('shedding round', round.page, round.card, round.record);
     const ran = stationsOf(round.card).find((s) => s.step === 'shed');
     // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
     const roundGroup = groupOfPopover(await popoverOf(round.page, ran?.button), 'Round');
@@ -9929,10 +9929,10 @@ m.unmount();
     round.page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_69e30548-32e', 1);
+    const { card, page, record } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    stripDrawn('hold', card, modelPairs(record, row));
-    await popoversOpen('hold', page, card, record, row);
+    stripDrawn('hold', card, modelPairs(record));
+    await popoversOpen('hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
     const out = outcomeOf(card);
@@ -9956,8 +9956,8 @@ m.unmount();
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
     const second = await api.getDecision('req_69e30548-32e', 2);
-    stripDrawn('placement after the hold', placed, modelPairs(second, undefined));
-    await popoversOpen('placement after the hold', page, placed, second, undefined);
+    stripDrawn('placement after the hold', placed, modelPairs(second));
+    await popoversOpen('placement after the hold', page, placed, second);
     const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the account a hold waited on and how long it waited',
@@ -9968,10 +9968,10 @@ m.unmount();
   }
   {
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
-    const { card, page, record, row } = await story('req_e8b7eb13-060', 1);
+    const { card, page, record } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    stripDrawn('strategy hold', card, modelPairs(record, row));
-    await popoversOpen('strategy hold', page, card, record, row);
+    stripDrawn('strategy hold', card, modelPairs(record));
+    await popoversOpen('strategy hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
     results.push({
@@ -9982,8 +9982,8 @@ m.unmount();
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
     const second = await api.getDecision('req_e8b7eb13-060', 2);
-    stripDrawn('placement after a strategy hold', after, modelPairs(second, undefined));
-    await popoversOpen('placement after a strategy hold', page, after, second, undefined);
+    stripDrawn('placement after a strategy hold', after, modelPairs(second));
+    await popoversOpen('placement after a strategy hold', page, after, second);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
@@ -9996,10 +9996,10 @@ m.unmount();
     // A request held until its bound ran out answers 429 without a dispatch, whatever the exhaustion after the hold
     // names: the Hold row reads that it ran out, and the Answer row reads the status the request row carries.
     const [id, seq] = ['req_77634945-72b', 2];
-    const { card, page, record, row } = await story(id, seq);
+    const { card, page, record } = await story(id, seq);
     scan('exhaustion after a hold', card);
-    stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
-    await popoversOpen('exhaustion after a hold', page, card, record, row);
+    stripDrawn('exhaustion after a hold', card, modelPairs(record));
+    await popoversOpen('exhaustion after a hold', page, card, record);
     const answered = requests.find((r) => r.id === id)?.status;
     results.push({
       name: '/routing-log a hold whose bound ran out reads ran out on its hold and 429 on the exhaustion after it, with nothing dispatched',
@@ -10011,10 +10011,10 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_51d0e2b8-7a0');
+    const { card, page, record } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    stripDrawn('exhaustion', card, modelPairs(record, row));
-    await popoversOpen('exhaustion', page, card, record, row);
+    stripDrawn('exhaustion', card, modelPairs(record));
+    await popoversOpen('exhaustion', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
     // The story's obstacles name no account, so each one's chip is keyed `obstacle`, and its hover says why.
@@ -10039,10 +10039,10 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_e0a4c6f2-118');
+    const { card, page, record } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
     stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
-    await popoversOpen('refusal', page, card, record, row);
+    await popoversOpen('refusal', page, card, record);
     const stations = stationsOf(card);
     // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
     const admission = await popoverOf(page, stationButton(card, 'admission'));
@@ -10067,10 +10067,10 @@ m.unmount();
   }
   {
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
-    const { card, page, record, row } = await story('req_c41d0311-200', 1, 'probe');
+    const { card, page, record } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    stripDrawn('probe', card, modelPairs(record, row));
-    await popoversOpen('probe', page, card, record, row);
+    stripDrawn('probe', card, modelPairs(record));
+    await popoversOpen('probe', page, card, record);
     const steps = stationsOf(card).map((s) => s.step);
     results.push({
       name: "/routing-log the probe's card is the decision card",
@@ -10082,8 +10082,8 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
-    stripDrawn('failover attempt', card, modelPairs(record, row));
-    await popoversOpen('failover attempt', page, card, record, row);
+    stripDrawn('failover attempt', card, modelPairs(record));
+    await popoversOpen('failover attempt', page, card, record);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
       ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
@@ -10093,7 +10093,7 @@ m.unmount();
   }
   {
     // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
-    const { card, page, record, row } = await story('req_ef099b34-453');
+    const { card, page, record } = await story('req_ef099b34-453');
     scan('fresh placement', card);
     stripDrawn('fresh placement', card, [
       ['Pin', 'none'],
@@ -10108,7 +10108,7 @@ m.unmount();
       ['static', 'none'],
       ['Pick', 'chosen'],
     ]);
-    await popoversOpen('fresh placement', page, card, record, row);
+    await popoversOpen('fresh placement', page, card, record);
     const stations = stationsOf(card);
     const pick = stations.find((s) => s.step === 'Pick');
     const lookup = groupOfPopover(await popoverOf(page, stations[0]?.button), 'Lookup');
@@ -10206,7 +10206,7 @@ m.unmount();
       ['fresh placement', 'req_ef099b34-453'],
       ['shed move', 'req_868264bc-611'],
     ]) {
-      const { card, page, record, row } = await story(id);
+      const { card, page, record } = await story(id);
       const strip = card?.querySelector('.decision-strip') ?? null;
       const model = stationModel(record, CLOCK_ORIGIN);
       const names = [...(strip?.querySelectorAll('.strip-station, .strip-candidate, .strip-terminus') ?? [])].map((b) => b.getAttribute('aria-label'));
@@ -10369,10 +10369,10 @@ m.unmount();
   }
   {
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
-    const { card, page, record, row } = await story('req_4b0e9d17-c31', 2);
+    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
-    stripDrawn('fast failover', card, modelPairs(record, row));
-    await popoversOpen('fast failover', page, card, record, row);
+    stripDrawn('fast failover', card, modelPairs(record));
+    await popoversOpen('fast failover', page, card, record);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
     results.push({
@@ -10384,10 +10384,10 @@ m.unmount();
   }
   {
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
-    const { card, page, record, row } = await story('req_52f62e67-839');
+    const { card, page, record } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    stripDrawn('with main placement', card, modelPairs(record, row));
-    await popoversOpen('with main placement', page, card, record, row);
+    stripDrawn('with main placement', card, modelPairs(record));
+    await popoversOpen('with main placement', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'with main');
     // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
     const rung = await popoverOf(page, line?.button);
@@ -12222,8 +12222,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         page.unmount();
         return read;
       };
-      let utc = { label: '', ticks: [] };
-      let zoned = { label: '', ticks: [] };
+      let utc;
+      let zoned;
       try {
         utc = await monthAxis();
         process.env.TZ = 'America/Los_Angeles';
@@ -15062,7 +15062,7 @@ m.unmount();
   function Fixture({ expertOnly = false, held, hold = null, initialGroup = null, refused = false, start = 'one', status = 'Every group saves together.' }) {
     const [chosen, setChosen] = useState(start);
     // The page's reset, which React runs after the dialog's open effect.
-    useEffect(() => setChosen(initialGroup ?? start), []);
+    useEffect(() => setChosen(initialGroup ?? start), [initialGroup, start]);
     const b = h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined }));
     const groups = [
       { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },

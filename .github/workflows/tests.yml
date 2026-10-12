@@ -53,6 +53,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      - run: node scripts/check-build.mjs
+      - run: npm run lint
       - run: npm test
       - run: npm run smoke
       # The mock pass is CI's browser check; the live pass needs a router with a secret and stays local.

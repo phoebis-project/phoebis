@@ -26,11 +26,12 @@ The other scripts:
 - `npm run e2e` runs the browser pass against a running router ([e2e/README.md](e2e/README.md)).
 - `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port. Its shots go to
   `PHOEBIS_SCREENSHOT_DIR`, or to `phoebis-screenshots` under the system's temporary directory when that is unset.
+- `npm run lint` runs ESLint over the sources, the tests, the smoke checks, the browser pass and the scripts.
 - `npm run smoke` mounts every view in jsdom against the mock and checks what it draws.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.
 
-Node 20.19 or a later 20, or 22.12 or later, and npm 9 or newer (`.nvmrc` and the `engines` field say so). The
+Node 20.19 or a later 20, or 22.13 or later, and npm 9 or newer (`.nvmrc` and the `engines` field say so). The
 dependency list is React 18, react-router-dom 7, and Recharts; styling is plain CSS with custom properties.
 
 ## Where the mock's data comes from

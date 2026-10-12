@@ -167,9 +167,7 @@ function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation
   const source = shared ?? own;
   const current = source.stale ? null : source.data;
   const [last, setLast] = useState<AnalyticsGroup[] | null>(null);
-  useEffect(() => {
-    if (current !== null) setLast(current);
-  }, [current]);
+  if (current !== null && current !== last) setLast(current);
   return current !== null ? source : { ...source, data: last };
 }
 
@@ -229,7 +227,11 @@ export function AnalyticsPage() {
   }, [accountList, keyList, modelList, poolList, a.session]);
   const [sessionText, setSessionText] = useState(a.session);
   // The field follows the address, so a link or the bare Analytics entry replaces what it shows.
-  useEffect(() => setSessionText(a.session), [a.session]);
+  const [sessionFor, setSessionFor] = useState(a.session);
+  if (sessionFor !== a.session) {
+    setSessionFor(a.session);
+    setSessionText(a.session);
+  }
   const ink = useChartInk();
   // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
   // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
