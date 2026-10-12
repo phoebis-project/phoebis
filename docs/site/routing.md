@@ -84,12 +84,15 @@ outside its bound gets:
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false`. See below |
 | `body_capture_hours` | `0` (off) | at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. The console proposes 24 |
+| `expected_revision` | unset | the `revision` the pool was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the pool still carries it, else `409 the pool changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written. A create accepts it and ignores it |
 | `members` | none | a list of `{account_id, priority, budget_daily_usd, budget_monthly_usd}`, written as the whole membership when present, as `PUT /admin/pools/{id}/members` does |
 
-An unknown field in the body, or a value past its field's type, is answered `400 body must be a JSON object`. A
-member's `priority` is a number, `0` by default, and lower sorts first. Naming an unknown account in `members` answers
-`404 account {id} not found`, naming one twice answers `409 members name account {id} twice`, and in either case the
-pool is not created. A pool with keys cannot be deleted: `409 pool still has keys`.
+An unknown field in the body, or a value past its field's type, is answered `400 body must be a JSON object`, and a
+create under an id a pool already holds `409 a pool with this id exists`. A member's `priority` is a number, `0` by
+default, and lower sorts first. Naming an unknown account in `members` answers `404 account {id} not found`, naming
+one twice `409 members name account {id} twice`, and naming an account that is a member of another pool
+`409 account {id} is a member of pool {pool}`, the refusal that keeps an account in one pool. In each case nothing is
+written. A pool with keys cannot be deleted: `409 pool still has keys`.
 
 Every member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
 default (no cap), above zero when set (`budget_daily_usd is above 0`, `budget_monthly_usd is above 0`) and measured
@@ -141,11 +144,9 @@ answer of its own conversation, or of the conversation it forked from, on the se
 of the session on that account and model. A fork names its parent's answer only until it has an answer of its own on
 that account and model. Off by default.
 
-`auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default, the
-router passes the request for a check and its verdict through unchanged. Off, it drops the request so the client
-reviews each tool use with a classifier request of its own. [Auto mode behind the
-router](relay.md#auto-mode-behind-the-router) says what the router cuts and what the client does in each case, and a
-key can override the pool ([Keys](#keys)).
+`auto_mode_server` is whether a Claude Code session's server-side auto mode checks travel to the upstream, on by
+default, and a key's own `auto_mode_server` overrides the pool's ([Keys](#keys)). What the router cuts under the off
+setting and what the client does then are on [Auto mode behind the router](relay.md#auto-mode-behind-the-router).
 
 ### Cache TTL
 
@@ -200,10 +201,11 @@ Every field, in the order the key's JSON body lists them, with the answer a valu
 | `keepalive_opt_out` | `false` | `true` or `false` |
 | `body_capture_hours` | unset, inheriting the pool's | `0` turns capture off, else at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. `null` inherits again |
 | `auto_mode_server` | unset, inheriting the pool's | `true`, `false` or `null`: `auto_mode_server must be true, false, or null`. `null` inherits again |
+| `expected_revision` | unset | the `revision` the key was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the key still carries it, else `409 the key changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written. A create accepts it and ignores it |
 
-Rotate issues a new secret under the same id, and a revoked key cannot be rotated (`409 a revoked key cannot be
-rotated`). Revoke is permanent, so a revoked key cannot be re-enabled. Delete removes the key outright and detaches its
-request history from the key's name.
+A create under an id a key already holds answers `409 a key with this id exists`. Rotate issues a new secret under the
+same id, and a revoked key cannot be rotated (`409 a revoked key cannot be rotated`). Revoke is permanent, so a revoked
+key cannot be re-enabled. Delete removes the key outright and detaches its request history from the key's name.
 
 A key's `body_capture_hours` keeps the bodies of every request under the key in the ledger for that many hours, the
 pool's value when the key inherits it, at most `stats.body_capture_max_hours` ([stats](installation.md#stats)). The
@@ -221,15 +223,13 @@ Every request carries a class, read off its user agent: `claude-code/<entrypoint
 entrypoint token it names, `cli` when it names none)
 and `other` for anything else.
 
-A Claude Code session in auto mode asks the upstream to review each tool use on the model's own turn: a `safeguards`
-member near the end of its body and the `dangerous-tool-use-2026-09-03` beta in its header, answered by a verdict per
-tool use. With the pool's `auto_mode_server` on (the default), or a key's override on, both travel as sent and the
-verdict comes back unchanged. Off, the router cuts the member and removes the beta from every request of the key, a
-token count and a keepalive probe included, and restamps a first-party body's billing hash. The answer is copied as it
-comes, never edited. The client then reviews each tool use with a classifier request of its own for the rest of its
-process, billed to the account's windows, as [Auto mode behind the router](relay.md#auto-mode-behind-the-router)
-describes. A body whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or
-carried twice) is refused `400` with the error code `body_shape` before anything reaches the upstream.
+Under the pool's `auto_mode_server`, or a key's override, a Claude Code session's tool uses are reviewed by the
+upstream on the model's own turn, or by the client with classifier requests of its own, which the router routes as
+requests of the session: they carry its id and pin, on the client's Sonnet default, so a session on another model takes
+a second pin beside its own, and they draw on the account's windows. A body whose `safeguards` member the router cannot
+cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the error code `body_shape`
+before anything reaches the upstream. The mechanism is on
+[Auto mode behind the router](relay.md#auto-mode-behind-the-router).
 
 A conversation is identified by its session header: the session id the client sends names it, keys its pin and its
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
@@ -435,11 +435,11 @@ A marked session moves at its next request, the request that ran the round inclu
 round. It moves onto a cool sibling (see above) that did not shed this pin within `source_dwell_seconds`. A mark from a
 round on plan quota moves a standard request alone: a fast-mode request of the marked session stays where it is. A pin
 on an account cooling for the session's model, marked or not, is released rather than moved, with `cooldown` among its
-reasons: it is not renewed at step 5, the fresh placement takes its place, and a mark goes with it. The round on the
-account still runs, since a cooldown can hold one model alone. An unmarked pin never moves for utilization. The marks
-last for the dwell: a marked session that stays idle never moves, and no new round runs on the account until its dwell
-passes. The round's marks and its dwell are written to the registry and survive a restart, so a restart neither
-forgets a mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open
+reasons: the selection's renew step does not renew it, the fresh placement takes its place, and a mark goes with it. The
+round on the account still runs, since a cooldown can hold one model alone. An unmarked pin never moves for utilization.
+The marks last for the dwell: a marked session that stays idle never moves, and no new round runs on the account until
+its dwell passes. The round's marks and its dwell are written to the registry and survive a restart, so a restart
+neither forgets a mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open
 connection closes and the client retries), and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
@@ -499,9 +499,9 @@ the reset is not refused by a clock a hair behind.
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 429, a shared window (5h or 7d) or `status` rejected, the 5-hour status absent beside a rejected 7-day window included | Account-wide until the later of the rejected window's reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
 | 429, the claim naming the model's own week, the `7d_oi` or the top-level `status` rejected, 5h and 7d healthy | Model-scoped until the later of the `7d_oi` reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
 | 429, the `7d_oi` status rejected, no other family's week claimed, 5h and 7d healthy | Model-scoped, the same deadline | Yes |
+| 429, a shared window (5h or 7d) or `status` rejected, the 5-hour status absent beside a rejected 7-day window included | Account-wide until the later of the rejected window's reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
 | 429 whose unified headers reject nothing | Account-wide until `Retry-After`, else the fallback | Yes |
 | 429 without unified headers | Account-wide until `Retry-After`, else the fallback | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
@@ -761,8 +761,8 @@ cannot record. The writer's standing is on [The ledger writer](statistics.md#the
 
 Claude Code resumes a subscriber session on its own, after a usage-limit reset, only when the `429` carried all three
 of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix seconds) and
-`anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `seven_day`,
-`seven_day_overage_included`, `seven_day_opus`, `seven_day_sonnet` or `overage`), with the reset at most 24 hours away.
+`anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `overage`, `seven_day`,
+`seven_day_opus`, `seven_day_overage_included` or `seven_day_sonnet`), with the reset at most 24 hours away.
 `Retry-After` alone arms nothing, and the client also skips arming when the claim names a model-scoped window for a
 model the session is not using.
 
@@ -797,8 +797,9 @@ the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilizati
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
 organization's spend cap is reached it answers `429` with the overage window rejected and the claim
-`seven_day_overage_included`. Both shared windows still read healthy, so the cooldown path scopes that rejection to the
-requested model on its own week when it has one (the Fable week) and to the account otherwise.
+`seven_day_overage_included`. Both shared windows still read healthy, so the oauth table's model-scoped rows, which
+stand ahead of the shared row, take that rejection: it cools the requested model on its own week when the model has one
+(the Fable week), and the account otherwise.
 
 Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
 included: an account counts as in overage while the reset its evidence names is ahead of the present instant. Evidence
