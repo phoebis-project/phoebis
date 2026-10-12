@@ -3,8 +3,7 @@
 The router keeps its state in two SQLite files and one key file. This page covers backing them up and restoring them,
 what the storage key protects and how a lost one is recovered, reading a running router with `phoebis status`,
 upgrading the binary or the container, renewing a certificate pair, and what a drift refusal is and what ends it. The
-build, the tests, the capture steps, the continuous checks, publishing this site and releasing are on
-[Development](development.md).
+build and the tests are on [Development](development.md).
 
 ## Backup
 
@@ -121,8 +120,9 @@ one open. Where the binary is not at hand, `head -c 32 /dev/urandom | od -An -tx
 created empty at `0600` is the same key. Writing through a redirect under the usual umask would leave the key
 world-readable for the moment between the file's creation and a later `chmod`, and an interrupted run would leave it
 that way for good. The key file may end in one newline after the 64 hex characters, so a key written as a line is
-accepted too, and any other shape is refused with `storage key file must hold exactly 32 raw bytes or 64 hex
-characters, with at most one trailing newline`.
+accepted too, such as `printf '%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"` written into that same
+empty file, and any other shape is refused with `storage key file must hold exactly 32 raw bytes or 64 hex characters,
+with at most one trailing newline`.
 
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
@@ -151,7 +151,7 @@ service layout, as root:
    read as the new key. When the file `storage.encryption_key_file` names is missing, the run generates the key as
    `init` does, at `0600` and owned by the `--owner` user with the directories it created for it, and prints `wrote a
    new storage key to {path} (mode 0600)`. The `--owner` user also receives the registry's lock file when this run
-   creates it, which is why the run needs root.
+   creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a run without it).
 4. Read its summary, which opens `the recovery discards what the old key sealed:` over the counts of OAuth credential
    bundles, API-key secrets and keepalive recipe bodies, then `and marks the accounts:` over the counts of OAuth
    accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
@@ -275,7 +275,7 @@ Under `pools` each pool prints by id with its status, its member, key and pin co
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
 off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
 Fable week when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
-{reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:<canonical>`) when the cooldown holds less
+{reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
 than the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no
 pool holds, with their state, and is left out when there are none.
 
@@ -361,7 +361,7 @@ sudo certbot certonly -d phoebis.example.com --deploy-hook '
   phoebis tls reload --config /etc/phoebis/config.yaml'
 ```
 
-`phoebis tls reload` posts `POST /admin/tls/reload` and prints one line per listener: `{listener}: plain HTTP,
+`phoebis tls reload` sends `POST /admin/tls/reload` and prints one line per listener: `{listener}: plain HTTP,
 nothing to reload`, `{listener}: reloaded, certificate {cert_file} expires {expires}`, or `{listener}: not reloaded,
 {error}. The router keeps the pair it was serving.`, with `the router named no reason` as the error when the answer
 carries none. `--json` prints the route's body instead. It exits 0 once every pair reloaded, a plain listener aside, 1
@@ -374,8 +374,9 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 [Conditions and gauges](statistics.md#conditions-and-gauges) describes.
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
-inside its own transaction, so a crash leaves the last version that landed. This build writes the registry at schema
-52 and the ledger at schema 32. Both refuse to open a file a newer build wrote: the registry with `the registry's
+inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
+rebuild a table, and a ledger migration can rebuild a table too. This build writes the registry at schema 52 and the
+ledger at schema 32. Both refuse to open a file a newer build wrote: the registry with `the registry's
 schema version {found} is newer than this build supports ({supported}), so restore the backup taken before the
 upgrade`, and the ledger with the same words after `the ledger's schema version`. `phoebis check-config` reads both
 versions read-only, taking no lock, and refuses first with `the registry at {path} is at schema {found}, newer than the
@@ -391,12 +392,14 @@ Every configuration block denies unknown keys, so a key the new build does not r
 A drift refusal is the `client_drift` answer to a request whose billing hash or `cc_version` suffix this build cannot
 reproduce. [Client drift](relay.md#client-drift) has the two checks and their messages, and the formula they check
 against comes from the one profile this build carries. The refusal lasts until the router runs a build re-pinned to the
-client: no setting clears it, and a newer client build is not relayed in its own shape on its own, since the restored
-fields and the beta edits are the pinned profile's ([The betas](relay.md#the-betas)). The `client_drift` attention item
-dates from the first refusal of a client version, while its key, its trigger and its link follow the newest one
-([Conditions and gauges](statistics.md#conditions-and-gauges)). The re-pin is a source change and a release: a capture
-of the new build's requests, a new profile with its constants, the fixtures regenerated and the tests graded against
-them, then a release the operator installs. The capture steps are on [Development](development.md).
+client: no setting clears it. What the router restores and edits is on [The relay](relay.md#the-restoration). The
+`client_drift` attention item dates from the first refusal of a client version, while its key, its trigger and its
+link follow the newest one ([Conditions and gauges](statistics.md#conditions-and-gauges)). The re-pin is a source
+change and a release: a capture of the new build's requests, a new profile with its constants, the fixtures
+regenerated and the tests graded against them, then a release the operator installs. The capture steps are on
+[Development](development.md).
+
+## On other pages
 
 The continuous checks that run on every push and pull request are on [Development](development.md). Publishing this
 site is on [Development](development.md).
