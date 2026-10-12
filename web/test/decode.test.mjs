@@ -969,7 +969,8 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   assert.deepEqual(placed.cache, { hit: true, inputTokens: 1000, promisedTokens: 31200, readTokens: 500 });
   const refused = page.rows.find((r) => r.type === 'decision' && r.kind === 'refused');
   assert.deepEqual(refused.fact, [{ entity: { id: 'retired', kind: 'key' }, key: 'key', unit: null, value: 'retired' }], 'a fact names its entity');
-  assert.deepEqual(refused.refusal, { code: '', kind: 'key', reason: 'the key is not in the registry' }, 'a refusal written before its code reads an empty one');
+  assert.deepEqual(refused.refusal, { code: 'unknown', kind: 'key', reason: 'the key is not in the registry' }, "a refusal reads the router's code beside its reason");
+  assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { kind: 'key', reason: 'the key is not in the registry' } }).refusal.code, '', 'a refusal written before its code reads an empty one');
   assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }).refusal.code, 'revoked');
   const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
   assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
@@ -1543,7 +1544,8 @@ test('settings decode the members the route answers and nothing more', () => {
     },
     'each member carries what the pages read and no other key',
   );
-  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: false }, 'an answer without proxy_tls reads a listener that terminates no TLS');
+  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: wire.listeners.proxy_tls });
+  assert.equal(d.decodeSettings({ ...wire, listeners: { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy } }).listeners.proxyTls, false, 'an answer without proxy_tls reads a listener that terminates no TLS');
   assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
