@@ -99,6 +99,21 @@ for (const colorScheme of ['light', 'dark']) {
   await sidebar.getByRole('link', { name: 'Session', exact: true }).waitFor();
   check(await sidebar.getByRole('link', { name: 'Accounts', exact: true }).isVisible(), `${colorScheme}: the sidebar lists the tags`);
   check(await sidebar.getByRole('link', { name: 'List the accounts' }).isVisible(), `${colorScheme}: the sidebar lists the operations`);
+  // Each of these opens a Scalar-hosted service (the agent chat, the MCP generator and its editor installs, the
+  // developer tools' sharing and deploying, the hosted client), so the page renders none of them.
+  const offOrigin = {
+    'Ask AI': page.getByRole('button', { name: 'Ask AI' }),
+    'Ask AI Agent': page.getByPlaceholder('Ask AI Agent'),
+    Configure: page.getByText('Configure', { exact: true }),
+    Cursor: page.getByText('Cursor', { exact: true }),
+    Deploy: page.getByText('Deploy', { exact: true }),
+    'Developer Tools': page.getByText('Developer Tools', { exact: true }),
+    'Generate MCP': page.getByText('Generate MCP', { exact: true }),
+    'Open API Client': page.getByText('Open API Client', { exact: true }),
+    Share: page.getByText('Share', { exact: true }),
+    'VS Code': page.getByText('VS Code', { exact: true }),
+  };
+  for (const [name, locator] of Object.entries(offOrigin)) check((await locator.count()) === 0, `${colorScheme}: no ${name} control`);
   const authorization = page.getByPlaceholder('Token');
   await authorization.waitFor();
   check((await authorization.inputValue()) === '', `${colorScheme}: the Authorization input is empty`);
@@ -113,7 +128,10 @@ for (const colorScheme of ['light', 'dark']) {
   // The page's own text already holds "session_id" and "bearer" (the example, the description, the scheme's
   // name), so the call is proven from the response the browser received and the request it sent.
   const answered = page.waitForResponse((response) => /\/admin\/session$/.test(new URL(response.url()).pathname));
-  await client.getByRole('button', { name: /^Send get request to \S*\/admin\/session$/ }).click();
+  await client.getByRole('button', { name: /^Send get request to / }).waitFor();
+  const send = client.getByRole('button', { name: `Send get request to ${origin}/admin/session`, exact: true });
+  check((await send.count()) === 1, `${colorScheme}: the client sends to ${origin}/admin/session`);
+  await send.click();
   const response = await answered;
   check(response.status() === 200, `${colorScheme}: GET /admin/session answered 200 (${response.status()})`);
   const answer = await response.json().catch(() => null);
@@ -123,6 +141,7 @@ for (const colorScheme of ['light', 'dark']) {
   const shown = client.getByRole('region', { name: 'Response' });
   await shown.getByText('"session_id"').waitFor();
   check(await shown.getByText('"bearer"').isVisible(), `${colorScheme}: the client shows the answer`);
+  check((await client.getByText('Open API Client', { exact: true }).count()) === 0, `${colorScheme}: the client links to no hosted client`);
 
   check(errors.length === 0, `${colorScheme}: no console error and no policy violation (${errors.join(' | ')})`);
   const elsewhere = requests.filter((url) => !url.startsWith('data:') && !url.startsWith('blob:') && new URL(url).origin !== origin);

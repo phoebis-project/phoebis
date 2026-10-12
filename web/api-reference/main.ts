@@ -10,4 +10,11 @@ createApiReference('#app', {
   withDefaultFonts: false,
   authentication: { preferredSecurityScheme: 'bearer' },
   theme: 'default',
+  // The agent chat, the MCP generator, the developer tools and the hosted client each lead to a Scalar service.
+  agent: { disabled: true },
+  hideClientButton: true,
+  mcp: { disabled: true },
+  showDeveloperTools: 'never',
+  // The document's server is `/`, which the client's send label joins to a path as `//`.
+  servers: [{ url: window.location.origin }],
 });

@@ -135,12 +135,13 @@ npm run build
 npm run e2e:reference
 ```
 
-`e2e:reference` serves `dist/` from a static server on a loopback port with a three-operation stub document and a
-stub `GET /admin/session`, opens `/api-reference/` in headless Chromium in both color schemes, and asserts that
-the page loads with no console error and no policy violation, lists the stub's tags and operations, shows an empty
-Authorization input, sends a typed token as `Authorization: Bearer` and shows the answer, makes every request to the
-server's origin and no other, keeps the token out of `localStorage` and `sessionStorage`, and follows the browser's
-color scheme. With `PHOEBIS_E2E_BASE` and `PHOEBIS_E2E_SECRET` set it runs the same assertions over a running
+`e2e:reference` serves `dist/` from a static server on a loopback port with a three-operation stub document and a stub
+`GET /admin/session`, opens `/api-reference/` in headless Chromium in both color schemes, and asserts that the page
+loads with no console error and no policy violation, lists the stub's tags and operations, renders none of Scalar's
+controls that lead to a hosted service (the agent chat, the MCP generator, the developer tools, the hosted client),
+shows an empty Authorization input, sends a typed token as `Authorization: Bearer` and shows the answer, makes every
+request to the server's origin and no other, keeps the token out of `localStorage` and `sessionStorage`, and follows the
+browser's color scheme. With `PHOEBIS_E2E_BASE` and `PHOEBIS_E2E_SECRET` set it runs the same assertions over a running
 router's real document. `cargo test -p phoebis-router --test end_to_end the_reference_page` reads the page and the
 document through the router it starts, and runs this script against it when `PHOEBIS_E2E_BROWSER=1` is set.
 
