@@ -41,8 +41,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 PHOEBIS_UI_EXPECT=bundle cargo test --workspace --locked
 ```
 
-`PHOEBIS_UI_EXPECT=bundle` makes the UI crate's test assert that the build embedded the bundle and not the placeholder.
-Without the variable the test accepts either and checks only that the embedded shell and its assets agree.
+`PHOEBIS_UI_EXPECT=bundle` makes the UI crate's test assert that the build embedded the bundle rather than the
+placeholder. Without the variable the test accepts either and checks only that the embedded shell and its assets agree.
 
 The `web` job, from `web/`:
 
@@ -132,7 +132,7 @@ take no page.
 
 ## The fixtures
 
-The console's fixtures under `web/test/fixtures/` are captured from the crates by two tests and never edited by hand.
+The console's fixtures under `web/test/fixtures/` are written by two crate tests and never edited by hand.
 `PHOEBIS_WRITE_FIXTURES=1 cargo test -p phoebis-admin --test fixtures` rewrites the admin fixtures. Without the variable
 the test compares each committed file's shape with the live answer and fails a missing one with
 `{name}.json is missing; run with PHOEBIS_WRITE_FIXTURES=1`, and every captured body is searched for the secrets the
@@ -158,7 +158,7 @@ binary the profile was measured from:
 
 `phoebis` links BoringSSL through the `boring` and `boring-sys` crates, both pinned at 5.2.0. `boring-sys` vendors its
 own copy of BoringSSL under `deps/boringssl/` rather than linking a system build, and that vendored tree carries no
-upstream commit id. `include/openssl/base.h` in it declares `BORINGSSL_API_VERSION 41`, the only revision marker the
+upstream revision id. `include/openssl/base.h` in it declares `BORINGSSL_API_VERSION 41`, the only revision marker the
 vendored source carries.
 
 Every fixture under `crates/profile/fixtures/` was captured from a client binary running against loopback receivers
@@ -238,9 +238,9 @@ the table after any accepted re-pin.
 A profile is a fixed set of constants measured from one Claude Code release: the version and build tag, the two user agents, the Stainless
 headers, the three beta lists (one per credential shape), the control-plane URLs and client id, and the TLS curves and
 cipher list, each a field of the `Profile` value in `crates/profile/src/lib.rs`, graded against the fixtures under
-`crates/profile/fixtures/` whose manifest is above. A newer client build is not relayed in its own shape on its own: the
-fields the router restores and the beta edits are the pinned profile's, as [The relay](relay.md#the-betas) describes,
-and a build the profile cannot reproduce is refused until the router runs a build re-pinned to it. To re-pin the
+`crates/profile/fixtures/` whose manifest is above. The router does not follow a newer client build by itself: the
+fields it restores and the beta edits are the pinned profile's, as [The relay](relay.md#the-betas) describes, and a
+request the profile cannot reproduce is refused until the router runs a build re-pinned to the client. To re-pin the
 profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
@@ -254,7 +254,7 @@ profile against a new build:
    client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints a
    bounded diff per body so that shows as a date difference rather than a shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
-   pinned profile no longer matches the client.
+   client has moved past the pinned profile.
 3. The control plane (the token exchange and the profile, usage and roles calls) is not captured by the script: it
    needs a manual session behind a CONNECT tunnel, which the script's header comment describes. `--check` lists those
    fixtures under `not captured (control plane):` rather than failing on them.
@@ -276,9 +276,9 @@ profile against a new build:
    `python3 scripts/build-fixtures.py --check --through-router --baseline <baseline-dir> <output-dir>`, which must
    print `fixtures match`. The `Content-Length` and `account_uuid` masks are the only differences the check allows,
    and it treats the billing fields and the `x-client-request-id` the relay restores on a reduced-shape request as
-   absent rather than masking them, since a field moving from absent to present is the restoration at work and no
-   drift. The fresh capture is the baseline because a client run stamps today's date into its own system reminder,
-   which no mask touches. The check re-signs every captured body through `cargo run -p phoebis-cch --example resign`
+   absent rather than masking them, since a field moving from absent to present is the restoration at work. The
+   fresh capture is the baseline because a client run stamps today's date into its own system reminder, which no
+   mask touches. The check re-signs every captured body through `cargo run -p phoebis-cch --example resign`
    unless `--skip-hash-check` is added by hand, so cargo must be on the host. Pair the account right before a run: the
    receiver's throwaway certificate carries `api.anthropic.com` alone, so a token refresh the router attempts mid-run
    fails at the TLS handshake and the capture fails with it.
@@ -333,15 +333,15 @@ run. `Documentation` builds and checks this site ([Publishing the site](#publish
 `Release`, runs on a release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
 ([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
 
-Every job runs with a read-only token except the release workflow's `build` and `publish` jobs, which write packages,
-and its `smoke` job, which reads them.
+The release workflow's jobs run with a read-only token except `build` and `publish`, which write packages, and `smoke`,
+which reads them. The `Tests` jobs read alone, and in `Documentation` only the deploy job writes, to Pages.
 
 ## Publishing the site
 
-The `Documentation` workflow builds this site on every push to `main` and every pull request: `zensical build --clean
---strict`, the checks under `scripts/check-docs.py`, and the built `site/` directory uploaded as an artifact. The deploy
-job runs only on a push, and only when the repository variable `DOCS_PAGES` is `1`, so a push to `main` stays green
-until Pages is enabled.
+The `Documentation` workflow builds this site on every push to `main` and every pull request:
+`scripts/tests/check-docs.sh`, `zensical build --clean --strict`, the checks under `scripts/check-docs.py`, and the
+built `site/` directory uploaded as an artifact. The deploy job runs only on a push, and only when the repository
+variable `DOCS_PAGES` is `1`, so a push to `main` stays green until Pages is enabled.
 
 To publish: in the repository's Pages settings, set the source to GitHub Actions. A private repository needs a GitHub
 plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
@@ -363,7 +363,7 @@ on a published release, on a manual dispatch, and on a pull request that touches
 
 1. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease), head
    the changelog's section for it `## X.Y.Z`, and merge to `main`.
-2. Create the release on GitHub with the tag `X.Y.Z` on that commit, no `v` prefix. Publishing it starts the workflow.
+2. Create the release on GitHub with the tag `X.Y.Z` at that head, no `v` prefix. Publishing it starts the workflow.
 3. The workflow's guard refuses the release before anything builds when the tag has another shape
    (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
