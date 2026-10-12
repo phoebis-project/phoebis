@@ -768,6 +768,20 @@ textarea.input {
   color: var(--accent-ink);
 }
 
+/* The hairline sets the row apart as the list's head rather than one of its choices. */
+.mselect__option--all {
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 4px 4px 0 0;
+}
+
+.mselect__mixed {
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
 .mselect__empty {
   padding: 10px;
   color: var(--ink-2);

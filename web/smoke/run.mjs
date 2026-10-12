@@ -134,6 +134,8 @@ const fillTitles = (name, table) => {
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
+/** A multi-select's own options: the Select all row heads every list, so a count, a list or a first pick reads past it. */
+const CHOICE = '.mselect__option:not(.mselect__option--all)';
 /** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
 const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 /** The discard question while it is up, the topmost open dialog (the question's own modal makes it so), or null. */
@@ -7063,7 +7065,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   if (!speed) controlMissing(speedCheck, 'Speed');
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  const speedOptions = [...(speed?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim());
+  const speedOptions = [...(speed?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
   results.push({ name: '/requests the Speed control offers fast and standard', ok: JSON.stringify(speedOptions) === JSON.stringify(['fast', 'standard']), missing: speedOptions });
   [...(speed?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'fast')?.click();
   await m.settle(700);
@@ -8368,7 +8370,7 @@ m.unmount();
       const control = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
       control?.querySelector('.mselect__trigger')?.click();
       await page.settle(60);
-      const options = [...(control?.querySelectorAll('.mselect__option') ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
+      const options = [...(control?.querySelectorAll(CHOICE) ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
       control?.querySelector('.mselect__trigger')?.click();
       await page.settle(60);
       return options;
@@ -8480,7 +8482,7 @@ m.unmount();
       filter.querySelector('.mselect__trigger')?.click();
       await page.settle(150);
     }
-    return [...(filterOf(page, label)?.querySelectorAll('.mselect__option') ?? [])];
+    return [...(filterOf(page, label)?.querySelectorAll(CHOICE) ?? [])];
   };
   const pick = async (page, label, text) => {
     (await openOptions(page, label)).find((o) => o.textContent?.trim() === text)?.click();
@@ -8909,7 +8911,7 @@ m.unmount();
   const openOptions = async (page, filter) => {
     filter?.querySelector('.mselect__trigger')?.click();
     await page.settle(150);
-    return [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    return [...(filter?.querySelectorAll(CHOICE) ?? [])];
   };
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
@@ -9052,7 +9054,7 @@ m.unmount();
     const trigger = filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
     filter?.querySelector('.mselect__trigger')?.click();
     await m.settle(100);
-    const entries = [...(filter?.querySelectorAll('.mselect__group, .mselect__option') ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
+    const entries = [...(filter?.querySelectorAll(`.mselect__group, ${CHOICE}`) ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
     filter?.querySelector('.mselect__trigger')?.click();
     await m.settle(100);
     const events = entries.indexOf('# Events');
@@ -10764,7 +10766,7 @@ m.unmount();
     for (const trigger of page.container.querySelectorAll('.filters .mselect__trigger')) {
       trigger.click();
       await page.settle(60);
-      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll('.mselect__option').length ?? 0}`);
+      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll(CHOICE).length ?? 0}`);
       trigger.click();
       await page.settle(60);
     }
@@ -12406,7 +12408,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // grouping before a change until the new read lands; the reads are held here so that beat can be read.
       m = await mount('/analytics');
       const trigger = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-      const listed = (label) => [...(trigger(label)?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
+      const listed = (label) => [...(trigger(label)?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim() ?? '');
       const optionsOf = async (label) => {
         trigger(label)?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
@@ -12464,7 +12466,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const pool = trigger('Pool');
         pool?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
-        const picked = pool?.querySelector('.mselect__option');
+        const picked = pool?.querySelector(CHOICE);
         const poolName = picked?.textContent?.trim() ?? '';
         picked?.click();
         await m.settle(700);
@@ -13053,7 +13055,7 @@ m.unmount();
     const filter = keysFilter(page);
     filter?.querySelector('.mselect__trigger')?.click();
     await page.settle(150);
-    const options = [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    const options = [...(filter?.querySelectorAll(CHOICE) ?? [])];
     const unscoped = read === undefined ? [] : (await listRequests.call(api, { ...read.query, cursor: undefined, keyIds: [], limit: 500 })).requests;
     pair.push({
       checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length,
@@ -14090,7 +14092,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const modelFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Model'));
     modelFilter?.querySelector('.mselect__trigger')?.click();
     await m.settle(150);
-    const unused = [...(modelFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => !used.includes(o.textContent?.trim()));
+    const unused = [...(modelFilter?.querySelectorAll(CHOICE) ?? [])].find((o) => !used.includes(o.textContent?.trim()));
     unused?.click();
     await m.settle(900);
     results.push({
@@ -15302,8 +15304,8 @@ m.unmount();
   const tabbedOut = agentType?.querySelector('.mselect__list') === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
-    name: 'the Agent type filter opens onto its first option and the keys move, close and return focus',
-    ok: labels.length > 2 && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
+    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus',
+    ok: labels.length > 2 && labels[0] === 'Select all' && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
     missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on the trigger ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
   });
 
@@ -15315,7 +15317,7 @@ m.unmount();
   press('ArrowDown');
   await page.settle(50);
   const first = models?.querySelector('.mselect__option');
-  const down = first != null && document.activeElement === first;
+  const down = first != null && first.textContent?.trim() === 'Select all' && document.activeElement === first;
   press('ArrowUp');
   await page.settle(50);
   const up = search != null && document.activeElement === search;
@@ -15324,7 +15326,7 @@ m.unmount();
   results.push({
     name: 'the Models filter opens onto its search field',
     ok: onSearch && down && up && models?.querySelector('.mselect__list') === null,
-    missing: [`on the search field ${onSearch}`, `ArrowDown to the first option ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
+    missing: [`on the search field ${onSearch}`, `ArrowDown to the Select all row ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
   });
 
   agentOpener?.click();
@@ -15395,6 +15397,125 @@ m.unmount();
     missing: [keyMenu ? `focus in the menu ${inMenu}` : 'no key menu in any pool dialog', `menu closed ${menuClosed}`, `on the trigger ${onOpener}`, `dialog kept ${dialogKept}`, `a second Escape closed it ${dialogClosed}`],
   });
   page.unmount();
+}
+
+{
+  // The Select all row of every multi-select, one case per picker on the pinned clock, late in the run like the
+  // keyboard checks before it, so the real time the clicks' reads take moves none of the story's relative times the
+  // earlier checks read. The address key reads what the page wrote, so a row that handed its options over one change at
+  // a time would leave fewer values there than it checked.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const filterOf = (page, label) =>
+    [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
+      const shown = d.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+      return shown === label || shown.startsWith(`${label} (`);
+    });
+  const read = (page, label, key) => {
+    const filter = filterOf(page, label);
+    const head = filter?.querySelector('.mselect__option--all');
+    const choices = [...(filter?.querySelectorAll(CHOICE) ?? [])];
+    return {
+      address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
+      checked: choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? ''),
+      choices: choices.map((o) => o.textContent?.trim() ?? ''),
+      first: head != null && filter?.querySelector('[role="option"]') === head,
+      head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
+      set: filter?.classList.contains('has-value') === true,
+      trigger: filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`,
+    };
+  };
+  const clickHead = async (page, label) => {
+    filterOf(page, label)?.querySelector('.mselect__option--all')?.click();
+    await page.settle(700);
+  };
+  const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+  const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
+
+  const PICKERS = [
+    ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
+    ['/requests', [['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
+    ['/routing-log', [['Kinds', 'kinds'], ['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models']]],
+  ];
+  for (const [view, pickers] of PICKERS) {
+    const page = await mount(view, { now: CLOCK_ORIGIN });
+    for (const [label, key] of pickers) {
+      const name = `${view} Select all on ${label} checks every option and a second click clears them`;
+      if (!filterOf(page, label)) {
+        controlMissing(name, label);
+        continue;
+      }
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(150);
+      const before = read(page, label, key);
+      await clickHead(page, label);
+      const all = read(page, label, key);
+      await clickHead(page, label);
+      const none = read(page, label, key);
+      // The Kinds filter's empty value is the route's default set: every kind but the two hidden ones.
+      const kinds = label === 'Kinds';
+      const opened = kinds ? before.head?.checked === 'mixed' && before.head.selected === 'false' : before.head?.checked === null && before.head.selected === 'false' && before.checked.length === 0;
+      const cleared = kinds
+        ? none.trigger === 'Kinds (2 hidden)' && !none.set && none.address === null && none.checked.length === none.choices.length - 2 && sameSet(none.checked, before.checked)
+        : none.trigger === label && !none.set && none.address === null && none.checked.length === 0;
+      results.push({
+        name,
+        ok:
+          before.first &&
+          before.head?.text === 'Select all' &&
+          opened &&
+          all.choices.length > 0 &&
+          all.checked.length === all.choices.length &&
+          all.head?.selected === 'true' &&
+          all.head.checked === null &&
+          all.trigger === `${label} (${all.choices.length})` &&
+          all.address?.length === all.choices.length &&
+          cleared &&
+          none.head?.selected === 'false',
+        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `second click: ${brief(none)}`],
+      });
+      // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
+      if (label === 'Models') {
+        const queryName = `${view} Select all on Models under a query checks the options the search shows and leaves the hidden ones unchecked`;
+        const search = filterOf(page, label)?.querySelector('.mselect__search');
+        const type = async (text) => {
+          setter.call(search, text);
+          search.dispatchEvent(new window.Event('input', { bubbles: true }));
+          await page.settle(100);
+        };
+        if (!search) results.push({ name: queryName, ok: false, missing: ['no search field'] });
+        else {
+          await type('sonnet');
+          const shown = read(page, label, key);
+          await clickHead(page, label);
+          const under = read(page, label, key);
+          await type('');
+          const whole = read(page, label, key);
+          results.push({
+            name: queryName,
+            ok:
+              shown.choices.length > 0 &&
+              shown.choices.length < whole.choices.length &&
+              shown.choices.every((c) => c.includes('sonnet')) &&
+              shown.checked.length === 0 &&
+              under.checked.length === shown.choices.length &&
+              under.head?.selected === 'true' &&
+              sameSet(whole.checked, shown.choices) &&
+              whole.head?.checked === 'mixed' &&
+              whole.address !== null &&
+              sameSet(whole.address, shown.choices) &&
+              whole.trigger === `Models (${shown.choices.length})`,
+            missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`],
+          });
+          filterOf(page, label)?.querySelector('.mselect__clear')?.click();
+          await page.settle(700);
+        }
+      }
+      // Clearing leaves the list open, so the trigger closes it.
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(100);
+    }
+    page.unmount();
+  }
 }
 
 {

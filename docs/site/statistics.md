@@ -412,8 +412,9 @@ slot, the cache miss reason filter picks the reason the serving attempt reported
 order and then any other name the rows or the address carry, the effort filter picks a level as the hourly rollups fold
 it (`low` to `max`, `none` for a request that asked for none, `other` for a level outside the five), and the request
 class filter picks a class as the rollups fold it (`unattributed` for a request that sent none, `other` for a value
-outside the identifier charset or past 64 bytes). The search and the two pattern fields apply 400 milliseconds after
-the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the
+outside the identifier charset or past 64 bytes). Each multi-select opens with a Select all row that checks the options
+the search shows, and clears them when all are checked. The search and the two pattern fields apply 400 milliseconds
+after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the
 page's address, so a reload or a shared link keeps them: a preset range by its name, a custom range as `from` and `to`.
 The range control offers Custom range with two instant inputs, which Refresh reads again and a preset or Reset drops. A
 filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's

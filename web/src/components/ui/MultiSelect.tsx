@@ -35,6 +35,12 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
   }, [open]);
   const visible = useMemo(() => options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase())), [options, query]);
   const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
+  const visibleValues = visible.map((o) => o.value);
+  const allOn = visible.length > 0 && visibleValues.every((v) => value.includes(v));
+  const someOn = visibleValues.some((v) => value.includes(v));
+  // The row reaches the options the search shows, so a query narrows what it selects and the hidden ones stay as
+  // they are.
+  const toggleAll = () => onChange(allOn ? value.filter((v) => !visibleValues.includes(v)) : [...value, ...visibleValues.filter((v) => !value.includes(v))]);
   const shown = summary ?? (value.length === 0 ? label : `${label} (${value.length})`);
   // The keys act only while the list is open, so an Escape on a closed filter still reaches the page, whose drawer
   // closes on it. Home and End stay with the search field, where they move the caret.
@@ -106,6 +112,19 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
         <div className="mselect__list" role="listbox" aria-multiselectable ref={listRef}>
           {searchable && <input className="input mselect__search" placeholder={`Search ${label.toLowerCase()}`} value={query} onChange={(e) => setQuery(e.target.value)} />}
           {visible.length === 0 && <div className="mselect__empty">No matches</div>}
+          {visible.length > 0 && (
+            <button
+              type="button"
+              role="option"
+              aria-selected={allOn}
+              aria-checked={someOn && !allOn ? 'mixed' : undefined}
+              className={`mselect__option mselect__option--all ${allOn ? 'is-on' : someOn ? 'is-mixed' : ''}`}
+              onClick={toggleAll}
+            >
+              <span className="mselect__check">{allOn ? <IconCheck size={14} /> : someOn ? <span className="mselect__mixed" aria-hidden="true" /> : null}</span>
+              Select all
+            </button>
+          )}
           {visible.map((o, i) => {
             const on = value.includes(o.value);
             return (
