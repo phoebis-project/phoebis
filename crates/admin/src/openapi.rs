@@ -126,21 +126,21 @@ pub(crate) struct ErrorBody {
 }
 
 /// `500 storage failure`: the store failed the read or the write, or a create lost the race for its id.
-/// Declared for the document alone, since the handler builds the answer by hand.
+// Declared for the document alone, since the handler builds the answer by hand.
 #[allow(dead_code)]
 #[derive(ToResponse)]
 #[response(example = json!({"error": "storage failure"}))]
 pub(crate) struct StorageFailure(ErrorBody);
 
 /// `500 ledger failure`: the ledger could not answer the read.
-/// Declared for the document alone, since the handler builds the answer by hand.
+// Declared for the document alone, since the handler builds the answer by hand.
 #[allow(dead_code)]
 #[derive(ToResponse)]
 #[response(example = json!({"error": "ledger failure"}))]
 pub(crate) struct LedgerFailure(ErrorBody);
 
 /// `503 the router is not available`: the routing task is gone, so nothing can be published or read from it.
-/// Declared for the document alone, since the handler builds the answer by hand.
+// Declared for the document alone, since the handler builds the answer by hand.
 #[allow(dead_code)]
 #[derive(ToResponse)]
 #[response(example = json!({"error": "the router is not available"}))]
@@ -150,7 +150,7 @@ pub(crate) struct RouterUnavailable(ErrorBody);
 /// publishes it`, with the header: the row is already written, and until that reload the router still
 /// authenticates and routes by the old registry. `the router is not available`, with no header: the routing task is
 /// gone, so nothing can be published.
-/// Declared for the document alone, since the handler builds the answer by hand.
+// Declared for the document alone, since the handler builds the answer by hand.
 #[allow(dead_code)]
 #[derive(ToResponse)]
 #[response(

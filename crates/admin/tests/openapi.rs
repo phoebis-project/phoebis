@@ -272,6 +272,14 @@ async fn the_document_is_served_without_the_gate_as_no_store_json() {
         .is_none());
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     println!("the document is {} bytes", bytes.len());
+    // The reason for an `#[allow(dead_code)]` stays a line comment, since the derive copies a doc comment into the
+    // description a reader sees.
+    assert!(
+        !std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("Declared for the document alone"),
+        "the dead-code allowance's reason stays out of the document"
+    );
     assert_eq!(document["openapi"], "3.1.0");
     assert_eq!(document["info"]["title"], "Phoebis Router admin API");
     assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
