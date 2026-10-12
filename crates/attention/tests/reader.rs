@@ -1,7 +1,7 @@
-//! The ten conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The eleven conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
-//! refresh run read back by a second reader, a listener's pair read on the read's clock, and the gauge the metrics
-//! listener scrapes from the same read.
+//! refresh run read back by a second reader, a listener's pair read on the read's clock, an unweighted model the
+//! ledger's landing saw, and the gauge the metrics listener scrapes from the same read.
 mod common;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1566,5 +1566,259 @@ fn the_certificate_kinds_rank_among_the_others() {
             "ledger_record_parked",
             "poll_backoff",
         ]
+    );
+}
+
+/// A finished request of pool `main` on `model`, received at `at`, whose `attempts` attempts on `account` each used a
+/// thousand input tokens: plan-funded on `business`, billed on `direct`.
+fn on_model(id: &str, model: &str, account: &str, at: i64, attempts: u32) -> Record {
+    let account_kind = if account == "direct" {
+        "api_key"
+    } else {
+        "oauth"
+    };
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts,
+            ..Default::default()
+        },
+        attempts: (1..=attempts)
+            .map(|attempt| AttemptRecord {
+                request_id: id.into(),
+                attempt,
+                account_id: account.into(),
+                account_kind: account_kind.into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                ..Default::default()
+            })
+            .collect(),
+        bodies: None,
+    }
+}
+
+/// The requests the `model_unweighted` item about `model` counts, 0 while the read carries none.
+fn unweighted_requests(conditions: &[Condition], model: &str) -> u64 {
+    find(conditions, Kind::ModelUnweighted, model)
+        .map_or(0, |c| c.detail["requests"].as_u64().unwrap())
+}
+
+/// The read once the item about `model` counts `requests` or more: the ledger records it after the landing commits,
+/// so a read waits for it rather than for the row.
+async fn read_counting(
+    attention: &Attention,
+    at: i64,
+    model: &str,
+    requests: u64,
+) -> Vec<Condition> {
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        let conditions = read(attention, at);
+        (unweighted_requests(&conditions, model) >= requests).then_some(conditions)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_landed_request_once() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // Apart from the clock, so the item's date reads the request's arrival rather than the read.
+    let arrived = NOW - 60_000;
+    rig.ledger
+        .record_request(on_model("r1", "claude-opus-5", "business", arrived, 1))
+        .await;
+    let first = read_counting(&attention, NOW, "claude-opus-5", 1).await;
+    let held = find(&first, Kind::ModelUnweighted, "claude-opus-5").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.link,
+            held.pools.is_empty(),
+            &held.detail
+        ),
+        (
+            true,
+            Some(arrived),
+            &Subject {
+                kind: SubjectKind::Model,
+                id: "claude-opus-5".into(),
+                label: "claude-opus-5".into(),
+            },
+            &Some(Link {
+                page: "models",
+                id: "claude-opus-5".into(),
+            }),
+            true,
+            &json!({
+                "model": "claude-opus-5",
+                "requests": 1,
+                "tier": "opus",
+                "weight_of": "claude-opus-5-5",
+            })
+        ),
+        "the item names the model tier and the model whose weight stands in, opens the Models page and belongs to \
+         no pool card"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#),
+        "{text}"
+    );
+    rig.ledger
+        .record_request(on_model("r2", "claude-opus-5-20260101", "business", NOW, 1))
+        .await;
+    let second = read_counting(&attention, NOW, "claude-opus-5", 2).await;
+    assert_eq!(
+        (
+            unweighted_requests(&second, "claude-opus-5"),
+            find(&second, Kind::ModelUnweighted, "claude-opus-5")
+                .unwrap()
+                .since,
+            find(&second, Kind::ModelUnweighted, "claude-opus-5-20260101").is_none()
+        ),
+        (2, Some(arrived), true),
+        "a dated id counts under its undated name, and the item keeps the first request's date"
+    );
+    rig.ledger
+        .record_request(on_model("r3", "claude-opus-5", "business", NOW, 2))
+        .await;
+    let third = read_counting(&attention, NOW, "claude-opus-5", 3).await;
+    assert_eq!(
+        unweighted_requests(&third, "claude-opus-5"),
+        3,
+        "a request whose two attempts both answered counts once"
+    );
+}
+
+#[tokio::test]
+async fn a_weighted_model_a_model_of_no_weighted_tier_and_a_billed_request_raise_no_unweighted_item(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    for record in [
+        on_model("r-weighted", "claude-opus-5-5", "business", NOW, 1),
+        on_model("r-mystery", "claude-mystery-2", "business", NOW, 1),
+        on_model("r-billed", "claude-opus-5", "direct", NOW, 1),
+        // Lands behind the three, so the read that sees its item sees whatever their landings recorded.
+        on_model("r-marker", "claude-sonnet-5", "business", NOW, 1),
+    ] {
+        rig.ledger.record_request(record).await;
+    }
+    let conditions = read_counting(&attention, NOW, "claude-sonnet-5", 1).await;
+    assert_eq!(
+        conditions
+            .iter()
+            .filter(|c| c.kind == Kind::ModelUnweighted)
+            .map(|c| c.subject.id.as_str())
+            .collect::<Vec<_>>(),
+        ["claude-sonnet-5"],
+        "a weighted model needs no stand-in, nothing stands in for a model tier without a weighted model, and an \
+         API key's request reads no window share"
+    );
+}
+
+#[tokio::test]
+async fn a_held_unweighted_model_has_its_series_and_ranks_after_every_degraded_state() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    attention.observe(&observed("x1", Some("desktop"), "main"));
+    attention.observe(&complete("x1", Outcome::Exhausted, None, None, NOW));
+    rig.ledger
+        .record_request(on_model("r1", "claude-opus-5", "business", NOW, 1))
+        .await;
+    let conditions = read_counting(&attention, NOW, "claude-opus-5", 1).await;
+    assert_eq!(
+        series(&conditions),
+        [
+            ("funding_required", "direct".to_string(), false),
+            ("ledger_record_parked", "main".to_string(), false),
+            ("model_unweighted", "claude-opus-5".to_string(), true),
+            ("poll_backoff", "business".to_string(), false),
+            ("pool_exhausted", "main".to_string(), true),
+            ("reauth_required", "business".to_string(), false),
+            ("reauth_required", "direct".to_string(), false),
+            ("refresh_failed", "business".to_string(), false),
+            ("writer_degraded", "ledger".to_string(), false),
+            ("writer_degraded", "routing".to_string(), false),
+        ],
+        "the model that served joins the series while every other subject keeps its own"
+    );
+    let mut held: Vec<Kind> = conditions
+        .iter()
+        .filter(|c| c.holds)
+        .map(|c| c.kind)
+        .collect();
+    held.sort();
+    assert_eq!(
+        held,
+        [Kind::PoolExhausted, Kind::ModelUnweighted],
+        "an estimate breaks nothing, so it ranks after the exhaustion held beside it"
+    );
+    assert!(
+        Kind::PollBackoff < Kind::ModelUnweighted,
+        "and after the last degraded state"
+    );
+}
+
+#[tokio::test]
+async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_and_its_series_reads_0(
+) {
+    let (first, second) = COSTS
+        .split_once("  - effective: 2026-02-01\n")
+        .expect("the cost fixture carries a second entry");
+    let weighted = format!(
+        "{first}  - effective: 2026-02-01\n{}",
+        second.replacen("claude-opus-5: null", "claude-opus-5: 3", 1)
+    );
+    let rig = rig_with_tables(tables_of(&weighted)).await;
+    let (attention, _arm) = rig.attention(None);
+    rig.ledger
+        .record_request(on_model("r1", "claude-opus-5", "business", NOW, 1))
+        .await;
+    read_counting(&attention, NOW, "claude-opus-5", 1).await;
+    let later = phoebis_ledger::effective_instant("2026-02-01").unwrap() + 43_200_000;
+    rig.at(later);
+    rig.ledger
+        .record_request(on_model("r2", "claude-opus-5", "business", later, 1))
+        .await;
+    let cleared = fake_upstream::wait_for(Duration::from_secs(5), || {
+        let conditions = read(&attention, later);
+        find(&conditions, Kind::ModelUnweighted, "claude-opus-5")
+            .is_some_and(|c| !c.holds)
+            .then_some(conditions)
+    })
+    .await;
+    let item = find(&cleared, Kind::ModelUnweighted, "claude-opus-5").unwrap();
+    assert_eq!(
+        (item.since, &item.detail),
+        (
+            None,
+            &json!({
+                "model": "claude-opus-5",
+                "requests": 0,
+                "tier": "opus",
+                "weight_of": "claude-opus-5-5",
+            })
+        ),
+        "the landing under the revision that weights the model clears the date and the count"
+    );
+    let (_, text) = scrape(&rig, &attention).await;
+    assert!(
+        text.contains(r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 0"#),
+        "the cleared model reads 0 under the same labels rather than vanishing: {text}"
     );
 }

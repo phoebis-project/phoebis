@@ -247,6 +247,7 @@ pub async fn run_until(
     let ledger = phoebis_ledger::spawn(
         ledger_db.clone(),
         pricing.clone(),
+        tables.clone(),
         store.clone(),
         &bus,
         router_task.clone(),

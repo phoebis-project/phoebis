@@ -680,6 +680,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
                 ("pool_exhausted", "main".into(), true),
                 ("client_drift", "2.1.274".into(), false),
                 ("pool_exhausted", "odd\"pool".into(), false),
+                ("model_unweighted", "claude-opus-5".into(), true),
             ],
         },
         ..RoutingGauges::default()
@@ -690,6 +691,7 @@ fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() 
         r#"phoebis_attention{kind="pool_exhausted",subject="main"} 1"#,
         r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#,
         r#"phoebis_attention{kind="pool_exhausted",subject="odd\"pool"} 0"#,
+        r#"phoebis_attention{kind="model_unweighted",subject="claude-opus-5"} 1"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
     }
@@ -782,6 +784,7 @@ revisions:
     let ledger = phoebis_ledger::spawn(
         db,
         Arc::new(Pricing::new(revisions)),
+        Arc::new(phoebis_ledger::PlanTables::shipped()),
         store,
         &phoebis_bus::Bus::new(),
         router,
@@ -834,5 +837,96 @@ revisions:
             r#"phoebis_tokens_total{account="a",kind="input",model="claude-renamed-1"} 10"#
         ),
         "the token series take the same label:\n{text}"
+    );
+}
+
+/// The unknown-model total and the unweighted models count a request after its batch commits, so a try the file
+/// refused counts nothing and the retry that lands it counts it once.
+#[tokio::test]
+async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_lands() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    let january = phoebis_ledger::test_tables::JANUARY_2026;
+    let clock_cell = Arc::new(AtomicI64::new(january));
+    let clock: phoebis_oauth::Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
+    let store = Arc::new(
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let sql = |sql: &str| {
+        db.write(|c| {
+            c.execute_batch(sql)?;
+            Ok(())
+        })
+        .unwrap()
+    };
+    sql("CREATE TRIGGER refuse BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'refused by test'); END;");
+    let pricing = Arc::new(Pricing::new(phoebis_ledger::test_tables::api_prices()));
+    let ledger = phoebis_ledger::spawn(
+        db.clone(),
+        pricing.clone(),
+        Arc::new(phoebis_ledger::test_tables::subscription_costs()),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(Metrics::new()),
+        LedgerConfig::default(),
+    );
+    // Listed by neither test file: its id names the `opus` model tier, so the cost model's fallback prices it.
+    let model = "claude-opus-9";
+    ledger
+        .record_request(phoebis_ledger::Record::Request {
+            request: RequestRecord {
+                id: "r1".into(),
+                received_at: january,
+                finished_at: Some(january + 500),
+                model: model.into(),
+                canonical_model: model.into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![AttemptRecord {
+                request_id: "r1".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(10),
+                ..Default::default()
+            }],
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || ledger.degraded().then_some(())).await;
+    sql("DROP TRIGGER refuse;");
+    clock_cell.fetch_add(
+        phoebis_ledger::BATCH_RETRY_DELAYS[0].as_millis() as i64,
+        Ordering::SeqCst,
+    );
+    // The spend read after the retry's commit clears the flag, so the counts are in once it reads clear.
+    wait_for(Duration::from_secs(5), || {
+        (!ledger.degraded()).then_some(())
+    })
+    .await;
+    assert_eq!(
+        (pricing.unknown_models(), ledger.unweighted_served()),
+        (
+            1,
+            vec![phoebis_ledger::UnweightedModel {
+                model: model.into(),
+                tier: "opus".into(),
+                weight_of: "claude-opus-5-5".into(),
+                since: Some(january),
+                requests: 1,
+            }]
+        ),
+        "the refused try counted nothing"
     );
 }

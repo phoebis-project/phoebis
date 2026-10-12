@@ -47,8 +47,9 @@ pub trait TlsPairs: Send + Sync {
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
-    /// The ledger's degraded flag and its parked rows; `None` where a harness builds no ledger, and then
-    /// `writer_degraded` for the ledger reads 0 and `ledger_record_parked` has no series.
+    /// The ledger's degraded flag, its parked rows and the unweighted models its landing saw. `None` where a harness
+    /// builds no ledger, and then `writer_degraded` for the ledger reads 0 and neither `ledger_record_parked` nor
+    /// `model_unweighted` has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -101,6 +102,11 @@ impl Attention {
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
+        let unweighted = self
+            .ledger
+            .as_ref()
+            .map(Ledger::unweighted_served)
+            .unwrap_or_default();
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
@@ -109,6 +115,7 @@ impl Attention {
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             parked.as_deref(),
+            &unweighted,
             pairs.as_deref(),
             self.usage.as_deref(),
             now,

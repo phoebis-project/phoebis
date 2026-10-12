@@ -91,7 +91,12 @@ pub(crate) struct AttentionLink {
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     // A failed read answers 500 and never an empty list, which the dashboard would draw as the quiet state.
     let mut held: Vec<_> = match state.attention.conditions((state.clock)()) {
-        Ok(conditions) => conditions.into_iter().filter(|c| c.holds).collect(),
+        // The console at main reads an unknown kind as an exhausted pool, so the kind reaches the route when the
+        // console learns it.
+        Ok(conditions) => conditions
+            .into_iter()
+            .filter(|c| c.holds && c.kind != phoebis_attention::Kind::ModelUnweighted)
+            .collect(),
         Err(error) => {
             tracing::warn!(%error, "the attention read failed, so the route answers 500");
             return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");

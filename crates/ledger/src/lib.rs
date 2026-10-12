@@ -82,8 +82,8 @@ pub use rollup::{
     OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 pub use task::{
-    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, BATCH_RETRY_DELAYS,
-    BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
+    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnweightedModel,
+    BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
 };
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 

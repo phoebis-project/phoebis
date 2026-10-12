@@ -139,6 +139,7 @@ pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> F
             Some(accounting),
             None,
             None,
+            None,
         )
         .await,
     )
@@ -152,7 +153,37 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
 pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices), None).await)
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            Some(prices),
+            None,
+            None,
+        )
+        .await,
+    )
+}
+
+/// The full harness reading the subscription cost model `costs` rather than the shipped one, over a fresh store, so a
+/// case names a model the list leaves unweighted without reading the shipped file.
+pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Some(costs),
+        )
+        .await,
+    )
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
@@ -165,6 +196,7 @@ pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevision
             Some(store),
             None,
             Some(prices),
+            None,
             None,
         )
         .await,
@@ -272,7 +304,17 @@ pub async fn admin_app() -> (Router, FakeUpstream) {
 
 /// The app with `reload` standing in for the router's certificate pairs, so the reload route answers its outcomes.
 pub async fn admin_app_reloading(reload: Arc<dyn TlsReload>) -> (Router, FakeUpstream) {
-    let parts = build_app(None, ACCOUNT_UUID, false, None, None, None, Some(reload)).await;
+    let parts = build_app(
+        None,
+        ACCOUNT_UUID,
+        false,
+        None,
+        None,
+        None,
+        Some(reload),
+        None,
+    )
+    .await;
     (parts.app, parts.up)
 }
 
@@ -299,6 +341,7 @@ pub async fn admin_parts_polled() -> Polled {
         Some(fixture_identity()),
         ACCOUNT_UUID,
         false,
+        None,
         None,
         None,
         None,
@@ -726,9 +769,10 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, None, None, None).await
+    build_app(identity, upstream_uuid, tls, store, None, None, None, None).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_app(
     identity: Option<Identity>,
     upstream_uuid: &str,
@@ -737,6 +781,7 @@ async fn build_app(
     accounting: Option<AccountingSource>,
     prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
+    costs: Option<PlanTables>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -863,9 +908,11 @@ async fn build_app(
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceRevisions::shipped)));
     let metrics = Arc::new(Metrics::new());
+    let tables = Arc::new(costs.unwrap_or_else(PlanTables::shipped));
     let ledger = spawn_ledger(
         db.clone(),
         pricing.clone(),
+        tables.clone(),
         store.clone(),
         &bus,
         router_handle.clone(),
@@ -904,7 +951,6 @@ async fn build_app(
         Some(source) => relay.with_accounting(source),
         None => relay,
     });
-    let tables = Arc::new(PlanTables::shipped());
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),

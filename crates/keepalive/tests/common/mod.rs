@@ -224,9 +224,11 @@ pub async fn rig(spec: RigSpec) -> Rig {
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let pricing = Arc::new(Pricing::new(spec.pricing.clone()));
     let metrics = Arc::new(Metrics::new());
+    let tables = Arc::new(spec.tables);
     let ledger = spawn_ledger(
         db.clone(),
         pricing.clone(),
+        tables.clone(),
         h.store.clone(),
         &bus,
         h.router.clone(),
@@ -234,7 +236,6 @@ pub async fn rig(spec: RigSpec) -> Rig {
         metrics.clone(),
         LedgerConfig::default(),
     );
-    let tables = Arc::new(spec.tables);
     let engine = Engine::new(EngineParts {
         bus: bus.clone(),
         clock,

@@ -1,7 +1,7 @@
 //! The ledger task: one bounded channel from the assembler and every other producer, one writer that lands
 //! batches through `spawn_blocking`, and the gap event that says what was lost.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber};
 use phoebis_oauth::Clock;
-use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle};
+use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
@@ -22,6 +22,7 @@ use crate::db::{
 };
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
+use crate::plan::{funding_of, Funding, PlanTables};
 use crate::pricing::{PriceRevisions, Pricing};
 use crate::query::{member_spends, period_bounds, BudgetedMember};
 use crate::record::{
@@ -60,6 +61,8 @@ const CLOCK_TICK: Duration = Duration::from_millis(250);
 const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
 
 const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior panic";
+
+const UNWEIGHTED_POISONED: &str = "ledger unweighted-model map poisoned by a prior panic";
 
 #[derive(Clone, Debug)]
 pub struct LedgerConfig {
@@ -126,6 +129,29 @@ pub struct Admission {
 #[error("the ledger task has stopped")]
 pub struct LedgerGone;
 
+/// A model the cost model in force did not weight when a plan-funded request on it landed, so its window share was
+/// estimated from its model tier's latest weighted model. Kept once seen, so its gauge series reads 0 rather than
+/// vanishing after a revision weights the model.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct UnweightedModel {
+    /// The undated model id.
+    pub model: String,
+    /// The model tier whose latest weighted model stands in.
+    pub tier: String,
+    /// The model whose weight stands in.
+    pub weight_of: String,
+    /// When the first request priced through the fallback arrived, `None` once a landing found the model weighted,
+    /// until the next fallback landing dates it again.
+    pub since: Option<i64>,
+    /// Landed requests with at least one plan-funded attempt priced through the fallback since `since`, one per
+    /// request, 0 once a landing found the model weighted.
+    pub requests: u64,
+}
+
+/// The unweighted models by undated id, written by the landing after its commit and read by the attention reader. A
+/// `std` mutex, since the reader asks synchronously from inside the runtime, where a tokio lock would have to block.
+type Unweighted = Arc<std::sync::Mutex<BTreeMap<String, UnweightedModel>>>;
+
 /// What a replay of the parked records did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Replayed {
@@ -154,6 +180,7 @@ enum Control {
 pub struct Ledger {
     db: Arc<LedgerDb>,
     stats: Arc<LedgerStats>,
+    unweighted: Unweighted,
     metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
     /// Flipped by `shutdown`; the writer closes its receiver on it, so no clone of the handle can keep the
@@ -177,6 +204,17 @@ impl Ledger {
 
     pub fn stats(&self) -> Arc<LedgerStats> {
         self.stats.clone()
+    }
+
+    /// Every model a plan-funded landing priced through its model tier's fallback since the start, by undated model
+    /// id, a model a later landing found weighted among them with no `since` and no requests. Empty at each start.
+    pub fn unweighted_served(&self) -> Vec<UnweightedModel> {
+        self.unweighted
+            .lock()
+            .expect(UNWEIGHTED_POISONED)
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn dropped(&self) -> u64 {
@@ -318,6 +356,7 @@ impl Ledger {
 pub fn spawn(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
+    tables: Arc<PlanTables>,
     store: Arc<Store>,
     bus: &Bus,
     router: RouterHandle,
@@ -328,11 +367,13 @@ pub fn spawn(
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
     let (control, control_rx) = mpsc::channel::<Control>(1);
     let stats = Arc::new(LedgerStats::default());
+    let unweighted = Unweighted::default();
     let (done_tx, done_rx) = oneshot::channel();
     let (stop, stopped) = watch::channel(false);
     let ledger = Ledger {
         db: db.clone(),
         stats: stats.clone(),
+        unweighted: unweighted.clone(),
         metrics: metrics.clone(),
         tx,
         stop: Arc::new(stop),
@@ -402,6 +443,8 @@ pub fn spawn(
     tokio::spawn(writer(
         db.clone(),
         pricing,
+        tables,
+        unweighted,
         router,
         rx,
         control_rx,
@@ -487,6 +530,8 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
 async fn writer(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
+    tables: Arc<PlanTables>,
+    unweighted: Unweighted,
     router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
     mut control: mpsc::Receiver<Control>,
@@ -516,6 +561,8 @@ async fn writer(
     let mut spends = Spends {
         db: db.clone(),
         pricing: pricing.clone(),
+        tables: tables.clone(),
+        unweighted: unweighted.clone(),
         router: router.clone(),
         stats: stats.clone(),
         metrics: metrics.clone(),
@@ -526,7 +573,17 @@ async fn writer(
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
     let tiers = registry_tiers(&router.snapshot());
-    let _ = land_parked(&db, &pricing, &stats, &metrics, &tiers, clock()).await;
+    let _ = land_parked(
+        &db,
+        &pricing,
+        &tables,
+        &unweighted,
+        &stats,
+        &metrics,
+        &tiers,
+        clock(),
+    )
+    .await;
     // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
     // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
     let mut spend_due = spends.start().await;
@@ -538,6 +595,8 @@ async fn writer(
             let mut ctx = WriterCtx {
                 db: &db,
                 pricing: &pricing,
+                tables: &tables,
+                unweighted: &unweighted,
                 router: &router,
                 stats: &stats,
                 metrics: &metrics,
@@ -592,7 +651,18 @@ async fn writer(
                     continue;
                 }
                 let tiers = registry_tiers(&router.snapshot());
-                let replayed = match land_parked(&db, &pricing, &stats, &metrics, &tiers, now).await {
+                let replayed = match land_parked(
+                    &db,
+                    &pricing,
+                    &tables,
+                    &unweighted,
+                    &stats,
+                    &metrics,
+                    &tiers,
+                    now,
+                )
+                .await
+                {
                     Ok((landed, _)) => {
                         // The spend read the start runs after its own pass: the landed money reaches the routing
                         // table before the caller hears the counts, so a selection after a replay that crossed a
@@ -645,6 +715,8 @@ async fn writer(
         match land(
             &db,
             &pricing,
+            &tables,
+            &unweighted,
             &stats,
             &metrics,
             &tiers,
@@ -688,8 +760,18 @@ async fn writer(
                     ..Default::default()
                 })]);
                 let tiers = batch_tiers(&router.snapshot(), &gap);
-                if let Landed::Written =
-                    land(&db, &pricing, &stats, &metrics, &tiers, &gap, 0..1).await
+                if let Landed::Written = land(
+                    &db,
+                    &pricing,
+                    &tables,
+                    &unweighted,
+                    &stats,
+                    &metrics,
+                    &tiers,
+                    &gap,
+                    0..1,
+                )
+                .await
                 {
                     reported = dropped;
                     stats.gaps.fetch_add(1, Ordering::Relaxed);
@@ -771,6 +853,8 @@ enum Retry {
 struct WriterCtx<'a> {
     db: &'a Arc<LedgerDb>,
     pricing: &'a Arc<Pricing>,
+    tables: &'a Arc<PlanTables>,
+    unweighted: &'a Unweighted,
     router: &'a RouterHandle,
     stats: &'a Arc<LedgerStats>,
     metrics: &'a Arc<Metrics>,
@@ -816,6 +900,8 @@ async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
         match land(
             ctx.db,
             ctx.pricing,
+            ctx.tables,
+            ctx.unweighted,
             ctx.stats,
             ctx.metrics,
             &tiers,
@@ -849,6 +935,8 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
         let error = match land(
             ctx.db,
             ctx.pricing,
+            ctx.tables,
+            ctx.unweighted,
             ctx.stats,
             ctx.metrics,
             &tiers,
@@ -903,6 +991,8 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                 let _ = land(
                     ctx.db,
                     ctx.pricing,
+                    ctx.tables,
+                    ctx.unweighted,
                     ctx.stats,
                     ctx.metrics,
                     &tiers,
@@ -990,9 +1080,12 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
 /// fares between the two: one that lands leaves the table and is observed as a landed record; one that fails keeps its
 /// row with the error it met this time. Answers how many landed and how many were kept, or the error of a row read
 /// that failed, since a pass that never ran is not one that kept every row.
+#[allow(clippy::too_many_arguments)]
 async fn land_parked(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
+    tables: &Arc<PlanTables>,
+    unweighted: &Unweighted,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
@@ -1021,6 +1114,8 @@ async fn land_parked(
                 land_acknowledging(
                     db,
                     pricing,
+                    tables,
+                    unweighted,
                     stats,
                     metrics,
                     tiers,
@@ -1286,6 +1381,8 @@ fn budget_period_ended(previous: &MemberSpend, spend: &MemberSpend, at: i64) -> 
 struct Spends {
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
+    tables: Arc<PlanTables>,
+    unweighted: Unweighted,
     router: RouterHandle,
     stats: Arc<LedgerStats>,
     metrics: Arc<Metrics>,
@@ -1367,6 +1464,8 @@ impl Spends {
         let landed = land(
             &self.db,
             &self.pricing,
+            &self.tables,
+            &self.unweighted,
             &self.stats,
             &self.metrics,
             &tiers,
@@ -1542,16 +1641,22 @@ enum Observation {
 /// the records to the caller to retry, replay or park; only a panicking closure drops them, counted, so the gap
 /// that follows names them. Metrics are observed only after the commit succeeds, so a failed write never reaches
 /// the request or sample series.
+#[allow(clippy::too_many_arguments)]
 async fn land(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
+    tables: &Arc<PlanTables>,
+    unweighted: &Unweighted,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
     batch: &Batch,
     range: Range<usize>,
 ) -> Landed {
-    land_acknowledging(db, pricing, stats, metrics, tiers, batch, range, None).await
+    land_acknowledging(
+        db, pricing, tables, unweighted, stats, metrics, tiers, batch, range, None,
+    )
+    .await
 }
 
 /// `land`, deleting the parked row the batch replays in the record's own transaction. A row deleted after the commit
@@ -1561,6 +1666,8 @@ async fn land(
 async fn land_acknowledging(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
+    tables: &Arc<PlanTables>,
+    unweighted: &Unweighted,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
@@ -1569,17 +1676,16 @@ async fn land_acknowledging(
     parked: Option<i64>,
 ) -> Landed {
     let db = db.clone();
-    let pricing = pricing.clone();
+    let revisions = pricing.revisions();
     let tiers = tiers.clone();
     let records = batch.clone();
     let size = range.len() as u64;
-    let tables: Vec<&'static str> = batch[range.clone()].iter().map(table_of).collect();
+    let dropped_tables: Vec<&'static str> = batch[range.clone()].iter().map(table_of).collect();
     let written = tokio::task::spawn_blocking(move || {
         let mut observations = Vec::new();
         // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
         // that rolls back is tried again with it.
         let mut orphans = Vec::new();
-        let revisions = pricing.revisions();
         let result = db.write(|conn| {
             let tx = begin_write(conn)?;
             for record in &records[range] {
@@ -1599,15 +1705,6 @@ async fn land_acknowledging(
                         let mut attempts = attempts.to_vec();
                         for a in &mut attempts {
                             a.tier = tiers.get(&a.account_id).cloned().flatten();
-                        }
-                        // Counted at the landing, once per request, since every read prices the same counts again.
-                        if attempts.iter().any(AttemptRecord::has_usage)
-                            && revisions
-                                .in_force(request.received_at)
-                                .price(&request.canonical_model)
-                                .is_none()
-                        {
-                            pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
                         }
                         let previous = insert_request_in(&tx, request, &attempts, bodies.as_ref())?;
                         crate::rollup::fold_request(
@@ -1702,11 +1799,25 @@ async fn land_acknowledging(
                         revisions,
                         request,
                         attempts,
-                    } => metrics.observe_request(
-                        revisions.in_force(request.received_at),
-                        &request,
-                        &attempts,
-                    ),
+                    } => {
+                        // Counted at the landing, once per request, since every read prices the same counts again,
+                        // and after the commit, since a refused batch runs its transaction again on the retry or
+                        // the replay.
+                        if attempts.iter().any(AttemptRecord::has_usage)
+                            && revisions
+                                .in_force(request.received_at)
+                                .price(&request.canonical_model)
+                                .is_none()
+                        {
+                            pricing.unknown_counter().fetch_add(1, Ordering::Relaxed);
+                        }
+                        note_unweighted(tables, unweighted, &request, &attempts);
+                        metrics.observe_request(
+                            revisions.in_force(request.received_at),
+                            &request,
+                            &attempts,
+                        );
+                    }
                     Observation::Samples { quota } => metrics.observe_samples(&quota),
                 }
             }
@@ -1724,11 +1835,66 @@ async fn land_acknowledging(
             tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
-            for table in &tables {
+            for table in &dropped_tables {
                 metrics.observe_drop(table);
             }
             Landed::Lost
         }
+    }
+}
+
+/// Records a landed request whose plan-funded attempts with usage priced through the model tier's fallback at its
+/// arrival: the entry enters, or counts the request once however many of its attempts answered. A landing that finds
+/// the model weighted clears the entry and keeps its key, so its gauge series reads 0. A model the fallback cannot
+/// price (no model tier, or none weighted in it) is never named, since nothing stands in for it.
+fn note_unweighted(
+    tables: &PlanTables,
+    unweighted: &Unweighted,
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+) {
+    let plan_funded = attempts.iter().any(|a| {
+        a.has_usage()
+            && funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) == Funding::Plan
+    });
+    if !plan_funded {
+        return;
+    }
+    let canonical = request.canonical_model.as_str();
+    let model = phoebis_routing::listing::undated(canonical).unwrap_or(canonical);
+    let costs = tables.revisions.in_force(request.received_at);
+    let mut served = unweighted.lock().expect(UNWEIGHTED_POISONED);
+    match costs.weight_or_fallback(canonical, FIVE_HOUR) {
+        Some((_, true)) => {
+            let Some((tier, weight_of)) = costs
+                .tier_of(canonical)
+                .and_then(|tier| Some((tier, costs.latest_weighted(tier)?)))
+            else {
+                return;
+            };
+            let entry = served
+                .entry(model.to_string())
+                .or_insert_with(|| UnweightedModel {
+                    model: model.to_string(),
+                    tier: String::new(),
+                    weight_of: String::new(),
+                    since: None,
+                    requests: 0,
+                });
+            // Read on every landing, since a revision can move the model's tier or list a newer model that stands in.
+            entry.tier = tier.to_string();
+            entry.weight_of = weight_of.to_string();
+            // A cleared entry starts a new run.
+            entry.since.get_or_insert(request.received_at);
+            entry.requests += 1;
+        }
+        Some((_, false)) => {
+            if let Some(entry) = served.get_mut(model) {
+                entry.since = None;
+                entry.requests = 0;
+            }
+        }
+        None => {}
     }
 }
 
@@ -1779,6 +1945,7 @@ mod tests {
         let ledger = Ledger {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
             stats: Arc::new(LedgerStats::default()),
+            unweighted: Unweighted::default(),
             metrics: Arc::new(Metrics::new()),
             tx,
             stop: Arc::new(stop),
@@ -2003,6 +2170,8 @@ mod tests {
             pricing: Arc::new(Pricing::new(
                 PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
             )),
+            tables: Arc::new(PlanTables::shipped()),
+            unweighted: Unweighted::default(),
             router,
             stats: Arc::new(LedgerStats::default()),
             metrics: Arc::new(Metrics::new()),
