@@ -9,12 +9,11 @@ reads, what the ledger records for every probe, where the console shows all of i
 
 ## How a probe works
 
-With keepalive enabled on a pool, the router keeps a replayable copy of every eligible request a session sends: a
-request whose thinking is adaptive or disabled, whose tool choice is not forced, and whose output is neither structured
-nor bound to a strict tool. A request that fails one of those checks, whose body runs over `proxy.max_request_bytes`, or
-whose header block runs over the replay's budget (8192 bytes for one value, 16384 for the block) is never retained, and
-the Sessions view reads it `not_retained` with the check it failed as the cause (see [The five
-states](#the-five-states)).
+A request is eligible for a replayable copy when its thinking is adaptive or disabled, its tool choice is not forced,
+and its output is neither structured nor bound to a strict tool. A request that fails one of those checks, whose body
+runs over `proxy.max_request_bytes`, or whose header block runs over the replay's budget (8192 bytes for one value,
+16384 for the block) is never retained, and the Sessions view reads it `not_retained` with the check it failed as the
+cause (see [The five states](#the-five-states)).
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it through the same
 failover loop a real request takes, under the headers the bus published for the request: the same body with `max_tokens`
@@ -82,8 +81,7 @@ Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 
 than the shortest cache TTL cannot keep the session on the account it warmed`. A probe follows the session's pin to a
 subscription account as to an API-key one. A key with `keepalive_opt_out` is never retained, and the opt-out reaches a
 session that is already idle: its held prompt is dropped under `key_opted_out` rather than kept, since nothing on that
-key may be probed again until the flag is cleared. A pool row whose stored policy the admin API would refuse, for its
-shape or for a value outside the bounds, reads as probing off rather than as an error.
+key may be probed again until the flag is cleared.
 
 In the console the switch is in the pool dialog: Pools, Edit, the Keepalive group under Caching, "Keep prompt caches
 warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
@@ -268,7 +266,11 @@ agent holds no prompt, as a request refused at its account selection does.
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the
 deletion of the key that registered it, or the same key id created again, takes the previous holder's sessions and their
-recipes with it rather than leaving them to the session expiry.
+recipes with it within a second of the deletion, rather than leaving them to the session expiry.
+
+A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
+is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
+would travel with a stale stamp or a doubled member.
 
 ### The guard field
 
@@ -296,10 +298,6 @@ cap the engine evicts before it refuses: unattended sessions' agents first, olde
 sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
 stopped under `idle_limit` does, and shows on the wasted counter at once, while the probes of one stopped under
 `idle_limit` reach it as their entries lapse with no real request. A lapse also shows in that log line.
-
-A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
-is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
-would travel with a stale stamp or a doubled member.
 
 A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is held under
 `retryable_probe_error` rather than paused under `probe_quota_exhausted`: its next attempt waits out that answer's
@@ -349,7 +347,7 @@ against their own cost. `probes_skipped` counts a due probe a gate or a lapsed e
 example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with `503
 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
-`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `held`, `migrated`,
+`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
 pool's [idle-age counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and
 retained bytes, each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the
@@ -371,9 +369,9 @@ resolves to and the figure in effect under one switched on past it (see [Pools](
 Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
 
 <a id="the-cost-reference"></a>
-The Cost reference dialog, which the Sessions view's head opens on what a million tokens costs in dollars and as a share
-of a subscription window, is described with that view under [Sessions](console.md#sessions). The price table's rows, the
-weights and how a probe is priced are on [Pricing](statistics.md#pricing).
+The Cost reference dialog, what a million tokens costs in dollars and as a share of a subscription window, is described
+with the Sessions view under [Sessions](console.md#sessions). The price table's rows and how a probe is priced are on
+[Pricing](statistics.md#pricing), and the cost model's weights on [Plan meter](statistics.md#plan-meter).
 
 ## A router restart
 
