@@ -75,18 +75,15 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/analytics/series", get(analytics::series))
         .route("/admin/attention", get(attention::show))
         .route("/admin/dashboard", get(dashboard::show))
-        .route("/admin/keepalive/overview", get(keepalive::overview))
-        .route("/admin/keepalive/recipes", get(keepalive::recipes))
-        .route("/admin/keys", get(keys::list).post(keys::create))
-        .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
-        .route("/admin/keys/{id}/models", get(models::key_models))
-        .route("/admin/keys/{id}/revoke", post(keys::revoke))
-        .route("/admin/keys/{id}/rotate", post(keys::rotate))
-        .route(
-            "/admin/ledger/parked/replay",
-            post(crate::ledger::replay_parked),
-        )
-        .route("/admin/models/state", get(models::state))
+        .routes(routes!(keepalive::overview))
+        .routes(routes!(keepalive::recipes))
+        .routes(routes!(keys::list, keys::create))
+        .routes(routes!(keys::patch, keys::remove))
+        .routes(routes!(models::key_models))
+        .routes(routes!(keys::revoke))
+        .routes(routes!(keys::rotate))
+        .routes(routes!(crate::ledger::replay_parked))
+        .routes(routes!(models::state))
         .route("/admin/oauth/sessions", post(pairing_start))
         .route(
             "/admin/oauth/sessions/{id}",

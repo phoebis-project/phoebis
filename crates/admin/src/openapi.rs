@@ -159,6 +159,69 @@ pub(crate) struct RouterUnavailable(ErrorBody);
 )]
 pub(crate) struct RegistryUnavailable(ErrorBody);
 
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentCountsView {
+    pub busy: u64,
+    pub idle: u64,
+    pub parked: u64,
+}
+
+/// The probes of the last 24 hours.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProbeCountsView {
+    pub failed: u64,
+    pub held: u64,
+    pub migrated: u64,
+    pub ok: u64,
+    pub skipped: u64,
+}
+
+/// An agent's recipe. `probes_today` and `credited_today` count from midnight UTC and read 0 on a day that has
+/// neither yet.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecipeViewSchema {
+    /// The pinned account.
+    pub account_id: Option<String>,
+    pub agent_id: String,
+    /// The mod's lifecycle word: `busy`, `idle`, `parked`, `released` or `unknown`.
+    #[schema(example = "busy")]
+    pub agent_state: String,
+    /// The engine's own reason, shown beside the state (the keepalive page's five states).
+    pub cause: String,
+    pub credited_today: u64,
+    pub deadline: Option<i64>,
+    pub key_id: String,
+    /// The guard's verdict on the last request the agent observed, null before the first one.
+    pub last_guard: Option<String>,
+    pub last_probe_at: Option<i64>,
+    pub last_request_at: Option<i64>,
+    pub model: String,
+    pub next_probe_at: Option<i64>,
+    /// `background`, `both` or `scheduled`, null off a park.
+    #[schema(example = "background")]
+    pub park_kind: Option<String>,
+    pub pool_id: String,
+    pub probes_today: u64,
+    pub session_id: String,
+    /// `retained`, `held`, `paused`, `not_retained` or `ended`.
+    #[schema(example = "retained")]
+    pub state: String,
+    pub ttl_seconds: i64,
+    pub wake_at: Option<i64>,
+}
+
+/// One entry of a model rule list: the pattern, checked as the routing page's model rules say, and whether it
+/// denies the models it matches.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelRuleView {
+    pub pattern: String,
+    pub not: bool,
+}
+
 macro_rules! fixture {
     ($name:literal, $status:literal) => {
         (
@@ -179,6 +242,14 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("account_catalog", "200"),
     fixture!("account_quota", "200"),
     fixture!("account_usage", "200"),
+    fixture!("keepalive_overview", "200"),
+    fixture!("keepalive_recipes", "200"),
+    fixture!("keys", "200"),
+    fixture!("key_created", "201"),
+    fixture!("key_models", "200"),
+    fixture!("replay", "200"),
+    fixture!("replay_held", "503"),
+    fixture!("models_state", "200"),
 ];
 
 /// The bodies the fixtures capture for one answer, each with its file stem.
@@ -302,6 +373,36 @@ pub(crate) mod round_trip {
         let typed: T = serde_json::from_value(body.clone())
             .unwrap_or_else(|e| panic!("{stem}.json does not fit the declared type: {e}"));
         assert_eq!(serde_json::to_value(&typed).unwrap(), body, "{stem}.json");
+    }
+
+    /// Every value at `path` in the fixture's body (a key per segment, `*` for each element of an array) round
+    /// trips through `T` with no unknown field: the mirror of a type another crate owns is held to that type here,
+    /// since the view's own field keeps the source type and serializes it as it is.
+    pub(crate) fn round_trips_each<T: DeserializeOwned + Serialize>(stem: &str, path: &[&str]) {
+        fn walk<'a>(v: &'a Value, path: &[&str], out: &mut Vec<&'a Value>) {
+            match path.split_first() {
+                None => out.push(v),
+                Some((&"*", rest)) => v
+                    .as_array()
+                    .expect("an array")
+                    .iter()
+                    .for_each(|e| walk(e, rest, out)),
+                Some((key, rest)) => walk(&v[*key], rest, out),
+            }
+        }
+        let body = fixture(stem);
+        let mut values = Vec::new();
+        walk(&body, path, &mut values);
+        assert!(!values.is_empty(), "{stem}.json holds nothing at {path:?}");
+        for value in values {
+            let typed: T = serde_json::from_value(value.clone())
+                .unwrap_or_else(|e| panic!("{stem}.json at {path:?} does not fit the mirror: {e}"));
+            assert_eq!(
+                &serde_json::to_value(&typed).unwrap(),
+                value,
+                "{stem}.json at {path:?}"
+            );
+        }
     }
 }
 

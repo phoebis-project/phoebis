@@ -15,8 +15,10 @@ use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{stamp_token, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
+use utoipa::ToSchema;
 
 use crate::accounts::within_text_bound;
+use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
@@ -28,37 +30,159 @@ use crate::AdminState;
 const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the key changed while it was being edited, so reload and try again";
 
-#[derive(serde::Deserialize, Default)]
-struct KeyInput {
+/// The key's fields. On a create `id`, `label` and `pool_id` are required. On an edit any subset but `id`.
+#[derive(serde::Deserialize, Default, ToSchema)]
+pub(crate) struct KeyInput {
+    /// `[a-z0-9][a-z0-9-]{0,63}`.
     #[serde(default)]
     id: Option<String>,
+    /// At most 256 bytes.
     #[serde(default)]
     label: Option<String>,
+    /// An existing pool.
     #[serde(default)]
     pool_id: Option<String>,
+    /// At most 256 bytes, or null to clear.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>, nullable)]
     notes: Option<Option<String>>,
     #[serde(default)]
     enabled: Option<bool>,
+    /// Unix milliseconds, or null to clear.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<i64>, nullable)]
     expires_at: Option<Option<i64>>,
+    /// An ordered list of `{pattern, not}`, at most 256, each pattern checked as the routing page's model rules say.
     #[serde(default)]
     model_rules: Option<Vec<RuleInput>>,
+    /// `extend` or `replace`.
     #[serde(default)]
+    #[schema(example = "extend")]
     model_rules_mode: Option<String>,
+    /// Default `true`.
     #[serde(default)]
     long_context_twins: Option<bool>,
     #[serde(default)]
     keepalive_opt_out: Option<bool>,
+    /// At most `stats.body_capture_max_hours`, or null to inherit.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<u32>, nullable)]
     body_capture_hours: Option<Option<u32>>,
+    /// `true`, `false`, or null to inherit the pool's, default null.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<bool>, nullable)]
     auto_mode_server: Option<Option<Value>>,
-    /// The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
-    /// its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
-    /// since there is no row to fence on.
+    /// Optional, the `revision` the row was read at. The write lands only while the key still carries it, and a body
+    /// without it fences on the route's own read. A create accepts it and ignores it, since a create has no row to
+    /// fence on. `revision` names one state of one key: an edit, a rotation or a revocation moves it, and a key
+    /// deleted and created again under the same id never answers a token its predecessor did, so an edit read
+    /// before the deletion answers `409` and writes nothing.
+    // The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
+    // its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
+    // since there is no row to fence on.
     #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = u64)]
     expected_revision: Option<Value>,
+}
+
+/// The keys, one row each.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyList {
+    pub keys: Vec<Key>,
+}
+
+/// A key as the registry and the ledger see it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Key {
+    pub id: String,
+    pub label: String,
+    pub notes: Option<String>,
+    pub pool_id: String,
+    pub enabled: bool,
+    pub revoked_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    #[schema(value_type = Vec<crate::openapi::ModelRuleView>)]
+    pub model_rules: Vec<phoebis_store::ModelRule>,
+    /// `extend` or `replace`.
+    #[schema(example = "extend")]
+    pub model_rules_mode: String,
+    /// Default `true`.
+    pub long_context_twins: bool,
+    pub keepalive_opt_out: bool,
+    pub body_capture_hours: Option<u32>,
+    /// Falls back to the pool's value when the key's own is unset.
+    pub effective_body_capture_hours: u32,
+    /// `true`, `false`, or null.
+    pub auto_mode_server: Option<bool>,
+    /// The key's own where set, else the pool's.
+    pub effective_auto_mode_server: bool,
+    pub prefix: String,
+    pub created_at: i64,
+    /// The key's last create, edit, rotation or revocation. A use never moves it.
+    pub updated_at: i64,
+    /// The row's edit token, which `PATCH /admin/keys/{id}` takes back as `expected_revision`.
+    pub revision: u64,
+    pub rotated_at: Option<i64>,
+    /// A client request presenting the key. A keepalive probe never moves it.
+    pub last_used_at: Option<i64>,
+    pub retired_secret_last_used_at: Option<i64>,
+    /// Live sessions whose newest request presented the secret the last rotation retired, 0 once the 15-minute
+    /// grace ends, and a session the keepalive mod registered that sent no request since counts as switched.
+    pub sessions_on_retired_secret: usize,
+    pub usage_7d: KeyUsage,
+    pub lifetime: KeyLifetime,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyUsage {
+    pub cost_usd: f64,
+    pub requests: u64,
+    pub tokens: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyLifetime {
+    pub cost_usd: f64,
+    pub requests: u64,
+}
+
+/// The key's fields and `secret`, the one answer that carries the secret.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyCreated {
+    pub id: String,
+    pub label: String,
+    pub notes: Option<String>,
+    pub pool_id: String,
+    pub enabled: bool,
+    pub revoked_at: Option<i64>,
+    pub expires_at: Option<i64>,
+    #[schema(value_type = Vec<crate::openapi::ModelRuleView>)]
+    pub model_rules: Vec<phoebis_store::ModelRule>,
+    #[schema(example = "extend")]
+    pub model_rules_mode: String,
+    pub long_context_twins: bool,
+    pub keepalive_opt_out: bool,
+    pub body_capture_hours: Option<u32>,
+    pub effective_body_capture_hours: u32,
+    pub auto_mode_server: Option<bool>,
+    pub effective_auto_mode_server: bool,
+    pub prefix: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub revision: u64,
+    pub rotated_at: Option<i64>,
+    pub last_used_at: Option<i64>,
+    pub retired_secret_last_used_at: Option<i64>,
+    pub sessions_on_retired_secret: usize,
+    pub usage_7d: KeyUsage,
+    pub lifetime: KeyLifetime,
+    /// The secret, issued once.
+    pub secret: String,
 }
 
 fn new_secret() -> String {
@@ -214,6 +338,17 @@ fn sessions_on_retired_secret(
         .unwrap_or(0)
 }
 
+/// List the keys.
+#[utoipa::path(
+    get,
+    path = "/admin/keys",
+    operation_id = "keys_list",
+    tag = "Keys",
+    responses(
+        (status = 200, description = "The keys.", body = KeyList),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match state.store.api_keys() {
         Ok(rows) => {
@@ -231,12 +366,28 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
                 let count = sessions_on_retired_secret(&row, &activity, now);
                 out.push(key_json(&snapshot, &row, &week, &lifetime, count));
             }
-            Json(json!({ "keys": out })).into_response()
+            Json(KeyList { keys: out }).into_response()
         }
         Err(error) => store_failure(error),
     }
 }
 
+/// Create a key.
+#[utoipa::path(
+    post,
+    path = "/admin/keys",
+    operation_id = "keys_create",
+    tag = "Keys",
+    request_body(content = KeyInput, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The created key.", body = KeyCreated),
+        (status = 400, description = "- `body must be a JSON object`\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 409, description = "`a key with this id exists`", body = ErrorBody, example = json!({"error": "a key with this id exists"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
     let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
@@ -300,7 +451,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Ok(()) => {
             let (week, lifetime) = totals(&state).await;
             // A key this route just created has never rotated, so no session can present a retired secret of it.
-            let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
+            let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
+            let mut v = serde_json::to_value(key).expect("a key serializes");
             v["secret"] = json!(secret);
             (StatusCode::CREATED, Json(v)).into_response()
         }
@@ -309,6 +461,27 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     response
 }
 
+/// Edit a key.
+#[utoipa::path(
+    patch,
+    path = "/admin/keys/{id}",
+    operation_id = "key_patch",
+    tag = "Keys",
+    params(("id" = String, Path, description = "The key's id")),
+    request_body(content = KeyInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The key's fields, the same shape as `POST /admin/keys` without `secret`.", body = Key),
+        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "- `key not found`\n- `pool not found`", body = ErrorBody, example = json!({"error": "key not found"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "- `a revoked key cannot be re-enabled`\n- `the key changed while it was being edited, so reload and try again`, which carries the `stale_edit` code",
+            headers(("x-phoebis-error-code" = String, description = "`stale_edit`: the row changed since it was read")),
+            body = ErrorBody, example = json!({"error": "a revoked key cannot be re-enabled"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn patch(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -355,10 +528,25 @@ pub(crate) async fn patch(
     let now = (state.clock)();
     let activity = recent_activity(&state, now).await;
     let count = sessions_on_retired_secret(&row, &activity, now);
-    let v = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
-    Json(v).into_response()
+    let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+    Json(key).into_response()
 }
 
+/// Rotate a key's secret.
+#[utoipa::path(
+    post,
+    path = "/admin/keys/{id}/rotate",
+    operation_id = "key_rotate",
+    tag = "Keys",
+    params(("id" = String, Path, description = "The key's id")),
+    responses(
+        (status = 200, description = "The key's fields and a new `secret`, issued the same way as `POST /admin/keys`. The previous secret keeps authenticating for 15 minutes after the rotation, so a running session can switch on its own time. A second rotation inside that window ends it at once, and a revocation ends it too. The key list counts the sessions still presenting the previous secret until the grace ends.", body = KeyCreated),
+        (status = 404, description = "`key not found`", body = ErrorBody, example = json!({"error": "key not found"})),
+        (status = 409, description = "`a revoked key cannot be rotated`", body = ErrorBody, example = json!({"error": "a revoked key cannot be rotated"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn rotate(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -390,7 +578,8 @@ pub(crate) async fn rotate(
             let (week, lifetime) = totals(&state).await;
             let activity = recent_activity(&state, now).await;
             let count = sessions_on_retired_secret(&row, &activity, now);
-            let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+            let key = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+            let mut v = serde_json::to_value(key).expect("a key serializes");
             v["secret"] = json!(secret);
             Json(v).into_response()
         }
@@ -399,6 +588,20 @@ pub(crate) async fn rotate(
     }
 }
 
+/// Revoke a key.
+#[utoipa::path(
+    post,
+    path = "/admin/keys/{id}/revoke",
+    operation_id = "key_revoke",
+    tag = "Keys",
+    params(("id" = String, Path, description = "The key's id")),
+    responses(
+        (status = 204, description = "The key is revoked."),
+        (status = 404, description = "`key not found`", body = ErrorBody, example = json!({"error": "key not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn revoke(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -413,6 +616,20 @@ pub(crate) async fn revoke(
     }
 }
 
+/// Delete a key.
+#[utoipa::path(
+    delete,
+    path = "/admin/keys/{id}",
+    operation_id = "key_delete",
+    tag = "Keys",
+    params(("id" = String, Path, description = "The key's id")),
+    responses(
+        (status = 204, description = "The id is free to use again at once. The deleted key's usage stays under the key that spent it, filed by the key's creation time, so a later key under the same id never reads it, and the hourly rollups keep it for `stats.rollup_retention_days` as they keep everything."),
+        (status = 404, description = "`key not found`", body = ErrorBody, example = json!({"error": "key not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn remove(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -434,16 +651,77 @@ fn key_json(
     week: &BTreeMap<String, phoebis_ledger::Totals>,
     lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
     sessions_on_retired_secret: usize,
-) -> Value {
-    json!({
-        "id": row.id, "label": row.label, "notes": row.notes, "pool_id": row.pool_id, "enabled": row.enabled,
-        "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
-        "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
-        "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": snapshot.body_capture_hours(row),
-        "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": snapshot.auto_mode_server(row),
-        "prefix": row.prefix, "created_at": row.created_at, "updated_at": row.updated_at, "revision": stamp_token(row.incarnation, row.updated_at), "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
-        "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
-        "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
-        "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },
-    })
+) -> Key {
+    let week = week.get(&row.id);
+    let lifetime = lifetime.get(&row.id);
+    Key {
+        id: row.id.clone(),
+        label: row.label.clone(),
+        notes: row.notes.clone(),
+        pool_id: row.pool_id.clone(),
+        enabled: row.enabled,
+        revoked_at: row.revoked_at,
+        expires_at: row.expires_at,
+        model_rules: row.model_rules.clone(),
+        model_rules_mode: row.model_rules_mode.as_str().to_string(),
+        long_context_twins: row.long_context_twins,
+        keepalive_opt_out: row.keepalive_opt_out,
+        body_capture_hours: row.body_capture_hours,
+        effective_body_capture_hours: snapshot.body_capture_hours(row),
+        auto_mode_server: row.auto_mode_server,
+        effective_auto_mode_server: snapshot.auto_mode_server(row),
+        prefix: row.prefix.clone(),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        revision: stamp_token(row.incarnation, row.updated_at),
+        rotated_at: row.rotated_at,
+        last_used_at: row.last_used_at,
+        retired_secret_last_used_at: row.retired_secret_last_used_at,
+        sessions_on_retired_secret,
+        usage_7d: KeyUsage {
+            cost_usd: week.map_or(0.0, |t| t.cost_usd),
+            requests: week.map_or(0, |t| t.requests),
+            tokens: week.map_or(0, |t| t.tokens),
+        },
+        lifetime: KeyLifetime {
+            cost_usd: lifetime.map_or(0.0, |t| t.cost_usd),
+            requests: lifetime.map_or(0, |t| t.requests),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::openapi::round_trip::{fixture, round_trips, round_trips_each};
+    use crate::openapi::ModelRuleView;
+
+    use super::{Key, KeyCreated, KeyList};
+
+    #[test]
+    fn the_key_list_answer_round_trips_through_its_declared_type() {
+        round_trips::<KeyList>("keys");
+    }
+
+    #[test]
+    fn every_model_rule_of_the_key_list_round_trips_through_its_mirror() {
+        round_trips_each::<ModelRuleView>("keys", &["keys", "*", "model_rules", "*"]);
+    }
+
+    #[test]
+    fn the_created_key_answer_round_trips_through_its_declared_type() {
+        round_trips::<KeyCreated>("key_created");
+    }
+
+    #[test]
+    fn the_created_key_is_a_key_with_the_secret_last() {
+        let mut body = fixture("key_created");
+        let object = body.as_object_mut().unwrap();
+        assert_eq!(
+            object.keys().next_back().map(String::as_str),
+            Some("secret")
+        );
+        assert!(object.shift_remove("secret").is_some_and(|s| s.is_string()));
+        let key: Key = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&key).unwrap(), body);
+    }
 }

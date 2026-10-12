@@ -28,15 +28,6 @@ const PLAIN_ROUTES: &[&str] = &[
     "/admin/analytics/series",
     "/admin/attention",
     "/admin/dashboard",
-    "/admin/keepalive/overview",
-    "/admin/keepalive/recipes",
-    "/admin/keys",
-    "/admin/keys/{id}",
-    "/admin/keys/{id}/models",
-    "/admin/keys/{id}/revoke",
-    "/admin/keys/{id}/rotate",
-    "/admin/ledger/parked/replay",
-    "/admin/models/state",
     "/admin/oauth/sessions",
     "/admin/oauth/sessions/{id}",
     "/admin/oauth/sessions/{id}/callback",
@@ -104,6 +95,17 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("account_usage", &[404, 500]),
     ("account_usage_refresh", &[404, 500, 503]),
     ("account_verify", &[400, 404, 409, 500, 502]),
+    ("keepalive_overview", &[500]),
+    ("keepalive_recipes", &[]),
+    ("keys_list", &[500]),
+    ("keys_create", &[400, 404, 409, 500, 503]),
+    ("key_patch", &[400, 404, 409, 500, 503]),
+    ("key_delete", &[404, 500, 503]),
+    ("key_models", &[404, 500, 503]),
+    ("key_revoke", &[404, 500, 503]),
+    ("key_rotate", &[404, 409, 500, 503]),
+    ("ledger_replay_parked", &[500, 503]),
+    ("models_state", &[500, 503]),
 ];
 
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
@@ -114,6 +116,14 @@ const EXAMPLE_FILES: &[&str] = &[
     "account_catalog",
     "account_quota",
     "account_usage",
+    "keepalive_overview",
+    "keepalive_recipes",
+    "keys",
+    "key_created",
+    "key_models",
+    "replay",
+    "replay_held",
+    "models_state",
 ];
 
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
