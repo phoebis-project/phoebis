@@ -720,10 +720,13 @@ export function GroupedDialog({
     if (id !== chosen) onChoose(id);
   };
   // Every group shown starts the body at its top. Focus moves only for a choice, to the group's heading or, for Go
-  // to, its refused control, and for the group the address named: the page's reset chooses that group after this
-  // effect has run, so the choice waits here until `chosen` matches it. A group the mode hid mounts its section only in
-  // the render after the mode turns on, so the choice also waits for the group to be shown, even when the page already
-  // holds it. A group the page sets itself on open leaves focus where the browser's dialog focusing put it.
+  // to, its refused control, and for the group the address named. A page's reset chooses that group in the render that
+  // opens the dialog, before this effect runs, or after this effect has run, so the choice waits here until `chosen`
+  // matches it and moves focus at once when it already does. Only a reset that runs after this effect can name a group
+  // the mode hid: the hand-off above runs first and replaces a hidden group named in the opening render before this
+  // effect turns the mode on. A group the mode hid mounts its section only in the render after the mode turns on, so
+  // the choice also waits for the group to be shown, even when the page already holds it. A group the page sets itself
+  // on open leaves focus where the browser's dialog focusing put it.
   useEffect(() => {
     if (!open) {
       wasOpen.current = false;
