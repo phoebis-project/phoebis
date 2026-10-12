@@ -2280,11 +2280,18 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         ),
         (Some("desktop"), Some("console"), Some(200), Some(true))
     );
-    assert_eq!(
-        row["attempts"][0]["pricing_version"], "2026-10-01",
-        "the override file priced the attempt"
+    // The override file's cells: 12 input tokens at 3 and 3 output tokens at 15 per million.
+    let per_attempt = (12.0 * 3.0 + 3.0 * 15.0) / 1e6;
+    let attempt = &row["attempts"][0];
+    assert!(
+        attempt.get("pricing_version").is_none(),
+        "an attempt carries no stamp, since its dollars are priced when it is read: {attempt}"
     );
-    assert!((row["cost_usd"].as_f64().unwrap() - (12.0 * 3.0 + 3.0 * 15.0) / 1e6).abs() < 1e-12);
+    assert!(
+        (attempt["estimated_usd"].as_f64().unwrap() - per_attempt).abs() < 1e-12,
+        "the override file priced the attempt: {attempt}"
+    );
+    assert!((row["cost_usd"].as_f64().unwrap() - per_attempt).abs() < 1e-12);
     let id = row["id"].as_str().unwrap();
     let bodies: serde_json::Value = client
         .get(admin(&format!("/requests/{id}/bodies")))

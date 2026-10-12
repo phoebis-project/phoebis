@@ -353,8 +353,6 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         cache_miss_reason: Some("none".into()),
         ratelimit_5h_utilization: Some(0.4),
         ratelimit_5h_reset: Some(at + 3_600_000),
-        estimated_usd: Some(0.012),
-        pricing_version: Some("2026-09-08".into()),
         written_at: Some(at + 30),
         ..Default::default()
     }

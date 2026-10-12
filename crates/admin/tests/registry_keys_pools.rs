@@ -1125,9 +1125,8 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
                 attempts: 1,
                 ..Default::default()
             },
-            // The ledger reprices every attempt from the shipped table on write (see `land` in
-            // `crates/ledger/src/task.rs`), so a manually set `estimated_usd` would not survive; the model is
-            // priced instead and the assertions below use the table's own rate.
+            // The fold prices every attempt's counts from the shipped table when the request lands (see `fold_request`
+            // in `crates/ledger/src/rollup.rs`), so the assertions below use the table's own rate.
             attempts: vec![AttemptRecord {
                 request_id: id.into(),
                 attempt: 1,

@@ -1,6 +1,7 @@
 //! The API price file as a list of revisions keyed by the date each takes effect, and the list prices per million
-//! tokens of one revision, the estimate every attempt is stamped with. Every estimate is an estimate: tier and batch
-//! modifiers are not known here, and subscription quota is the rate-limit windows, never this number.
+//! tokens of one revision, which price an attempt's stored counts whenever a reader asks for its dollars, at the
+//! revision in force when its request arrived. Every estimate is an estimate: tier and batch modifiers are not known
+//! here, and subscription quota is the rate-limit windows, never this number.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,7 +10,6 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use crate::record::AttemptRecord;
 use crate::rollup::CostSplit;
 use crate::LedgerError;
 
@@ -521,62 +521,10 @@ impl Pricing {
     }
 }
 
-pub fn price_attempts(
-    table: &PriceTable,
-    canonical_model: &str,
-    attempts: &mut [AttemptRecord],
-    unknown: &AtomicU64,
-) -> CostSplit {
-    let mut total = CostSplit::default();
-    let mut counted = false;
-    for a in attempts.iter_mut() {
-        if !a.has_usage() {
-            continue;
-        }
-        match table.estimate(
-            canonical_model,
-            Speed::of(a.speed.as_deref()),
-            a.input_tokens.unwrap_or(0),
-            a.cache_read_tokens.unwrap_or(0),
-            a.cache_write_5m_tokens.unwrap_or(0),
-            a.cache_write_1h_tokens.unwrap_or(0),
-            a.output_tokens.unwrap_or(0),
-        ) {
-            Some((usd, split)) => {
-                a.estimated_usd = Some(usd);
-                a.pricing_version = Some(table.effective.clone());
-                a.input_usd = Some(split.input_usd);
-                a.cache_read_usd = Some(split.cache_read_usd);
-                a.cache_write_usd = Some(split.cache_write_usd);
-                a.output_usd = Some(split.output_usd);
-                total.input_usd += split.input_usd;
-                total.cache_read_usd += split.cache_read_usd;
-                total.cache_write_usd += split.cache_write_usd;
-                total.output_usd += split.output_usd;
-            }
-            None => {
-                a.estimated_usd = None;
-                a.pricing_version = None;
-                a.input_usd = None;
-                a.cache_read_usd = None;
-                a.cache_write_usd = None;
-                a.output_usd = None;
-                if !counted {
-                    unknown.fetch_add(1, Ordering::Relaxed);
-                    counted = true;
-                }
-            }
-        }
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::AttemptRecord;
     use crate::test_tables::JANUARY_2026;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     /// The refusal `from_yaml` answers for a file whose one revision's one model carries `standard` and, when given,
     /// `fast` cells and a `long_context` block.
@@ -1393,75 +1341,6 @@ mod tests {
         );
         assert_eq!(table.model_label("claude-nope-20250101"), "other");
         assert_eq!(table.model_label("gpt-5"), "other");
-    }
-
-    #[test]
-    fn attempts_are_stamped_with_the_version_and_an_unknown_model_is_counted_once() {
-        let revisions = crate::test_tables::api_prices();
-        let table = revisions.in_force(JANUARY_2026);
-        // The test table's Haiku 4.5 row: input 1 and output 5 per million.
-        let want = (1_000.0 * 1.0 + 100.0 * 5.0) / 1_000_000.0;
-        let unknown = AtomicU64::new(0);
-        let mut attempts = vec![
-            AttemptRecord {
-                attempt: 1,
-                ..Default::default()
-            },
-            AttemptRecord {
-                attempt: 2,
-                input_tokens: Some(1_000),
-                output_tokens: Some(100),
-                ..Default::default()
-            },
-        ];
-        let split = price_attempts(table, "claude-haiku-4-5-20251001", &mut attempts, &unknown);
-        assert_eq!(
-            (
-                attempts[0].estimated_usd,
-                attempts[0].pricing_version.as_deref()
-            ),
-            (None, None),
-            "no usage, no estimate"
-        );
-        assert!((attempts[1].estimated_usd.unwrap() - want).abs() < 1e-12);
-        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-01-01"));
-        assert!((split.total() - want).abs() < 1e-12);
-        let split = price_attempts(table, "gpt-5", &mut attempts, &unknown);
-        assert_eq!(
-            (
-                attempts[1].estimated_usd,
-                unknown.load(Ordering::SeqCst),
-                split
-            ),
-            (None, 1, CostSplit::default())
-        );
-    }
-
-    /// An attempt whose answer named no cache counts prices its prompt as its input alone.
-    #[test]
-    fn an_attempts_missing_counts_read_as_zero_in_its_prompt_length() {
-        let revisions = crate::test_tables::api_prices();
-        let table = revisions.in_force(JANUARY_2026);
-        let unknown = AtomicU64::new(0);
-        let attempt = |input| AttemptRecord {
-            attempt: 1,
-            input_tokens: Some(input),
-            ..Default::default()
-        };
-        let mut under = vec![attempt(1_000)];
-        let mut over = vec![attempt(1_001)];
-        price_attempts(table, "claude-haiku-5-5", &mut under, &unknown);
-        price_attempts(table, "claude-haiku-5-5", &mut over, &unknown);
-        assert!(
-            (under[0].input_usd.unwrap() - 1_000e-6).abs() < 1e-12,
-            "{:?}",
-            under[0].input_usd
-        );
-        assert!(
-            (over[0].input_usd.unwrap() - 5_005e-6).abs() < 1e-12,
-            "{:?}",
-            over[0].input_usd
-        );
     }
 
     #[test]

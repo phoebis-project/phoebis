@@ -62,12 +62,20 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
         input_tokens: Some(100),
         output_tokens: Some(10),
         cache_read_tokens: Some(40),
-        estimated_usd: Some(0.01),
-        pricing_version: Some("2026-09-08".into()),
         ratelimit_5h_utilization: Some(0.3),
         ratelimit_5h_reset: Some(9_000),
         ..Default::default()
     }
+}
+
+/// What `insert_request` books for one `attempt` on `model`: its counts at the shipped revision in force at `at`, the
+/// request's receipt.
+fn attempt_usd(model: &str, at: i64) -> f64 {
+    phoebis_ledger::PriceRevisions::shipped()
+        .in_force(at)
+        .estimate(model, phoebis_ledger::Speed::Standard, 100, 40, 0, 0, 10)
+        .expect("the shipped list carries the model")
+        .0
 }
 
 /// Six inference requests over two client builds, an agent type every third row, and a turn origin every
@@ -226,7 +234,17 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         (Some(3), Some(2), Some(1), Some(3))
     );
     assert_eq!(business["tokens"]["cache_read"].as_u64(), Some(120));
-    assert!((business["cost_usd"].as_f64().unwrap() - 0.03).abs() < 1e-9);
+    // The three business rows `seed_rollups` lands.
+    let business_usd: f64 = [0, 2, 4]
+        .into_iter()
+        .map(|i| attempt_usd("claude-sonnet-5", common::NOW - (5 - i) * HOUR))
+        .sum();
+    assert!(business_usd > 0.0);
+    assert!(
+        (business["cost_usd"].as_f64().unwrap() - business_usd).abs() < 1e-9,
+        "{} vs {business_usd}",
+        business["cost_usd"]
+    );
     assert_eq!(
         business["histograms"]["ttfb_ms"].as_array().unwrap().len(),
         64
@@ -1716,7 +1734,15 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
         ),
         (Some(24 * 150), Some(24 * 40))
     );
-    assert!((dashboard["cost_24h"].as_f64().unwrap() - 0.24).abs() < 1e-9);
+    let day_usd: f64 = (0..24)
+        .map(|i| attempt_usd("claude-sonnet-5", now - i * HOUR))
+        .sum();
+    assert!(day_usd > 0.0);
+    assert!(
+        (dashboard["cost_24h"].as_f64().unwrap() - day_usd).abs() < 1e-9,
+        "the 24 rows' counts at the shipped cells: {} vs {day_usd}",
+        dashboard["cost_24h"]
+    );
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);

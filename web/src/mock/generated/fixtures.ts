@@ -6342,7 +6342,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.0036,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "placement": {
                   "rung": "content",
@@ -6359,7 +6358,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": null
             }
           ],
           "held": null,
@@ -6470,7 +6470,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6481,7 +6480,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -6592,7 +6592,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6603,7 +6602,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -6718,7 +6718,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6729,7 +6728,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -6840,7 +6840,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6851,7 +6850,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -6962,7 +6962,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "strategy": "pace",
                 "tier": null,
@@ -6991,7 +6990,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": null,
                 "stop_sequence": null
-              }
+              },
+              "tier": null
             },
             {
               "index": 2,
@@ -7018,7 +7018,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "strategy": "pace",
                 "tier": [
@@ -7046,7 +7045,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "fast",
                 "stop_reason": "tool_use",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": {
@@ -8640,7 +8640,6 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": null,
@@ -8669,7 +8668,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "speed": "standard",
               "stop_reason": null,
               "stop_sequence": null
-            }
+            },
+            "tier": null
           },
           {
             "index": 2,
@@ -8696,7 +8696,6 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": [
@@ -8724,7 +8723,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "speed": "fast",
               "stop_reason": "tool_use",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": {
@@ -8943,7 +8943,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.0036,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "placement": {
                   "rung": "content",
@@ -8960,7 +8959,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": null
             }
           ],
           "held": null,
@@ -9071,7 +9071,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -9082,7 +9081,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -9193,7 +9193,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -9204,7 +9203,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -9319,7 +9319,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -9330,7 +9329,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -9441,7 +9441,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -9452,7 +9451,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": "end_turn",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": null,
@@ -9563,7 +9563,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "strategy": "pace",
                 "tier": null,
@@ -9592,7 +9591,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "standard",
                 "stop_reason": null,
                 "stop_sequence": null
-              }
+              },
+              "tier": null
             },
             {
               "index": 2,
@@ -9619,7 +9619,6 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "estimated_usd": 0.00355,
-              "pricing_version": "2026-10-08",
               "selection": {
                 "strategy": "pace",
                 "tier": [
@@ -9647,7 +9646,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "speed": "fast",
                 "stop_reason": "tool_use",
                 "stop_sequence": null
-              }
+              },
+              "tier": "default_claude_max_20x"
             }
           ],
           "held": {
@@ -11783,7 +11783,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 32,
+        "schema_version": 33,
         "written": 18,
         "dropped": 0,
         "write_failures": 0,

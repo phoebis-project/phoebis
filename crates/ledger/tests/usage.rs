@@ -12,7 +12,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, RequestRecord, KEY_RANGE_PREDICATE,
+    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord, Speed,
+    KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{ApiKeyRow, RulesMode, Store};
 use tower::ServiceExt;
@@ -29,7 +30,6 @@ fn used(id: &str) -> AttemptRecord {
         output_tokens: Some(10),
         cache_read_tokens: Some(50),
         cache_write_5m_tokens: Some(20),
-        estimated_usd: Some(0.5),
         ..Default::default()
     }
 }
@@ -123,7 +123,22 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
     assert_eq!((k1.requests, k1.succeeded, k1.failed), (4, 3, 1));
     assert_eq!(k1.tokens.input, 300);
     assert_eq!(k1.tokens.cache_write, 60);
-    assert!((k1.cost_usd - 1.5).abs() < 1e-9);
+    // `insert_request` folds at the shipped list, so each `used` attempt's dollars are its counts at the entry in force
+    // when its request arrived.
+    let used_usd = |model: &str| {
+        PriceRevisions::shipped()
+            .in_force(1_000)
+            .estimate(model, Speed::Standard, 100, 50, 20, 0, 10)
+            .expect("the shipped list carries the model")
+            .0
+    };
+    let want = 2.0 * used_usd("claude-sonnet-5") + used_usd("claude-opus-5");
+    assert!(want > 0.0);
+    assert!(
+        (k1.cost_usd - want).abs() < 1e-9,
+        "{} against {want}",
+        k1.cost_usd
+    );
     assert_eq!(
         k1.models
             .iter()

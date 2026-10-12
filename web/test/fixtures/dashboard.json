@@ -280,7 +280,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-08",
             "selection": {
               "placement": {
                 "rung": "content",
@@ -297,7 +296,8 @@
               "speed": "standard",
               "stop_reason": "end_turn",
               "stop_sequence": null
-            }
+            },
+            "tier": null
           }
         ],
         "held": null,
@@ -408,7 +408,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -419,7 +418,8 @@
               "speed": "standard",
               "stop_reason": "end_turn",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": null,
@@ -530,7 +530,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -541,7 +540,8 @@
               "speed": "standard",
               "stop_reason": "end_turn",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": null,
@@ -656,7 +656,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -667,7 +666,8 @@
               "speed": "standard",
               "stop_reason": "end_turn",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": null,
@@ -778,7 +778,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -789,7 +788,8 @@
               "speed": "standard",
               "stop_reason": "end_turn",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": null,
@@ -900,7 +900,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": null,
@@ -929,7 +928,8 @@
               "speed": "standard",
               "stop_reason": null,
               "stop_sequence": null
-            }
+            },
+            "tier": null
           },
           {
             "index": 2,
@@ -956,7 +956,6 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.00355,
-            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": [
@@ -984,7 +983,8 @@
               "speed": "fast",
               "stop_reason": "tool_use",
               "stop_sequence": null
-            }
+            },
+            "tier": "default_claude_max_20x"
           }
         ],
         "held": {

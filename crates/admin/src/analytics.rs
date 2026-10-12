@@ -854,10 +854,11 @@ pub(crate) async fn burn(
         ..Default::default()
     };
     let read = if group_by == "session" {
+        let prices = state.pricing.revisions();
         state
             .ledger
             .db()
-            .read(move |c| session_burn_series(c, &tables, &tiers, &filter))
+            .read(move |c| session_burn_series(c, &tables, &prices, &tiers, &filter))
             .await
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,

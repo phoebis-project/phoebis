@@ -220,8 +220,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(32), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that records the diagnostics member's source"
+        (Some(33), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that records the account's tier on each attempt"
     );
     assert_eq!(
         (
@@ -1304,7 +1304,6 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
             output_tokens: Some(100),
-            estimated_usd: Some(0.01),
             ..Default::default()
         }],
         bodies: None,
@@ -1810,51 +1809,47 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     // A tier on file, so the shares the session grouping leaves null are the grouping's and not a missing tier's.
     set_max_20x(&parts.store);
     let now = common::NOW;
-    let session_request = |id: &str,
-                           at: i64,
-                           session: &str,
-                           account: &str,
-                           input: u64,
-                           output: u64,
-                           estimated_usd: f64| Record::Request {
-        request: RequestRecord {
-            id: id.into(),
-            received_at: at,
-            finished_at: Some(at + 500),
-            key_id: Some("desktop".into()),
-            pool_id: Some("main".into()),
-            session_id: Some(session.into()),
-            model: "claude-sonnet-5".into(),
-            canonical_model: "claude-sonnet-5".into(),
-            kind: "inference".into(),
-            origin: "client".into(),
-            status: Some(200),
-            outcome: "succeeded".into(),
-            attempts: 1,
-            ..Default::default()
-        },
-        attempts: vec![AttemptRecord {
-            request_id: id.into(),
-            attempt: 1,
-            account_id: account.into(),
-            account_kind: if account == "business" {
-                "oauth"
-            } else {
-                "api_key"
+    let session_request =
+        |id: &str, at: i64, session: &str, account: &str, input: u64, output: u64| {
+            Record::Request {
+                request: RequestRecord {
+                    id: id.into(),
+                    received_at: at,
+                    finished_at: Some(at + 500),
+                    key_id: Some("desktop".into()),
+                    pool_id: Some("main".into()),
+                    session_id: Some(session.into()),
+                    model: "claude-sonnet-5".into(),
+                    canonical_model: "claude-sonnet-5".into(),
+                    kind: "inference".into(),
+                    origin: "client".into(),
+                    status: Some(200),
+                    outcome: "succeeded".into(),
+                    attempts: 1,
+                    ..Default::default()
+                },
+                attempts: vec![AttemptRecord {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: account.into(),
+                    account_kind: if account == "business" {
+                        "oauth"
+                    } else {
+                        "api_key"
+                    }
+                    .into(),
+                    started_at: at,
+                    outcome: "succeeded".into(),
+                    input_tokens: Some(input),
+                    output_tokens: Some(output),
+                    ..Default::default()
+                }],
+                bodies: None,
             }
-            .into(),
-            started_at: at,
-            outcome: "succeeded".into(),
-            input_tokens: Some(input),
-            output_tokens: Some(output),
-            estimated_usd: Some(estimated_usd),
-            ..Default::default()
-        }],
-        bodies: None,
-    };
-    // The most tokens, split an hour apart so the series carries it in two buckets. Each attempt carries a
-    // nonzero `estimated_usd` too, so the assertion below proves the oauth branch ignores it rather than
-    // merely never having seen a value to add.
+        };
+    // The most tokens, split an hour apart so the series carries it in two buckets. Each attempt's counts price to
+    // nonzero dollars too, so the assertion below proves the oauth branch ignores them rather than merely never
+    // having seen a value to add.
     parts.ledger.record(session_request(
         "r-big-1",
         now - HOUR - 100,
@@ -1862,7 +1857,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "business",
         2_000,
         200,
-        5.0,
     ));
     parts.ledger.record(session_request(
         "r-big-2",
@@ -1871,7 +1865,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "business",
         2_000,
         200,
-        5.0,
     ));
     // Fewer tokens than "s-big", more than "s-small", on an api_key account.
     parts.ledger.record(session_request(
@@ -1881,7 +1874,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "direct",
         1_000,
         100,
-        0.05,
     ));
     // The fewest tokens: last in the ranking.
     parts.ledger.record(session_request(
@@ -1891,7 +1883,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "business",
         10,
         1,
-        0.0,
     ));
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-mid").await.unwrap()
@@ -1937,6 +1928,24 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         .find(|p| p["group"] == "s-mid" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
         .unwrap_or_else(|| panic!("s-mid's bucket carries its dollar price: {points:?}"));
     assert_eq!(mid_point["uncached_tokens"].as_u64(), Some(1_000));
+    // The attempt's counts at the shipped revision in force when its request arrived.
+    let mid_usd = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(now - 100)
+        .estimate(
+            "claude-sonnet-5",
+            phoebis_ledger::Speed::Standard,
+            1_000,
+            0,
+            0,
+            0,
+            100,
+        )
+        .expect("the shipped list carries the model")
+        .0;
+    assert!(
+        (mid_point["usd"].as_f64().unwrap() - mid_usd).abs() < 1e-12,
+        "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
+    );
     // A session can move between upstreams, and shares of different accounts' windows do not add.
     assert!(
         points.iter().all(|p| null_field(p, "five_hour_share")

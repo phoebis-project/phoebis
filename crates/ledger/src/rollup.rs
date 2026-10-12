@@ -7,6 +7,7 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use phoebis_routing::PinUsage;
 use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
@@ -14,7 +15,7 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::funding_of;
-use crate::pricing::Speed;
+use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
 
@@ -118,6 +119,48 @@ pub fn bucket_of(at_ms: i64) -> i64 {
     at_ms.div_euclid(1_000).div_euclid(300) * 300
 }
 
+/// The dollars of the attempts with usage, summed per cell type, on the revision in force at the request's
+/// `received_at`, each attempt at the cells its own prompt and its reported speed select. The rollup row stores
+/// dollars, so the fold prices the counts as it writes them.
+fn attempt_dollars(
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+    prices: &PriceRevisions,
+) -> CostSplit {
+    let table = prices.in_force(request.received_at);
+    let model = request.canonical_model.as_str();
+    // Accumulated from a positive zero rather than summed: `Sum<f64>` starts at -0.0, so an hour of unpriced
+    // requests would carry a signed zero into the rollups and out to the wire.
+    let mut total = CostSplit::default();
+    for a in attempts.iter().filter(|a| a.has_usage()) {
+        let counts = PinUsage {
+            input: a.input_tokens.unwrap_or(0),
+            cache_read: a.cache_read_tokens.unwrap_or(0),
+            write_5m: a.cache_write_5m_tokens.unwrap_or(0),
+            write_1h: a.cache_write_1h_tokens.unwrap_or(0),
+            output: a.output_tokens.unwrap_or(0),
+        };
+        let band = table.band_of(
+            model,
+            prompt_tokens(
+                counts.input,
+                counts.cache_read,
+                counts.write_5m,
+                counts.write_1h,
+            ),
+        );
+        if let Some((_, split)) =
+            table.estimate_banded(model, Speed::of(a.speed.as_deref()), band, counts)
+        {
+            total.input_usd += split.input_usd;
+            total.cache_read_usd += split.cache_read_usd;
+            total.cache_write_usd += split.cache_write_usd;
+            total.output_usd += split.output_usd;
+        }
+    }
+    total
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CostSplit {
     pub input_usd: f64,
@@ -129,18 +172,6 @@ pub struct CostSplit {
 impl CostSplit {
     pub fn total(&self) -> f64 {
         self.input_usd + self.cache_read_usd + self.cache_write_usd + self.output_usd
-    }
-
-    /// The split a request was folded with is read back from its own rows, so a replace subtracts exactly what
-    /// its first write added rather than a reconstruction.
-    pub fn from_attempts(attempts: &[AttemptRecord]) -> CostSplit {
-        let sum = |f: fn(&AttemptRecord) -> Option<f64>| attempts.iter().filter_map(f).sum::<f64>();
-        CostSplit {
-            input_usd: sum(|a| a.input_usd),
-            cache_read_usd: sum(|a| a.cache_read_usd),
-            cache_write_usd: sum(|a| a.cache_write_usd),
-            output_usd: sum(|a| a.output_usd),
-        }
     }
 }
 
@@ -411,8 +442,14 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
     }
 }
 
-pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRow {
-    let costs = CostSplit::from_attempts(attempts);
+/// `prices` prices the delta's dollar columns from the attempts' counts at the revision in force at the request's
+/// `received_at`, each attempt at the cells its own prompt selects.
+pub fn delta_of(
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+    prices: &PriceRevisions,
+) -> RollupRow {
+    let costs = attempt_dollars(request, attempts, prices);
     let last = attempts.last();
     let mut d = RollupRow::key(
         hour_of(request.received_at),
@@ -503,12 +540,7 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             }
         }
     }
-    // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so an hour of unpriced
-    // requests would carry a signed zero into the rollups and out to the wire.
-    d.estimated_usd = attempts
-        .iter()
-        .filter_map(|a| a.estimated_usd)
-        .fold(0.0, |a, b| a + b);
+    d.estimated_usd = costs.total();
     d.input_usd = costs.input_usd;
     d.cache_read_usd = costs.cache_read_usd;
     d.cache_write_usd = costs.cache_write_usd;
@@ -590,6 +622,7 @@ pub fn fold_request(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     previous: Option<(&RequestRecord, &[AttemptRecord])>,
+    prices: &PriceRevisions,
 ) -> Result<(), LedgerError> {
     // A replaced request first leaves the row it was folded into, under the key it had then: the same id can
     // land under another account or hour once its attempts are known. A request folded under its raw dimensions by
@@ -598,7 +631,7 @@ pub fn fold_request(
     // in both rows, and a later request's row otherwise, where the counters saturate at zero and the dollar columns
     // can go below zero while the totals still balance. Accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
-        let old = delta_of(old_request, old_attempts);
+        let old = delta_of(old_request, old_attempts, prices);
         if let Some(mut row) = read_rollup(tx, &old)? {
             row.subtract(&old);
             // Every delta sets `requests` to 1 but a held probe's, which leaves it at 0 and sets `probes_held`, one
@@ -624,7 +657,7 @@ pub fn fold_request(
             }
         }
     }
-    let delta = delta_of(request, attempts);
+    let delta = delta_of(request, attempts, prices);
     let mut row = read_rollup(tx, &delta)?.unwrap_or_else(|| {
         RollupRow::key(
             delta.hour,
@@ -1449,6 +1482,38 @@ mod tests {
             !rollups.iter().any(|c| c == "probes_skipped"),
             "probes_skipped is migration 5's column: {rollups:?}"
         );
+        assert!(
+            attempts.iter().any(|c| c == "estimated_usd")
+                && attempts.iter().any(|c| c == "pricing_version")
+                && !attempts.iter().any(|c| c == "tier"),
+            "estimated_usd and pricing_version are version 1's own, which migration 33 drops, and the tier is \
+             migration 33's: {attempts:?}"
+        );
+    }
+
+    /// The attempt columns migration 33 drops: the five dollar figures, which a reader prices from the counts, and
+    /// the stamp of the table that priced them.
+    const DROPPED_ATTEMPT_COLUMNS: [&str; 6] = [
+        "cache_read_usd",
+        "cache_write_usd",
+        "estimated_usd",
+        "input_usd",
+        "output_usd",
+        "pricing_version",
+    ];
+
+    /// The attempt holds no dollar column and no stamp at the newest version, and carries the account's tier.
+    fn assert_attempts_carry_the_tier_and_no_dollars(attempts: &[String]) {
+        for dropped in DROPPED_ATTEMPT_COLUMNS {
+            assert!(
+                !attempts.iter().any(|c| c == dropped),
+                "migration 33 dropped {dropped}: {attempts:?}"
+            );
+        }
+        assert!(
+            attempts.iter().any(|c| c == "tier"),
+            "migration 33 added the tier: {attempts:?}"
+        );
     }
 
     /// A file holding exactly what version 1 created reaches the newest version with the newest shape.
@@ -1464,6 +1529,13 @@ mod tests {
                 [],
             )
             .unwrap();
+            conn.execute(
+                "INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, \
+                 outcome, input_tokens, estimated_usd, pricing_version) \
+                 VALUES ('r1', 1, 'a', 'oauth', 1000, 'succeeded', 10, 0.5, '2026-09-08')",
+                [],
+            )
+            .unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
         assert_eq!(
@@ -1472,6 +1544,21 @@ mod tests {
         );
         let (tables, attempts, _) = db.read_blocking(|c| Ok(shape(c))).unwrap();
         assert_eq!(tables, FINAL_TABLES);
+        assert_attempts_carry_the_tier_and_no_dollars(&attempts);
+        let row: (Option<String>, Option<i64>) = db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT tier, input_tokens FROM attempts WHERE request_id = 'r1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(
+            row,
+            (None, Some(10)),
+            "a row from before the column reads no tier and keeps its counts"
+        );
     }
 
     /// The fresh path is the upgrade path from version 1, so a file that did not exist reads the same version and
@@ -1488,6 +1575,7 @@ mod tests {
         );
         let (tables, attempts, rollups) = db.read_blocking(|c| Ok(shape(c))).unwrap();
         assert_eq!(tables, FINAL_TABLES);
+        assert_attempts_carry_the_tier_and_no_dollars(&attempts);
         assert!(rollups.iter().any(|c| c == "probes_skipped"));
         assert!(rollups.iter().any(|c| c == "probes_held"));
     }
@@ -1519,7 +1607,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 33);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -1577,7 +1665,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 33);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1629,8 +1717,9 @@ mod tests {
                     client: Some("claude-code/cli".into()),
                     ..Default::default()
                 },
-                &[attempt(1, "a", None, None, None, None)],
+                &[attempt(1, "a", None, None, None)],
                 None,
+                &prices(),
             )?;
             tx.commit()?;
             Ok(())
@@ -1672,7 +1761,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 33);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -1687,6 +1776,42 @@ mod tests {
                 .cooldown_seconds,
             20,
             "the interval folds on a ledger that predates the table it is kept in"
+        );
+    }
+
+    /// The test price list. The requests here arrive before its first date, so each prices at its first entry.
+    fn prices() -> PriceRevisions {
+        crate::test_tables::api_prices()
+    }
+
+    /// A model the test list carries without a long-context block, so a case prices at its standard cells.
+    const SONNET: &str = "claude-sonnet-5-5";
+
+    /// The standard cells `SONNET` carries in the entry in force when `r` arrived.
+    fn sonnet_cells(r: &RequestRecord) -> crate::pricing::ModelPrice {
+        prices()
+            .in_force(r.received_at)
+            .price(SONNET)
+            .expect("the test list carries the model")
+            .clone()
+    }
+
+    fn assert_split(row: &RollupRow, want: &CostSplit) {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(
+            close(row.input_usd, want.input_usd)
+                && close(row.cache_read_usd, want.cache_read_usd)
+                && close(row.cache_write_usd, want.cache_write_usd)
+                && close(row.output_usd, want.output_usd)
+                && close(row.estimated_usd, want.total()),
+            "{:?} against {want:?}",
+            (
+                row.estimated_usd,
+                row.input_usd,
+                row.cache_read_usd,
+                row.cache_write_usd,
+                row.output_usd
+            )
         );
     }
 
@@ -1717,7 +1842,6 @@ mod tests {
         read: Option<u64>,
         write: Option<u64>,
         out: Option<u64>,
-        usd: Option<f64>,
     ) -> AttemptRecord {
         AttemptRecord {
             request_id: "r".into(),
@@ -1729,7 +1853,6 @@ mod tests {
             cache_write_5m_tokens: write,
             output_tokens: out,
             input_tokens: Some(10),
-            estimated_usd: usd,
             cache_miss_reason: Some("none".into()),
             ratelimit_5h_utilization: Some(0.5),
             ..Default::default()
@@ -1776,7 +1899,7 @@ mod tests {
         r.client = Some(long.clone());
         r.effort = Some(long.clone());
         r.request_class = Some(long.clone());
-        let d = delta_of(&r, &[]);
+        let d = delta_of(&r, &[], &prices());
         assert_eq!(
             (
                 d.user_agent.as_str(),
@@ -1793,12 +1916,12 @@ mod tests {
             "the key files the folded values"
         );
         r.user_agent = Some("no product token".into());
-        assert_eq!(delta_of(&r, &[]).user_agent, OTHER_DIMENSION);
+        assert_eq!(delta_of(&r, &[], &prices()).user_agent, OTHER_DIMENSION);
         r.user_agent = None;
         r.client = None;
         r.effort = None;
         r.request_class = None;
-        let d = delta_of(&r, &[]);
+        let d = delta_of(&r, &[], &prices());
         assert_eq!(
             (
                 d.user_agent.as_str(),
@@ -1820,7 +1943,7 @@ mod tests {
             requested_speed: Some("fast".into()),
             ..request("exhausted", Some(429), Some("k"))
         };
-        let d = delta_of(&refused, &[]);
+        let d = delta_of(&refused, &[], &prices());
         assert_eq!(
             (d.speed.as_str(), d.funding.as_str()),
             ("fast", PLAN_FUNDING),
@@ -1831,14 +1954,14 @@ mod tests {
             ..refused.clone()
         };
         assert_eq!(
-            delta_of(&caller_text, &[]).speed,
+            delta_of(&caller_text, &[], &prices()).speed,
             STANDARD_SPEED,
             "the caller's text never keys a row"
         );
-        let mut served = attempt(1, "a", None, None, Some(5), None);
+        let mut served = attempt(1, "a", None, None, Some(5));
         served.speed = Some(STANDARD_SPEED.into());
         assert_eq!(
-            delta_of(&refused, &[served]).speed,
+            delta_of(&refused, &[served], &prices()).speed,
             STANDARD_SPEED,
             "the speed the answer reported outranks the one the request asked for"
         );
@@ -1855,7 +1978,7 @@ mod tests {
             attempts: 0,
             ..request("rejected", Some(503), Some("k"))
         };
-        let d = delta_of(&held, &[]);
+        let d = delta_of(&held, &[], &prices());
         assert_eq!(
             (
                 (d.probes_held, d.requests),
@@ -1903,18 +2026,17 @@ mod tests {
 
     #[test]
     fn the_key_is_the_serving_account_and_the_reserved_id_stands_in_for_what_is_missing() {
+        let r = RequestRecord {
+            canonical_model: SONNET.into(),
+            ..request("succeeded", Some(200), Some("k"))
+        };
         let d = delta_of(
-            &request("succeeded", Some(200), Some("k")),
+            &r,
             &[
-                attempt(1, "a", None, None, None, Some(0.1)),
-                AttemptRecord {
-                    input_usd: Some(0.1),
-                    cache_read_usd: Some(0.05),
-                    cache_write_usd: Some(0.0),
-                    output_usd: Some(0.15),
-                    ..attempt(2, "b", Some(5), None, Some(20), Some(0.2))
-                },
+                attempt(1, "a", None, None, None),
+                attempt(2, "b", Some(5), None, Some(20)),
             ],
+            &prices(),
         );
         assert_eq!(
             (
@@ -1925,7 +2047,7 @@ mod tests {
                 d.canonical_model.as_str(),
                 d.kind.as_str()
             ),
-            (3_600, "k", "p", "b", "m", "inference")
+            (3_600, "k", "p", "b", SONNET, "inference")
         );
         assert_eq!(
             (
@@ -1943,8 +2065,16 @@ mod tests {
             (d.input_tokens, d.cache_read_tokens, d.output_tokens),
             (10, 5, 20)
         );
-        assert!((d.estimated_usd - 0.3).abs() < 1e-9);
-        assert!((d.input_usd - 0.1).abs() < 1e-9 && (d.output_usd - 0.15).abs() < 1e-9);
+        // Both attempts answered, so both are priced: ten input tokens each, and the second's cache read and output.
+        let cells = sonnet_cells(&r);
+        let want = CostSplit {
+            input_usd: 20.0 * cells.input / 1e6,
+            cache_read_usd: 5.0 * cells.cache_read / 1e6,
+            cache_write_usd: 0.0,
+            output_usd: 20.0 * cells.output / 1e6,
+        };
+        assert!(want.total() > 0.0);
+        assert_split(&d, &want);
         assert_eq!(
             d.ttfb_hist.count()
                 + d.ttfc_hist.count()
@@ -1964,7 +2094,7 @@ mod tests {
             "a none with a cache read is a hit"
         );
         assert!(d.errors.is_empty());
-        let d = delta_of(&request("rejected", Some(401), None), &[]);
+        let d = delta_of(&request("rejected", Some(401), None), &[], &prices());
         assert_eq!(
             (
                 d.key_id.as_str(),
@@ -1979,7 +2109,8 @@ mod tests {
         assert_eq!(d.errors.get("upstream_unreachable"), Some(&1));
         let d = delta_of(
             &request("failed", Some(429), Some("k")),
-            &[attempt(1, "a", None, Some(3), None, None)],
+            &[attempt(1, "a", None, Some(3), None)],
+            &prices(),
         );
         assert_eq!((d.rate_limited, d.failed, d.cache_misses), (1, 0, 1));
         assert_eq!(
@@ -1992,7 +2123,8 @@ mod tests {
         );
         let d = delta_of(
             &request("canceled", Some(503), Some("k")),
-            &[attempt(1, "a", None, None, None, None)],
+            &[attempt(1, "a", None, None, None)],
+            &prices(),
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
     }
@@ -2234,9 +2366,10 @@ mod tests {
             delta_of(
                 &request("succeeded", Some(200), Some("k")),
                 &[
-                    attempt(1, first, None, None, None, None),
-                    attempt(2, second, None, None, None, None),
+                    attempt(1, first, None, None, None),
+                    attempt(2, second, None, None, None),
                 ],
+                &prices(),
             )
         };
         let replayed = two("a", "a");
@@ -2252,34 +2385,33 @@ mod tests {
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
         let (req, attempts) = (
-            request("succeeded", Some(200), Some("k")),
-            vec![AttemptRecord {
-                input_usd: Some(0.05),
-                cache_read_usd: Some(0.02),
-                cache_write_usd: Some(0.0),
-                output_usd: Some(0.13),
-                thinking_tokens: Some(25),
-                web_search_requests: Some(2),
-                web_fetch_requests: Some(1),
-                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
-            }],
-        );
-        let (req2, attempts2) = (
             RequestRecord {
-                id: "r2".into(),
+                canonical_model: SONNET.into(),
                 ..request("succeeded", Some(200), Some("k"))
             },
             vec![AttemptRecord {
                 thinking_tokens: Some(25),
                 web_search_requests: Some(2),
                 web_fetch_requests: Some(1),
-                ..attempt(1, "a", Some(5), None, Some(20), Some(0.2))
+                ..attempt(1, "a", Some(5), None, Some(20))
+            }],
+        );
+        let (req2, attempts2) = (
+            RequestRecord {
+                id: "r2".into(),
+                ..req.clone()
+            },
+            vec![AttemptRecord {
+                thinking_tokens: Some(25),
+                web_search_requests: Some(2),
+                web_fetch_requests: Some(1),
+                ..attempt(1, "a", Some(5), None, Some(20))
             }],
         );
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &req, &attempts, None)?;
-            fold_request(&tx, &req2, &attempts2, None)?;
+            fold_request(&tx, &req, &attempts, None, &prices())?;
+            fold_request(&tx, &req2, &attempts2, None, &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2288,8 +2420,8 @@ mod tests {
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
         assert_eq!(rows.len(), 1);
-        let mut expected = delta_of(&req, &attempts);
-        expected.add(&delta_of(&req2, &attempts2));
+        let mut expected = delta_of(&req, &attempts, &prices());
+        expected.add(&delta_of(&req2, &attempts2, &prices()));
         assert_eq!(rows[0], expected, "two requests, two contributions");
         let accounts = db
             .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
@@ -2301,21 +2433,17 @@ mod tests {
             ),
             ("a", Some(0.5))
         );
-        // The first request is written again with more output and a different split: its earlier split goes,
-        // the new one lands whole, never mixed with what it replaced.
+        // The first request is written again with more output and a cache write: its earlier split goes, the new
+        // one lands whole, never mixed with what it replaced.
         let more = vec![AttemptRecord {
-            input_usd: Some(0.3),
-            cache_read_usd: Some(0.1),
-            cache_write_usd: Some(0.05),
-            output_usd: Some(0.45),
             thinking_tokens: Some(30),
             web_search_requests: Some(1),
             web_fetch_requests: Some(0),
-            ..attempt(1, "a", Some(5), None, Some(50), Some(0.9))
+            ..attempt(1, "a", Some(5), Some(100), Some(50))
         }];
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &req, &more, Some((&req, &attempts)))?;
+            fold_request(&tx, &req, &more, Some((&req, &attempts)), &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2323,8 +2451,8 @@ mod tests {
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
-        let mut expected = delta_of(&req2, &attempts2);
-        expected.add(&delta_of(&req, &more));
+        let mut expected = delta_of(&req2, &attempts2, &prices());
+        expected.add(&delta_of(&req, &more, &prices()));
         assert_eq!(
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
@@ -2344,13 +2472,18 @@ mod tests {
             rows[0].output_tps_hist, expected.output_tps_hist,
             "the old sample left the histogram"
         );
-        assert!(
-            (rows[0].input_usd - 0.3).abs() < 1e-9
-                && (rows[0].cache_read_usd - 0.1).abs() < 1e-9
-                && (rows[0].cache_write_usd - 0.05).abs() < 1e-9
-                && (rows[0].output_usd - 0.45).abs() < 1e-9,
-            "the replaced request's split lands whole, unblended with what it replaced"
-        );
+        // The second request's counts and the replacement's: ten input tokens and five cache reads each, the
+        // replacement's hundred cache writes, and 20 + 50 output tokens.
+        let cells = sonnet_cells(&req);
+        let want = CostSplit {
+            input_usd: 20.0 * cells.input / 1e6,
+            cache_read_usd: 10.0 * cells.cache_read / 1e6,
+            cache_write_usd: 100.0 * cells.cache_write_5m / 1e6,
+            output_usd: 70.0 * cells.output / 1e6,
+        };
+        assert!(want.total() > 0.0);
+        // The replaced request's split lands whole, unblended with what it replaced.
+        assert_split(&rows[0], &want);
         assert!(
             rows[0].input_usd >= 0.0
                 && rows[0].cache_read_usd >= 0.0
@@ -2362,11 +2495,84 @@ mod tests {
 
     #[test]
     fn an_hour_of_unpriced_requests_rolls_up_an_unsigned_zero() {
-        let delta = delta_of(&RequestRecord::default(), &[]);
+        let delta = delta_of(&RequestRecord::default(), &[], &prices());
         assert_eq!(
             serde_json::to_string(&delta.estimated_usd).unwrap(),
             "0.0",
             "a signed zero on the wire is read back as -$0.00"
+        );
+    }
+
+    /// An attempt whose answer named no cache counts prices its prompt as its input alone, so the input decides which
+    /// side of the threshold its cells come from.
+    #[test]
+    fn an_attempts_missing_counts_read_as_zero_in_its_prompt_length() {
+        let haiku = |input: u64| {
+            let r = RequestRecord {
+                canonical_model: "claude-haiku-5-5".into(),
+                ..request("succeeded", Some(200), Some("k"))
+            };
+            let a = AttemptRecord {
+                input_tokens: Some(input),
+                cache_read_tokens: None,
+                cache_write_5m_tokens: None,
+                cache_write_1h_tokens: None,
+                ..attempt(1, "a", None, None, None)
+            };
+            delta_of(&r, &[a], &prices())
+        };
+        let table = prices();
+        let row = table
+            .in_force(request("succeeded", Some(200), Some("k")).received_at)
+            .models["claude-haiku-5-5"]
+            .clone();
+        let long = row
+            .long_context
+            .expect("the test list's Haiku 5.5 is priced by prompt length");
+        let (under, over) = (haiku(long.over), haiku(long.over + 1));
+        assert!(
+            (under.input_usd - long.over as f64 * row.standard.input / 1e6).abs() < 1e-12,
+            "{}",
+            under.input_usd
+        );
+        assert!(
+            (over.input_usd - (long.over + 1) as f64 * long.cells.input / 1e6).abs() < 1e-12,
+            "{}",
+            over.input_usd
+        );
+    }
+
+    /// The fold prices a request at the revision in force when it arrived, whichever revision is the latest.
+    #[test]
+    fn the_fold_prices_a_request_at_the_revision_in_force_when_it_arrived() {
+        let at = |received_at: i64| {
+            let r = RequestRecord {
+                received_at,
+                canonical_model: SONNET.into(),
+                ..request("succeeded", Some(200), Some("k"))
+            };
+            (
+                delta_of(&r, &[attempt(1, "a", None, None, Some(20))], &prices()),
+                sonnet_cells(&r),
+            )
+        };
+        let february = crate::effective_instant("2026-02-01").expect("a date");
+        for (received_at, revision) in [(february - 1, "2026-01-01"), (february, "2026-02-01")] {
+            assert_eq!(prices().in_force(received_at).effective, revision);
+            let (d, cells) = at(received_at);
+            assert_split(
+                &d,
+                &CostSplit {
+                    input_usd: 10.0 * cells.input / 1e6,
+                    cache_read_usd: 0.0,
+                    cache_write_usd: 0.0,
+                    output_usd: 20.0 * cells.output / 1e6,
+                },
+            );
+        }
+        assert!(
+            (at(february).0.estimated_usd - 2.0 * at(february - 1).0.estimated_usd).abs() < 1e-12,
+            "the second entry doubles the first's cells"
         );
     }
 
@@ -2480,7 +2686,7 @@ mod tests {
             thinking_tokens: Some(25),
             web_search_requests: Some(2),
             web_fetch_requests: Some(1),
-            ..attempt(n, "a", Some(5), None, Some(40), Some(0.2))
+            ..attempt(n, "a", Some(5), None, Some(40))
         };
         let first = (request("succeeded", Some(200), Some("k")), vec![counted(1)]);
         let second = (
@@ -2492,8 +2698,8 @@ mod tests {
         );
         db.write(|c| {
             let tx = c.transaction()?;
-            fold_request(&tx, &first.0, &first.1, None)?;
-            fold_request(&tx, &second.0, &second.1, None)?;
+            fold_request(&tx, &first.0, &first.1, None, &prices())?;
+            fold_request(&tx, &second.0, &second.1, None, &prices())?;
             tx.commit()?;
             Ok(())
         })
@@ -2614,7 +2820,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 32);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 33);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

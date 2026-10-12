@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, price_shares, Funding, PlanTables, WindowShares};
-use crate::pricing::{PriceTable, Speed};
+use crate::pricing::{prompt_tokens, PriceRevisions, PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
@@ -3296,12 +3296,43 @@ struct SessionAttempt {
     cache_write_5m_tokens: u64,
     cache_write_1h_tokens: u64,
     output_tokens: u64,
-    estimated_usd: f64,
+    /// Milliseconds, `requests.received_at`: the instant that names the price revision the attempt's dollars read.
+    received_at: i64,
     /// `attempts.speed`, the speed the answer reported.
     speed: Option<String>,
     /// `attempts.account_kind` and `attempts.overage_in_use`, the two facts beside the speed that say who paid.
     account_kind: String,
     overage_in_use: Option<bool>,
+}
+
+/// The attempt's dollars on the revision in force when its request arrived, at the cells its own prompt and its
+/// reported speed select, zero for a model the revision lacks.
+fn session_attempt_usd(a: &SessionAttempt, prices: &PriceRevisions) -> f64 {
+    let table = prices.in_force(a.received_at);
+    let counts = PinUsage {
+        input: a.input_tokens,
+        cache_read: a.cache_read_tokens,
+        write_5m: a.cache_write_5m_tokens,
+        write_1h: a.cache_write_1h_tokens,
+        output: a.output_tokens,
+    };
+    let band = table.band_of(
+        &a.canonical_model,
+        prompt_tokens(
+            counts.input,
+            counts.cache_read,
+            counts.write_5m,
+            counts.write_1h,
+        ),
+    );
+    table
+        .estimate_banded(
+            &a.canonical_model,
+            Speed::of(a.speed.as_deref()),
+            band,
+            counts,
+        )
+        .map_or(0.0, |(usd, _)| usd)
 }
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
@@ -3317,7 +3348,7 @@ fn session_attempts_statement(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, a.estimated_usd, a.speed, a.account_kind, a.overage_in_use \
+         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -3357,7 +3388,7 @@ fn read_session_attempts(
             cache_write_5m_tokens: tokens(row.get(7)?),
             cache_write_1h_tokens: tokens(row.get(8)?),
             output_tokens: tokens(row.get(9)?),
-            estimated_usd: row.get::<_, Option<f64>>(10)?.unwrap_or(0.0),
+            received_at: row.get(10)?,
             speed: row.get(11)?,
             account_kind: row.get(12)?,
             overage_in_use: row.get(13)?,
@@ -3374,6 +3405,7 @@ fn read_session_attempts(
 pub fn session_burn_series(
     conn: &Connection,
     tables: &PlanTables,
+    prices: &PriceRevisions,
     tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
@@ -3421,7 +3453,7 @@ pub fn session_burn_series(
                 cache_write_5m_tokens: a.cache_write_5m_tokens,
                 cache_write_1h_tokens: a.cache_write_1h_tokens,
                 output_tokens: a.output_tokens,
-                estimated_usd: a.estimated_usd,
+                estimated_usd: session_attempt_usd(&a, prices),
                 at: a.completed_at,
                 funding: funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()),
             },

@@ -507,6 +507,19 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         ] {
             sql.push_str(&format!("ALTER TABLE requests DROP COLUMN {column}; "));
         }
+        // Migration 33 drops the attempt's five dollar columns and its stamp and adds the tier, so the attempts table
+        // goes back to the shape a version-four file has before the replay runs it.
+        sql.push_str("ALTER TABLE attempts DROP COLUMN tier; ");
+        for column in [
+            "cache_read_usd REAL",
+            "cache_write_usd REAL",
+            "estimated_usd REAL",
+            "input_usd REAL",
+            "output_usd REAL",
+            "pricing_version TEXT",
+        ] {
+            sql.push_str(&format!("ALTER TABLE attempts ADD COLUMN {column}; "));
+        }
         sql.push_str("ALTER TABLE quota_samples DROP COLUMN observed_at; ");
         sql.push_str("DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; ");
         sql.push_str("DROP TABLE decisions; DROP INDEX IF EXISTS events_account; ");
@@ -523,7 +536,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 32);
+    assert_eq!(db.schema_version().await.unwrap(), 33);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

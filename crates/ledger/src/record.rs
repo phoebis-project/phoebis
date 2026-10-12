@@ -128,12 +128,10 @@ pub struct AttemptRecord {
     pub ratelimit_7d_oi_reset: Option<i64>,
     pub overage_in_use: Option<bool>,
     pub overage_utilization: Option<f64>,
-    pub estimated_usd: Option<f64>,
-    pub input_usd: Option<f64>,
-    pub cache_read_usd: Option<f64>,
-    pub cache_write_usd: Option<f64>,
-    pub output_usd: Option<f64>,
-    pub pricing_version: Option<String>,
+    /// The serving account's rate-limit tier as the router's registry snapshot held it when the request landed,
+    /// `None` for an api_key account and for an oauth account whose profile has not been read. Written once, so a
+    /// row reads the tier the account had and a later change moves nothing.
+    pub tier: Option<String>,
     pub thinking_tokens: Option<u64>,
     pub web_search_requests: Option<u64>,
     pub web_fetch_requests: Option<u64>,
@@ -153,8 +151,8 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    /// Whether the attempt carries any of the five priced token counts: what `price_attempts` prices, and what
-    /// a retried leg's earlier, answer-less passes lack.
+    /// Whether the attempt carries any of the five priced token counts: what the fold prices, and what a retried
+    /// leg's earlier, answer-less passes lack.
     pub fn has_usage(&self) -> bool {
         self.input_tokens.is_some()
             || self.output_tokens.is_some()

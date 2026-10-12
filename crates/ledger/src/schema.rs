@@ -283,6 +283,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 32: the request row records who put the cache diagnostics member on the body the upstream compared, the
 /// client or the router, so the drawer tells a client's own comparison from the relay's insertion. A row from before
 /// reads NULL.
+///
+/// Version 33: an attempt keeps its counts and no dollar figure, since a reader prices the counts at the revision in
+/// force when the request arrived, so the five dollar columns and the stamp of the table that priced them leave. The
+/// attempt records the serving account's tier as the registry held it at the landing. SQLite drops a column in place,
+/// so the table is not rebuilt. No backfill: a row from before reads a NULL tier.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -882,4 +887,11 @@ CREATE INDEX events_request ON events (request_id);",
          ALTER TABLE requests ADD COLUMN stream_end_at INTEGER;",
     ),
     (32, "ALTER TABLE requests ADD COLUMN diagnostics_source TEXT;"),
+    (
+        33,
+        "ALTER TABLE attempts DROP COLUMN estimated_usd; ALTER TABLE attempts DROP COLUMN input_usd; \
+         ALTER TABLE attempts DROP COLUMN cache_read_usd; ALTER TABLE attempts DROP COLUMN cache_write_usd; \
+         ALTER TABLE attempts DROP COLUMN output_usd; ALTER TABLE attempts DROP COLUMN pricing_version; \
+         ALTER TABLE attempts ADD COLUMN tier TEXT;",
+    ),
 ];

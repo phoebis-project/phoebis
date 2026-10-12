@@ -54,6 +54,23 @@ fn usage(input: u64, output: u64) -> PinUsage {
     }
 }
 
+/// What `insert_request` books for one attempt: its counts at the shipped revision in force at `at`.
+fn shipped_usd(at: i64, model: &str, speed: Speed, counts: PinUsage) -> f64 {
+    PriceRevisions::shipped()
+        .in_force(at)
+        .estimate(
+            model,
+            speed,
+            counts.input,
+            counts.cache_read,
+            counts.write_5m,
+            counts.write_1h,
+            counts.output,
+        )
+        .expect("the shipped list carries the model")
+        .0
+}
+
 fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let keys = ["k1", "k2", "k3"];
@@ -127,7 +144,6 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
                 cache_miss_reason: last.then(|| {
                     ["none", "tools_changed", "messages_changed"][rng.random_range(0..3)].into()
                 }),
-                estimated_usd: last.then(|| rng.random_range(0.0..0.5)),
                 ratelimit_5h_utilization: Some(rng.random_range(0.0..1.0)),
                 speed: (last && rng.random_bool(0.5)).then(|| "fast".into()),
                 ..Default::default()
@@ -162,14 +178,16 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
     out
 }
 
-/// A direct aggregation of the raw rows under one group-by, built from the same delta rule but summed in memory.
+/// A direct aggregation of the raw rows under one group-by, built from the same delta rule but summed in memory, and
+/// priced at the shipped list `insert_request` folds with.
 fn aggregate(
     rows: &[(RequestRecord, Vec<AttemptRecord>)],
     group: impl Fn(&RollupRow) -> String,
 ) -> BTreeMap<String, RollupRow> {
+    let prices = PriceRevisions::shipped();
     let mut out: BTreeMap<String, RollupRow> = BTreeMap::new();
     for (request, attempts) in rows {
-        let delta = delta_of(request, attempts);
+        let delta = delta_of(request, attempts, &prices);
         let key = group(&delta);
         out.entry(key.clone())
             .and_modify(|row| row.add(&delta))
@@ -973,9 +991,10 @@ fn served_at(id: &str, speeds: &[Option<&str>]) -> (RequestRecord, Vec<AttemptRe
 fn a_fast_answer_files_its_request_under_speed_fast_and_a_silent_answer_under_standard() {
     let fast = served_at("r-fast", &[Some("fast")]);
     let silent = served_at("r-silent", &[None]);
-    assert_eq!(delta_of(&fast.0, &fast.1).speed, "fast");
+    let prices = PriceRevisions::shipped();
+    assert_eq!(delta_of(&fast.0, &fast.1, &prices).speed, "fast");
     assert_eq!(
-        delta_of(&silent.0, &silent.1).speed,
+        delta_of(&silent.0, &silent.1, &prices).speed,
         "standard",
         "an answer that named no speed files under standard"
     );
@@ -1067,7 +1086,6 @@ struct ShareRow<'a> {
     overage: Option<bool>,
     speed: Option<&'a str>,
     client: Option<&'a str>,
-    usd: f64,
 }
 
 impl Default for ShareRow<'_> {
@@ -1083,7 +1101,6 @@ impl Default for ShareRow<'_> {
             overage: None,
             speed: None,
             client: None,
-            usd: 0.0,
         }
     }
 }
@@ -1119,7 +1136,6 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             cache_write_5m_tokens: Some(row.usage.write_5m),
             cache_write_1h_tokens: Some(row.usage.write_1h),
             output_tokens: Some(row.usage.output),
-            estimated_usd: Some(row.usd),
             overage_in_use: row.overage,
             speed: row.speed.map(String::from),
             ..Default::default()
@@ -1947,7 +1963,6 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
                 ..PinUsage::default()
             },
             overage: Some(true),
-            usd: 0.05,
             ..ShareRow::default()
         },
     );
@@ -2014,8 +2029,20 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
         }
     };
     let billed = read(FundingFilter::Billed).await;
+    let probe_usd = shipped_usd(
+        WEEKDAY_OFF_PEAK,
+        "claude-fable-5-1",
+        Speed::Standard,
+        PinUsage {
+            cache_read: 2_000,
+            ..PinUsage::default()
+        },
+    );
     assert!(
-        (billed.0 - 0.05).abs() < 1e-12 && (billed.1 - 0.04).abs() < 1e-12 && billed.2 == 0.0,
+        probe_usd > 0.0
+            && (billed.0 - probe_usd).abs() < 1e-12
+            && (billed.1 - 0.04).abs() < 1e-12
+            && billed.2 == 0.0,
         "billed keeps the probe's request dollars and its credit, and no waste: {billed:?}"
     );
     let plan = read(FundingFilter::Plan).await;
@@ -2107,7 +2134,7 @@ async fn a_tierless_oauth_group_and_an_account_the_registry_lacks_answer_no_shar
 #[test]
 fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
-    let plant = |id: &str, account: &str, kind: &str, usd: f64, cache_read: Option<u64>| {
+    let plant = |id: &str, account: &str, kind: &str, cache_read: Option<u64>| {
         db.insert_request(
             &RequestRecord {
                 id: id.into(),
@@ -2131,21 +2158,20 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
                 input_tokens: Some(1_000),
                 cache_read_tokens: cache_read,
                 output_tokens: Some(100),
-                estimated_usd: Some(usd),
                 ..Default::default()
             }],
             None,
         )
         .unwrap();
     };
-    // Both rows carry a nonzero `estimated_usd`, so a burn that priced every row both ways instead of by its
-    // funding would still pass the dollar assertion; only pricing by funding can pass both.
-    plant("sub", "oauth-a", "oauth", 9.99, None);
-    plant("key", "api-b", "api_key", 1.25, None);
+    // Every row folds a nonzero dollar figure from its counts, so a burn that priced every row in dollars instead of
+    // by its funding would fail the dollar assertion, and only pricing by funding passes it and the shares.
+    plant("sub", "oauth-a", "oauth", None);
+    plant("key", "api-b", "api_key", None);
     // Absent from the registry below: a plan row of an account the registry no longer holds prices no share without
     // a tier and no dollar under the plan, while its tokens still count, its cache reads included, the one row
     // carrying any so the cached half of the assertion below reads them.
-    plant("unknown", "unknown-c", "oauth", 4.0, Some(500));
+    plant("unknown", "unknown-c", "oauth", Some(500));
     let tables = PlanTables::shipped();
     let tiers: Tiers = HashMap::from([("oauth-a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
@@ -2190,9 +2216,16 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         "the subscription row alone prices its 7-day share: {:?} vs {seven_day}",
         point.seven_day_share
     );
+    let key_usd = shipped_usd(
+        3_600_000,
+        "claude-sonnet-5-5",
+        Speed::Standard,
+        usage(1_000, 100),
+    );
     assert!(
-        (point.usd - 1.25).abs() < 1e-9,
-        "the api-key row alone prices in dollars from estimated_usd"
+        (point.usd - key_usd).abs() < 1e-9,
+        "the api-key row alone prices in dollars from the dollars its counts folded: {} vs {key_usd}",
+        point.usd
     );
     assert_eq!(
         (point.cached_tokens, point.uncached_tokens),
@@ -2710,7 +2743,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
 fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
     // A million Opus 5.5 input tokens per account in one off-band hour.
-    let plant = |account: &str, kind: &str, usd: f64| {
+    let plant = |account: &str, kind: &str| {
         let id = format!("r-{account}");
         db.insert_request(
             &RequestRecord {
@@ -2733,18 +2766,17 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
                 account_kind: kind.into(),
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000_000),
-                estimated_usd: Some(usd),
                 ..Default::default()
             }],
             None,
         )
         .unwrap();
     };
-    // Every row carries dollars, so only pricing by kind leaves them off the subscription rows.
-    plant("max", "oauth", 5.0);
-    plant("pro", "oauth", 5.0);
-    plant("tierless", "oauth", 5.0);
-    plant("key", "api_key", 5.0);
+    // Every row folds dollars from its counts, so only pricing by kind leaves them off the subscription rows.
+    plant("max", "oauth");
+    plant("pro", "oauth");
+    plant("tierless", "oauth");
+    plant("key", "api_key");
     let tables = PlanTables::shipped();
     let tiers: Tiers = HashMap::from([
         ("max".to_string(), Some(MAX_20X.to_string())),
@@ -2802,7 +2834,17 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
             key.usd,
             key.uncached_tokens
         ),
-        (None, None, 5.0, 1_000_000),
+        (
+            None,
+            None,
+            shipped_usd(
+                WEEKDAY_OFF_PEAK,
+                "claude-opus-5-5",
+                Speed::Standard,
+                usage(1_000_000, 0)
+            ),
+            1_000_000
+        ),
         "an api_key row keeps its estimated dollars and reads no window"
     );
 }
@@ -2993,7 +3035,6 @@ fn a_row_on_a_model_without_a_weight_prices_a_share_at_its_tiers_latest_weight_a
             account_kind: "oauth".into(),
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
-            estimated_usd: Some(5.0),
             ..Default::default()
         }],
         None,
@@ -3088,7 +3129,15 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &tables,
+                &PriceRevisions::shipped(),
+                &tiers,
+                &filter,
+            )
+        })
         .unwrap();
     let point = sessions
         .iter()
@@ -3153,7 +3202,6 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
                 finished_at: Some(WEEKDAY_OFF_PEAK + 500),
                 outcome: "succeeded".into(),
                 input_tokens: Some(1_000_000),
-                estimated_usd: Some(10.0),
                 speed: speed.map(String::from),
                 ..Default::default()
             }],
@@ -3171,7 +3219,15 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &tables,
+                &PriceRevisions::shipped(),
+                &tiers,
+                &filter,
+            )
+        })
         .unwrap();
     let point = |session: &str| {
         sessions
@@ -3193,8 +3249,18 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
             fast.seven_day_share,
             fast.uncached_tokens
         ),
-        (10.0, Some(0.0), Some(0.0), 1_000_000),
-        "the attempt that reported speed fast reads its dollars and a zero share"
+        (
+            shipped_usd(
+                WEEKDAY_OFF_PEAK,
+                "claude-opus-5-5",
+                Speed::Fast,
+                usage(1_000_000, 0)
+            ),
+            Some(0.0),
+            Some(0.0),
+            1_000_000
+        ),
+        "the attempt that reported speed fast reads its dollars at the fast cells and a zero share"
     );
 }
 
@@ -3240,7 +3306,7 @@ fn share_tables() -> PlanTables {
 }
 
 /// One Sonnet request of `session` on the oauth account `a` in the off-band hour, `overage` as its head reported it.
-fn plant_funded(db: &LedgerDb, id: &str, session: &str, overage: Option<bool>, usd: f64) {
+fn plant_funded(db: &LedgerDb, id: &str, session: &str, overage: Option<bool>) {
     db.insert_request(
         &RequestRecord {
             id: id.into(),
@@ -3267,7 +3333,6 @@ fn plant_funded(db: &LedgerDb, id: &str, session: &str, overage: Option<bool>, u
             outcome: "succeeded".into(),
             input_tokens: Some(1_000),
             output_tokens: Some(100),
-            estimated_usd: Some(usd),
             overage_in_use: overage,
             ..Default::default()
         }],
@@ -3369,8 +3434,8 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
 #[test]
 fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
     let db = LedgerDb::open_in_memory().unwrap();
-    plant_funded(&db, "r-plan", "s", None, 3.0);
-    plant_funded(&db, "r-overage", "s", Some(true), 7.0);
+    plant_funded(&db, "r-plan", "s", None);
+    plant_funded(&db, "r-overage", "s", Some(true));
     let tables = share_tables();
     let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
@@ -3415,8 +3480,16 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
         plan,
         hour,
     );
+    // The two rows carry the same counts, so the bucket holding one row's dollars rather than both proves the plan
+    // row adds none.
+    let one_row = shipped_usd(
+        WEEKDAY_OFF_PEAK,
+        "claude-sonnet-5-5",
+        Speed::Standard,
+        usage(1_000, 100),
+    );
     assert!(
-        (point.usd - 7.0).abs() < 1e-9,
+        (point.usd - one_row).abs() < 1e-9,
         "the overage row's dollars alone reach the bucket: {point:?}"
     );
     assert!(
@@ -3437,8 +3510,8 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
 #[test]
 fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_adds_shares() {
     let db = LedgerDb::open_in_memory().unwrap();
-    plant_funded(&db, "r-plan", "s-mixed", None, 3.0);
-    plant_funded(&db, "r-overage", "s-mixed", Some(true), 7.0);
+    plant_funded(&db, "r-plan", "s-mixed", None);
+    plant_funded(&db, "r-overage", "s-mixed", Some(true));
     let tables = share_tables();
     let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
@@ -3449,7 +3522,15 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &tiers, &filter))
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &tables,
+                &PriceRevisions::shipped(),
+                &tiers,
+                &filter,
+            )
+        })
         .unwrap();
     let point = sessions
         .iter()
@@ -3474,8 +3555,16 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
         plan,
         at,
     );
+    // The two attempts carry the same counts, so the bucket holding one attempt's dollars rather than both proves the
+    // plan attempt adds none.
+    let one_attempt = shipped_usd(
+        WEEKDAY_OFF_PEAK,
+        "claude-sonnet-5-5",
+        Speed::Standard,
+        usage(1_000, 100),
+    );
     assert!(
-        (point.usd - 7.0).abs() < 1e-9,
+        (point.usd - one_attempt).abs() < 1e-9,
         "the overage attempt's dollars alone reach the bucket: {point:?}"
     );
     assert!(
@@ -3851,8 +3940,8 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
     );
 }
 
-/// A request and its one attempt, for a pool member's spend: `estimated_usd` is planted at an obviously wrong
-/// figure, so a test that reads the priced sum back at the seeded token count (not the planted figure) proves
+/// A request and its one attempt, for a pool member's spend: the fold books the attempt at the shipped list, so a
+/// test that reads the sum back at its own table's price for the seeded token count (not the booked figure) proves
 /// `member_spends` recomputes at read time for a model priced one way rather than trusting what the attempt was
 /// booked at.
 #[allow(clippy::too_many_arguments)]
@@ -3887,7 +3976,6 @@ fn plant_spend(
         account_kind: "oauth".into(),
         outcome: "succeeded".into(),
         input_tokens: Some(input_tokens),
-        estimated_usd: Some(999.0),
         ..Default::default()
     };
     db.insert_request(&request, &[attempt], None).unwrap();
@@ -3939,7 +4027,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
         (day[0].spent_usd, day[0].period_start, day[0].period_end),
         (250.0, ms(2026, 1, 15, 0, 0), ms(2026, 1, 16, 0, 0)),
         "the row before the day is left out; the probe counts like any other write; the price is the \
-         table's, not the row's planted estimated_usd of 999"
+         table's, not the dollars the fold booked at the shipped list"
     );
 
     // The month bound over the same rows: every request of January counts, the probe included.
@@ -4728,10 +4816,12 @@ fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
 fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_rest() {
     let db = LedgerDb::open_in_memory().unwrap();
     let now = ms(2026, 1, 15, 10, 0);
-    // The booked figure is deliberately not what the table prices, so a re-pricing would show.
-    for (id, model, input, booked) in [
-        ("long", "claude-haiku-5-5", 1_001, 7.0),
-        ("plain", "claude-sonnet-5-5", 1_000_000, 999.0),
+    // The rows land at the test list, so each is booked at its first entry's cells: the Haiku 5.5 row over the
+    // threshold at the long-context input, the Sonnet 5.5 row at the standard one.
+    let prices = phoebis_ledger::test_tables::api_prices();
+    for (id, model, input) in [
+        ("long", "claude-haiku-5-5", 1_001),
+        ("plain", "claude-sonnet-5-5", 1_000_000),
     ] {
         let request = RequestRecord {
             id: id.into(),
@@ -4753,22 +4843,26 @@ fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_r
             account_kind: "api_key".into(),
             outcome: "succeeded".into(),
             input_tokens: Some(input),
-            estimated_usd: Some(booked),
             ..Default::default()
         };
-        db.insert_request(&request, &[attempt], None).unwrap();
+        db.insert_request_at(&request, &[attempt], None, &prices)
+            .unwrap();
     }
     let spend = |table: &PriceTable| {
         db.read_blocking(|c| member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], now, table))
             .unwrap()[0]
             .spent_usd
     };
-    // The test table's Sonnet 5.5 input is 3 per million: a million tokens re-price at 3, the Haiku 5.5 row at 7
-    // as booked.
-    let revisions = phoebis_ledger::test_tables::api_prices();
-    let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
+    let input_usd = |table: &PriceTable, model: &str, input: u64| {
+        table
+            .estimate(model, Speed::Standard, input, 0, 0, 0, 0)
+            .expect("the test list carries the model")
+            .0
+    };
+    let table = prices.in_force(phoebis_ledger::test_tables::JANUARY_2026);
+    let booked = input_usd(table, "claude-haiku-5-5", 1_001);
     assert!(
-        (spend(table) - (7.0 + 3.0)).abs() < 1e-9,
+        (spend(table) - (booked + input_usd(table, "claude-sonnet-5-5", 1_000_000))).abs() < 1e-9,
         "{}",
         spend(table)
     );
@@ -4789,8 +4883,13 @@ fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_r
     let revisions = PriceRevisions::from_yaml(&text, "test").unwrap();
     let doubled = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
     assert!(
-        (spend(doubled) - (7.0 + 6.0)).abs() < 1e-9,
-        "the booked 7 stays beside the plain group's doubled 6: {}",
+        input_usd(doubled, "claude-haiku-5-5", 1_001) > booked,
+        "a re-pricing of the long-context row would show"
+    );
+    assert!(
+        (spend(doubled) - (booked + input_usd(doubled, "claude-sonnet-5-5", 1_000_000))).abs()
+            < 1e-9,
+        "the booked long-context dollars stay beside the plain group's doubled ones: {}",
         spend(doubled)
     );
 }

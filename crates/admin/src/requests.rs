@@ -9,8 +9,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    funding_of, list_requests, price_shares, request_by_id, request_events,
-    AttemptRecord, Funding, LiveKeys, PlanTables, RequestFilter, RequestRecord, Tiers,
+    funding_of, list_requests, price_shares, prompt_tokens, request_by_id, request_events,
+    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions,
+    RequestFilter, RequestRecord, Speed, Tiers,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -25,12 +26,14 @@ use crate::AdminState;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 
-/// What a request's share is priced with, read once per handler call: the cost model in force and each oauth
-/// account's tier as the registry holds it now, so a request made under an earlier tier reads under the current
-/// one, as the burn route reads it.
+/// What a request's share and dollars are priced with, read once per handler call: the cost model in force, each
+/// oauth account's tier as the registry holds it now, so a request made under an earlier tier reads under the current
+/// one, as the burn route reads it, and the API price list, whose revision in force at the request's receipt prices
+/// its attempts.
 pub(crate) struct ShareContext {
     pub tables: Arc<PlanTables>,
     pub tiers: Tiers,
+    pub prices: Arc<PriceRevisions>,
 }
 
 impl ShareContext {
@@ -41,14 +44,23 @@ impl ShareContext {
     pub(crate) fn read(state: &AdminState) -> Result<ShareContext, Response> {
         let accounts = state.store.accounts().map_err(store_failure)?;
         let tiers = oauth_tiers(&state.store, &accounts).map_err(store_failure)?;
-        Ok(ShareContext::of(state.tables.clone(), tiers))
+        Ok(ShareContext::of(
+            state.tables.clone(),
+            tiers,
+            state.pricing.revisions(),
+        ))
     }
 
-    /// The tables and tiers given: a test's own cost model, or the process's shared one.
-    pub(crate) fn of(tables: impl Into<Arc<PlanTables>>, tiers: Tiers) -> ShareContext {
+    /// The tables, tiers and prices given: a test's own, or the process's shared ones.
+    pub(crate) fn of(
+        tables: impl Into<Arc<PlanTables>>,
+        tiers: Tiers,
+        prices: impl Into<Arc<PriceRevisions>>,
+    ) -> ShareContext {
         ShareContext {
             tables: tables.into(),
             tiers,
+            prices: prices.into(),
         }
     }
 }
@@ -223,8 +235,9 @@ pub(crate) struct Attempt {
     /// present only when the head carried it.
     pub windows: Vec<AttemptWindow>,
     pub overage_in_use: Option<bool>,
+    /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
+    /// receipt, priced when it is read, null for a model the revision lacks and for an attempt without usage.
     pub estimated_usd: Option<f64>,
-    pub pricing_version: Option<String>,
     /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
     /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
@@ -233,6 +246,10 @@ pub(crate) struct Attempt {
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
+    /// The serving account's rate-limit tier as the registry held it when the request landed, null for an api_key
+    /// account, for an oauth account whose profile had not been read, and for an attempt recorded before the router
+    /// kept it.
+    pub tier: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -431,11 +448,14 @@ pub(crate) fn request_summary(
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         cost_usd: attempts
             .iter()
-            .filter_map(|a| a.estimated_usd)
+            .filter_map(|a| attempt_usd(a, r, &shares.prices))
             .fold(0.0, |a, b| a + b),
         cost_shares: cost_shares_json(r, attempts, shares),
         phases: phases_json(r, attempts),
-        attempts: attempts.iter().map(attempt_json).collect(),
+        attempts: attempts
+            .iter()
+            .map(|a| attempt_json(a, r, &shares.prices))
+            .collect(),
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
         held: r
             .held
@@ -536,7 +556,40 @@ fn usage_json(last: Option<&AttemptRecord>) -> RequestUsage {
     }
 }
 
-fn attempt_json(a: &AttemptRecord) -> Attempt {
+/// The attempt's dollars at the cells its own prompt and its reported speed select on the revision in force when its
+/// request arrived, `None` for an attempt without usage and for a model the revision lacks.
+fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -> Option<f64> {
+    if !a.has_usage() {
+        return None;
+    }
+    let table = prices.in_force(r.received_at);
+    let counts = PinUsage {
+        input: a.input_tokens.unwrap_or(0),
+        cache_read: a.cache_read_tokens.unwrap_or(0),
+        write_5m: a.cache_write_5m_tokens.unwrap_or(0),
+        write_1h: a.cache_write_1h_tokens.unwrap_or(0),
+        output: a.output_tokens.unwrap_or(0),
+    };
+    let band = table.band_of(
+        &r.canonical_model,
+        prompt_tokens(
+            counts.input,
+            counts.cache_read,
+            counts.write_5m,
+            counts.write_1h,
+        ),
+    );
+    table
+        .estimate_banded(
+            &r.canonical_model,
+            Speed::of(a.speed.as_deref()),
+            band,
+            counts,
+        )
+        .map(|(usd, _)| usd)
+}
+
+fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -> Attempt {
     let window = |id: &str, u: Option<f64>, reset: Option<i64>| {
         (u.is_some() || reset.is_some()).then(|| AttemptWindow {
             id: id.to_string(),
@@ -587,8 +640,7 @@ fn attempt_json(a: &AttemptRecord) -> Attempt {
         }),
         windows,
         overage_in_use: a.overage_in_use,
-        estimated_usd: a.estimated_usd,
-        pricing_version: a.pricing_version.clone(),
+        estimated_usd: attempt_usd(a, r, prices),
         selection: a
             .selection
             .as_deref()
@@ -603,6 +655,7 @@ fn attempt_json(a: &AttemptRecord) -> Attempt {
             stop_reason: a.stop_reason.clone(),
             stop_sequence: a.stop_sequence.clone(),
         },
+        tier: a.tier.clone(),
     }
 }
 
@@ -962,6 +1015,7 @@ revisions:
                 .iter()
                 .map(|(id, tier)| (id.to_string(), tier.map(String::from)))
                 .collect(),
+            PriceRevisions::shipped(),
         )
     }
 
@@ -1033,7 +1087,11 @@ revisions:
         let summary = serde_json::to_value(request_summary(
             &RequestRecord::default(),
             &[],
-            &ShareContext::of(PlanTables::shipped(), Tiers::new()),
+            &ShareContext::of(
+                PlanTables::shipped(),
+                Tiers::new(),
+                PriceRevisions::shipped(),
+            ),
         ))
         .unwrap();
         assert_eq!(
@@ -1069,7 +1127,11 @@ revisions:
                 ..Default::default()
             },
         ];
-        let shares = ShareContext::of(PlanTables::shipped(), Tiers::new());
+        let shares = ShareContext::of(
+            PlanTables::shipped(),
+            Tiers::new(),
+            PriceRevisions::shipped(),
+        );
         let summary = |attempts: &[AttemptRecord]| {
             serde_json::to_value(request_summary(&row, attempts, &shares)).unwrap()
         };
