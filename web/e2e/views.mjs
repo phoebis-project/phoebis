@@ -1070,6 +1070,35 @@ async function utilizationMargin(theme) {
 }
 
 /**
+ * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
+ * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong.
+ */
+async function poolMemberPins(theme) {
+  const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
+  const count = (text) => Number((text ?? '').trim().replace(/,/g, '') || Number.NaN);
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.pool')].map((card) => {
+      const tile = [...card.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Active pins');
+      return {
+        active: tile?.querySelector('dd')?.textContent ?? null,
+        members: [...card.querySelectorAll('.serving tbody tr')].map((tr) => tr.lastElementChild?.textContent ?? null),
+        name: card.querySelector('.card__title')?.textContent ?? '',
+      };
+    }),
+  );
+  measurements.push(`${theme} /pools member pins ${JSON.stringify(cards)}`);
+  if (cards.length === 0) say('no pool card to read');
+  for (const card of cards) {
+    const active = count(card.active);
+    const members = card.members.map(count);
+    const sum = members.reduce((n, x) => n + x, 0);
+    if (Number.isNaN(active)) say(`the ${card.name} card draws no Active pins figure`);
+    else if (members.some(Number.isNaN)) say(`the ${card.name} card's Pins column reads ${JSON.stringify(card.members)}`);
+    else if (sum !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins, not its Active pins ${active}`);
+  }
+}
+
+/**
  * The first pool card at the pass's viewport and in the 720 px strip: the serving table ends inside the card, and the
  * six tiles stand on two rows of three, then three rows of two, with a left hairline on every tile but a row's first.
  * Then every card's serving table at the pass's viewport, at 1160 px where two card columns leave a card narrower than
@@ -5783,6 +5812,7 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await poolMemberPins(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);
