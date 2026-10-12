@@ -11612,10 +11612,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const totals = keyQuery ? sumGroups(await api.getAnalyticsBreakdown(keyQuery)) : null;
       const cardOf = (t) => [...native.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
       const ticksOf = (t) => [...(cardOf(t)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((x) => x.textContent?.trim() ?? '');
-      // A pair line's figure is its text less the word after it.
-      const textOf = (line) => {
-        const figure = line.cloneNode(true);
-        figure.querySelector('.stat__pair-word')?.remove();
+      // A pair line's figure is its text less the word after it, and a table cell's its text less the line under it.
+      const textOf = (el, apart = '.stat__pair-word') => {
+        const figure = el.cloneNode(true);
+        figure.querySelector(apart)?.remove();
         return figure.textContent?.trim() ?? '';
       };
       const tileRead = () =>
@@ -11630,7 +11630,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const table = [...native.container.querySelectorAll('#cost .card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
         return {
           heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
-          rows: [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => ({ cells: [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? ''), label: tr.children[0]?.textContent?.trim() ?? '', title: tr.children[0]?.getAttribute('title') ?? '' })),
+          // A native figure cell reads its figure, the billed line under it and the full reading on its title.
+          rows: [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => {
+            const figures = [...tr.querySelectorAll('td.num')];
+            return {
+              cells: figures.map((td) => textOf(td, '.sub')),
+              label: tr.children[0]?.textContent?.trim() ?? '',
+              subs: figures.map((td) => td.querySelector('.sub')?.textContent?.trim() ?? ''),
+              title: tr.children[0]?.getAttribute('title') ?? '',
+              titles: figures.map((td) => td.querySelector('[title]')?.getAttribute('title') ?? ''),
+            };
+          }),
           subtitle: table?.querySelector('.card__subtitle')?.textContent?.trim() ?? '',
         };
       };
@@ -11694,15 +11704,25 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [splitSubtitle, JSON.stringify(rings)],
       });
       const byKey = tableRead('Cost by key');
-      const windowCell = (label) => (v) => v === '-' || new RegExp(`^~?(\\d[\\d.]*% of 20x ${label}|0%)$`).test(v);
-      const CELLS = [(v) => /^\d[\d,]*$/.test(v), windowCell('5-hour'), windowCell('7-day'), windowCell('Fable week'), (v) => v === '-' || isUsd(v), windowCell('7-day'), windowCell('7-day')];
+      // A cell names its window in the short word, and a group with no plan row reads its billed dollars alone.
+      const short = (word) => (v) => v === '-' || new RegExp(`^~?\\d[\\d.]*% 20x ${word}$`).test(v);
+      const sevenDayOrDollars = (v) => short('7d')(v) || isUsd(v);
+      const CELLS = [(v) => /^\d[\d,]*$/.test(v), sevenDayOrDollars, short('5h'), short('Fable week'), sevenDayOrDollars, sevenDayOrDollars];
+      const billedLine = (v) => v === '' || v === '-' || /^\$[\d,]+\.\d+ billed$/.test(v);
+      // The title reads the full form of the figure the cell shows, the billed dollars after it and the estimate last.
+      const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
+      const fullOf = (cell, title) => {
+        const figure = /^~?(\d[\d.]*%) 20x (5h|7d|Fable week)$/.exec(cell);
+        return figure === null || title.startsWith(`${figure[1]} of 20x ${FULL[figure[2]]}`);
+      };
       results.push({
-        name: "/analytics under native the Cost by table reads the requests, the three 20x columns, the billed dollars and the 20x 7-day equivalent per plan request and per 1k plan output, the dollar split columns gone",
+        name: "/analytics under native the Cost by table reads the requests, the cost with its billed dollars under it, the 5-hour and model week equivalents and the ratios in the short 20x form, every full reading on a cell's title",
         ok:
-          JSON.stringify(byKey.heads) === JSON.stringify(['Key', 'Requests', '20x 5-hour', '20x 7-day', '20x 7-day Fable', 'Billed', 'Per request', 'Per 1k output']) &&
+          JSON.stringify(byKey.heads) === JSON.stringify(['Key', 'Requests', 'Cost', '20x 5-hour', '20x 7-day Fable', 'Per request', 'Per 1k output']) &&
           byKey.subtitle === `Totals for the selected range and filters, ${NATIVE_SUBSET}` &&
-          byKey.rows.length > 0 && byKey.rows.every((r) => r.cells.length === CELLS.length && r.cells.every((c, i) => CELLS[i](c))) &&
-          byKey.rows.some((r) => sevenDay(r.cells[2])) && byKey.rows.some((r) => isUsd(r.cells[4])),
+          byKey.rows.length > 0 && byKey.rows.every((r) => r.cells.length === CELLS.length && r.cells.every((c, i) => CELLS[i](c)) && r.subs.every(billedLine) && r.cells.every((c, i) => fullOf(c, r.titles[i]))) &&
+          byKey.rows.some((r) => r.cells[1] !== '-' && short('7d')(r.cells[1]) && /^\$[\d,]+\.\d+ billed$/.test(r.subs[1])) &&
+          byKey.rows.some((r) => marked(r.cells[1]) && r.titles[1].endsWith(`${ESTIMATED_TITLE}.`)),
         missing: [byKey.heads.join(','), byKey.subtitle, JSON.stringify(byKey.rows.slice(0, 4))],
       });
       await groupPage(native, 'account');
@@ -11710,7 +11730,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const secondary = byAccount.rows.find((r) => r.label === 'secondary');
       results.push({
         name: "/analytics under native grouped by account the secondary account's priced equivalent cells lead with the tilde and its label carries the estimate, its unpriced week a bare dash",
-        ok: secondary !== undefined && marked(secondary.cells[1]) && marked(secondary.cells[2]) && secondary.cells[3] === '-' && marked(secondary.cells[5]) && secondary.title === `secondary. ${ESTIMATED_TITLE}.`,
+        ok: secondary !== undefined && marked(secondary.cells[1]) && marked(secondary.cells[2]) && secondary.cells[3] === '-' && marked(secondary.cells[4]) && secondary.title === `secondary. ${ESTIMATED_TITLE}.`,
         missing: [JSON.stringify(secondary ?? byAccount.rows.map((r) => r.label))],
       });
       await groupPage(native, 'key');

@@ -4171,11 +4171,16 @@
   white-space: nowrap;
 }
 
-/* Each equivalent cell names its window, so the figure columns take most of a 990 px card. The group column keeps a
-   floor of sixteen characters plus its cell's 12 px of padding each side, and the table scrolls inside its wrap where
-   the figures need more. */
+/* Each equivalent cell names its window in its short word, so at 1280 px the six figure columns fit a 990 px card at
+   8 px of padding a side beside a group column that keeps a floor of sixteen characters plus its 12 px a side. Longer
+   figures scroll the table inside its wrap. */
 .native-cost-table td.col-fill {
   min-width: calc(16ch + 24px);
+}
+
+.native-cost-table .col-fit {
+  padding-right: 8px;
+  padding-left: 8px;
 }
 
 /* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half

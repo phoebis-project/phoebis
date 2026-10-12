@@ -3178,6 +3178,28 @@ async function costSplitRings(theme) {
   }
 }
 
+/**
+ * The native Cost by table at the pass's 1280 by 800, read on the Cost tab under a fresh browser's native position: its
+ * width recorded, and every column inside its wrap, so no figure sits behind the wrap's scroll. The view returns to
+ * Traffic afterwards.
+ */
+async function nativeCostTable(theme) {
+  try {
+    if (!(await tabTo(theme, 'Cost'))) return;
+    const read = await page.evaluate(() => {
+      const table = document.querySelector('.native-cost-table table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      return { columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]), needs: wrap.scrollWidth, wrap: wrap.clientWidth };
+    });
+    measurements.push(`${theme} /analytics native cost table ${read === null ? 'not drawn' : `${read.needs} of ${read.wrap}px ${JSON.stringify(read.columns)}`}`);
+    if (read === null) failures.push(`${theme} /analytics: the native Cost by table is not drawn`);
+    else if (read.needs > read.wrap) failures.push(`${theme} /analytics: the native Cost by table needs ${read.needs}px of its wrap's ${read.wrap}px`);
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
+}
+
 /** The Analytics tab strip in the 720 px strip and at 400 px: every tab stays within the viewport's width. */
 async function analyticsTabs(theme) {
   for (const width of [720, 400]) {
@@ -6055,6 +6077,7 @@ try {
         await analyticsColumns(theme);
         await trafficCards(theme);
         await costSplitRings(theme);
+        await nativeCostTable(theme);
         await analyticsTabs(theme);
         await stickyStrip(theme);
         await unitControl(theme);

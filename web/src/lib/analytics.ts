@@ -1,7 +1,7 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
-import { fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd } from '@/lib/format';
+import { equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
@@ -233,6 +233,22 @@ const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost',
  * the window holds none, as a dollar figure's `usdOrDash`. A dash is no figure, so no estimate marks it.
  */
 export const equivalentOrDash = (windowKey: string, v: number | null | undefined, estimated = false): string => (v === null || v === undefined ? '-' : `${estimated ? '~' : ''}${fmtEquivalent(windowKey, v)}`);
+/**
+ * A native table cell, short enough that the table's columns fit its card: the 20x equivalent in its window's short
+ * word ("0.244% 20x 7d"), the tilde before an estimated figure, and for a cell that sums both fundings the billed
+ * dollars under it. `undefined` leaves out a side with no rows, and null reads a dash for a side with nothing priced.
+ * The title carries the full reading and the estimate.
+ */
+export function nativeCellOf(windowKey: string, equivalent: number | null | undefined, estimated: boolean, billed?: number | null): { main: string; sub: string; title: string } {
+  const marked = estimated && equivalent !== null && equivalent !== undefined;
+  const sides = [
+    ...(equivalent === undefined ? [] : [equivalent === null ? { full: null, short: '-' } : { full: fmtEquivalent(windowKey, equivalent), short: `${marked ? '~' : ''}${equivalentShort(windowKey, equivalent)}` }]),
+    ...(billed === undefined ? [] : [billed === null ? { full: null, short: '-' } : { full: `${fmtUsd(billed)} billed`, short: fmtUsd(billed) }]),
+  ];
+  if (sides.length === 0) return { main: '-', sub: '', title: '' };
+  const [main, second] = sides;
+  return { main: main.short, sub: second === undefined ? '' : second.full ?? second.short, title: withEstimate(sides.flatMap((s) => (s.full === null ? [] : [s.full])).join(', '), marked) };
+}
 /**
  * The two sides of a sum over both fundings: the plan rows' 20x equivalent on a window and the billed rows' dollars,
  * a side with no rows null. The route counts the plan requests, and a fold of request rows that counted none tells the

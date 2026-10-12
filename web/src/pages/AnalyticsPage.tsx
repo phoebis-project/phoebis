@@ -19,7 +19,7 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, nativeCellOf, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -160,30 +160,41 @@ function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perT
 }
 
 /**
- * The native table's columns, the week column named by the groups' equivalent keys, as `weekColumnOf` names it for the
- * shares.
+ * The native table's columns: Cost, the 20x 7-day equivalent with the billed dollars under it, then the other windows,
+ * the week column named by the groups' equivalent keys as `weekColumnOf` names it for the shares, then the ratios.
  */
-const nativeColumns = (groups: AnalyticsGroup[]): string[] => ['Requests', '20x 5-hour', '20x 7-day', `20x ${weekColumnOf(groups.map((g) => ({ costShares: g.costEquivalent })))}`, 'Billed', 'Per request', 'Per 1k output'];
+const nativeColumns = (groups: AnalyticsGroup[]): string[] => ['Requests', 'Cost', '20x 5-hour', `20x ${weekColumnOf(groups.map((g) => ({ costShares: g.costEquivalent })))}`, 'Per request', 'Per 1k output'];
+/** A native cell's figure over its billed line, the full reading on its title. */
+const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNode => (
+  <span title={cell.title || undefined}>
+    {cell.main}
+    {cell.sub && <span className="sub">{cell.sub}</span>}
+  </span>
+);
 /**
- * A group's native row: its requests, its plan rows' 20x equivalents per window and per plan request and 1k plan
- * output tokens, and its billed dollars, a side with no rows a dash. An estimated group marks every equivalent it
- * shows and names the estimate on its label.
+ * A group's native row: its requests, its cost (the plan rows' 20x 7-day equivalent with the billed dollars under it),
+ * its 5-hour and model week equivalents, and the 7-day equivalent per plan request and per 1k plan output tokens with
+ * the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left out and a
+ * figure with no count a dash. An estimated group marks every equivalent it shows and names the estimate on its label.
  */
 function nativeRowOf(g: AnalyticsGroup): { cells: ReactNode[]; key: string; label: string; title: string } {
   const sides = sidesOf(g, 'seven_day');
   const priced = (key: string | undefined) => (sides.equivalent === null || key === undefined || !own(g.costEquivalent, key) ? null : g.costEquivalent[key]);
   const sevenDay = priced('seven_day');
-  const per = (count: number | null, scale: number) => (sevenDay === null || count === null || !(count > 0) ? null : (sevenDay / count) * scale);
+  const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
+  // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
+  const both = (equivalent: number | null, billed: number | null) => nativeCell(nativeCellOf('seven_day', sides.equivalent === null ? undefined : equivalent, g.estimated, sides.billed === null ? undefined : billed));
+  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(sevenDay, planCount, scale), per(sides.billed, planCount === null ? null : whole - planCount, scale));
+  const windowCell = (key: string | undefined) => nativeCell(nativeCellOf(key ?? '', priced(key), g.estimated));
   const week = weekKeyOf(g.costEquivalent);
   return {
     cells: [
       fmtInt(g.requests),
-      equivalentOrDash('five_hour', priced('five_hour'), g.estimated),
-      equivalentOrDash('seven_day', sevenDay, g.estimated),
-      equivalentOrDash(week ?? '', priced(week), g.estimated),
-      usdOrDash(sides.billed),
-      equivalentOrDash('seven_day', per(g.planRequests, 1), g.estimated),
-      equivalentOrDash('seven_day', per(g.planOutputTokens, 1000), g.estimated),
+      both(sevenDay, sides.billed),
+      windowCell('five_hour'),
+      windowCell(week),
+      ratio(g.planRequests, g.requests, 1),
+      ratio(g.planOutputTokens, g.tokens.output, 1000),
     ],
     key: g.key,
     label: g.label,

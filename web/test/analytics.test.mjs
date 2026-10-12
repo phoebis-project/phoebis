@@ -741,3 +741,14 @@ test('native marks an estimated equivalent and leaves out a side with no rows, a
   const folded = d.costHeadOf('native', accountGroup({ planRequests: null }));
   assert.equal(folded.meta, `${equivalent} and ${billed} in range`);
 });
+
+test('a native table cell reads the short 20x form with the billed dollars under it, the full reading and the estimate on its title', () => {
+  const g = accountGroup();
+  const sevenDay = g.costEquivalent.seven_day;
+  const full = d.fmtEquivalent('seven_day', sevenDay);
+  assert.deepEqual(d.nativeCellOf('seven_day', sevenDay, false, g.billedUsd), { main: d.equivalentShort('seven_day', sevenDay), sub: `${d.fmtUsd(g.billedUsd)} billed`, title: `${full}, ${d.fmtUsd(g.billedUsd)} billed` });
+  assert.deepEqual(d.nativeCellOf('seven_day', sevenDay, true), { main: `~${d.equivalentShort('seven_day', sevenDay)}`, sub: '', title: `${full}. ${d.ESTIMATED_TITLE}.` }, 'a plan-only cell marks its estimate');
+  assert.deepEqual(d.nativeCellOf('seven_day', undefined, true, g.billedUsd), { main: d.fmtUsd(g.billedUsd), sub: '', title: `${d.fmtUsd(g.billedUsd)} billed` }, 'a cell with no plan row reads its billed dollars alone, unmarked');
+  assert.deepEqual(d.nativeCellOf('seven_day', null, true, null), { main: '-', sub: '-', title: '' }, 'a side priced nothing reads a dash');
+  assert.deepEqual(d.nativeCellOf('five_hour', undefined, false), { main: '-', sub: '', title: '' }, 'a cell with no row on either side');
+});
