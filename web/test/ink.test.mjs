@@ -8,6 +8,7 @@ const sheet = (name) => readFileSync(new URL(`../src/styles/${name}.css`, import
  * The rules whose `--ink-3` draws no word the operator reads: placeholders, disabled controls and decorative strokes.
  */
 const INK3_ALLOWED = new Set([
+  ".add-filter__row[aria-disabled='true']",
   '.chip--removable button',
   '.dialog__close',
   '.dialog-group .input:disabled',
