@@ -872,6 +872,97 @@ async fn a_key_the_route_leaves_out_rather_than_writing_null_does_not_render_nul
     }
 }
 
+/// The JSON types a rendered schema names itself, from a `type` string or a `type` array.
+fn types_of(schema: &Value) -> Vec<&str> {
+    match &schema["type"] {
+        Value::String(t) => vec![t.as_str()],
+        Value::Array(types) => types.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Every `oneOf` at or below `node`, each with the JSON pointer that reaches it.
+fn one_ofs<'a>(node: &'a Value, pointer: &str, found: &mut Vec<(String, &'a [Value])>) {
+    match node {
+        Value::Object(map) => {
+            for (key, value) in map {
+                let below = format!("{pointer}/{key}");
+                if key == "oneOf" {
+                    if let Some(members) = value.as_array() {
+                        found.push((below.clone(), members));
+                    }
+                }
+                one_ofs(value, &below, found);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                one_ofs(item, &format!("{pointer}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn a_facts_value_is_a_boolean_a_number_a_word_or_a_list_of_words_never_an_integer() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let mut schema = &schemas["SummaryFact"]["properties"]["value"];
+    if let Some(reference) = schema["$ref"].as_str() {
+        schema = &schemas[reference.rsplit('/').next().unwrap()];
+    }
+    let members = schema["oneOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the fact's value renders as a oneOf: {schema}"));
+    let types: Vec<Vec<&str>> = members.iter().map(types_of).collect();
+    assert_eq!(
+        types,
+        [
+            vec!["boolean"],
+            vec!["number"],
+            vec!["string"],
+            vec!["array"]
+        ],
+        "the fact's value is a boolean, a number, a word or a list of words: {schema}"
+    );
+    assert_eq!(
+        types_of(&members[3]["items"]),
+        ["string"],
+        "the list holds words: {schema}"
+    );
+    assert!(
+        types.iter().flatten().all(|t| *t != "integer"),
+        "a whole value is a number, so no member is an integer: {schema}"
+    );
+}
+
+#[tokio::test]
+async fn no_one_of_in_the_components_holds_two_numeric_members_since_an_integer_matches_both() {
+    let (_app, _up, document) = document().await;
+    let mut found = Vec::new();
+    one_ofs(
+        &document["components"]["schemas"],
+        "#/components/schemas",
+        &mut found,
+    );
+    assert!(!found.is_empty(), "the components hold a oneOf to check");
+    for (pointer, members) in found {
+        let numeric = members
+            .iter()
+            .filter(|member| {
+                types_of(member)
+                    .iter()
+                    .any(|t| *t == "integer" || *t == "number")
+            })
+            .count();
+        assert!(
+            numeric < 2,
+            "{pointer}: {numeric} members take a number, so an integer matches more than one: {members:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_document_allows_it() {
     let parts = admin_parts_full().await;

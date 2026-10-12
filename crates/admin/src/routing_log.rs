@@ -153,8 +153,8 @@ pub(crate) struct SummaryFact {
     pub entity: Option<FactEntity>,
 }
 
-/// A fact's value in its bare JSON form: a boolean, an integer, a number, a word or a list of words.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+/// A fact's value in its bare JSON form: a boolean, a number, a word or a list of words.
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub(crate) enum FactValue {
     Bool(bool),
@@ -163,6 +163,28 @@ pub(crate) enum FactValue {
     Text(String),
     List(Vec<String>),
 }
+
+// JSON Schema counts a whole value as a number, so the derive's separate `integer` and `number` members would both
+// match it and fail `oneOf`. `Int` and `Number` share the one `number` member here.
+impl utoipa::PartialSchema for FactValue {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Schema, Type};
+        Schema::OneOf(
+            OneOfBuilder::new()
+                .item(ObjectBuilder::new().schema_type(Type::Boolean))
+                .item(ObjectBuilder::new().schema_type(Type::Number))
+                .item(ObjectBuilder::new().schema_type(Type::String))
+                .item(ArrayBuilder::new().items(ObjectBuilder::new().schema_type(Type::String)))
+                .description(Some(
+                    "A fact's value in its bare JSON form: a boolean, a number, a word or a list of words.",
+                ))
+                .build(),
+        )
+        .into()
+    }
+}
+
+impl ToSchema for FactValue {}
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]

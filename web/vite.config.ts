@@ -19,5 +19,10 @@ export default defineConfig({
       },
     },
   },
-  server: { proxy: { '/admin': { target: 'http://127.0.0.1:8081' } } },
+  server: {
+    proxy: {
+      '/admin': { target: 'http://127.0.0.1:8081' },
+      '/api-reference/openapi.json': { target: 'http://127.0.0.1:8081' },
+    },
+  },
 });
