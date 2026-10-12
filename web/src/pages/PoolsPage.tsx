@@ -28,7 +28,7 @@ import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_L
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
-import { windowOf } from '@/lib/quota';
+import { endOf, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
@@ -1210,7 +1210,7 @@ export function PoolDialog({
       const w = windowOf(a, id);
       return w === null ? null : { resetsAt: w.resetsAt, utilization: w.utilization };
     };
-    return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
+    return { end: endOf(a, now), fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
   });
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
@@ -1711,7 +1711,7 @@ export function PoolDialog({
     utilization: (
       <>
         <p className="dialog-group__intro">
-          A window&apos;s pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
+          A window&apos;s pace is the share of it that has elapsed, to its reset, or to the subscription&apos;s end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page&apos;s.
         </p>
         <div className="cells">
           <div className="cell--half">
@@ -1838,7 +1838,7 @@ export function PoolDialog({
             <Field label="Preview" plain>
               <p className="shed-preview num" role="status">
                 {form.shedAheadOn ? (
-                  shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading')
+                  shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading', now)
                 ) : (
                   <>
                     No round runs while <GroupLink id="utilization">shed ahead of pace</GroupLink> is off.

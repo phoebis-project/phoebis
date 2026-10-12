@@ -1,6 +1,6 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
-import { fmtAbsolute, fmtRelative } from './format';
-import { instant as clockInstant, logHref, sinceCondition } from './routingLog';
+import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
+import { logHref, sinceCondition } from './routingLog';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   certificate_expiring: 'Certificate expiring',

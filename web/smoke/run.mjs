@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -714,12 +714,12 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       const meter = chip?.nextElementSibling;
       const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
       const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
-      const share = live ? remainingTimeShare(w, at) : null;
+      const share = live ? remainingTimeShare(w, at, endOf(a, at)) : null;
       rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
     }
   }
   const marked = rows.filter((r) => r.want !== null);
-  const off = rows.filter((r) => (r.want === null ? r.marks !== 0 : r.marks !== 1 || r.left !== r.want || !/, (\d+% (ahead of|behind) pace|on pace)$/.test(r.title)));
+  const off = rows.filter((r) => (r.want === null ? r.marks !== 0 : r.marks !== 1 || r.left !== r.want || !/, (\d+% (ahead of|behind) pace|on pace)( to its end at .+)?$/.test(r.title)));
   results.push({
     name: "/quota every live window row draws one pace mark at the window's remaining time share whose title names the lead",
     ok: marked.length > 0 && rows.some((r) => r.want === null) && off.length === 0,
@@ -3486,7 +3486,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
     expect('/pools the Utilization thresholds group opens with its intro naming the two windows and the fresh placement', util?.textContent ?? '', [
-      "A window's pace is the share of it that has elapsed. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page's.",
+      "A window's pace is the share of it that has elapsed, to its reset, or to the subscription's end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed share, read on its 5-hour and its 7-day window. The readings are the Quota page's.",
       'A member whose used share runs ahead of the elapsed share by this many points starts a shedding round, and while the switch is on a member at or above the margin less 5 points is no cool destination either: a new session, and a moved one, lands on a cool sibling while one exists.',
     ]);
     // Pool all runs the Pace strategy, so the Strategy field draws its hint, and the Pace floor sits in the Failover group.
@@ -3518,14 +3518,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         util?.querySelector('.ubar__band') !== null,
       missing: [String(percent?.value), ...ticks, String(leadTicks().length), String(marginLine()?.style.left), String(marginLine()?.getAttribute('title')), String(util?.querySelector('.ubar__band') !== null)],
     });
-    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of
-    // the run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The
-    // 7-day windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits
-    // minutes away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's
-    // 41% used reads about 54% elapsed and 13 points behind, secondary's 88% about 27% elapsed and 61 points ahead,
-    // nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the typed value: 20 points sits
-    // at 60% of the track with the band 7.5% wide, 50 at 75%.
-    const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed, (\d+ points? (ahead|behind)|on pace)$/;
+    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of the
+    // run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The 7-day
+    // windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits minutes
+    // away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's 41% used
+    // reads about 54% elapsed and 13 points behind, secondary's 88% about 28% elapsed to its end, two hours before its
+    // reset, and 60 points ahead, nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the
+    // typed value: 20 points sits at 60% of the track with the band 7.5% wide, 50 at 75%.
+    const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed( to its end at .+)?, (\d+ points? (ahead|behind)|on pace)$/;
     const atFifty = leadTicks();
     if (percent) setter.call(percent, '20');
     percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -3541,7 +3541,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         atFifty.every((title) => leadTitle.test(title ?? '')) &&
         atFifty.some((title) => /^primary: 5-hour 62% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
         atFifty.some((title) => /^primary: 7-day 41% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
-        atFifty.some((title) => /^secondary: 7-day 88% used, \d+% elapsed, \d+ points ahead$/.test(title ?? '')) &&
+        atFifty.some((title) => /^secondary: 7-day 88% used, \d+% elapsed to its end at .+, \d+ points ahead$/.test(title ?? '')) &&
         atFifty.some((title) => /^nightly: 7-day 35% used, \d+% elapsed, \d+ points behind$/.test(title ?? '')) &&
         util?.querySelector('.ubar__track--lead')?.getAttribute('aria-label') === 'Lead over pace by member and window' &&
         JSON.stringify(atTwenty) === '["60%","Shedding margin: 20 points","7.5%"]' &&
@@ -3549,7 +3549,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [...atFifty, JSON.stringify(atTwenty), String(marginLine()?.style.left)],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
-    // 0.61, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
+    // 0.60 to its end, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
     expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', [
       '2 members run ahead of pace by the margin',
       'nightly (5-hour',

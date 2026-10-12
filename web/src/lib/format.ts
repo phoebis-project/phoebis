@@ -156,6 +156,16 @@ export function fmtShortTime(isoTime: string): string {
   return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
+/**
+ * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`). One
+ * further off carries its date (`Sep 18 08:42`).
+ */
+export function instant(ms: number, now: number): string {
+  const at = new Date(ms).toISOString();
+  if (Math.abs(ms - now) < 86_400_000) return fmtShortTime(at);
+  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
+}
+
 export function fmtDate(isoTime: string): string {
   return new Date(isoTime).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
 }

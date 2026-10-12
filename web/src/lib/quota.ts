@@ -1,5 +1,5 @@
 import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
-import { fmtAbsolute, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -28,29 +28,56 @@ export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== nul
 
 const HOUR = 3_600_000;
 
-/** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
-export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
-  if (window.resetsAt === null) return window.utilization;
-  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
-  const elapsed = (lengthMs - (Date.parse(window.resetsAt) - now)) / lengthMs;
-  return window.utilization - Math.min(1, Math.max(0, elapsed));
+/** The end the router's pace reads (`term::end_of`): the saved end while the account is cancelled, else a trial end still ahead. */
+export function endOf(account: Pick<Account, 'cancelled' | 'subscription'>, now: number): number | null {
+  const term = account.subscription;
+  if (!term) return null;
+  if (account.cancelled) return term.endsAt === null ? null : Date.parse(term.endsAt);
+  const trial = term.trialEndsAt === null ? Number.NaN : Date.parse(term.trialEndsAt);
+  return trial > now ? trial : null;
 }
 
-/** The share of a window's period still to come, 0 to 1. Null without a reset time. */
-export function remainingTimeShare(w: RateLimitWindow, now: number): number | null {
+/** The account's `end` where a window's pace runs to it, an end before the reset (one at the reset is the reset); else null. */
+export const paceEnd = (resetsAt: string | null, end: number | null): number | null => (resetsAt !== null && end !== null && end < Date.parse(resetsAt) ? end : null);
+
+/** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it; empty for none. */
+export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
+
+/** The share of a window elapsed from its start to the earlier of its `reset` and the account's `end`, clamped to 0 to 1. */
+function elapsedShare(reset: number, lengthMs: number, now: number, end: number | null): number {
+  const start = reset - lengthMs;
+  const span = Math.min(reset, end ?? reset) - start;
+  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
+  const elapsed = span <= 0 ? 1 : (now - start) / span;
+  return Math.min(1, Math.max(0, elapsed));
+}
+
+/**
+ * The router's reading: a window's utilization less the share of it that has elapsed, from its start to the earlier
+ * of its reset and the account's `end` (`endOf`), clamped to 0 to 1; 0 elapsed without a reset.
+ */
+export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number, end: number | null): number {
+  if (window.resetsAt === null) return window.utilization;
+  return window.utilization - elapsedShare(Date.parse(window.resetsAt), lengthMs, now, end);
+}
+
+/**
+ * The share of a window's period still to come toward the earlier of its reset and the account's `end`, 0 to 1, so
+ * the pace mark and `paceWords` read one deadline. Null without a reset time.
+ */
+export function remainingTimeShare(w: RateLimitWindow, now: number, end: number | null): number | null {
   if (w.resetsAt === null) return null;
-  const period = w.periodHours * HOUR;
-  const elapsed = (period - (Date.parse(w.resetsAt) - now)) / period;
-  return 1 - Math.min(1, Math.max(0, elapsed));
+  return 1 - elapsedShare(Date.parse(w.resetsAt), w.periodHours * HOUR, now, end);
 }
 
 /** The lead over pace in words, as `aheadOf` reads it: "12% ahead of pace", "5% behind pace", or "on pace" within
- *  one point (a lead under 0.01). Null without a reset time. */
-export function paceWords(w: RateLimitWindow, now: number): string | null {
+ *  one point (a lead under 0.01), with " to its end at 15:42" where the pace runs to the account's `end`. Null
+ *  without a reset time. */
+export function paceWords(w: RateLimitWindow, now: number, end: number | null): string | null {
   if (w.resetsAt === null) return null;
-  const lead = aheadOf(w, w.periodHours * HOUR, now);
-  if (Math.abs(lead) < 0.01) return 'on pace';
-  return `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
+  const lead = aheadOf(w, w.periodHours * HOUR, now, end);
+  const words = Math.abs(lead) < 0.01 ? 'on pace' : `${Math.round(Math.abs(lead) * 100)}% ${lead > 0 ? 'ahead of' : 'behind'} pace`;
+  return `${words}${toEndWords(paceEnd(w.resetsAt, end), now)}`;
 }
 
 export const isSubscription = (account: Account) => account.kind === 'oauth';

@@ -1,6 +1,6 @@
 //! The analytics, request-log, and dashboard routes over rows written straight into the ledger.
 mod common;
-use common::{get, json, login, post, wait_json};
+use common::{get, json, login, patch, post, wait_json};
 use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
 
 const HOUR: i64 = 3_600_000;
@@ -722,6 +722,65 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
         business["peak"]["five_hour"].as_f64(),
         Some(0.3),
         "the peaks still come from the attempts' heads"
+    );
+}
+
+#[tokio::test]
+async fn the_accounts_route_runs_a_cancelled_account_s_lead_to_its_end_inside_the_sampled_week() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A day of the week gone at the sample and the end a day after it: half the span to the end has elapsed,
+    // where a seventh of the week has to the reset.
+    let sampled_at = 2 * HOUR + 300_456;
+    let end = sampled_at + 24 * HOUR;
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(sampled_at),
+                window: "seven_day".into(),
+                utilization: Some(0.41),
+                reset_at: Some(sampled_at + 6 * 24 * HOUR),
+                source: "poll".into(),
+                observed_at: Some(sampled_at),
+            }],
+            None,
+        )
+        .unwrap();
+    let cancelled = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(cancelled.status(), 200);
+    let answer = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/accounts?range={},{}", HOUR, 4 * HOUR),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    let hour = business["hours"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["hour"] == 2 * HOUR)
+        .unwrap();
+    let lead = hour["windows"]["seven_day"]["lead"].as_f64().unwrap();
+    assert!(
+        (lead - (0.41 - 0.5)).abs() < 1e-9,
+        "the pace runs to the end, a day gone of the two to it, steeper than a seventh of the week: {lead}"
     );
 }
 

@@ -427,20 +427,21 @@ An API key names no reset, so no grace applies.
 not winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With `shed_ahead_of_pace` set, a request pinned to an account whose 5-hour or 7-day window runs ahead of its
-pace by at least the margin (the prediction less the share of the window already elapsed; a 5-hour window past its reset
-reads the router's own use since) starts a shedding round there, at most once per `source_dwell_seconds`. The round
-orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last
-prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the
-burn on the account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin there, so a
-pool with one session on the account sheds nothing, and no round takes all of an account's burn. A pin a former pool
-left on the account is outside the round until it ends. A pin whose burn carries the total past the share stays marked,
-and the round stops there. A pin whose burn the cost model cannot price ranks after every priced pin of its group,
-counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the
-order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders
-every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing
-request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no
-share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to
-standard requests brings its pin back with the plan burn it still carries.
+pace by at least the margin (the prediction less the share of the window already elapsed toward the window's reset, or
+toward the account's subscription end when that comes first; a 5-hour window past its reset reads the router's own use
+since) starts a shedding round there, at most once per `source_dwell_seconds`. The round orders the pool's pins on the
+account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last prompt size in tokens), and
+marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the burn on the account over
+`burn_window_seconds` (default 600). It never marks the pool's last unmarked pin there, so a pool with one session on
+the account sheds nothing, and no round takes all of an account's burn. A pin a former pool left on the account is
+outside the round until it ends. A pin whose burn carries the total past the share stays marked, and the round stops
+there. A pin whose burn the cost model cannot price ranks after every priced pin of its group, counts nothing toward the
+share, and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the order: `never` stops after
+the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders every pin by burn over rewrite
+cost, cold or warm. While the account runs on its plan, a pin whose last refreshing request was sent in fast mode is out
+of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In dollars, on an
+API-key account or one in overage, it stays in the round. A session that returns to standard requests brings its pin
+back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and

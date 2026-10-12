@@ -2,6 +2,7 @@ import type {
   Account, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordOutcome,
   RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
+import { aheadOf, endOf, paceEnd } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { KEY_REVOKED_AT, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, HAIKU, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
@@ -258,12 +259,12 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     if (a.kind === 'oauth') {
       const head = r.attempts.some((x) => x.accountId === a.id) || a.id === 'primary';
       const ageMs = head ? 4_000 : 120_000;
+      const end = endOf(a, at);
       for (const w of readingsOf(spec, a.id)) {
         const name = WINDOW_OF[w.id];
         if (name === undefined || w.utilization === null) continue;
-        const reset = w.resetsAt === null ? null : Date.parse(w.resetsAt);
-        const elapsed = reset === null ? 0 : Math.min(1, Math.max(0, 1 - (reset - at) / WINDOW_MS[name]));
-        windows[name] = { ageMs, ahead: name === 'seven_day_fable' ? null : Math.round((w.utilization - elapsed) * 1000) / 1000, observedAt: iso(at - ageMs), reset: w.resetsAt, source: head ? 'head' : 'poll', utilization: w.utilization };
+        const ahead = aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, WINDOW_MS[name], at, end);
+        windows[name] = { ageMs, ahead: name === 'seven_day_fable' ? null : Math.round(ahead * 1000) / 1000, observedAt: iso(at - ageMs), reset: w.resetsAt, source: head ? 'head' : 'poll', utilization: w.utilization };
       }
     } else {
       windows.worst_bucket = { ageMs: 4_000, ahead: null, observedAt: iso(at - 4_000), reset: iso(at + 40_000), source: 'head', utilization: a.id === 'overflow' ? 0.04 : 0.1 };
@@ -325,15 +326,22 @@ const ROUNDS = [SHED_ROUND];
 const newestRound = (accountId: string, at: number): number | null =>
   ROUNDS.filter((x) => x.accountId === accountId && x.at <= at).reduce<number | null>((newest, x) => (newest === null || x.at > newest ? x.at : newest), null);
 
-/** The two shared windows' leads over pace with their elapsed shares, and the larger lead's margin over `against`. */
-function leadFacts(c: RecordCandidate, against: number): WalkFact[] {
+/**
+ * The two shared windows' leads over pace with their elapsed shares, each window's deadline where its pace runs to the
+ * account's end, and the larger lead's margin over `against`.
+ */
+function leadFacts(c: RecordCandidate, against: number, at: number): WalkFact[] {
   const facts: WalkFact[] = [];
   const leads: number[] = [];
+  const account = accountOf.get(c.accountId);
+  const end = account === undefined ? null : endOf(account, at);
   for (const [name, short] of [['five_hour', 'five_hour'], ['seven_day', 'seven_day']] as const) {
     const w = c.windows[name];
     if (!w || w.ahead === null) continue;
     leads.push(w.ahead);
     facts.push(fact(`ahead_${short}`, w.ahead, 'percent'), fact(`elapsed_${short}`, Math.round((w.utilization - w.ahead) * 1000) / 1000, 'percent'));
+    const deadline = paceEnd(w.reset, end);
+    if (deadline !== null) facts.push(fact(`deadline_${short}`, deadline, 'time'));
   }
   if (leads.length) facts.push(fact('margin', Math.round((Math.max(...leads) - against) * 1000) / 1000, 'percent'));
   return facts;
@@ -374,7 +382,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const cool = (c: RecordCandidate) => under(c) && rested(c) && c.inFlight < c.inFlightCap;
   const coolFacts = (c: RecordCandidate) => {
     const newest = newestRound(c.accountId, at);
-    const readings = c.kind === 'api_key' ? [fact('worst_bucket', c.windows.worst_bucket?.utilization ?? null, 'percent')] : leadFacts(c, band ?? 0);
+    const readings = c.kind === 'api_key' ? [fact('worst_bucket', c.windows.worst_bucket?.utilization ?? null, 'percent')] : leadFacts(c, band ?? 0, at);
     return [...readings, fact('band', c.kind === 'api_key' ? 1 : band, 'percent'), ...(newest === null ? [] : [fact('last_shed_age_ms', at - newest, 'ms')]), fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count'), fact('cool', cool(c))].map((f) => ({ ...f, accountId: c.accountId }));
   };
   const siblings = candidates.filter((c) => c.obstacle === null && c.accountId !== source?.accountId);
@@ -441,7 +449,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     no(4, [fact('threshold', 'off')]);
     return none;
   }
-  const facts = [...(source ? leadFacts(source, threshold) : []), fact('threshold', threshold, 'percent')];
+  const facts = [...(source ? leadFacts(source, threshold, at) : []), fact('threshold', threshold, 'percent')];
   if (!source || !PLAN_WINDOWS.some((w) => (source.windows[w]?.ahead ?? -1) >= threshold)) {
     no(4, facts);
     return none;

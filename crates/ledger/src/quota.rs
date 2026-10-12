@@ -166,10 +166,16 @@ pub fn samples_from_poll(
 }
 
 /// How far a sampled reading runs ahead of its window's pace at the sample's instant: the utilization less the
-/// share of the window elapsed by its reset, the router's own arithmetic (`elapsed_share_at`) over the raw sample
-/// rather than its prediction.
-pub fn lead_over_pace(window: &str, utilization: f64, reset_at: Option<i64>, at: i64) -> f64 {
-    utilization - elapsed_share_at(window, reset_at, at)
+/// share of the window elapsed toward the earlier of its reset and the account's `end`, the router's own arithmetic
+/// (`elapsed_share_at`) over the raw sample rather than its prediction.
+pub fn lead_over_pace(
+    window: &str,
+    utilization: f64,
+    reset_at: Option<i64>,
+    end: Option<i64>,
+    at: i64,
+) -> f64 {
+    utilization - elapsed_share_at(window, reset_at, end, at)
 }
 
 /// Whether the poll asks about this account: every OAuth account that holds a credential, paused or not,

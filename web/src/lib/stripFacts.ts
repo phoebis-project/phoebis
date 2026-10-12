@@ -44,7 +44,7 @@ const PIN_GROUPS: GroupKeys[] = [
   { keys: ['warmth', 'cause', 'marked'], label: 'Warmth' },
 ];
 const SHED_GROUPS: GroupKeys[] = [
-  { keys: ['ahead_five_hour', 'elapsed_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'cooldown', 'window_share_fast'], label: 'Windows' },
+  { keys: ['ahead_five_hour', 'elapsed_five_hour', 'deadline_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'deadline_seven_day', 'cooldown', 'window_share_fast'], label: 'Windows' },
   { keys: ['margin', 'threshold', 'round', 'marked', 'marks'], label: 'Round' },
   { keys: ['destinations', 'no_destination'], label: 'Destinations' },
 ];

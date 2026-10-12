@@ -1,5 +1,6 @@
 import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime } from './format';
+import { endOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
@@ -70,15 +71,6 @@ export function overageBadge(reset: string | null, now: number): StandingBadge {
 export function windingDownBadge(end: number, now: number): StandingBadge {
   const at = fmtAbsolute(new Date(end).toISOString());
   return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
-}
-
-/** The end an engine rule reads: the saved end while the account is cancelled, else a trial end still ahead. */
-function endOf(account: Account, now: number): number | null {
-  const term = account.subscription;
-  if (!term) return null;
-  if (account.cancelled) return term.endsAt === null ? null : Date.parse(term.endsAt);
-  const trial = term.trialEndsAt === null ? Number.NaN : Date.parse(term.trialEndsAt);
-  return trial > now ? trial : null;
 }
 
 /**

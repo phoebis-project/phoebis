@@ -8,7 +8,7 @@ import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
 import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { aheadOf } from '@/lib/quota';
+import { aheadOf, endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
@@ -1154,9 +1154,10 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const holds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
   // A move prefers a cool destination: one whose leads over pace sit under the band and that no round shed from
   // within the dwell. One that is not cool is taken only where no sibling is, which this rule leaves undecided.
-  const elapsed = (w: AttemptWindow) => Math.min(1, Math.max(0, 1 - (Date.parse(w.resetsAt ?? '') - at) / (w.id === '5h' ? 5 * HOUR : 7 * DAY)));
+  const headAccount = ACCOUNTS.find((a) => a.id === head.accountId);
+  const end = headAccount === undefined ? null : endOf(headAccount, at);
   const band = pool.shedAheadOfPace === null ? null : pool.shedAheadOfPace - 0.05;
-  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || w.utilization - elapsed(w) < band);
+  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, w.id === '5h' ? 5 * HOUR : 7 * DAY, at, end) < band);
   const rested = !(head.accountId === SHED_ROUND.accountId && at >= SHED_ROUND.at && at - SHED_ROUND.at < pool.sourceDwellSeconds * 1_000);
   if (!under || !rested) return null;
   const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
@@ -2063,7 +2064,8 @@ function accountRollups(): AccountRollup[] {
     lastSample.set(`${hist.accountId}|${hist.windowId}`, last);
   }
   // An hour's last sample of each window the router reads, with the reset live at the sample's instant and the lead
-  // the router would read then, so the Pace card draws leads on both sides of zero across the story's accounts.
+  // the router would read then, to the account's end where it comes first, so the Pace card draws leads on both sides
+  // of zero across the story's accounts.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
     for (const w of [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]) {
@@ -2072,7 +2074,7 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;

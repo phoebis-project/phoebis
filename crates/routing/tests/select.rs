@@ -11011,12 +11011,105 @@ fn the_round_s_elapsed_share_is_the_exported_reading_of_its_window_s_reset() {
     st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let round = d.shed_round.expect("the round ran on this decision").facts;
-    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), T);
+    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), None, T);
     assert!(
         (round.elapsed_share - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
         "the engine's reading and the exported arithmetic agree on a tenth of the week: {} against {exported}",
         round.elapsed_share
     );
+}
+
+#[test]
+fn a_sibling_that_ends_inside_its_week_reads_the_smaller_lead_and_takes_the_shed_pin() {
+    // a and b read the same week, 0.5 with a tenth gone, so each runs 0.4 ahead of a pace to the reset. b's
+    // subscription ends a tenth of a week from now, so half its span to the end has gone and it runs level.
+    let b_ends = vec![SubscriptionTerm {
+        account_id: "b".into(),
+        since: Some(0),
+        trial_ends_at: None,
+        cancelled: true,
+        ends_at: Some(T + WEEK_MS / 10),
+        tier: None,
+    }];
+    let run = |terms: Vec<SubscriptionTerm>| {
+        let s = snapshot_with_terms(pace_pool(), terms);
+        let mut st = two_pins_on_a();
+        st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+        st.record_sample("b", weekly(0.1, 0.5, 9, T - 500));
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0)
+    };
+    assert_eq!(
+        run(b_ends),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "b's lead reads 0 to its end, under the cool line of 0.15, so the round moves the marked pin there"
+    );
+    assert_eq!(
+        run(Vec::new()),
+        ("a".into(), None),
+        "without the end b runs 0.4 ahead like a, so the round finds no cool sibling and the pin stays"
+    );
+}
+
+#[test]
+fn a_pinned_account_that_ends_inside_its_week_reads_the_smaller_lead_and_runs_no_round() {
+    // a reads 0.5 with a tenth of the week gone, 0.4 ahead of a pace to the reset. Its subscription ends a tenth of
+    // a week from now, so half its span to the end has gone and it runs level, under the threshold of 0.2.
+    let end = T + WEEK_MS / 10;
+    let a_ends = vec![SubscriptionTerm {
+        account_id: "a".into(),
+        since: Some(0),
+        trial_ends_at: None,
+        cancelled: true,
+        ends_at: Some(end),
+        tier: None,
+    }];
+    let run = |terms: Vec<SubscriptionTerm>| {
+        let s = snapshot_with_terms(pace_pool(), terms);
+        let mut st = two_pins_on_a();
+        st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+        st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+        let last_shed = st.last_shed("p", "a");
+        (d, last_shed)
+    };
+    let (ends, last_shed) = run(a_ends);
+    assert_eq!(
+        landed(ends.result.clone()),
+        ("a".into(), None),
+        "a's lead reads 0 to its end, under the threshold, so the pin stays"
+    );
+    assert!(
+        ends.shed_round.is_none() && last_shed.is_none(),
+        "no round ran on a"
+    );
+    let shed = line(&ends.record, "move:shed");
+    assert_eq!(shed.verdict, "no");
+    assert!(
+        (number(fact(shed, "elapsed_seven_day")) - 0.5).abs() < 1e-9,
+        "the record's elapsed share runs to the end: a tenth gone of the fifth of a week to it"
+    );
+    assert!(number(fact(shed, "ahead_seven_day")).abs() < 1e-9);
+    let deadline = shed
+        .facts
+        .iter()
+        .find(|f| f.key == "deadline_seven_day")
+        .expect("the week's deadline is the end, so the line names it");
+    assert_eq!(
+        (&deadline.value, deadline.unit),
+        (&FactValue::Int(end), Some("time"))
+    );
+    assert!(
+        shed.facts.iter().all(|f| f.key != "deadline_five_hour"),
+        "the 5-hour reading names no reset, so it names no deadline: {:?}",
+        shed.facts
+    );
+    let (plain, last_shed) = run(Vec::new());
+    assert_eq!(
+        landed(plain.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "without the end a runs 0.4 ahead, so the round moves the marked pin to b"
+    );
+    assert_eq!(last_shed, Some(T));
 }
 
 #[test]
@@ -12241,6 +12334,11 @@ fn a_shed_move_records_the_round_and_its_marks() {
     assert!((number(fact(shed, "ahead_seven_day")) - 0.4).abs() < 1e-9);
     assert!((number(fact(shed, "elapsed_seven_day")) - 0.1).abs() < 1e-9);
     assert!((number(fact(shed, "ahead_five_hour")) - 0.1).abs() < 1e-9);
+    assert!(
+        shed.facts.iter().all(|f| !f.key.starts_with("deadline_")),
+        "a pace to the reset names no deadline: {:?}",
+        shed.facts
+    );
     assert!((number(fact(shed, "threshold")) - 0.2).abs() < 1e-9);
     assert!(
         (number(fact(shed, "margin")) - 0.2).abs() < 1e-9,

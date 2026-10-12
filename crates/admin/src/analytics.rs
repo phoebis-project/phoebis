@@ -13,8 +13,8 @@ use phoebis_ledger::{
     series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
     LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, Tiers, GROUP_BYS,
 };
-use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::AccountKind;
+use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::{AccountKind, SubscriptionTerm};
 use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
@@ -530,15 +530,19 @@ fn base_windows() -> Map<String, Value> {
 
 /// An hour's last sample of one window as the wire carries it. The lead is scored at the sample's own instant,
 /// since the bucket is the sampler's 300-second floor and a reset minutes away would read wrong from it, and a
-/// sample that reported the reset alone has no lead.
-fn window_json(s: &HourlyWindowSample) -> WindowSample {
+/// sample that reported the reset alone has no lead. The pace runs to the account's end in the registry's current
+/// term, resolved at the sample's instant, since the ledger keeps no term history. The lead matches the router's for
+/// a trial end and for the samples taken after a cancellation was recorded, and the older samples of the window that
+/// holds a cancelled end re-read with it.
+fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> WindowSample {
     let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
+    let end = term.and_then(|t| term::end_of(t, sampled_at));
     WindowSample {
         utilization: s.utilization,
         reset_at: s.reset_at,
         lead: s
             .utilization
-            .map(|u| lead_over_pace(&s.window, u, s.reset_at, sampled_at)),
+            .map(|u| lead_over_pace(&s.window, u, s.reset_at, end, sampled_at)),
         sampled_at,
     }
 }
@@ -623,7 +627,8 @@ fn windows_schema() -> utoipa::openapi::schema::Object {
 }
 
 /// The hour's last sample of one window. `lead` is the utilization less the share of the window elapsed at the
-/// sample's instant, null with the utilization for a sample that reported the reset alone.
+/// sample's instant toward the window's reset, or toward the account's subscription end when that comes first, null
+/// with the utilization for a sample that reported the reset alone.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowSample {
@@ -676,6 +681,7 @@ pub(crate) async fn accounts(
         Err(e) => return ledger_failure(e),
     };
     type Hour = (AccountRollupRow, Map<String, Value>);
+    let snapshot = state.router.snapshot();
     let mut by_account: BTreeMap<String, (AccountRollupRow, BTreeMap<i64, Hour>)> = BTreeMap::new();
     for row in rows {
         let entry = by_account.entry(row.account_id.clone()).or_insert_with(|| {
@@ -715,7 +721,8 @@ pub(crate) async fn accounts(
         });
         windows.insert(
             s.window.clone(),
-            serde_json::to_value(window_json(&s)).expect("a window sample serializes"),
+            serde_json::to_value(window_json(&s, snapshot.term(&s.account_id)))
+                .expect("a window sample serializes"),
         );
     }
     let accounts = by_account

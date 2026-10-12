@@ -671,7 +671,7 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.deepEqual(groupsOf(stationPlan(renewal, 'pin')), [['Lookup', ['found', 'on', 'epoch']], ['Age', ['idle', 'refresh age']], ['Warmth', ['warmth', 'cause', 'marked']]]);
 
   const SHED = [
-    ['Windows', ['ahead_five_hour', 'elapsed_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'cooldown', 'window_share_fast']],
+    ['Windows', ['ahead_five_hour', 'elapsed_five_hour', 'deadline_five_hour', 'ahead_seven_day', 'elapsed_seven_day', 'deadline_seven_day', 'cooldown', 'window_share_fast']],
     ['Round', ['margin', 'threshold', 'round', 'marked', 'marks']],
     ['Destinations', ['destinations', 'no_destination']],
   ];

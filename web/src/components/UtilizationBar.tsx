@@ -2,11 +2,15 @@ import { useRef, type KeyboardEvent, type PointerEvent, type RefObject } from 'r
 import { Legend } from '@/components/charts/Tooltip';
 import { fmtPct } from '@/lib/format';
 import { leadWords } from '@/lib/presets';
-import { aheadOf } from '@/lib/quota';
+import { aheadOf, paceEnd, toEndWords } from '@/lib/quota';
 import { WINDOW_HOURS } from '@/lib/windows';
 
-/** A member's shared-window readings, each with the reset its lead over pace needs. Null where its row reports no such window. */
+/**
+ * A member's shared-window readings, each with the reset its lead over pace needs, and the account's end (`endOf`),
+ * which the pace runs to where it comes first. Null where its row reports no such window.
+ */
 export interface MemberReading {
+  end: number | null;
   fiveHour: { resetsAt: string | null; utilization: number } | null;
   id: string;
   label: string;
@@ -84,7 +88,7 @@ export function UtilizationBar({ expert, margin, now, readings, selectBelow }: {
         ['5h', '5-hour', r.fiveHour],
         ['7d', '7-day', r.sevenDay],
       ] as const
-    ).flatMap(([id, name, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, lead: aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now), name, used: w.utilization }])),
+    ).flatMap(([id, name, w]) => (w === null ? [] : [{ end: paceEnd(w.resetsAt, r.end), id, key: `${r.id}-${id}`, label: r.label, lead: aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now, r.end), name, used: w.utilization }])),
   );
   // The band spans the leads a cool destination may hold above pace, up to the margin less the hysteresis band of 5
   // points, so a margin at or under 5 leaves none to shade.
@@ -106,7 +110,7 @@ export function UtilizationBar({ expert, margin, now, readings, selectBelow }: {
       <div className="ubar__track ubar__track--lead" role="img" aria-label="Lead over pace by member and window">
         {band > 0 && <span className="ubar__band" style={{ left: '50%', width: `${band}%` }} title="cool under here" />}
         {windows.map((w) => (
-          <span key={w.key} className={`ubar__tick ubar__tick--${w.id}`} style={{ left: `${onLead(w.lead)}%` }} title={`${w.label}: ${w.name} ${fmtPct(w.used)} used, ${fmtPct(w.used - w.lead)} elapsed, ${leadWords(w.lead)}`} />
+          <span key={w.key} className={`ubar__tick ubar__tick--${w.id}`} style={{ left: `${onLead(w.lead)}%` }} title={`${w.label}: ${w.name} ${fmtPct(w.used)} used, ${fmtPct(w.used - w.lead)} elapsed${toEndWords(w.end, now)}, ${leadWords(w.lead)}`} />
         ))}
         {margin !== null && <span className="ubar__margin" style={{ left: `${onLead(margin / 100)}%` }} title={`Shedding margin: ${margin} ${margin === 1 ? 'point' : 'points'}`} />}
       </div>
