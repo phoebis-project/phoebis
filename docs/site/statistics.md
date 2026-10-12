@@ -70,9 +70,9 @@ still draws real money. The table in force is fixed at startup, so a member held
 end or its budget to be raised, rather than for a price correction. A member's rows on a model priced by prompt length
 are summed at the dollars they were booked at, since an hour's sums carry no per-attempt prompt. The rollups file each
 hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
-An account's rollups also book its cooldown time to the hour it elapses in as the interval runs, up to seven days ahead
-of the announcement that set it, a later announcement booking on from there, and a cooldown cleared early gives back
-only the hours it never held.
+An account's rollups also book a cooldown's time when its announcement lands, each part to the hour it falls in, up to
+seven days past the announcement, a later announcement booking on from the end already booked, and a cooldown cleared
+early gives back the time after the clear.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -221,9 +221,9 @@ of its capacity inside the band, so a request completing inside it spends 1/0.7 
 The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force
 at its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round
 prices on plan quota so the order reads what the meter charges. The account, key and request class groupings of the
-analytics read the hourly rollups instead, which fold a request under the hour it arrived in and weigh its share by
-that hour's band rather than by the band at its completion. The Tiers and peak band tab of the cost reference names
-this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
+analytics read the hourly rollups instead, which fold a request under the hour it arrived in, so the account
+grouping's shares weigh it by that hour's band rather than by the band at its completion. The Tiers and peak band tab
+of the cost reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
