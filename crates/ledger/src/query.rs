@@ -5,15 +5,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY};
-use phoebis_store::{AccountKind, BudgetPeriod};
+use phoebis_routing::{
+    window_for, MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
+};
+use phoebis_store::BudgetPeriod;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
-use crate::plan::{funding_of, price_shares, CostRevisions, Funding, PlanTables, WindowShares};
+use crate::plan::{
+    funding_of, price_equivalent, price_shares, CostRevisions, Funding, PlanTables, WindowShares,
+};
 use crate::price::{price_row, Priced, RowKey};
 use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Speed};
 use crate::record::{
@@ -337,10 +341,11 @@ pub fn list_requests(
                 format!("?{}", args.len())
             })
             .collect();
-        // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. A
-        // request with no served speed reads as the rollups fold it.
+        // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. The speed
+        // follows the rollups' fold: the speed the serving attempt's answer reported, `standard` for an answer with
+        // usage that reported none, and the speed the request asked for where no attempt answered.
         clauses.push(format!(
-            "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({})",
+            "COALESCE((SELECT COALESCE(a.speed, CASE WHEN COALESCE(a.input_tokens, a.output_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens) IS NOT NULL THEN 'standard' END) FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({})",
             marks.join(", ")
         ));
     }
@@ -1325,24 +1330,31 @@ pub struct ProbeCounts {
     pub skipped: u64,
 }
 
-/// What prices a group's shares: the cost model, each account's kind and each oauth account's tier, read once per
-/// route call; `None` under a grouping other than account, where no share is answered.
+/// The cost model a group's shares price on. A read answers the shares only where each group holds one account's
+/// rows (`holds_one_account`), since shares of different accounts' windows do not add, and each row's own account
+/// tier prices it.
 #[derive(Clone, Copy)]
 pub struct SharePricing<'a> {
     pub tables: &'a PlanTables,
-    pub kinds: &'a HashMap<String, AccountKind>,
-    pub tiers: &'a Tiers,
 }
 
 impl SharePricing<'_> {
-    /// The tier `account` prices under: `None` for an api_key account, an oauth account with no tier on file and
-    /// an account the registry does not hold, none of which answers a share.
-    fn tier_of(&self, account: &str) -> Option<&str> {
-        match self.kinds.get(account)? {
-            AccountKind::Oauth => self.tiers.get(account)?.as_deref(),
-            AccountKind::ApiKey => None,
-        }
+    /// The account tier `row` recorded at its landing: `None` under `UNATTRIBUTED`, which an api_key account's rows,
+    /// a profile not yet read and every row folded before the tier was recorded carry, none of which answers a share.
+    fn tier_of<'r>(&self, row: &'r RollupRow) -> Option<&'r str> {
+        (row.tier != UNATTRIBUTED).then_some(row.tier.as_str())
     }
+}
+
+/// Whether every group of a read holds one account's rows, the one place the own-window shares add: the account
+/// grouping, or a filter naming exactly one account under any grouping.
+fn holds_one_account(group_by: &str, accounts: &[String]) -> bool {
+    group_by == "account" || names_one_account(accounts)
+}
+
+/// Whether a filter names exactly one account, a name given twice counting once.
+fn names_one_account(accounts: &[String]) -> bool {
+    accounts.iter().collect::<BTreeSet<_>>().len() == 1
 }
 
 /// The read and write halves of a window's cache share, as fractions of the window.
@@ -1359,6 +1371,67 @@ pub struct CacheShare {
 pub struct ProbeShare {
     pub cost: f64,
     pub wasted: Option<f64>,
+}
+
+/// The three equivalent columns summed, keyed `five_hour`, `seven_day` and the model week where a row carried one.
+pub type Equivalent = IndexMap<&'static str, f64>;
+
+/// The read and write halves of a window's 20x equivalent.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CacheEquivalent {
+    pub read: f64,
+    pub write: f64,
+}
+
+/// The probe rows' 20x equivalent of a window and the wasted probes' own counts priced on it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ProbeEquivalent {
+    pub cost: f64,
+    pub wasted: f64,
+}
+
+/// The two shared windows' equivalents, where a reader sums across models and draws no model week (the dashboard,
+/// keys, pools and traffic members).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SharedEquivalent {
+    pub five_hour: f64,
+    pub seven_day: f64,
+}
+
+impl SharedEquivalent {
+    /// A priced row's two shared windows added in: a window the row could not be priced on adds nothing, as a model
+    /// the revision lacks adds no dollar.
+    fn add_windows(&mut self, windows: &WindowShares) {
+        self.five_hour += windows.get(FIVE_HOUR).copied().flatten().unwrap_or(0.0);
+        self.seven_day += windows.get(SEVEN_DAY).copied().flatten().unwrap_or(0.0);
+    }
+
+    fn add(&mut self, other: &SharedEquivalent) {
+        self.five_hour += other.five_hour;
+        self.seven_day += other.seven_day;
+    }
+}
+
+/// One row priced for a reader that sums the two shared windows: its dollars, the billed part of them, its 20x
+/// equivalent where a plan row's, and whether that priced through the fallback, which a row with no token never is.
+fn shared_figures(
+    row: &RollupRow,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+) -> (f64, f64, SharedEquivalent, bool) {
+    let priced = priced(row, prices, costs);
+    let usd = priced.usd.map_or(0.0, |usd| usd.total());
+    let mut equivalent = SharedEquivalent::default();
+    if let Some(windows) = &priced.equivalent {
+        equivalent.add_windows(windows);
+    }
+    let billed = if Funding::of_rollup(&row.funding) == Funding::Plan {
+        0.0
+    } else {
+        usd
+    };
+    let estimated = priced.estimated && tokens_of(row.usage()) > 0;
+    (usd, billed, equivalent, estimated)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1399,17 +1472,33 @@ pub struct GroupRow {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
-    /// Keyed by window id, `five_hour`, `seven_day` and the model week. A window is absent where a plan row a known
-    /// tier holds could not be priced on it, never for a row whose model the window does not apply to. `None` for
-    /// an api_key group, an oauth group with no tier on file, an account the registry does not hold, and under
-    /// every grouping but account.
+    /// Keyed by window id, `five_hour`, `seven_day` and the model week, each plan row priced under the account tier
+    /// it recorded. A window is absent where a plan row with a tier could not be priced on it, never for a row whose
+    /// model the window does not apply to. `None` for a group whose rows carry no tier (an api_key group, an oauth
+    /// group whose profile was not read, the rows folded before the tier was recorded) and wherever the read's
+    /// groups do not each hold one account's rows.
     pub cost_shares: Option<IndexMap<&'static str, f64>>,
     pub cache_shares: Option<IndexMap<&'static str, CacheShare>>,
     pub probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
-    /// The plan-funded requests and output tokens the shares were summed over, the denominators of a share per
-    /// request and per 1k output tokens; `None` where `cost_shares` is.
+    /// The plan-funded requests and output tokens the shares and the equivalent are summed over, the denominators
+    /// of a figure per request and per 1k output tokens. Answered under every grouping.
     pub plan_requests: Option<u64>,
     pub plan_output_tokens: Option<u64>,
+    /// The plan rows' 20x window equivalent per window, under every grouping. A window is absent where a plan row
+    /// could not be priced on it.
+    pub cost_equivalent: Equivalent,
+    /// The plan rows' cache reads and writes in the equivalent, keyed and latched as `cost_equivalent`.
+    pub cache_equivalent: IndexMap<&'static str, CacheEquivalent>,
+    /// The plan-funded probe rows and their wasted counts in the equivalent, keyed and latched as `cost_equivalent`.
+    pub probe_equivalent: IndexMap<&'static str, ProbeEquivalent>,
+    /// The dollars of the billed rows alone (`fast`, `overage`, `billed`).
+    pub billed_usd: f64,
+    pub billed: CostSplitJson,
+    /// The plan rows' 20x 7-day equivalent by token kind, `input`, `cache_read`, `cache_write` and `output`, which
+    /// sum to `cost_equivalent`'s `seven_day`. Empty where that window is.
+    pub equivalent_split: IndexMap<&'static str, f64>,
+    /// True when any plan row priced through the model tier's fallback weight.
+    pub estimated: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1690,14 +1779,26 @@ pub(crate) fn priced(row: &RollupRow, prices: &PriceRevisions, costs: &PlanTable
     price_row(prices, costs, &row_key(row), row.usage())
 }
 
-fn group_row(
-    key: &str,
-    sum: &RollupRow,
-    probes: &RollupRow,
-    dollars: &GroupDollars,
-    label: String,
-    shares: GroupShares,
-) -> GroupRow {
+fn cost_split_json(usd: &CostSplit) -> CostSplitJson {
+    CostSplitJson {
+        cache_read: usd.cache_read_usd,
+        cache_write: usd.cache_write_usd,
+        input: usd.input_usd,
+        output: usd.output_usd,
+    }
+}
+
+fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
+    let GroupSum {
+        sum,
+        probes,
+        dollars,
+        shares,
+        plan,
+        ..
+    } = group;
+    let shares = shares.map_or_else(GroupShares::default, ShareSums::finish);
+    let equivalent = plan.equivalent.finish_equivalent();
     let expired = sum
         .cache_miss_reasons
         .get("expired_between_turns")
@@ -1733,12 +1834,7 @@ fn group_row(
             web_fetch: sum.web_fetch_requests,
             web_search: sum.web_search_requests,
         },
-        cost: CostSplitJson {
-            cache_read: dollars.usd.cache_read_usd,
-            cache_write: dollars.usd.cache_write_usd,
-            input: dollars.usd.input_usd,
-            output: dollars.usd.output_usd,
-        },
+        cost: cost_split_json(&dollars.usd),
         cost_usd: dollars.usd.total(),
         errors: sum.errors.clone(),
         cache_miss_reasons: reasons,
@@ -1779,8 +1875,15 @@ fn group_row(
         cost_shares: shares.cost_shares,
         cache_shares: shares.cache_shares,
         probe_shares: shares.probe_shares,
-        plan_requests: shares.plan_requests,
-        plan_output_tokens: shares.plan_output_tokens,
+        plan_requests: Some(plan.requests),
+        plan_output_tokens: Some(plan.output_tokens),
+        cost_equivalent: equivalent.cost,
+        cache_equivalent: equivalent.cache,
+        probe_equivalent: equivalent.probe,
+        billed_usd: dollars.billed.total(),
+        billed: cost_split_json(&dollars.billed),
+        equivalent_split: plan.split.finish(),
+        estimated: plan.estimated,
     }
 }
 
@@ -1810,26 +1913,29 @@ struct CacheSum {
     unpriced: bool,
 }
 
-/// The five share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
+/// The three share members of a `GroupRow`, folded from a group's `ShareSums` or all `None`.
 #[derive(Default)]
 struct GroupShares {
     cost_shares: Option<IndexMap<&'static str, f64>>,
     cache_shares: Option<IndexMap<&'static str, CacheShare>>,
     probe_shares: Option<IndexMap<&'static str, ProbeShare>>,
-    plan_requests: Option<u64>,
-    plan_output_tokens: Option<u64>,
 }
 
-/// A group's shares, summed row by row as the rows arrive: the summed keys of `GroupSum` blank the account, the
-/// model and the hour a share is priced from, so the shares fold here from the incoming row. Keyed by window in the
-/// order the rows introduced them.
+/// The three equivalent members of a `GroupRow`, folded from a group's `ShareSums` priced in the 20x equivalent.
+struct GroupEquivalent {
+    cost: Equivalent,
+    cache: IndexMap<&'static str, CacheEquivalent>,
+    probe: IndexMap<&'static str, ProbeEquivalent>,
+}
+
+/// A group's shares, or its 20x equivalent, summed row by row as the rows arrive: the summed keys of `GroupSum`
+/// blank the account, the model and the hour a figure is priced from, so the figures fold here from the incoming
+/// row. Keyed by window in the order the rows introduced them.
 #[derive(Default)]
 struct ShareSums {
     cost: IndexMap<&'static str, WindowSum>,
     cache: IndexMap<&'static str, CacheSum>,
     probe_cost: IndexMap<&'static str, WindowSum>,
-    plan_requests: u64,
-    plan_output_tokens: u64,
     /// The wasted probes' own counts priced on each window. A settlement files under the funding its probe's own
     /// row took, so an overage probe's waste files under `overage`, a fast recipe's under `fast`, and neither
     /// reaches the plan's windows.
@@ -1840,12 +1946,20 @@ struct ShareSums {
 }
 
 impl ShareSums {
-    /// Folds one plan-funded row in: the request side's shares and counts when `counted`, as the request dollars
-    /// take the row, and the probe cost when the row is a probe's, each window priced at the row's own hour.
+    /// Folds one plan-funded row in: the request side's shares when `counted`, as the request dollars take the row,
+    /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier`.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
         self.add_priced(row, counted, |usage| {
             let at = row.hour * 1_000;
             price_shares(tables, tier, &row.canonical_model, usage, at, at).shares
+        });
+    }
+
+    /// `add` in the 20x equivalent, which reads no account tier.
+    fn add_equivalent(&mut self, row: &RollupRow, costs: &PlanTables, counted: bool) {
+        self.add_priced(row, counted, |usage| {
+            let at = row.hour * 1_000;
+            price_equivalent(costs, &row.canonical_model, usage, at, at).shares
         });
     }
 
@@ -1856,10 +1970,6 @@ impl ShareSums {
         counted: bool,
         price: impl Fn(PinUsage) -> WindowShares,
     ) {
-        if counted {
-            self.plan_requests += row.requests;
-            self.plan_output_tokens += row.output_tokens;
-        }
         let usage = row.usage();
         if row.kind == PROBE_KIND {
             self.plan_wasted_probes += row.wasted_probes;
@@ -1956,8 +2066,147 @@ impl ShareSums {
                     })
                     .collect(),
             ),
-            plan_requests: Some(self.plan_requests),
-            plan_output_tokens: Some(self.plan_output_tokens),
+        }
+    }
+
+    /// The sums priced in the 20x equivalent: a latched window absent from each map as it is from the shares, and the
+    /// wasted part of a probe window zero where no wasted count reached it.
+    fn finish_equivalent(self) -> GroupEquivalent {
+        let ShareSums {
+            cost,
+            cache,
+            probe_cost,
+            wasted,
+            ..
+        } = self;
+        GroupEquivalent {
+            cost: cost
+                .into_iter()
+                .filter(|(_, s)| !s.unpriced)
+                .map(|(w, s)| (w, s.sum))
+                .collect(),
+            cache: cache
+                .into_iter()
+                .filter(|(_, s)| !s.unpriced)
+                .map(|(w, s)| {
+                    (
+                        w,
+                        CacheEquivalent {
+                            read: s.read,
+                            write: s.write,
+                        },
+                    )
+                })
+                .collect(),
+            probe: probe_cost
+                .into_iter()
+                .filter(|(_, s)| !s.unpriced)
+                .filter_map(|(w, s)| {
+                    let wasted = match wasted.get(w) {
+                        None => 0.0,
+                        Some(sum) if sum.unpriced => return None,
+                        Some(sum) => sum.sum,
+                    };
+                    Some((
+                        w,
+                        ProbeEquivalent {
+                            cost: s.sum,
+                            wasted,
+                        },
+                    ))
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The plan rows' 20x 7-day equivalent by token kind, latched as a window is: a row the 7-day window could not be
+/// priced on leaves the split empty, as it leaves `cost_equivalent` without the window.
+#[derive(Default)]
+struct SplitSum {
+    input: f64,
+    cache_read: f64,
+    cache_write: f64,
+    output: f64,
+    seen: bool,
+    unpriced: bool,
+}
+
+impl SplitSum {
+    fn add(&mut self, costs: &PlanTables, canonical_model: &str, usage: PinUsage, at: i64) {
+        let week = |usage: PinUsage| costs.equivalent_at(SEVEN_DAY, canonical_model, usage, at);
+        let parts = [
+            week(PinUsage {
+                input: usage.input,
+                ..PinUsage::default()
+            }),
+            week(PinUsage {
+                cache_read: usage.cache_read,
+                ..PinUsage::default()
+            }),
+            week(PinUsage {
+                write_5m: usage.write_5m,
+                write_1h: usage.write_1h,
+                ..PinUsage::default()
+            }),
+            week(PinUsage {
+                output: usage.output,
+                ..PinUsage::default()
+            }),
+        ];
+        self.seen = true;
+        match parts {
+            [Some(input), Some(cache_read), Some(cache_write), Some(output)] => {
+                self.input += input;
+                self.cache_read += cache_read;
+                self.cache_write += cache_write;
+                self.output += output;
+            }
+            _ => self.unpriced = true,
+        }
+    }
+
+    fn finish(self) -> IndexMap<&'static str, f64> {
+        if !self.seen || self.unpriced {
+            return IndexMap::new();
+        }
+        IndexMap::from([
+            ("input", self.input),
+            ("cache_read", self.cache_read),
+            ("cache_write", self.cache_write),
+            ("output", self.output),
+        ])
+    }
+}
+
+/// A group's plan-funded side under every grouping: the counts the shares and the equivalent are summed over, the
+/// 20x equivalent, its 7-day split by token kind, and whether a row priced through the model tier's fallback weight.
+#[derive(Default)]
+struct PlanSums {
+    requests: u64,
+    output_tokens: u64,
+    equivalent: ShareSums,
+    split: SplitSum,
+    estimated: bool,
+}
+
+impl PlanSums {
+    /// Folds one plan-funded row in: its counts and its split when `counted`, as the request dollars take the row,
+    /// its equivalent as `ShareSums` folds a share, and `estimated`, the mark `price_row` set on its counts.
+    fn add(&mut self, row: &RollupRow, estimated: bool, costs: &PlanTables, counted: bool) {
+        if counted {
+            self.requests += row.requests;
+            self.output_tokens += row.output_tokens;
+        }
+        self.equivalent.add_equivalent(row, costs, counted);
+        let usage = row.usage();
+        if tokens_of(usage) == 0 {
+            return;
+        }
+        self.estimated |= estimated;
+        if counted {
+            self.split
+                .add(costs, &row.canonical_model, usage, row.hour * 1_000);
         }
     }
 }
@@ -1967,11 +2216,12 @@ fn tokens_of(usage: PinUsage) -> u64 {
     usage.input + usage.cache_read + usage.write_5m + usage.write_1h + usage.output
 }
 
-/// A group's dollars, each row priced at its own key as it joins: the counted rows' split, the probe rows' total and
-/// the wasted counts' total.
+/// A group's dollars, each row priced at its own key as it joins: the counted rows' split, the billed rows' part of
+/// it, the probe rows' total and the wasted counts' total.
 #[derive(Default)]
 struct GroupDollars {
     usd: CostSplit,
+    billed: CostSplit,
     probe_usd: f64,
     wasted_usd: f64,
 }
@@ -1985,8 +2235,9 @@ struct GroupSum {
     dollars: GroupDollars,
     /// Whether a non-probe row ever joined: a keepalive credit carries a real kind but never adds to `requests`.
     saw_non_probe: bool,
-    /// The shares, for an oauth account with a tier under the account grouping.
+    /// The shares, where the read's groups each hold one account's rows and a row of the group recorded a tier.
     shares: Option<ShareSums>,
+    plan: PlanSums,
 }
 
 #[derive(Default)]
@@ -2012,8 +2263,11 @@ impl GroupSums {
             dollars: GroupDollars::default(),
             saw_non_probe: false,
             shares: None,
+            plan: PlanSums::default(),
         });
-        let usd = priced(row, prices, costs).usd.unwrap_or_default();
+        let Priced { usd, estimated, .. } = priced(row, prices, costs);
+        let usd = usd.unwrap_or_default();
+        let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
         if row.kind == PROBE_KIND {
             entry.probes.add(row);
             entry.dollars.probe_usd += usd.total();
@@ -2024,21 +2278,28 @@ impl GroupSums {
         if counted {
             entry.sum.add(row);
             entry.dollars.usd.add(&usd);
+            if !plan {
+                entry.dollars.billed.add(&usd);
+            }
         }
         if tokens_of(row.wasted_usage()) > 0 {
-            entry.dollars.wasted_usd += price_row(prices, costs, &row_key(row), row.wasted_usage())
-                .usd
-                .map_or(0.0, |usd| usd.total());
+            let wasted = price_row(prices, costs, &row_key(row), row.wasted_usage());
+            entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
+            entry.plan.estimated |= plan && wasted.estimated;
         }
-        // Under the account grouping alone, where the group is one account and its tier prices every row of it.
-        let Some(pricing) = pricing.filter(|_| group_by == "account") else {
+        if plan {
+            entry.plan.add(row, estimated, costs, counted);
+        }
+        // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
+        // account tier it recorded.
+        let Some(pricing) = pricing else {
             return;
         };
-        let Some(tier) = pricing.tier_of(&row.account_id) else {
+        let Some(tier) = pricing.tier_of(row) else {
             return;
         };
         let shares = entry.shares.get_or_insert_with(ShareSums::default);
-        if Funding::of_rollup(&row.funding) == Funding::Plan {
+        if plan {
             shares.add(row, tier, pricing.tables, counted);
         }
     }
@@ -2053,31 +2314,15 @@ impl GroupSums {
             .0
             .into_iter()
             .map(|(k, group)| {
-                let shares = group
-                    .shares
-                    .map_or_else(GroupShares::default, ShareSums::finish);
                 if group_by == "key" {
-                    let mut row = group_row(
-                        &k,
-                        &group.sum,
-                        &group.probes,
-                        &group.dollars,
-                        live.label_of(&k),
-                        shares,
-                    );
+                    let mut row = group_row(&k, group, live.label_of(&k));
                     let (key_id, key_created_at) = live.holder_of(&k);
                     row.key_id = Some(key_id);
                     row.key_created_at = key_created_at;
                     row
                 } else {
-                    group_row(
-                        &k,
-                        &group.sum,
-                        &group.probes,
-                        &group.dollars,
-                        label_of(&k),
-                        shares,
-                    )
+                    let label = label_of(&k);
+                    group_row(&k, group, label)
                 }
             })
             .collect();
@@ -2129,6 +2374,8 @@ pub fn series(
     prices: &PriceRevisions,
     costs: &PlanTables,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
+    // The rows come with no filter, so only the account grouping holds one account's rows per group.
+    let pricing = pricing.filter(|_| holds_one_account(group_by, &[]));
     let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
     let last = hour_ceil(to);
     let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
@@ -2180,7 +2427,8 @@ pub fn breakdown(
         probes_counted,
         live,
         agent_groups,
-        pricing,
+        // The rows come with no filter, so only the account grouping holds one account's rows per group.
+        pricing.filter(|_| holds_one_account(group_by, &[])),
         prices,
         costs,
     )
@@ -2188,7 +2436,8 @@ pub fn breakdown(
 
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
 /// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. `pricing` prices the
-/// groups' shares under the account grouping, and every row's dollars price from its counts on `prices`.
+/// groups' shares where each group holds one account's rows, and every row's dollars and 20x equivalent price from
+/// its counts on `prices` and `costs`.
 #[allow(clippy::too_many_arguments)]
 pub async fn series_paged(
     db: &Arc<LedgerDb>,
@@ -2221,6 +2470,7 @@ pub async fn series_paged(
         .collect();
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
     let probes_counted = filter.probes_counted();
+    let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
             if !passes_patterns(row, filter) || !passes_funding(row, filter) || row.hour < first {
@@ -2253,8 +2503,8 @@ pub async fn series_paged(
 }
 
 /// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
-/// group sums as the pages arrive. `pricing` prices the groups' shares under the account grouping, and every row's
-/// dollars price from its counts on `prices`.
+/// group sums as the pages arrive. `pricing` prices the groups' shares where each group holds one account's rows, and
+/// every row's dollars and 20x equivalent price from its counts on `prices` and `costs`.
 #[allow(clippy::too_many_arguments)]
 pub async fn breakdown_paged(
     db: &Arc<LedgerDb>,
@@ -2269,6 +2519,7 @@ pub async fn breakdown_paged(
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
     let probes_counted = filter.probes_counted();
+    let pricing = pricing.filter(|_| holds_one_account(group_by, &filter.accounts));
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
             if passes_patterns(row, filter) && passes_funding(row, filter) {
@@ -2296,6 +2547,10 @@ pub struct HourPoint {
     pub errors: u64,
     pub requests: u64,
     pub tokens: u64,
+    /// The billed rows' dollars of the hour, a part of `cost`.
+    pub billed: f64,
+    /// The plan rows' 20x equivalent of the hour.
+    pub equivalent: SharedEquivalent,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2307,12 +2562,18 @@ pub struct Dashboard {
     pub error_rate_24h: Option<f64>,
     pub top_error_code: Option<String>,
     pub hourly: Vec<HourPoint>,
+    /// The billed rows' dollars of the day, a part of `cost_24h`.
+    pub billed_24h: f64,
+    /// The plan rows' 20x equivalent of the day.
+    pub equivalent_24h: SharedEquivalent,
+    /// True when any plan row of the day priced through the model tier's fallback weight.
+    pub estimated_24h: bool,
     #[serde(skip)]
     pub recent: Vec<RequestWithAttempts>,
 }
 
-/// The last day's rollups folded hour by hour through `read_rollups_paged`, each row's dollars priced from its counts,
-/// and the newest requests.
+/// The last day's rollups folded hour by hour through `read_rollups_paged`, each row's dollars and 20x equivalent
+/// priced from its counts, and the newest requests.
 pub async fn dashboard(
     db: &Arc<LedgerDb>,
     now: i64,
@@ -2330,17 +2591,24 @@ pub async fn dashboard(
             errors: 0,
             requests: 0,
             tokens: 0,
+            billed: 0.0,
+            equivalent: SharedEquivalent::default(),
         })
         .collect();
     let mut tokens_cached = 0;
+    let mut estimated = false;
     read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
         if r.kind == "probe" {
             return;
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
+            let (usd, billed, equivalent, fallback) = shared_figures(r, prices, costs);
             point.requests += r.requests;
             point.errors += r.requests.saturating_sub(r.succeeded);
-            point.cost += priced(r, prices, costs).usd.map_or(0.0, |usd| usd.total());
+            point.cost += usd;
+            point.billed += billed;
+            point.equivalent.add(&equivalent);
+            estimated |= fallback;
             point.tokens += r.input_tokens
                 + r.cache_read_tokens
                 + r.cache_write_5m_tokens
@@ -2368,6 +2636,14 @@ pub async fn dashboard(
             .iter()
             .max_by_key(|(_, n)| **n)
             .map(|(c, _)| c.clone()),
+        billed_24h: hourly.iter().map(|h| h.billed).sum(),
+        equivalent_24h: hourly
+            .iter()
+            .fold(SharedEquivalent::default(), |mut day, h| {
+                day.add(&h.equivalent);
+                day
+            }),
+        estimated_24h: estimated,
         hourly,
         recent,
     })
@@ -2523,6 +2799,12 @@ pub struct Totals {
     pub cost_usd: f64,
     pub requests: u64,
     pub tokens: u64,
+    /// The billed rows' dollars, a part of `cost_usd`.
+    pub billed_usd: f64,
+    /// The plan rows' 20x equivalent.
+    pub equivalent: SharedEquivalent,
+    /// True when any plan row priced through the model tier's fallback weight.
+    pub estimated: bool,
 }
 
 /// The price columns and the hour a SQL sum groups by beside its own column, and the sums it answers in the order
@@ -2564,12 +2846,23 @@ fn price_group(
         at: hour * 1_000,
         band_at: None,
     };
+    let priced = price_row(prices, costs, &key, usage);
+    let usd = priced.usd.map_or(0.0, |usd| usd.total());
+    let mut equivalent = SharedEquivalent::default();
+    if let Some(windows) = &priced.equivalent {
+        equivalent.add_windows(windows);
+    }
     Ok(Totals {
-        cost_usd: price_row(prices, costs, &key, usage)
-            .usd
-            .map_or(0.0, |usd| usd.total()),
+        cost_usd: usd,
         requests: count(5)?,
         tokens: tokens_of(usage),
+        billed_usd: if key.funding == Funding::Plan {
+            0.0
+        } else {
+            usd
+        },
+        equivalent,
+        estimated: priced.estimated && tokens_of(usage) > 0,
     })
 }
 
@@ -2578,6 +2871,9 @@ impl Totals {
         self.cost_usd += o.cost_usd;
         self.requests += o.requests;
         self.tokens += o.tokens;
+        self.billed_usd += o.billed_usd;
+        self.equivalent.add(&o.equivalent);
+        self.estimated |= o.estimated;
     }
 }
 
@@ -3045,10 +3341,16 @@ pub struct TrafficBucket {
     pub failed: u64,
     pub tokens: u64,
     pub cost_usd: f64,
+    /// The billed rows' dollars, a part of `cost_usd`.
+    pub billed_usd: f64,
+    /// The plan rows' 20x equivalent.
+    pub equivalent: SharedEquivalent,
+    /// True when any plan row of the bucket priced through the model tier's fallback weight.
+    pub estimated: bool,
 }
 
 /// Every bucket in the range from the rollups of one pool, probes left out, read through `read_rollups_paged` with
-/// the pool bound in SQL, each row's dollars priced from its counts.
+/// the pool bound in SQL, each row's dollars and 20x equivalent priced from its counts.
 pub async fn pool_traffic(
     db: &Arc<LedgerDb>,
     pool_id: &str,
@@ -3079,6 +3381,9 @@ pub async fn pool_traffic(
             failed: 0,
             tokens: 0,
             cost_usd: 0.0,
+            billed_usd: 0.0,
+            equivalent: SharedEquivalent::default(),
+            estimated: false,
         })
         .collect();
     let select = RollupSelect {
@@ -3097,7 +3402,11 @@ pub async fn pool_traffic(
                 + r.cache_write_5m_tokens
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
-            bucket.cost_usd += priced(r, prices, costs).usd.map_or(0.0, |usd| usd.total());
+            let (usd, billed, equivalent, estimated) = shared_figures(r, prices, costs);
+            bucket.cost_usd += usd;
+            bucket.billed_usd += billed;
+            bucket.equivalent.add(&equivalent);
+            bucket.estimated |= estimated;
         }
     })
     .await?;
@@ -3143,10 +3452,11 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     Ok((first, last))
 }
 
-/// One point of the burn series: a subscription row's tokens as the share of its account's own two windows
-/// (the 5-hour share weighed by the band at the row's instant, the 7-day share unbanded), an api_key row's in
-/// dollars; `None` on a window while no subscription row of the bucket could be priced on it, or while any row of
-/// the bucket a known tier holds could not be.
+/// One point of the burn series: a subscription row's tokens as the share of the account tier's own windows it
+/// recorded (the 5-hour share weighed by the band at the row's instant, the 7-day share unbanded), answered where the
+/// read's groups each hold one account's rows, and as the 20x equivalent under every grouping, an api_key row's in
+/// dollars. A share is `None` on a window while no subscription row of the bucket could be priced on it, or while any
+/// row of the bucket with a tier could not be.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct BurnPoint {
     /// Milliseconds, like every other series' `at`.
@@ -3165,10 +3475,27 @@ pub struct BurnPoint {
     pub tokens: u64,
     pub uncached_tokens: u64,
     pub usd: f64,
+    /// The bucket's plan rows as the 20x 5-hour and 7-day equivalent under every grouping, the 5-hour one weighed
+    /// by the band at each row's instant. A billed row adds a zero, so a bucket with tokens and no plan row reads
+    /// 0, and `None` stays for an idle bucket and a window a row of the bucket could not be priced on.
+    pub five_hour_equivalent: Option<f64>,
+    pub seven_day_equivalent: Option<f64>,
+    /// The model week's share and equivalent beside the two shared windows, the share where the 5-hour and 7-day
+    /// shares are answered and the equivalent under every grouping. `None` where no row of the bucket is on a model
+    /// with a week of its own, and latched as the shared windows are.
+    pub model_week_share: Option<f64>,
+    pub model_week_equivalent: Option<f64>,
+    /// True when any plan row of the bucket priced through the model tier's fallback weight.
+    pub estimated: bool,
+    #[serde(skip)]
+    pub model_week_unpriced: bool,
+    #[serde(skip)]
+    pub five_hour_equivalent_unpriced: bool,
+    #[serde(skip)]
+    pub seven_day_equivalent_unpriced: bool,
+    #[serde(skip)]
+    pub model_week_equivalent_unpriced: bool,
 }
-
-/// The tier each account prices under, `None` for an account with none: read once per route call.
-pub type Tiers = HashMap<String, Option<String>>;
 
 /// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
 /// attempt carry the same five token counts and the keys their price reads under different names.
@@ -3196,24 +3523,50 @@ struct UsageRow<'a> {
     /// A rollup row's own word, or a session attempt's request's `kind`. A burn filter that asks for probes reads
     /// probe rows, which price a model the revision lacks at its dearest listed cells.
     kind: &'a str,
+    /// The account tier the row recorded at its landing, `None` for `UNATTRIBUTED` and a session attempt without
+    /// one: the tier its shares read.
+    tier: Option<&'a str>,
+}
+
+/// One row's figure added to a window of a burn point: `None` latches the window, whichever row came first, so a
+/// partial sum never reads as the bucket's figure.
+fn latch_add(value: &mut Option<f64>, unpriced: &mut bool, figure: Option<f64>) {
+    match figure {
+        Some(figure) if !*unpriced => *value.get_or_insert(0.0) += figure,
+        Some(_) => {}
+        None => {
+            *unpriced = true;
+            *value = None;
+        }
+    }
+}
+
+/// A zero on a window no row of the bucket has latched.
+fn latch_zero(value: &mut Option<f64>, unpriced: bool) {
+    if !unpriced {
+        value.get_or_insert(0.0);
+    }
 }
 
 /// The row's funding decides its unit, so the kind the registry holds for the account now has no say and a deleted
-/// or recreated account moves no dollar into a share: the row's read-time dollars for a row an api_key account
-/// served, the shares of a subscription's two windows (each banded at the row's own instant) for a plan row when
-/// `tier` names one the tables size, and no share for a plan row with no tier on file, an account the registry no
-/// longer holds among them. A fast row and one in overage add their dollars and a zero share where the tables size
-/// the tier: fast mode spends usage credits and overage is billed in dollars, neither draws a plan window, and the
-/// zero still tells a reader the account is priced in its window unit. A bucket holding a row the table cannot price
-/// answers `None` on that window, whichever row came first, and a row with no token has nothing to price and leaves
-/// both windows as the other rows set them.
+/// or recreated account moves no dollar into a share. One `price_row` call answers every figure: the row's read-time
+/// dollars for a billed row, and for a plan row the 20x equivalent of the two shared windows and of the model week
+/// where its model has one, and, where `shares` holds and the row recorded a tier, the shares of that tier's windows
+/// (each banded at the row's own instant). A plan row with no tier recorded prices no share and still its equivalent.
+/// A fast row and one in overage add their dollars and a zero share where the tables size the tier: fast mode spends
+/// usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader
+/// the account is priced in its window unit. Every billed row adds a zero equivalent, so a bucket with tokens and no
+/// plan row reads 0 there and only an idle bucket reads `None`. A bucket holding a row the table cannot price answers
+/// `None` on that window, whichever row came first, and a row with no token has nothing to price and leaves every
+/// window as the other rows set it.
 fn price_usage(
     point: &mut BurnPoint,
-    tier: Option<&str>,
     prices: &PriceRevisions,
     tables: &PlanTables,
     row: &UsageRow,
+    shares: bool,
 ) {
+    let tier = row.tier.filter(|_| shares);
     let usage = PinUsage {
         input: row.input_tokens,
         cache_read: row.cache_read_tokens,
@@ -3222,105 +3575,115 @@ fn price_usage(
         output: row.output_tokens,
     };
     let tokens = tokens_of(usage);
-    let dollars = || {
-        let key = RowKey {
-            model: row.canonical_model,
-            speed: row.speed,
-            band: row.band,
-            funding: row.funding,
-            kind: row.kind,
-            tier,
-            at: row.received_at,
-            band_at: Some(row.at),
-        };
-        price_row(prices, tables, &key, usage)
-            .usd
-            .map_or(0.0, |usd| usd.total())
+    let key = RowKey {
+        model: row.canonical_model,
+        speed: row.speed,
+        band: row.band,
+        funding: row.funding,
+        kind: row.kind,
+        tier,
+        at: row.received_at,
+        band_at: Some(row.at),
     };
-    match row.funding {
-        Funding::Fast | Funding::Overage => {
-            point.usd += dollars();
-            // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at,
-            // so the zero rests on the tier alone.
-            if let Some(tier) = tier.filter(|_| tokens > 0) {
-                if tables
-                    .tier_factor(tier, FIVE_HOUR, row.received_at)
-                    .is_some()
-                    && !point.five_hour_unpriced
-                {
-                    point.five_hour_share.get_or_insert(0.0);
+    let priced = price_row(prices, tables, &key, usage);
+    let week = Some(window_for(row.canonical_model)).filter(|week| *week != SEVEN_DAY);
+    point.usd += match row.funding {
+        Funding::Plan => 0.0,
+        _ => priced.usd.as_ref().map_or(0.0, CostSplit::total),
+    };
+    // A failed request books a row with no token, and the model refuses a model it has no weight for before it reads
+    // the usage: such a row would null a priced hour for a charge of nothing.
+    if tokens > 0 {
+        match row.funding {
+            Funding::Plan => {
+                point.estimated |= priced.estimated;
+                if tier.is_some() {
+                    // A tier the cost revision does not size answers no map, and every window it would share reads
+                    // unpriced.
+                    let share = |window: &str| {
+                        priced
+                            .shares
+                            .as_ref()
+                            .and_then(|shares| shares.get(window).copied().flatten())
+                    };
+                    latch_add(
+                        &mut point.five_hour_share,
+                        &mut point.five_hour_unpriced,
+                        share(FIVE_HOUR),
+                    );
+                    latch_add(
+                        &mut point.seven_day_share,
+                        &mut point.seven_day_unpriced,
+                        share(SEVEN_DAY),
+                    );
+                    if let Some(week) = week {
+                        latch_add(
+                            &mut point.model_week_share,
+                            &mut point.model_week_unpriced,
+                            share(week),
+                        );
+                    }
                 }
-                if tables
-                    .tier_factor(tier, SEVEN_DAY, row.received_at)
-                    .is_some()
-                    && !point.seven_day_unpriced
-                {
-                    point.seven_day_share.get_or_insert(0.0);
-                }
-            }
-        }
-        Funding::Plan => {
-            // A failed request books a row with no token, and the model refuses a model it has no weight for before
-            // it reads the usage: such a row would null a priced hour for a charge of nothing.
-            if let Some(tier) = tier.filter(|_| tokens > 0) {
-                let shares = price_shared_windows(
-                    tables,
-                    tier,
-                    row.canonical_model,
-                    usage,
-                    row.received_at,
-                    row.at,
+                let equivalent = |window: &str| {
+                    priced
+                        .equivalent
+                        .as_ref()
+                        .and_then(|equivalent| equivalent.get(window).copied().flatten())
+                };
+                latch_add(
+                    &mut point.five_hour_equivalent,
+                    &mut point.five_hour_equivalent_unpriced,
+                    equivalent(FIVE_HOUR),
                 );
-                let shared = |window: &str| shares.get(window).copied().flatten();
-                match shared(FIVE_HOUR) {
-                    Some(share) if !point.five_hour_unpriced => {
-                        *point.five_hour_share.get_or_insert(0.0) += share;
+                latch_add(
+                    &mut point.seven_day_equivalent,
+                    &mut point.seven_day_equivalent_unpriced,
+                    equivalent(SEVEN_DAY),
+                );
+                if let Some(week) = week {
+                    latch_add(
+                        &mut point.model_week_equivalent,
+                        &mut point.model_week_equivalent_unpriced,
+                        equivalent(week),
+                    );
+                }
+            }
+            funding => {
+                // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it
+                // at, so the zero share rests on the tier alone. An api_key account has no window to share.
+                if let Some(tier) = tier.filter(|_| funding != Funding::ApiKey) {
+                    let sized =
+                        |window: &str| tables.tier_factor(tier, window, row.received_at).is_some();
+                    if sized(FIVE_HOUR) {
+                        latch_zero(&mut point.five_hour_share, point.five_hour_unpriced);
                     }
-                    Some(_) => {}
-                    None => {
-                        point.five_hour_unpriced = true;
-                        point.five_hour_share = None;
+                    if sized(SEVEN_DAY) {
+                        latch_zero(&mut point.seven_day_share, point.seven_day_unpriced);
+                    }
+                    if week.is_some_and(sized) {
+                        latch_zero(&mut point.model_week_share, point.model_week_unpriced);
                     }
                 }
-                match shared(SEVEN_DAY) {
-                    Some(share) if !point.seven_day_unpriced => {
-                        *point.seven_day_share.get_or_insert(0.0) += share;
-                    }
-                    Some(_) => {}
-                    None => {
-                        point.seven_day_unpriced = true;
-                        point.seven_day_share = None;
-                    }
+                latch_zero(
+                    &mut point.five_hour_equivalent,
+                    point.five_hour_equivalent_unpriced,
+                );
+                latch_zero(
+                    &mut point.seven_day_equivalent,
+                    point.seven_day_equivalent_unpriced,
+                );
+                if week.is_some() {
+                    latch_zero(
+                        &mut point.model_week_equivalent,
+                        point.model_week_equivalent_unpriced,
+                    );
                 }
             }
         }
-        Funding::ApiKey => point.usd += dollars(),
     }
     point.cached_tokens += row.cache_read_tokens;
     point.tokens += tokens;
     point.uncached_tokens += row.input_tokens;
-}
-
-/// `price_shares` for the two shared windows alone, the five-hour and the seven-day: the burn chart draws no model
-/// week, so none is built. `at` selects the cost revision and `band_at` the peak band inside it.
-fn price_shared_windows(
-    tables: &PlanTables,
-    tier: &str,
-    canonical_model: &str,
-    usage: PinUsage,
-    at: i64,
-    band_at: i64,
-) -> WindowShares {
-    let costs = tables.revisions.in_force(at);
-    [FIVE_HOUR, SEVEN_DAY]
-        .into_iter()
-        .map(|window| {
-            (
-                window,
-                costs.share_at(window, tier, canonical_model, usage, band_at),
-            )
-        })
-        .collect()
 }
 
 /// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
@@ -3338,27 +3701,26 @@ pub fn burn_series(
     conn: &Connection,
     tables: &PlanTables,
     prices: &PriceRevisions,
-    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let rows = burn_rows(conn, filter)?;
-    burn_series_over(&rows, tables, prices, tiers, filter)
+    burn_series_over(&rows, tables, prices, filter)
 }
 
-/// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket. A
-/// subscription row's 5-hour share carries the band of the hour the rollup folded the request under, since the
-/// rollup keeps no completion; read per row rather than per bucket, since a six-hour or daily bucket can straddle a
-/// band edge and only the row's own hour says which side of it the row fell on. One pass: each row lands in its
-/// bucket by index.
+/// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket, its shares
+/// answered where the filter names one account. A subscription row's 5-hour share and equivalent carry the band of
+/// the hour the rollup folded the request under, since the rollup keeps no completion. The band reads per row rather
+/// than per bucket, since a six-hour or daily bucket can straddle a band edge and only the row's own hour says which
+/// side of it the row fell on. One pass: each row lands in its bucket by index.
 pub fn burn_series_over(
     rows: &[RollupRow],
     tables: &PlanTables,
     prices: &PriceRevisions,
-    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
     let mut points = empty_burn_points(first, last, filter.bucket_seconds);
+    let shares = names_one_account(&filter.accounts);
     for row in rows.iter().filter(|r| burn_scope_holds(filter, r)) {
         price_burn_row(
             &mut points,
@@ -3367,7 +3729,7 @@ pub fn burn_series_over(
             row,
             tables,
             prices,
-            tiers,
+            shares,
         );
     }
     Ok(points)
@@ -3400,7 +3762,7 @@ fn price_burn_row(
     row: &RollupRow,
     tables: &PlanTables,
     prices: &PriceRevisions,
-    tiers: &Tiers,
+    shares: bool,
 ) {
     if row.hour < first {
         return;
@@ -3410,7 +3772,6 @@ fn price_burn_row(
     };
     price_usage(
         point,
-        tiers.get(&row.account_id).and_then(Option::as_deref),
         prices,
         tables,
         &UsageRow {
@@ -3426,22 +3787,28 @@ fn price_burn_row(
             speed: Speed::of(Some(row.speed.as_str())),
             band: Band::of_rollup(&row.band),
             kind: &row.kind,
+            tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
         },
+        shares,
     );
 }
 
-/// The burn series of every group under `group_by` (`account`, `key` or `request_class`, else `account`) within
-/// `filter`'s scopes, read through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each
-/// group's points are the ones `burn_series_over` answers for a scope of that group alone. The groups are the ones
-/// the range itself holds; the read reaches back to the first bucket's edge, which may start before it.
+/// The burn series of every group under `group_by`, any dimension `group_of` knows, within `filter`'s scopes, read
+/// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are the
+/// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
+/// account's rows. The groups are the ones the range itself holds, and the read reaches back to the first bucket's
+/// edge, which may start before it.
+#[allow(clippy::too_many_arguments)]
 pub async fn burn_groups_paged(
     db: &Arc<LedgerDb>,
     tables: &PlanTables,
     prices: &PriceRevisions,
-    tiers: &Tiers,
     filter: &SeriesFilter,
     group_by: &str,
+    live: &LiveKeys,
+    agent_groups: &[String],
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+    let shares = holds_one_account(group_by, &filter.accounts);
     let (first, last) = bucket_range(filter)?;
     let from_hour = hour_of(filter.from);
     let select = RollupSelect {
@@ -3463,13 +3830,8 @@ pub async fn burn_groups_paged(
         if !burn_scope_holds(filter, row) {
             return;
         }
-        let group = match group_by {
-            "key" => &row.key_id,
-            "request_class" => &row.request_class,
-            _ => &row.account_id,
-        };
         let (points, held) = groups
-            .entry(group.clone())
+            .entry(group_of(row, group_by, live, agent_groups))
             .or_insert_with(|| (empty_burn_points(first, last, filter.bucket_seconds), false));
         *held |= row.hour >= from_hour && row.hour < last;
         price_burn_row(
@@ -3479,7 +3841,7 @@ pub async fn burn_groups_paged(
             row,
             tables,
             prices,
-            tiers,
+            shares,
         );
     })
     .await?;
@@ -3593,6 +3955,8 @@ struct SessionAttempt {
     overage_in_use: Option<bool>,
     /// `requests.kind`, so a probe's attempt prices as a probe row does.
     kind: String,
+    /// `attempts.tier`, the account tier the attempt recorded at its landing.
+    tier: Option<String>,
 }
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
@@ -3608,7 +3972,7 @@ fn session_attempts_statement(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind \
+         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -3653,6 +4017,7 @@ fn read_session_attempts(
             account_kind: row.get(12)?,
             overage_in_use: row.get(13)?,
             kind: row.get(14)?,
+            tier: row.get(15)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -3660,16 +4025,18 @@ fn read_session_attempts(
 }
 
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
-/// `burn_series` prices an account row, save that an attempt lands in the bucket it started in and reads the band
-/// at its completion. One pass over the range's attempts: each lands in its bucket by index, rather than every
-/// session re-scanning every attempt for every bucket.
+/// `burn_series` prices an account row, save that an attempt lands in the bucket it started in, reads the band at
+/// its completion and prices under the account tier it recorded. A session can move between accounts, so its shares
+/// are answered where the filter names one account, whose attempts alone the series then holds. One pass over the
+/// range's attempts: each lands in its bucket by index, rather than every session re-scanning every attempt for every
+/// bucket.
 pub fn session_burn_series(
     conn: &Connection,
     tables: &PlanTables,
     prices: &PriceRevisions,
-    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+    let shares = names_one_account(&filter.accounts);
     let (first, last) = bucket_range(filter)?;
     let sessions = top_sessions_by_tokens(conn, first * 1_000, last * 1_000, SESSION_BURN_LIMIT)?;
     if sessions.is_empty() {
@@ -3692,6 +4059,9 @@ pub fn session_burn_series(
         .map(|id| (id.clone(), empty_series()))
         .collect();
     for a in read_session_attempts(conn, first * 1_000, last * 1_000, &sessions)? {
+        if !filter.accounts.is_empty() && !filter.accounts.contains(&a.account_id) {
+            continue;
+        }
         let Some(series) = by_session.get_mut(&a.session_id) else {
             continue;
         };
@@ -3714,7 +4084,6 @@ pub fn session_burn_series(
         );
         price_usage(
             point,
-            tiers.get(&a.account_id).and_then(Option::as_deref),
             prices,
             tables,
             &UsageRow {
@@ -3730,7 +4099,9 @@ pub fn session_burn_series(
                 speed: Speed::of(a.speed.as_deref()),
                 band,
                 kind: &a.kind,
+                tier: a.tier.as_deref(),
             },
+            shares,
         );
     }
     Ok(sessions
@@ -3811,36 +4182,6 @@ mod tests {
     /// 2026-01-15 00:00 UTC in seconds, inside the test cost model's effective range.
     const HOUR: i64 = 1_768_435_200;
     const TIER: &str = "default_claude_max_20x";
-
-    /// The burn chart draws the two shared windows alone, so a model with a week of its own is priced on those two
-    /// and no entry is built for its week.
-    #[test]
-    fn a_burn_row_of_a_model_with_its_own_week_prices_the_two_shared_windows_alone() {
-        let tables = crate::test_tables::subscription_costs();
-        let model = "claude-fable-5-1";
-        assert_ne!(
-            phoebis_routing::window_for(model),
-            SEVEN_DAY,
-            "the model has a week of its own"
-        );
-        let usage = PinUsage {
-            input: 1_000,
-            output: 100,
-            ..PinUsage::default()
-        };
-        let at = HOUR * 1_000;
-        let shares = price_shared_windows(&tables, TIER, model, usage, at, at);
-        assert_eq!(
-            shares.keys().copied().collect::<Vec<_>>(),
-            [FIVE_HOUR, SEVEN_DAY],
-            "no model-week entry: {shares:?}"
-        );
-        for window in [FIVE_HOUR, SEVEN_DAY] {
-            let priced = tables.share_at(window, TIER, model, usage, at);
-            assert!(priced.is_some(), "the test model prices {window}");
-            assert_eq!(shares[window], priced, "{window}");
-        }
-    }
 
     /// A counted probe row is one usage for both sides, so it is priced once and the request side's cost and the
     /// probe side's cost read the same shares.

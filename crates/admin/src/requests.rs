@@ -11,7 +11,7 @@ use axum::Json;
 use phoebis_ledger::{
     funding_of, list_requests, price_shares, request_by_id, request_events,
     AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord,
-    Speed, Tiers,
+    Speed,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -20,7 +20,7 @@ use utoipa::ToSchema;
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::routes::{failure, store_failure};
-use crate::tiers::oauth_tiers;
+use crate::tiers::{oauth_tiers, Tiers};
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -948,7 +948,7 @@ pub(crate) async fn bodies(
 mod tests {
     use super::*;
     use crate::openapi::round_trip::{fixture, round_trips};
-    use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord, Tiers};
+    use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord};
     use serde_json::json;
 
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.

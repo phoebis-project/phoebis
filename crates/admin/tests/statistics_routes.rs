@@ -1160,9 +1160,11 @@ fn null_field(point: &serde_json::Value, field: &str) -> bool {
     point.get(field) == Some(&serde_json::Value::Null)
 }
 
-/// Stores the Max 20x tier on `business`, as a profile read does.
-fn set_max_20x(store: &phoebis_store::Store) {
-    store
+/// Stores the Max 20x tier on `business`, as a profile read does, and reloads the router, whose registry snapshot the
+/// landing records each attempt's tier from: a row landed before the reload keeps the tier it recorded.
+async fn set_max_20x(parts: &common::Full) {
+    parts
+        .store
         .set_profile(
             "business",
             r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
@@ -1174,6 +1176,7 @@ fn set_max_20x(store: &phoebis_store::Store) {
             },
         )
         .unwrap();
+    parts.router.reload().await.unwrap();
 }
 
 #[tokio::test]
@@ -1182,36 +1185,46 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     // An hour of a million Opus 5.5 input tokens on `business`.
-    let mut opus = record("burn-1", now - HOUR, "claude-opus-5-5", "s1");
-    if let Record::Request { attempts, .. } = &mut opus {
-        attempts[0].input_tokens = Some(1_000_000);
-        attempts[0].output_tokens = None;
-    }
-    parts.ledger.record(opus);
-    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
-        parts.db.request("burn-1").await.unwrap()
-    })
-    .await;
-    let business = |v: &serde_json::Value| {
+    let opus = |id: &str, at: i64| {
+        let mut opus = record(id, at, "claude-opus-5-5", "s1");
+        if let Record::Request { attempts, .. } = &mut opus {
+            attempts[0].input_tokens = Some(1_000_000);
+            attempts[0].output_tokens = None;
+        }
+        opus
+    };
+    let business = |v: &serde_json::Value, at: i64| {
         v["points"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
+            .find(|p| p["group"] == "business" && p["at"] == phoebis_ledger::hour_of(at) * 1_000)
             .cloned()
             .unwrap_or_else(|| panic!("a bucket carries the recorded attempt: {v}"))
     };
     let burn_url = "/admin/analytics/burn?range=24h&group_by=account";
-    // No tier on file yet: the upstream is a subscription whose window no table sizes.
-    let tierless = business(&json(get(&parts.app, burn_url, Some(&cookie)).await).await);
+    // No tier on file yet: the upstream is a subscription whose window no table sizes, and its row records none.
+    parts.ledger.record(opus("burn-0", now - 2 * HOUR));
+    landed(&parts, &["burn-0"]).await;
+    let tierless = business(
+        &json(get(&parts.app, burn_url, Some(&cookie)).await).await,
+        now - 2 * HOUR,
+    );
     assert!(
         tierless["unit"] == "window_share"
             && null_field(&tierless, "five_hour_share")
             && null_field(&tierless, "seven_day_share"),
         "a subscription with no tier prices no share: {tierless}"
     );
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
+    parts.ledger.record(opus("burn-1", now - HOUR));
+    landed(&parts, &["burn-1"]).await;
     let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
+    let earlier = business(&burn, now - 2 * HOUR);
+    assert!(
+        null_field(&earlier, "five_hour_share") && null_field(&earlier, "seven_day_share"),
+        "the row landed before the tier keeps pricing no share: {earlier}"
+    );
     assert_eq!(burn["group_by"], "account");
     let counts_every_token = |v: &serde_json::Value| {
         v["points"].as_array().unwrap().iter().all(|p| {
@@ -1224,7 +1237,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         counts_every_token(&burn),
         "each point counts every token type, its cached and uncached input among them: {burn}"
     );
-    let point = business(&burn);
+    let point = business(&burn, now - HOUR);
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
     let share = |window: &str| {
@@ -1370,7 +1383,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
 async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
     let mut fast = record("fast-1", common::NOW - HOUR, "claude-opus-5", "s1");
     if let Record::Request { attempts, .. } = &mut fast {
         attempts[0].input_tokens = Some(1_000_000);
@@ -1512,6 +1525,9 @@ const SHARE_MEMBERS: [&str; 5] = [
     "probe_shares",
 ];
 
+/// The share members alone: the plan-funded counts beside them answer under every grouping.
+const SHARES: [&str; 3] = ["cache_shares", "cost_shares", "probe_shares"];
+
 fn positive(v: &serde_json::Value) -> bool {
     v.as_f64().is_some_and(|x| x > 0.0)
 }
@@ -1521,7 +1537,7 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
 ) {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
     for row in share_rows() {
         parts.ledger.record(row);
     }
@@ -1566,12 +1582,17 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         "and joins it under include_probes: {with_probes}"
     );
     let direct = row_of(&body, "direct");
-    for member in SHARE_MEMBERS {
+    for member in SHARES {
         assert!(
             null_field(direct, member),
             "an api_key group answers {member} null: {direct}"
         );
     }
+    assert_eq!(
+        (&direct["plan_requests"], &direct["plan_output_tokens"]),
+        (&serde_json::json!(0), &serde_json::json!(0)),
+        "and counts no plan-funded request: {direct}"
+    );
     let by_model = json(
         get(
             &parts.app,
@@ -1582,20 +1603,32 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
     )
     .await;
     for row in by_model["rows"].as_array().unwrap() {
-        for member in SHARE_MEMBERS {
+        for member in SHARES {
             assert!(
                 null_field(row, member),
                 "no grouping but account answers {member}: {row}"
             );
         }
     }
+    let sonnet = row_of(&by_model, "claude-sonnet-5-5");
+    assert_eq!(
+        (&sonnet["plan_requests"], &sonnet["plan_output_tokens"]),
+        (&serde_json::json!(1), &serde_json::json!(100)),
+        "the plan-funded counts answer under every grouping: {sonnet}"
+    );
+    assert!(
+        positive(&sonnet["cost_equivalent"]["five_hour"])
+            && positive(&sonnet["billed_usd"])
+            && sonnet["estimated"] == false,
+        "the plan row's equivalent and the api_key row's dollars answer beside today's members: {sonnet}"
+    );
 }
 
 #[tokio::test]
 async fn the_series_points_carry_the_same_shares_per_bucket() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
     for row in share_rows() {
         parts.ledger.record(row);
     }
@@ -1807,7 +1840,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     // A tier on file, so the shares the session grouping leaves null are the grouping's and not a missing tier's.
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
     let now = common::NOW;
     let session_request =
         |id: &str, at: i64, session: &str, account: &str, input: u64, output: u64| {
@@ -2069,7 +2102,7 @@ async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
 async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ranges() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_20x(&parts.store);
+    set_max_20x(&parts).await;
     let now = common::NOW;
     // A 7-day range buckets in 6 hours; `now` always falls in the trailing partial bucket the ceiling of the
     // hour leaves, since the newest bucket ends at `now`'s own hour rather than a 6-hour edge.

@@ -1,7 +1,11 @@
 //! The oauth tiers the shares price under, read once per route call.
 
-use phoebis_ledger::Tiers;
+use std::collections::HashMap;
+
 use phoebis_store::{AccountKind, AccountRow, Store, StoreError};
+
+/// The tier each oauth account prices under, `None` for an account with none.
+pub(crate) type Tiers = HashMap<String, Option<String>>;
 
 /// `accounts` as the caller read them, and one `subscription()` per oauth account among them. A store failure is
 /// the caller's 500.

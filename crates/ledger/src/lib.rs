@@ -58,12 +58,12 @@ pub use query::{
     placements, pool_traffic, recent_events_of_kind, recent_gaps, request_by_id, request_events,
     request_totals, revision_spans, rewrite_series,
     series_paged, session_activity, session_burn_series, session_identities,
-    BudgetedMember, BurnPoint, CacheFacts, CacheShare, Dashboard, DecisionListRow, EventListRow,
-    FundingFilter, GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary, PlacementRow,
-    ProbeCounts, ProbeShare, RequestFilter, RollupFilter, RoutingLogCursor, RoutingLogFilter,
-    RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity,
-    SharePricing, Span, Tiers, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, GROUP_BYS,
-    MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow,
+    Equivalent, EventListRow, FundingFilter, GroupRow, HourlyWindowSample, LiveKeys, ParkedSummary,
+    PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter, RollupFilter,
+    RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint,
+    SessionActivity, SessionIdentity, SharePricing, SharedEquivalent, Span, Totals, TrafficBucket,
+    DECISION_KINDS, EVENT_KINDS, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,

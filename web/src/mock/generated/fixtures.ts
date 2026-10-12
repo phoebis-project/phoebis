@@ -911,8 +911,37 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": null,
-          "plan_output_tokens": null
+          "plan_requests": 3,
+          "plan_output_tokens": 300,
+          "cost_equivalent": {
+            "five_hour": 0.00005287500000000001,
+            "seven_day": 0.000008812499999999999
+          },
+          "cache_equivalent": {
+            "five_hour": {
+              "read": 3.75e-7,
+              "write": 0.000007500000000000001
+            },
+            "seven_day": {
+              "read": 6.250000000000001e-8,
+              "write": 0.00000125
+            }
+          },
+          "probe_equivalent": {},
+          "billed_usd": 0.0107,
+          "billed": {
+            "cache_read": 0.0002,
+            "cache_write": 0.0015,
+            "input": 0.006,
+            "output": 0.003
+          },
+          "equivalent_split": {
+            "input": 0.000005,
+            "cache_read": 6.250000000000001e-8,
+            "cache_write": 0.00000125,
+            "output": 0.0000025
+          },
+          "estimated": false
         },
         {
           "key": "desktop@1791720940000",
@@ -1263,8 +1292,37 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": null,
-          "plan_output_tokens": null
+          "plan_requests": 1,
+          "plan_output_tokens": 100,
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "cache_equivalent": {
+            "five_hour": {
+              "read": 1.25e-7,
+              "write": 0.0000025
+            },
+            "seven_day": {
+              "read": 2.0833333333333338e-8,
+              "write": 4.1666666666666667e-7
+            }
+          },
+          "probe_equivalent": {},
+          "billed_usd": 0,
+          "billed": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "equivalent_split": {
+            "input": 0.0000016666666666666669,
+            "cache_read": 2.0833333333333338e-8,
+            "cache_write": 4.1666666666666667e-7,
+            "output": 8.333333333333333e-7
+          },
+          "estimated": false
         }
       ]
     }
@@ -1639,7 +1697,36 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "probe_shares": {},
           "plan_requests": 4,
-          "plan_output_tokens": 400
+          "plan_output_tokens": 400,
+          "cost_equivalent": {
+            "five_hour": 0.0000705,
+            "seven_day": 0.00001175
+          },
+          "cache_equivalent": {
+            "five_hour": {
+              "read": 5e-7,
+              "write": 0.00001
+            },
+            "seven_day": {
+              "read": 8.333333333333335e-8,
+              "write": 0.0000016666666666666669
+            }
+          },
+          "probe_equivalent": {},
+          "billed_usd": 0.0071,
+          "billed": {
+            "cache_read": 0.0001,
+            "cache_write": 0.001,
+            "input": 0.004,
+            "output": 0.002
+          },
+          "equivalent_split": {
+            "input": 0.000006666666666666667,
+            "cache_read": 8.333333333333335e-8,
+            "cache_write": 0.0000016666666666666669,
+            "output": 0.0000033333333333333333
+          },
+          "estimated": false
         },
         {
           "key": "direct",
@@ -1988,8 +2075,20 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": null,
-          "plan_output_tokens": null
+          "plan_requests": 0,
+          "plan_output_tokens": 0,
+          "cost_equivalent": {},
+          "cache_equivalent": {},
+          "probe_equivalent": {},
+          "billed_usd": 0.0036,
+          "billed": {
+            "cache_read": 0.0001,
+            "cache_write": 0.0005,
+            "input": 0.002,
+            "output": 0.001
+          },
+          "equivalent_split": {},
+          "estimated": false
         }
       ]
     }
@@ -2348,8 +2447,20 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": null,
-          "plan_output_tokens": null
+          "plan_requests": 0,
+          "plan_output_tokens": 0,
+          "cost_equivalent": {},
+          "cache_equivalent": {},
+          "probe_equivalent": {},
+          "billed_usd": 0.00355,
+          "billed": {
+            "cache_read": 0.00005,
+            "cache_write": 0.0005,
+            "input": 0.002,
+            "output": 0.001
+          },
+          "equivalent_split": {},
+          "estimated": false
         },
         {
           "key": "standard",
@@ -2701,8 +2812,37 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": null,
-          "plan_output_tokens": null
+          "plan_requests": 4,
+          "plan_output_tokens": 400,
+          "cost_equivalent": {
+            "five_hour": 0.0000705,
+            "seven_day": 0.00001175
+          },
+          "cache_equivalent": {
+            "five_hour": {
+              "read": 5e-7,
+              "write": 0.00001
+            },
+            "seven_day": {
+              "read": 8.333333333333335e-8,
+              "write": 0.0000016666666666666669
+            }
+          },
+          "probe_equivalent": {},
+          "billed_usd": 0.00715,
+          "billed": {
+            "cache_read": 0.00015,
+            "cache_write": 0.001,
+            "input": 0.004,
+            "output": 0.002
+          },
+          "equivalent_split": {
+            "input": 0.000006666666666666667,
+            "cache_read": 8.333333333333335e-8,
+            "cache_write": 0.0000016666666666666669,
+            "output": 0.0000033333333333333333
+          },
+          "estimated": false
         }
       ]
     }
@@ -3876,8 +4016,37 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": null,
-              "plan_output_tokens": null
+              "plan_requests": 1,
+              "plan_output_tokens": 100,
+              "cost_equivalent": {
+                "five_hour": 0.000017625,
+                "seven_day": 0.0000029375
+              },
+              "cache_equivalent": {
+                "five_hour": {
+                  "read": 1.25e-7,
+                  "write": 0.0000025
+                },
+                "seven_day": {
+                  "read": 2.0833333333333338e-8,
+                  "write": 4.1666666666666667e-7
+                }
+              },
+              "probe_equivalent": {},
+              "billed_usd": 0.0071,
+              "billed": {
+                "cache_read": 0.0001,
+                "cache_write": 0.001,
+                "input": 0.004,
+                "output": 0.002
+              },
+              "equivalent_split": {
+                "input": 0.0000016666666666666669,
+                "cache_read": 2.0833333333333338e-8,
+                "cache_write": 4.1666666666666667e-7,
+                "output": 8.333333333333333e-7
+              },
+              "estimated": false
             },
             {
               "key": "desktop@1791720940000",
@@ -4228,8 +4397,37 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": null,
-              "plan_output_tokens": null
+              "plan_requests": 1,
+              "plan_output_tokens": 100,
+              "cost_equivalent": {
+                "five_hour": 0.000017625,
+                "seven_day": 0.0000029375
+              },
+              "cache_equivalent": {
+                "five_hour": {
+                  "read": 1.25e-7,
+                  "write": 0.0000025
+                },
+                "seven_day": {
+                  "read": 2.0833333333333338e-8,
+                  "write": 4.1666666666666667e-7
+                }
+              },
+              "probe_equivalent": {},
+              "billed_usd": 0,
+              "billed": {
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
+              },
+              "equivalent_split": {
+                "input": 0.0000016666666666666669,
+                "cache_read": 2.0833333333333338e-8,
+                "cache_write": 4.1666666666666667e-7,
+                "output": 8.333333333333333e-7
+              },
+              "estimated": false
             }
           ]
         },
@@ -4586,8 +4784,37 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": null,
-              "plan_output_tokens": null
+              "plan_requests": 2,
+              "plan_output_tokens": 200,
+              "cost_equivalent": {
+                "five_hour": 0.00003525,
+                "seven_day": 0.000005875
+              },
+              "cache_equivalent": {
+                "five_hour": {
+                  "read": 2.5e-7,
+                  "write": 0.000005
+                },
+                "seven_day": {
+                  "read": 4.1666666666666676e-8,
+                  "write": 8.333333333333333e-7
+                }
+              },
+              "probe_equivalent": {},
+              "billed_usd": 0.0036,
+              "billed": {
+                "cache_read": 0.0001,
+                "cache_write": 0.0005,
+                "input": 0.002,
+                "output": 0.001
+              },
+              "equivalent_split": {
+                "input": 0.0000033333333333333333,
+                "cache_read": 4.1666666666666676e-8,
+                "cache_write": 8.333333333333333e-7,
+                "output": 0.0000016666666666666669
+              },
+              "estimated": false
             }
           ]
         }
@@ -5059,7 +5286,36 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "probe_shares": {},
               "plan_requests": 2,
-              "plan_output_tokens": 200
+              "plan_output_tokens": 200,
+              "cost_equivalent": {
+                "five_hour": 0.00003525,
+                "seven_day": 0.000005875
+              },
+              "cache_equivalent": {
+                "five_hour": {
+                  "read": 2.5e-7,
+                  "write": 0.000005
+                },
+                "seven_day": {
+                  "read": 4.1666666666666676e-8,
+                  "write": 8.333333333333333e-7
+                }
+              },
+              "probe_equivalent": {},
+              "billed_usd": 0.0071,
+              "billed": {
+                "cache_read": 0.0001,
+                "cache_write": 0.001,
+                "input": 0.004,
+                "output": 0.002
+              },
+              "equivalent_split": {
+                "input": 0.0000033333333333333333,
+                "cache_read": 4.1666666666666676e-8,
+                "cache_write": 8.333333333333333e-7,
+                "output": 0.0000016666666666666669
+              },
+              "estimated": false
             }
           ]
         },
@@ -5428,7 +5684,36 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "probe_shares": {},
               "plan_requests": 2,
-              "plan_output_tokens": 200
+              "plan_output_tokens": 200,
+              "cost_equivalent": {
+                "five_hour": 0.00003525,
+                "seven_day": 0.000005875
+              },
+              "cache_equivalent": {
+                "five_hour": {
+                  "read": 2.5e-7,
+                  "write": 0.000005
+                },
+                "seven_day": {
+                  "read": 4.1666666666666676e-8,
+                  "write": 8.333333333333333e-7
+                }
+              },
+              "probe_equivalent": {},
+              "billed_usd": 0,
+              "billed": {
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
+              },
+              "equivalent_split": {
+                "input": 0.0000033333333333333333,
+                "cache_read": 4.1666666666666676e-8,
+                "cache_write": 8.333333333333333e-7,
+                "output": 0.0000016666666666666669
+              },
+              "estimated": false
             },
             {
               "key": "direct",
@@ -5777,8 +6062,20 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": null,
-              "plan_output_tokens": null
+              "plan_requests": 0,
+              "plan_output_tokens": 0,
+              "cost_equivalent": {},
+              "cache_equivalent": {},
+              "probe_equivalent": {},
+              "billed_usd": 0.0036,
+              "billed": {
+                "cache_read": 0.0001,
+                "cache_write": 0.0005,
+                "input": 0.002,
+                "output": 0.001
+              },
+              "equivalent_split": {},
+              "estimated": false
             }
           ]
         }
@@ -7843,175 +8140,325 @@ export const FIXTURES: Record<string, Fixture> = {
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791637200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791640800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791644400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791648000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791651600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791655200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791658800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791662400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791666000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791669600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791673200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791676800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791680400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791684000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791687600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791691200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791694800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791698400000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791702000000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791705600000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791709200000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791712800000,
           "requests": 0,
           "failed": 0,
           "tokens": 0,
-          "cost_usd": 0
+          "cost_usd": 0,
+          "billed_usd": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
+          "estimated": false
         },
         {
           "at": 1791716400000,
           "requests": 3,
           "failed": 1,
           "tokens": 7200,
-          "cost_usd": 0.0142
+          "cost_usd": 0.0142,
+          "billed_usd": 0.0071,
+          "equivalent": {
+            "five_hour": 0.00003525,
+            "seven_day": 0.000005875
+          },
+          "estimated": false
         },
         {
           "at": 1791720000000,
           "requests": 3,
           "failed": 1,
           "tokens": 5400,
-          "cost_usd": 0.0107
+          "cost_usd": 0.0107,
+          "billed_usd": 0.0036,
+          "equivalent": {
+            "five_hour": 0.00003525,
+            "seven_day": 0.000005875
+          },
+          "estimated": false
         }
       ]
     }
@@ -8141,7 +8588,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "iMQkX5sG",
+              "prefix": "lmddX3og",
               "enabled": true
             }
           ],
@@ -8155,175 +8602,325 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791637200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791640800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791644400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791648000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791651600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791655200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791658800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791662400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791666000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791669600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791673200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791676800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791680400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791684000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791687600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791691200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791694800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791698400000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791702000000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791705600000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791709200000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791712800000,
               "requests": 0,
               "failed": 0,
               "tokens": 0,
-              "cost_usd": 0
+              "cost_usd": 0,
+              "billed_usd": 0,
+              "equivalent": {
+                "five_hour": 0,
+                "seven_day": 0
+              },
+              "estimated": false
             },
             {
               "at": 1791716400000,
               "requests": 3,
               "failed": 1,
               "tokens": 7200,
-              "cost_usd": 0.0142
+              "cost_usd": 0.0142,
+              "billed_usd": 0.0071,
+              "equivalent": {
+                "five_hour": 0.00003525,
+                "seven_day": 0.000005875
+              },
+              "estimated": false
             },
             {
               "at": 1791720000000,
               "requests": 3,
               "failed": 1,
               "tokens": 5400,
-              "cost_usd": 0.0107
+              "cost_usd": 0.0107,
+              "billed_usd": 0.0036,
+              "equivalent": {
+                "five_hour": 0.00003525,
+                "seven_day": 0.000005875
+              },
+              "estimated": false
             }
           ]
         }

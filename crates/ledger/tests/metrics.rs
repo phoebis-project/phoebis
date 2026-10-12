@@ -754,3 +754,85 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         "the listener asks for no credential, so the store's words stay in the log"
     );
 }
+
+/// A price revision that lists a model under another key moves its `model` label at its own date: the landing labels
+/// each request off the revision in force when the request arrived, so a request before the date keeps the dated key
+/// and one after it reads the undated key the later revision lists.
+#[tokio::test]
+async fn a_landed_request_reads_its_model_label_off_the_revision_in_force_when_it_arrived() {
+    const RENAMED: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-renamed-1-20260101: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}
+  - effective: 2026-02-01
+    models:
+      claude-renamed-1: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}
+";
+    let revisions = PriceRevisions::from_yaml(RENAMED, "test").expect("the renamed list parses");
+    let january = phoebis_ledger::test_tables::JANUARY_2026;
+    let february = phoebis_ledger::effective_instant("2026-02-01").unwrap() + 43_200_000;
+    let store = Arc::new(
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let clock: phoebis_oauth::Clock = Arc::new(move || february);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let metrics = Arc::new(Metrics::new());
+    let ledger = phoebis_ledger::spawn(
+        db,
+        Arc::new(Pricing::new(revisions)),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        metrics.clone(),
+        LedgerConfig::default(),
+    );
+    for (id, at) in [("r-january", january), ("r-february", february)] {
+        ledger
+            .record_request(phoebis_ledger::Record::Request {
+                request: RequestRecord {
+                    id: id.into(),
+                    received_at: at,
+                    finished_at: Some(at + 500),
+                    key_id: Some("k".into()),
+                    model: "claude-renamed-1-20260101".into(),
+                    canonical_model: "claude-renamed-1-20260101".into(),
+                    kind: "inference".into(),
+                    origin: "client".into(),
+                    status: Some(200),
+                    outcome: "succeeded".into(),
+                    attempts: 1,
+                    ..Default::default()
+                },
+                attempts: vec![AttemptRecord {
+                    request_id: id.into(),
+                    attempt: 1,
+                    account_id: "a".into(),
+                    account_kind: "oauth".into(),
+                    outcome: "succeeded".into(),
+                    input_tokens: Some(10),
+                    output_tokens: Some(5),
+                    ..Default::default()
+                }],
+                bodies: None,
+            })
+            .await;
+    }
+    let (dated, undated) = (
+        r#"phoebis_attempts_total{account="a",model="claude-renamed-1-20260101",outcome="succeeded"} 1"#,
+        r#"phoebis_attempts_total{account="a",model="claude-renamed-1",outcome="succeeded"} 1"#,
+    );
+    let text = wait_for(Duration::from_secs(5), || {
+        let text = metrics.render(&RoutingGauges::default(), &[], 0);
+        (text.contains(dated) && text.contains(undated)).then_some(text)
+    })
+    .await;
+    assert!(
+        text.contains(
+            r#"phoebis_tokens_total{account="a",kind="input",model="claude-renamed-1"} 10"#
+        ),
+        "the token series take the same label:\n{text}"
+    );
+}

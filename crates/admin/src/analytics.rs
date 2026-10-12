@@ -11,7 +11,7 @@ use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, hourly_window_samples,
     lead_over_pace, moves_by_reason, parse_range, read_account_rollups, rewrite_series,
     series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
-    LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, Tiers, GROUP_BYS,
+    LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -20,7 +20,7 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
 use crate::routes::{failure, store_failure};
-use crate::tiers::oauth_tiers;
+use crate::tiers::{oauth_tiers, Tiers};
 use crate::AdminState;
 
 const BURN_GROUP_BYS: &[&str] = &["account", "key", "request_class", "session"];
@@ -266,15 +266,13 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, _, _) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
     let pricing = (group_by == "account").then(|| SharePricing {
         tables: &state.tables,
-        kinds: &kinds,
-        tiers: &tiers,
     });
     let points = match series_paged(
         state.ledger.db(),
@@ -336,14 +334,12 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, kinds, tiers) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live, _, _) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
     let pricing = (group_by == "account").then(|| SharePricing {
         tables: &state.tables,
-        kinds: &kinds,
-        tiers: &tiers,
     });
     let rows = match breakdown_paged(
         state.ledger.db(),
@@ -845,7 +841,7 @@ pub(crate) async fn burn(
             "group_by is account, key, request_class, or session",
         );
     }
-    let (kinds, tiers) = match kinds_and_tiers(&state, &group_by) {
+    let (kinds, _) = match kinds_and_tiers(&state, &group_by) {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -862,7 +858,7 @@ pub(crate) async fn burn(
         state
             .ledger
             .db()
-            .read(move |c| session_burn_series(c, &tables, &prices, &tiers, &filter))
+            .read(move |c| session_burn_series(c, &tables, &prices, &filter))
             .await
     } else {
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
@@ -871,9 +867,10 @@ pub(crate) async fn burn(
             state.ledger.db(),
             &tables,
             &prices,
-            &tiers,
             &filter,
             &group_by,
+            &LiveKeys::from_snapshot(&state.router.snapshot()),
+            &[],
         )
         .await
     };

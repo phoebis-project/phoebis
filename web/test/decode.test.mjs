@@ -834,9 +834,11 @@ test('an account-grouped breakdown row carries its shares keyed by window and a 
   const probed = d.decodeAnalyticsGroup({ probe_shares: { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } } });
   assert.deepEqual(probed.probeShares, { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } }, 'a wasted null reads through');
   const direct = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'direct');
-  assert.deepEqual([direct.cacheShares, direct.costShares, direct.planOutputTokens, direct.planRequests, direct.probeShares], [null, null, null, null, null], 'an api_key group');
+  assert.deepEqual([direct.cacheShares, direct.costShares, direct.probeShares], [null, null, null], 'an api_key group');
+  assert.deepEqual([direct.planOutputTokens, direct.planRequests], [0, 0], 'an api_key group counts no plan-funded request');
   for (const row of fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup)) {
-    assert.deepEqual([row.cacheShares, row.costShares, row.planOutputTokens, row.planRequests, row.probeShares], [null, null, null, null, null], `a key-grouped row: ${row.key}`);
+    assert.deepEqual([row.cacheShares, row.costShares, row.probeShares], [null, null, null], `a key-grouped row: ${row.key}`);
+    assert.ok(typeof row.planRequests === 'number' && typeof row.planOutputTokens === 'number', `the plan-funded counts answer under every grouping: ${row.key}`);
   }
   const point = fixture('analytics_series_accounts').points.map(d.decodeAnalyticsPoint).find((p) => p.groups.some((g) => g.key === 'business'));
   assert.equal(typeof point.groups.find((g) => g.key === 'business').costShares.five_hour, 'number', 'a series point carries the same shares');

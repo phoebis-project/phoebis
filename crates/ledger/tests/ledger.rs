@@ -1663,6 +1663,65 @@ fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filt
     );
 }
 
+/// A fast request whose serving attempt answered without naming a speed lists under `standard`, the speed the
+/// rollups file its answer under and price it at, rather than under the speed it asked for.
+#[test]
+fn a_fast_request_whose_answer_named_no_speed_is_listed_under_the_standard_speed_filter() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "answered".into(),
+            received_at: 1,
+            canonical_model: "claude-opus-5".into(),
+            model: "claude-opus-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            requested_speed: Some("fast".into()),
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "answered".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            output_tokens: Some(10),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let listed = |speed: &str| {
+        let filter = RequestFilter {
+            speeds: vec![speed.into()],
+            ..Default::default()
+        };
+        let (rows, _) = db
+            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap();
+        rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>()
+    };
+    let filed: Vec<String> = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap()
+        .into_iter()
+        .map(|r| r.speed)
+        .collect();
+    assert_eq!(
+        filed,
+        ["standard"],
+        "the rollups file the answer as standard"
+    );
+    assert_eq!(listed("standard"), ["answered"]);
+    assert!(
+        listed("fast").is_empty(),
+        "the list agrees with the rollups"
+    );
+}
+
 /// Writes request `id` with one attempt per `(account, status, cache_miss_reason)`, in attempt order.
 fn plant_trail(db: &LedgerDb, id: &str, received_at: i64, trail: &[(&str, u16, Option<&str>)]) {
     let request = RequestRecord {
