@@ -210,6 +210,8 @@ last resort, and for a member passed over `cooldown {left}` (on hover `In a cool
 budget, and `unavailable` with the account's status on hover. The caption names the strategy, `Pace`, `Priority, then
 random` or `Round robin`, with `subscription accounts first` appended where the pool prefers subscription accounts,
 and its hover notes "A request for a Fable model is placed on the Fable window instead, which this card does not draw."
+Pins reads the member's active pins, one per agent and model as the card's Active pins fact counts them, a muted `0`
+for none.
 Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in the last 24h", and the facts
 Members, Keys, Requests 24h, Cost 24h, Active pins and Moves in the last hour, whose figure opens the routing log on
 the pool's moved decisions and whose hover lists the moves by reason. "Delete" asks `Delete pool {name}`: "Deletes the
@@ -234,11 +236,23 @@ hour until that window resets or the subscription ends, within the first priorit
 An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts page."
 Utilization thresholds opens on "A window's pace is the share of it that has elapsed, to its reset, or to the
 subscription's end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed
-share, read on its 5-hour and its 7-day window. The readings are the Quota page's." and draws the member utilization
-bar: a tick per member window on the used track and on the lead-over-pace track, the latter centered on "on pace" with
-the cool band "cool under here" and the shedding margin, each tick's hover reading `{account}: {window} {used} used,
-{elapsed} elapsed to its end at {time}, {lead}` (the end named where the pace runs to the subscription's end), and in
-the expert view the "Select-below threshold" handle. Keys holds "Create key" and the pool's keys as Key, Prefix and
+share, read on its 5-hour and its 7-day window. The readings are the Quota page's.", holds the Shed ahead of pace
+switch with its margin and, in the expert view, Select below utilization with its threshold, and closes on the
+"Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on the Quota
+page. The lower track reads each window's lead over pace, from 100 points behind to 100 ahead, with the shedding
+margin and the cool band under it." The bar draws a tick per member window on the used track and on the lead track,
+the latter around "on pace" with the margin as a line (hover `Shedding margin: {n} points`), the cool band "cool
+under here" and the legend "5-hour reading", "7-day reading" and "Shedding margin", each tick's hover reading
+`{account}: {window} {used} used, {elapsed} elapsed to its end at {time}, {lead}` (the end named where the pace runs
+to the subscription's end), and in the expert view the "Select-below threshold" handle, dragged or moved with the
+arrow keys. In the expert view, Load shedding closes on a "Preview" line, the round's dry run as the fields stand:
+"No round runs while shed ahead of pace is off." while the switch is off, `No member is ahead of pace by the margin:
+the closest is {account}, {lead}` while none is, and otherwise `{n} members run ahead of pace by the margin:
+{account} ({window}, {lead})` followed by `A round there would move {n} sessions ({n} warm), {pct} of the hot
+members' recent burn together, to a cool sibling.`, or by `A round there would mark {n} sessions ({n} warm), {pct} of
+the hot members' recent burn together, but no sibling reads under the margin less 5 points, so the sessions would be
+marked and stay.` Until the cost model is read the line says so and counts no window-share pin. Keys holds "Create
+key" and the pool's keys as Key, Prefix and
 Status with a menu of "Move to…" and "Revoke". "Move to…" opens `Move key {name}` ("A key reaches only its own pool's
 members, so moving it ends its current session pins.") with the destination Pool, and "Revoke" asks `Revoke {name}`:
 `Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
