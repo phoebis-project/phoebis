@@ -1,7 +1,7 @@
 // The API reference page's browser smoke: the built page in headless Chromium over a static server and a stub
 // document, or over a running router when PHOEBIS_E2E_BASE names one. It asserts what the page must do (load
 // without an error or a policy violation, list the document, take a bearer and send it, follow the color scheme)
-// and what it must not (leave the origin, store the token).
+// and what it must not (leave the origin, set a cookie, store the token).
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
