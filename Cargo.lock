@@ -1534,6 +1534,7 @@ dependencies = [
  "bytes",
  "fake-upstream",
  "http-body-util",
+ "indexmap",
  "jiff",
  "phoebis-attention",
  "phoebis-bus",

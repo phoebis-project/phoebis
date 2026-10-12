@@ -92,15 +92,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(pools::patch, pools::remove))
         .routes(routes!(pools::set_members))
         .routes(routes!(pools::traffic))
-        .route("/admin/pricing", get(pricing::show))
-        .route("/admin/requests", get(requests::list))
-        .route("/admin/requests/{id}", get(requests::show))
-        .route("/admin/requests/{id}/bodies", get(requests::bodies))
-        .route(
-            "/admin/requests/{id}/decisions/{seq}",
-            get(crate::routing_log::record),
-        )
-        .route("/admin/routing-log", get(crate::routing_log::list))
+        .routes(routes!(pricing::show))
+        .routes(routes!(requests::list))
+        .routes(routes!(requests::show))
+        .routes(routes!(requests::bodies))
+        .routes(routes!(crate::routing_log::record))
+        .routes(routes!(crate::routing_log::list))
         .routes(routes!(whoami, login, logout))
         .route("/admin/sessions", get(sessions::list))
         .route(

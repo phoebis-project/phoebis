@@ -1150,10 +1150,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         &planted,
         "test_tables",
         "phoebis_ledger::test_tables",
-        phoebis_admin::table_envelopes(
+        serde_json::to_value(phoebis_admin::table_envelopes(
             &phoebis_ledger::test_tables::api_prices(),
             &phoebis_ledger::test_tables::subscription_costs(),
-        ),
+        ))
+        .unwrap(),
     );
     let probes = bound_probes(app, &cookie).await;
     hold(

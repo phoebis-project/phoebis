@@ -6,8 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use common::{get, json, post};
+use common::{admin_parts_full, get, json, login, post};
 use http_body_util::BodyExt;
+use phoebis_ledger::{BodyRecord, RequestRecord};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -28,12 +29,6 @@ const PLAIN_ROUTES: &[&str] = &[
     "/admin/analytics/series",
     "/admin/attention",
     "/admin/dashboard",
-    "/admin/pricing",
-    "/admin/requests",
-    "/admin/requests/{id}",
-    "/admin/requests/{id}/bodies",
-    "/admin/requests/{id}/decisions/{seq}",
-    "/admin/routing-log",
     "/admin/sessions",
     "/admin/sessions/{key}/{session}/release",
     "/admin/sessions/costs",
@@ -109,6 +104,12 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("pool_delete", &[404, 409, 500, 503]),
     ("pool_members_put", &[400, 404, 409, 500, 503]),
     ("pool_traffic", &[400, 404, 500]),
+    ("pricing_show", &[]),
+    ("requests_list", &[400, 500]),
+    ("request_show", &[404, 500]),
+    ("request_bodies", &[404, 500]),
+    ("request_decision", &[400, 404, 500]),
+    ("routing_log_list", &[400, 500]),
 ];
 
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
@@ -130,6 +131,12 @@ const EXAMPLE_FILES: &[&str] = &[
     "pairing_started",
     "pools",
     "pool_traffic",
+    "pricing",
+    "requests",
+    "request",
+    "request_bodies",
+    "decision",
+    "routing_log",
 ];
 
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
@@ -137,6 +144,8 @@ const EXAMPLE_FILES: &[&str] = &[
 const QUERY_MODULES: &[(&str, &str)] = &[
     ("accounts", include_str!("../src/accounts.rs")),
     ("pools", include_str!("../src/pools.rs")),
+    ("requests", include_str!("../src/requests.rs")),
+    ("routing_log", include_str!("../src/routing_log.rs")),
 ];
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -710,6 +719,128 @@ async fn every_examples_key_order_is_its_schemas_property_order() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_document_allows_it() {
+    let parts = admin_parts_full().await;
+    let now = common::NOW;
+    let capture = |id: &str, request: &[u8], response: Option<&[u8]>, seen: u64| BodyRecord {
+        request_id: id.into(),
+        request_body: request.to_vec(),
+        response_body: response.map(<[u8]>::to_vec),
+        request_len_seen: seen,
+        response_len_seen: response.map_or(0, |r| r.len() as u64),
+        expires_at: now + 3_600_000,
+    };
+    let sse = br#"{"model":"claude-sonnet-5","messages":[]}"#;
+    for (id, body, truncated) in [
+        (
+            "r-sse",
+            capture(
+                "r-sse",
+                sse,
+                Some(b"event: message_stop\ndata: {}\n\n".as_slice()),
+                sse.len() as u64,
+            ),
+            false,
+        ),
+        (
+            "r-cut",
+            capture("r-cut", br#"{"model":"claude-son"#, None, sse.len() as u64),
+            true,
+        ),
+        (
+            "r-scalar",
+            capture("r-scalar", b"42", Some(b"\"ok\"".as_slice()), 2),
+            false,
+        ),
+    ] {
+        let row = RequestRecord {
+            id: id.into(),
+            received_at: now,
+            bodies_captured: true,
+            request_truncated: truncated,
+            ..Default::default()
+        };
+        parts.db.insert_request(&row, &[], Some(&body)).unwrap();
+    }
+    let cookie = login(&parts.app, "admin-secret").await;
+    let read = json(get(&parts.app, "/admin/requests/r-sse/bodies", Some(&cookie)).await).await;
+    assert_eq!(
+        read["request"]["model"], "claude-sonnet-5",
+        "a JSON capture answers as JSON"
+    );
+    assert!(
+        read["response"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("event: message_stop")),
+        "an SSE stream answers as a string"
+    );
+    let cut = json(get(&parts.app, "/admin/requests/r-cut/bodies", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            cut["request"].as_str(),
+            cut["response"].is_null(),
+            cut["request_truncated"].as_bool()
+        ),
+        (Some(r#"{"model":"claude-son"#), true, Some(true)),
+        "a capture cut short answers as a string"
+    );
+    let scalar =
+        json(get(&parts.app, "/admin/requests/r-scalar/bodies", Some(&cookie)).await).await;
+    assert_eq!(
+        (scalar["request"].as_i64(), scalar["response"].as_str()),
+        (Some(42), Some("ok")),
+        "a scalar JSON body answers as that scalar"
+    );
+    let (_app, _up, document) = document().await;
+    let bodies = &document["components"]["schemas"]["Bodies"];
+    let properties: BTreeSet<&str> = bodies["properties"]
+        .as_object()
+        .expect("the Bodies schema's properties")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let required: BTreeSet<&str> = bodies["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(
+        required.is_subset(&properties),
+        "every required key is a property"
+    );
+    for answer in [&read, &cut, &scalar] {
+        let keys: BTreeSet<&str> = answer
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys, properties,
+            "the answer carries the schema's keys and no other"
+        );
+    }
+    for side in ["request", "response"] {
+        let schema = &bodies["properties"][side];
+        assert!(
+            schema.get("properties").is_none() && schema.get("required").is_none(),
+            "{side}: the schema restricts no shape"
+        );
+        assert_ne!(
+            schema["type"], "object",
+            "{side}: the schema is not an object alone"
+        );
+    }
+    // An any-value schema carries no `type`, so it admits null along with a string, a number and an object.
+    assert!(
+        bodies["properties"]["response"].get("type").is_none(),
+        "response admits null: {}",
+        bodies["properties"]["response"]
+    );
 }
 
 #[test]

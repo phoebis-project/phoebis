@@ -303,6 +303,144 @@ pub(crate) struct TrafficBucketView {
     pub cost_usd: f64,
 }
 
+/// One model's list prices, each cell per million tokens.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelRowView {
+    pub input: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
+    pub cache_read: f64,
+    pub output: f64,
+    /// The fast-mode cells under the same five names, on a model that serves fast mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<ModelPriceView>,
+    /// The threshold `over` in tokens and the five cells under the same names, on a model priced by prompt length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContextView>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelPriceView {
+    pub input: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
+    pub cache_read: f64,
+    pub output: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LongContextView {
+    /// The prompt length in tokens past which the five cells apply.
+    pub over: u64,
+    pub input: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
+    pub cache_read: f64,
+    pub output: f64,
+}
+
+/// Every key of the subscription cost model.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubscriptionCostsView {
+    pub effective: String,
+    pub unit: UnitView,
+    /// Keyed by the tier the account's profile reports.
+    pub capacity: BTreeMap<String, CapacityView>,
+    pub peak: PeakView,
+    pub type_multiplier: TypeMultiplierView,
+    /// Units per plain input token, keyed by undated model id. Null prices nothing.
+    pub model_weight: BTreeMap<String, Option<f64>>,
+    pub model_windows: BTreeMap<String, ModelWindowView>,
+    pub overrides: BTreeMap<String, OverrideView>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UnitView {
+    pub defined_by: DefinedByView,
+    pub units_per_window: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DefinedByView {
+    pub band: String,
+    pub tier: String,
+    pub window: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapacityView {
+    pub five_hour: Option<f64>,
+    pub seven_day: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PeakView {
+    pub capacity_factor: PerWindowView,
+    pub from_hour: u8,
+    pub to_hour: u8,
+    pub weekdays: bool,
+    pub zone: String,
+}
+
+/// The peak's factor on each shared window, both always set.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PerWindowView {
+    pub five_hour: f64,
+    pub seven_day: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TypeMultiplierView {
+    pub cache_read: f64,
+    pub cache_write_1h: f64,
+    pub cache_write_5m: f64,
+    pub input: f64,
+    pub output: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelWindowView {
+    pub capacity_factor: f64,
+    pub of: String,
+}
+
+// The shipped cost model carries no override, so the round trip never reaches this type or `TypeOverrideView`:
+// their fields are held to the ledger's `Override` and `TypeOverride` by reading the two side by side.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OverrideView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_multiplier: Option<TypeOverrideView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight_by_window: Option<BTreeMap<String, f64>>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TypeOverrideView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_5m: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+}
+
 macro_rules! fixture {
     ($name:literal, $status:literal) => {
         (
@@ -334,6 +472,12 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("pairing_started", "201"),
     fixture!("pools", "200"),
     fixture!("pool_traffic", "200"),
+    fixture!("pricing", "200"),
+    fixture!("requests", "200"),
+    fixture!("request", "200"),
+    fixture!("request_bodies", "200"),
+    fixture!("decision", "200"),
+    fixture!("routing_log", "200"),
 ];
 
 /// The bodies the fixtures capture for one answer, each with its file stem.
@@ -459,18 +603,18 @@ pub(crate) mod round_trip {
         assert_eq!(serde_json::to_value(&typed).unwrap(), body, "{stem}.json");
     }
 
-    /// Every value at `path` in the fixture's body (a key per segment, `*` for each element of an array) round
-    /// trips through `T` with no unknown field: the mirror of a type another crate owns is held to that type here,
-    /// since the view's own field keeps the source type and serializes it as it is.
+    /// Every value at `path` in the fixture's body (a key per segment, `*` for each element of an array or each
+    /// value of an object) round trips through `T` with no unknown field: the mirror of a type another crate owns is
+    /// held to that type here, since the view's own field keeps the source type and serializes it as it is.
     pub(crate) fn round_trips_each<T: DeserializeOwned + Serialize>(stem: &str, path: &[&str]) {
         fn walk<'a>(v: &'a Value, path: &[&str], out: &mut Vec<&'a Value>) {
             match path.split_first() {
                 None => out.push(v),
-                Some((&"*", rest)) => v
-                    .as_array()
-                    .expect("an array")
-                    .iter()
-                    .for_each(|e| walk(e, rest, out)),
+                Some((&"*", rest)) => match v {
+                    Value::Array(items) => items.iter().for_each(|e| walk(e, rest, out)),
+                    Value::Object(members) => members.values().for_each(|e| walk(e, rest, out)),
+                    _ => panic!("{v} is neither an array nor an object"),
+                },
                 Some((key, rest)) => walk(&v[*key], rest, out),
             }
         }
