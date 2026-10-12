@@ -464,9 +464,9 @@ test("a lead's line names the end its pace runs to beside the elapsed share, and
   const shed = wstep('move:shed', 'no', [wfact('ahead_five_hour', 0.1, 'percent'), wfact('elapsed_five_hour', 0, 'percent'), wfact('ahead_seven_day', 0, 'percent'), wfact('elapsed_seven_day', 0.5, 'percent'), wfact('deadline_seven_day', end, 'time'), wfact('threshold', 0.2, 'percent')]);
   const cool = wstep('cool', 'preferred', [wfact('elapsed_five_hour', 0.8, 'percent', 'secondary'), wfact('deadline_five_hour', end, 'time', 'secondary')]);
   const [shedLine, coolLine] = d.walkLines({ ...r, walk: [shed, cool] });
-  assert.deepEqual(shedLine.chips.map((c) => c.label), ['5h ahead', '5h elapsed', '7d ahead', '7d elapsed', '7d to its end at', 'threshold']);
+  assert.deepEqual(shedLine.chips.map((c) => c.label), ['5h ahead', '5h elapsed', '7d ahead', '7d elapsed', "7d to its subscription's end at", 'threshold']);
   assert.equal(shedLine.chips[4].value, d.formatFact(end, 'time', at), "the end in the time's words");
-  assert.equal(coolLine.chips[1].value, `5h to its end at ${d.formatFact(end, 'time', at)}`, 'a fact about a member names it as the key');
+  assert.equal(coolLine.chips[1].value, `5h to its subscription's end at ${d.formatFact(end, 'time', at)}`, 'a fact about a member names it as the key');
   const plain = d.walkLines({ ...r, walk: [wstep('move:shed', 'no', shed.facts.filter((f) => f.key !== 'deadline_seven_day'))] });
   assert.ok(plain[0].chips.every((c) => !c.label.includes('to its end')), 'a pace to the reset draws no end');
 });
