@@ -415,10 +415,8 @@ reference" link opens the dialog on Tiers and peak band. It closes on Member bud
 Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has not reported on
 reading "not reported".
 
-<!--
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
--->
 
 Latency reads "Percentiles read from merged per-hour histograms" and draws one row per metric, Time to first byte,
 Time to first content token, Total duration and Output tokens per second, each with a percentile chart (p50, p90, p95,
@@ -514,10 +512,8 @@ on Tiers and peak band. Its footer names each table in force as a chip, `API pri
 that set it or would replace it at the next start (`stats.api_prices_path`, `stats.subscription_costs_path`). The
 console has no import control: a table is replaced by a file at that path, read at the next start.
 
-<!--
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-light.png#only-light)
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-dark.png#only-dark)
--->
 
 Tiers and peak band draws Windows by tier, a row per tier the cost model sizes with its 5-hour and 7-day window as
 bars labeled as a multiple of the smallest tier's window, a Peak band switch that redraws them for a request completing
