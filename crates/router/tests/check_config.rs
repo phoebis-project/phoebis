@@ -224,18 +224,44 @@ fn the_summary_names_the_routing_keys() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    // Neither default path has a file under the test's working directory, so both tables are the shipped ones. The
-    // price line compares with the table it loads; the cost model's counts are proven over hand-counted tables
-    // below, so its line here is held to its shape.
-    let revisions = phoebis_ledger::PriceRevisions::shipped();
-    let prices = revisions.in_force(jiff::Timestamp::now().as_millisecond());
+    // Neither default path has a file under the test's working directory, so both lines read the shipped lists. Each
+    // expected line is built from its list as the loader reads it at the binary's clock, so a new revision edits no
+    // test. The counts' rule is proven over the hand-counted tables below.
+    let now = jiff::Timestamp::now().as_millisecond();
+    let listed = |revisions: usize, in_force: &str, next: Option<&str>, counts: String| {
+        let plural = if revisions == 1 { "" } else { "s" };
+        let next = next.map_or(String::new(), |date| format!(", next {date}"));
+        format!("{revisions} revision{plural}, in force {in_force}{next}, {counts}")
+    };
+    let prices = phoebis_ledger::PriceRevisions::shipped();
+    let price = prices.in_force(now);
     let api_prices = format!(
-        "api prices: built in (effective {}, {} models), since ./api_prices.yaml was not found",
-        prices.effective,
-        prices.models.len()
+        "api prices: built in ({}), since ./api_prices.yaml was not found",
+        listed(
+            prices.len(),
+            &price.effective,
+            prices.pending(now).map(|next| next.effective.as_str()),
+            format!("{} models", price.models.len())
+        )
+    );
+    let costs = phoebis_ledger::CostRevisions::shipped();
+    let cost = costs.in_force(now);
+    let subscription_costs = format!(
+        "subscription costs: built in ({}), since ./subscription_costs.yaml was not found",
+        listed(
+            costs.len(),
+            &cost.effective,
+            costs.pending(now).map(|next| next.effective.as_str()),
+            format!(
+                "{} weighted models, {} more by model tier, {} account tiers",
+                cost.weighted_model_count(),
+                cost.by_tier_count(),
+                cost.sized_tier_count()
+            )
+        )
     );
     assert_eq!(
-        lines.get(4..9),
+        lines.get(4..10),
         Some(
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
@@ -244,23 +270,11 @@ fn the_summary_names_the_routing_keys() {
                 "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
                 "ledger at ./data/ledger.sqlite",
                 api_prices.as_str(),
+                subscription_costs.as_str(),
             ][..]
         ),
         "{stdout}"
     );
-    let count = |n: &str| n.parse::<usize>().is_ok_and(|n| n > 0);
-    let shaped = lines
-        .get(9)
-        .and_then(|line| line.strip_prefix("subscription costs: built in (effective "))
-        .and_then(|rest| {
-            rest.strip_suffix(" tiers), since ./subscription_costs.yaml was not found")
-        })
-        .and_then(|rest| rest.split_once(", "))
-        .and_then(|(effective, counts)| Some((effective, counts.split_once(" models, ")?)))
-        .is_some_and(|(effective, (models, tiers))| {
-            !effective.is_empty() && count(models) && count(tiers)
-        });
-    assert!(shaped, "the subscription costs line: {stdout}");
     assert_eq!(
         lines.get(10..12),
         Some(
@@ -332,10 +346,12 @@ revisions:
 
 /// Two tables written for this count: two price rows dated 2026-02-01, the Haiku 4.5 row priced by prompt length,
 /// and a cost model dated 2026-03-01 that weighs Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at
-/// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides. Its four tiers are Pro and Max 20x sized
-/// on both windows, Team on the 5-hour window alone and Enterprise on neither. Counted by hand: two models on the
-/// price line (a row priced by prompt length is one model), and on the cost line four models (Opus 5 left out,
-/// Sonnet 5 in through its override, Haiku 4.5 once) and three tiers (Enterprise left out).
+/// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides. Its four account tiers are Pro and Max 20x
+/// sized on both windows, Team on the 5-hour window alone and Enterprise on neither. Each file holds one revision.
+/// Counted by hand: two models on the price line (a row priced by prompt length is one model), and on the cost line
+/// four weighted models (Opus 5 left out, Sonnet 5 in through its override, Haiku 4.5 once), one more by model tier
+/// (Opus 5, the one `model_tier` entry neither a weight nor an override prices, in the model tier Opus 5.5 weighs)
+/// and three account tiers (Enterprise left out).
 #[test]
 fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {
@@ -358,11 +374,12 @@ fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     let api_prices = format!(
-        "api prices: {} (file, effective 2026-02-01, 2 models)",
+        "api prices: {} (file, 1 revision, in force 2026-02-01, 2 models)",
         prices.display()
     );
     let subscription_costs = format!(
-        "subscription costs: {} (file, effective 2026-03-01, 4 models, 3 tiers)",
+        "subscription costs: {} (file, 1 revision, in force 2026-03-01, 4 weighted models, 1 more by model tier, \
+         3 account tiers)",
         costs.display()
     );
     assert_eq!(
@@ -521,6 +538,142 @@ fn a_cost_model_with_a_capacity_at_zero_fails_check_config_naming_the_key() {
         stderr.lines().any(|line| line.contains(
             "plan table: revision 2026-01-01: capacity.default_claude_max_20x.five_hour"
         )),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// Two entries on one date leave the table of that date ambiguous, so the start refuses the price file and the check
+/// refuses it too, naming the file and the date.
+#[test]
+fn a_price_file_with_two_entries_dated_the_same_fails_check_config_naming_the_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    let entry = "  - effective: 2026-10-04\n    models:\n      m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+                 cache_read: 1, output: 1}\n";
+    std::fs::write(&prices, format!("revisions:\n{entry}{entry}")).unwrap();
+    let config = config_file(
+        dir.path(),
+        "repeated-price-date",
+        &format!("stats:\n  api_prices_path: {}\n", prices.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: loading the price table from {}", prices.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains("pricing table: revisions: two entries dated 2026-10-04"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// A price file with no revision has no table to put in force, so the start refuses it and the check refuses it too,
+/// naming the file and asking for an entry.
+#[test]
+fn a_price_file_with_no_revision_fails_check_config_asking_for_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    std::fs::write(&prices, "revisions: []\n").unwrap();
+    let config = config_file(
+        dir.path(),
+        "no-price-revision",
+        &format!("stats:\n  api_prices_path: {}\n", prices.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: loading the price table from {}", prices.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains("pricing table: revisions: at least one entry"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// The cost model takes the price file's refusal of two entries on one date under its own prefix, naming the file
+/// and the date.
+#[test]
+fn a_cost_model_with_two_entries_dated_the_same_fails_check_config_naming_the_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let costs = dir.path().join("costs.yaml");
+    let text = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
+        .replace("effective: 2026-02-01", "effective: 2026-01-01");
+    assert_ne!(text, phoebis_ledger::test_tables::SUBSCRIPTION_COSTS);
+    std::fs::write(&costs, text).unwrap();
+    let config = config_file(
+        dir.path(),
+        "repeated-cost-date",
+        &format!("stats:\n  subscription_costs_path: {}\n", costs.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(
+            format!(
+                "Error: loading the subscription cost model from {}",
+                costs.display()
+            )
+            .as_str()
+        ),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains("plan table: revisions: two entries dated 2026-01-01"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// An entry dated after now is held rather than refused, so a change the provider announces can be recorded ahead.
+/// The line names the entry in force and the held one as `next`, the date a restart takes it at. The file is the cost
+/// fixture's two entries with a third dated 2099 appended. Counted by hand on the second entry: four weighted models
+/// (Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5), two more by model tier (Opus 5 and Opus 4.8, in the model tier
+/// Opus 5.5 weighs, while Mystery 2's model tier weighs nothing) and four account tiers.
+#[test]
+fn a_cost_model_entry_dated_after_now_is_held_and_named_as_next_beside_the_entry_in_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let costs = dir.path().join("costs.yaml");
+    let fixture = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS;
+    let (_, second) = fixture
+        .split_once("  - effective: 2026-02-01\n")
+        .expect("the cost fixture carries a second entry");
+    std::fs::write(
+        &costs,
+        format!("{fixture}  - effective: 2099-01-01\n{second}"),
+    )
+    .unwrap();
+    let config = config_file(
+        dir.path(),
+        "held-cost-entry",
+        &format!("stats:\n  subscription_costs_path: {}\n", costs.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let subscription_costs = format!(
+        "subscription costs: {} (file, 3 revisions, in force 2026-02-01, next 2099-01-01, 4 weighted models, \
+         2 more by model tier, 4 account tiers)",
+        costs.display()
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .find(|line| line.starts_with("subscription costs: ")),
+        Some(subscription_costs.as_str()),
         "{}",
         printed(&out)
     );

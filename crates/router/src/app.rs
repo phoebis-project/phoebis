@@ -204,7 +204,7 @@ pub async fn run_until(
             config.stats.ledger_path.display()
         )
     })?);
-    tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %prices.effective, "ledger opened");
+    log_ledger_opened(&config.stats.ledger_path, &revisions, started);
     // Rows from before the rollup key carried a generation are stamped with each live key's own, once; the
     // ledger task must not write before this, or a fresh row could collide with a stamped one. An id that had
     // a holder before this one starts at its own creation, so the earlier holder's rows stay unstamped.
@@ -746,6 +746,25 @@ fn router_config(
     }
 }
 
+/// The start's `ledger opened` line. It names the date of an entry dated after the start, which the tables built at
+/// the start take only at the next one, so an operator reads in the log what a restart changes.
+fn log_ledger_opened(
+    ledger: &std::path::Path,
+    revisions: &phoebis_ledger::PriceRevisions,
+    started: i64,
+) {
+    tracing::info!(
+        ledger = %ledger.display(),
+        pricing = %revisions.in_force(started).effective,
+        pricing_revisions = revisions.len(),
+        // An `Option` records nothing at `None`, so the line names no next date while nothing is held.
+        pricing_next = revisions
+            .pending(started)
+            .map(|next| tracing::field::display(&next.effective)),
+        "ledger opened"
+    );
+}
+
 fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> SettingsView {
     SettingsView {
         api_prices_path: config
@@ -1248,6 +1267,105 @@ mod tests {
         assert!(
             banded > 1.0,
             "a charge inside the band weighs more than one outside it: {banded}"
+        );
+    }
+
+    /// The routing task's 5-hour burn rates are built once at the start, so a cost revision dated after the start is
+    /// held for the next one: the rates read the cost entry in force at the start and never the held entry's doubled
+    /// weights.
+    #[test]
+    fn the_router_config_reads_the_cost_revision_in_force_at_the_start_and_not_a_pending_one() {
+        let held = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
+            .replace("effective: 2026-02-01", "effective: 2099-01-01");
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&held)
+                .expect("the list with a held entry parses"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(tables.clone()),
+            &RoutingConfig::default(),
+            START,
+        );
+        let in_force = tables.revisions.in_force(START);
+        let pending = tables
+            .revisions
+            .pending(START)
+            .expect("the 2099 entry is held at the start");
+        assert_eq!(
+            (in_force.effective.as_str(), pending.effective.as_str()),
+            ("2026-01-01", "2099-01-01")
+        );
+        let opus = |table: &phoebis_routing::RateTable| table.rates_for("claude-opus-5-5", 0);
+        let burn = opus(&config.rates.five_hour);
+        assert_eq!(
+            burn,
+            opus(&in_force.rate_table(phoebis_routing::FIVE_HOUR)),
+            "the burn rates are the entry in force at the start"
+        );
+        assert_ne!(
+            burn,
+            opus(&pending.rate_table(phoebis_routing::FIVE_HOUR)),
+            "the held entry waits for the next start"
+        );
+    }
+
+    /// The formatter's output kept in memory, so a case reads back the lines a function logged.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The start log names the price list's entry in force and its revision count, and a held entry's date only while
+    /// one is held, so an operator reads in the log what a restart changes.
+    #[test]
+    fn the_start_log_names_the_price_revisions_and_a_held_entrys_date_only_while_one_is_held() {
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(captured.clone())
+            .finish();
+        let held = phoebis_ledger::PriceRevisions::from_yaml(
+            &phoebis_ledger::test_tables::API_PRICES
+                .replace("effective: 2026-02-01", "effective: 2099-01-01"),
+            "test",
+        )
+        .expect("the list with a held entry parses");
+        let alone = phoebis_ledger::PriceRevisions::new(vec![held.in_force(START).clone()], "test")
+            .expect("one entry");
+        tracing::subscriber::with_default(subscriber, || {
+            log_ledger_opened(std::path::Path::new("ledger.sqlite"), &held, START);
+            log_ledger_opened(std::path::Path::new("ledger.sqlite"), &alone, START);
+        });
+        let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            text.lines().map(str::trim).collect::<Vec<_>>(),
+            [
+                "INFO ledger opened ledger=ledger.sqlite pricing=2026-01-01 pricing_revisions=2 \
+                 pricing_next=2099-01-01",
+                "INFO ledger opened ledger=ledger.sqlite pricing=2026-01-01 pricing_revisions=1",
+            ]
         );
     }
 

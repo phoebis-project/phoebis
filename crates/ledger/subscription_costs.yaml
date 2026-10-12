@@ -1,9 +1,10 @@
 # The subscription cost model. A token costs weight(model) x multiplier(type) units on every window; a window holds
 # `capacity` units; a request's share of a window is the units it spent over that capacity, over the peak factor when
 # the request completes inside the band. Unit: 1/150,000,000 of the Max 20x 5-hour window outside the peak band, so
-# one percent of that window, the step the usage header moves in, is 1,500,000 units. A model or tier left out, or
-# set to null, is unpriced. Written by the plan meter's table_fit.py; every value is a design constant it tested,
-# except a row whose comment says it is assumed.
+# one percent of that window, the step the usage header moves in, is 1,500,000 units. An account tier left out, or
+# set to null, is unpriced. A model without a weight prices at the weight of its model tier's latest weighted model,
+# as an estimate, and a model of no model tier, or of one with no weight, prices nothing. Written by the plan meter's
+# table_fit.py. Every value is a design constant it tested, except a row whose comment says it is assumed.
 revisions:
   - effective: 2026-10-05
 
