@@ -602,7 +602,7 @@ next reload clears it. A reload that lands between the two writes meets a key mi
 are in place. The service user reads the pair at reload as it did at start, so a new pair keeps the modes above.
 
 `phoebis tls reload` takes `--config` and [the shared flags](#commands), `--ca`, `--json`, `--secret-env`, `--timeout`
-and `--url`, and posts [the reload route](api.md#post-admintlsreload). It prints one line per listener on stdout:
+and `--url`, and posts the reload route. It prints one line per listener on stdout:
 `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's line}. The router keeps the
 pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`. `--json` prints the route's
 body instead. It exits 0 once every pair reloaded, a plain listener aside, 1 when any pair was refused, the secret was

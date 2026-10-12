@@ -308,6 +308,23 @@ While the router's ledger is behind, its writer channel at least half full, a re
 and before any account is chosen with `503` `api_error`, the error code `ledger_behind`, the message `the router is not
 accepting requests right now` and `Retry-After: 5`.
 
+### GET /v1/usage
+
+The key is presented as `Authorization: Bearer <secret>` or `x-api-key: <secret>`.
+
+Response: `key` (`id`, `label`, `pool_id`), `now`, `windows` (`24h` and `7d`, each `from`, `to`, `requests`,
+`succeeded`, `failed`, `incomplete`, `tokens` (`input`, `output`, `cache_read`, `cache_write`), `cost_usd`, `models`
+(per canonical model: `model`, `requests`, `tokens`, `cost_usd`)), summed from the hourly rollups filed under the key's
+id and generation, with probe rows left out; never an account, another key, or a secret.
+
+The figures are the presenting key's own from its creation: a deleted key's rows stay under the generation it was
+created with, so a later key under the same id never reads them, and each window starts where its name says, whole hours
+included.
+
+Refuses: `401` in the Anthropic error shape for a missing, malformed, or unrecognized key, exactly as
+`/v1/messages` refuses it; `500` in the same error shape with `x-phoebis-error-code: usage_unavailable` when the ledger
+cannot be read.
+
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.

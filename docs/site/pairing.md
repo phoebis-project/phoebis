@@ -47,7 +47,7 @@ and credential on the right](assets/accounts-dark.png#only-dark)
 The `curl` lines below are the same flow by hand.
 
 Every admin mutation that carries an `Origin` header must name the request's own `Host` with it, with the `https://`
-scheme where the admin listener terminates TLS or a front sends `X-Forwarded-Proto: https` ([access](api.md#access)),
+scheme where the admin listener terminates TLS or a front sends `X-Forwarded-Proto: https` (access),
 and the router refuses the request otherwise; a request that carries no `Origin`, as the curl lines below do on
 loopback, is admitted. Every request that carries a body also needs `Content-Type: application/json` (the curl lines
 below already carry it). Log in first and keep the cookie:

@@ -11,14 +11,24 @@ extra_css = ["assets/logo.css"]
 
 nav = [
   { "Overview" = "index.md" },
-  { "Installation" = "installation.md" },
-  { "Downstream client" = "client.md" },
-  { "Pairing an account" = "pairing.md" },
-  { "Pools, keys, and routing" = "routing.md" },
-  { "Keepalive" = "keepalive.md" },
-  { "Statistics" = "statistics.md" },
-  { "API reference" = "api-reference.md" },
+  { "Getting started" = [
+    { "Quick start" = "quickstart.md" },
+    { "The client" = "client.md" },
+    { "A second machine" = "second-machine.md" },
+  ] },
+  { "Reference" = [
+    { "Installation" = "installation.md" },
+    { "Pairing an account" = "pairing.md" },
+    { "Pools, keys and routing" = "routing.md" },
+    { "Keepalive" = "keepalive.md" },
+    { "The keepalive mod" = "keepalive-mod.md" },
+    { "The relay" = "relay.md" },
+    { "The console" = "console.md" },
+    { "Statistics" = "statistics.md" },
+    { "API reference" = "api-reference.md" },
+  ] },
   { "Operations" = "operations.md" },
+  { "Development" = "development.md" },
   { "Changelog" = "changelog.md" },
 ]
 

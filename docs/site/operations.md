@@ -246,7 +246,7 @@ reads it prints the loader's line for it ([TLS on the listeners](installation.md
 router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and lists
 each one on its own line under it: records `queued` in the writer channel, `behind` while admission refuses, `degraded`
 after a failed batch, priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state
-writer's `deferred` writes and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention
+writer's `deferred` writes and its `degraded` flag (api). `attention:` lists every attention
 item on its own line under it as `<kind> <subject> since <HH:MM>`, in the items' order, or reads `attention: none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24

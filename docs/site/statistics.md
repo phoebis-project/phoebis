@@ -728,7 +728,7 @@ host for the name that reaches it, and the address the listener binds shows besi
 ## Conditions and gauges
 
 The router exports what needs an operator as Prometheus gauges and shows the same conditions on the dashboard's
-attention line and the pool cards, which read `GET /admin/attention` ([API](api.md#get-adminattention)), worst first
+attention line and the pool cards, which read `GET /admin/attention` (API), worst first
 and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while the cause
 holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition reads 0
 rather than vanishing; a deleted account or pool loses its series at the next read, except that a pool a parked record
