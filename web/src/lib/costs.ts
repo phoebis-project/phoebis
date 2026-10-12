@@ -193,8 +193,8 @@ export const shareOrFallback = (costs: SubscriptionCosts, window: string, tier: 
   return share === null || weight === null ? null : { estimated: weight.estimated, share };
 };
 
-/** The 20x window equivalent: the share under the anchor tier, no account tier read (spec 5.1 rule 1), so it adds
- *  across accounts. */
+/** The 20x window equivalent: the share under the anchor tier, the cost model's units over its capacity. No account
+ *  tier is read, so the figure adds across accounts. */
 export const equivalentOf = (costs: SubscriptionCosts, window: string, model: string, usage: Usage, at: number): { equivalent: number; estimated: boolean } | null => {
   const priced = shareOrFallback(costs, window, anchorTier(costs), model, usage, at);
   return priced === null ? null : { equivalent: priced.share, estimated: priced.estimated };
