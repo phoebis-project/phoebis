@@ -8,14 +8,126 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::{BurnRates, BurnUnit, FIVE_HOUR};
-use serde_json::json;
+use serde_json::{json, Value};
+use utoipa::ToSchema;
 
+use crate::openapi::{ErrorBody, RouterUnavailable};
 use crate::routes::failure;
 use crate::AdminState;
 
+/// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
+#[derive(serde::Serialize, ToSchema)]
+pub(crate) struct SessionList {
+    #[schema(value_type = Vec<Session>)]
+    pub sessions: Vec<Value>,
+}
+
+/// One session row. The seven pin keys, `burn` to `shed_from`, are null on a row with no pin.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Session {
+    pub key_id: String,
+    pub key_generation: i64,
+    pub session_id: String,
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub account_id: Option<String>,
+    pub epoch: Option<u64>,
+    pub created_at: Option<i64>,
+    pub last_used_at: Option<i64>,
+    pub last_request_at: Option<i64>,
+    pub requests: Option<u64>,
+    pub pinned: bool,
+    /// The pin's typed burn per hour priced in `burn_unit` when read: the share of the account's own 5-hour
+    /// window on plan quota, dollars otherwise, null when the account's tier is unknown, when the model has no
+    /// weight on the 5-hour window, or when the tier has no capacity on it. Null as well on a pinned row whose
+    /// account has left the registry.
+    pub burn: Option<f64>,
+    /// `window_share` or `usd`, also null when the pin's account has left the registry, with no kind left to pick
+    /// a unit from.
+    #[schema(example = "window_share")]
+    pub burn_unit: Option<String>,
+    /// When `burn` was last folded, the instant the shedding preview decays it forward from.
+    pub burn_at: Option<i64>,
+    /// The cache TTL in force at the pin's last refresh.
+    pub cache_ttl_ms: Option<i64>,
+    pub last_input_tokens: Option<u64>,
+    /// The pin's last main, subagent or compaction turn, or a keepalive probe's renewal.
+    pub last_refresh_at: Option<i64>,
+    /// The account a shed round marked the pin's session to leave.
+    pub shed_from: Option<String>,
+    pub historical: bool,
+    /// `reporting`, `silent`, or `none`.
+    #[schema(example = "reporting")]
+    pub companion: String,
+    pub companion_since: Option<i64>,
+    pub agents: u64,
+    /// Main's recipe.
+    pub keepalive: SessionKeepalive,
+    /// The seconds since main's last presence report, null before the first one.
+    pub presence_age_seconds: Option<i64>,
+    /// The conversation the session's first request that is not auxiliary (a compaction, main, subagent or
+    /// unclassed request) continued at depth 2 or deeper, from a session that branched off another, an
+    /// auxiliary request ahead of it skipped. Both fork keys are null for a session that continued no other
+    /// conversation and for one the ledger holds no client request for.
+    pub forked_from: Option<String>,
+    /// The matched depth.
+    pub fork_depth: Option<u32>,
+}
+
+/// The recipe as the session row reads it, every member null while main holds none.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionKeepalive {
+    pub cause: Option<String>,
+    pub last_guard: Option<String>,
+    pub next_probe_at: Option<i64>,
+    pub state: Option<String>,
+}
+
+/// The per-model cost card the console shows beside the sessions.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionCosts {
+    pub version: String,
+    pub effective: String,
+    pub models: Vec<CostRow>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CostRow {
+    pub model: String,
+    pub input_per_m: f64,
+    pub cache_write_5m_per_m: f64,
+    pub cache_write_1h_per_m: f64,
+    pub cache_read_per_m: f64,
+    pub output_per_m: f64,
+    /// `cache_write_5m` divided by `cache_read` when `cache_read` is positive, else null.
+    pub reads_per_write_5m: Option<f64>,
+    /// The fast-mode cells under the same five `*_per_m` names, null on a model that serves no fast mode.
+    #[schema(value_type = Option<crate::openapi::FastCells>)]
+    pub fast: Value,
+    /// `over` and the five `*_per_m` cells, null on a model priced one way.
+    #[schema(value_type = Option<crate::openapi::LongContextCells>)]
+    pub long_context: Value,
+}
+
+/// List the sessions.
+#[utoipa::path(
+    get,
+    path = "/admin/sessions",
+    operation_id = "sessions_list",
+    tag = "Sessions",
+    responses(
+        (status = 200, description = "The session rows.", body = SessionList),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 503, response = RouterUnavailable),
+    ),
+)]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     match rows(&state).await {
-        Ok(out) => Json(json!({ "sessions": out })).into_response(),
+        Ok(out) => Json(SessionList { sessions: out }).into_response(),
         Err(refusal) => refusal,
     }
 }
@@ -285,20 +397,64 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     Ok(out)
 }
 
+/// Read the per-model cost card.
+#[utoipa::path(
+    get,
+    path = "/admin/sessions/costs",
+    operation_id = "sessions_costs",
+    tag = "Sessions",
+    responses(
+        (status = 200, description = "The cost card.", body = SessionCosts),
+    ),
+)]
 pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
     let table = state.pricing.current();
-    Json(json!({
-        "version": table.version, "effective": table.effective,
-        "models": table.models.iter().map(|(m, row)| (m, &row.standard, row)).map(|(m, p, row)| json!({
-            "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output,
-            "reads_per_write_5m": if p.cache_read > 0.0 { Some(p.cache_write_5m / p.cache_read) } else { None },
-            "fast": crate::pricing::fast_json(row),
-            "long_context": crate::pricing::long_context_json(row),
-        })).collect::<Vec<_>>(),
-    }))
+    Json(SessionCosts {
+        version: table.version.clone(),
+        effective: table.effective.clone(),
+        models: table
+            .models
+            .iter()
+            .map(|(m, row)| {
+                let p = &row.standard;
+                CostRow {
+                    model: m.clone(),
+                    input_per_m: p.input,
+                    cache_write_5m_per_m: p.cache_write_5m,
+                    cache_write_1h_per_m: p.cache_write_1h,
+                    cache_read_per_m: p.cache_read,
+                    output_per_m: p.output,
+                    reads_per_write_5m: if p.cache_read > 0.0 {
+                        Some(p.cache_write_5m / p.cache_read)
+                    } else {
+                        None
+                    },
+                    fast: crate::pricing::fast_json(row),
+                    long_context: crate::pricing::long_context_json(row),
+                }
+            })
+            .collect(),
+    })
     .into_response()
 }
 
+/// Release a session's pin and recipe.
+#[utoipa::path(
+    post,
+    path = "/admin/sessions/{key}/{session}/release",
+    operation_id = "session_release",
+    tag = "Sessions",
+    params(
+        ("key" = String, Path, description = "The key's id"),
+        ("session" = String, Path, description = "The client's own session id"),
+    ),
+    responses(
+        (status = 204, description = "Releases both the router pin and the keepalive recipe for the pair.",
+            headers(("x-phoebis-released" = String, description = "The pin count"))),
+        (status = 404, description = "`no pin or recipe for this session`", body = ErrorBody, example = json!({"error": "no pin or recipe for this session"})),
+        (status = 503, description = "- `the keepalive engine is shutting down`\n- `the router is not available`", body = ErrorBody, example = json!({"error": "the keepalive engine is shutting down"})),
+    ),
+)]
 pub(crate) async fn release(
     State(state): State<Arc<AdminState>>,
     Path((key, session)): Path<(String, String)>,
@@ -336,4 +492,47 @@ pub(crate) async fn release(
         HeaderValue::from_str(&pins.to_string()).expect("digits"),
     );
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::openapi::round_trip::{round_trips, round_trips_each};
+
+    #[test]
+    fn the_session_fixtures_round_trip_through_their_declared_types() {
+        round_trips_each::<Session>("sessions", &["sessions", "*"]);
+        round_trips::<SessionCosts>("sessions_costs");
+        // A model priced one way carries `fast` and `long_context` as null, which no cell type takes, so each set a
+        // model carries round-trips through its type and the nulls are passed over.
+        let costs = crate::openapi::round_trip::fixture("sessions_costs");
+        let (mut fast, mut long_context) = (0, 0);
+        for model in costs["models"].as_array().unwrap() {
+            let id = &model["model"];
+            if !model["fast"].is_null() {
+                let typed: crate::openapi::FastCells =
+                    serde_json::from_value(model["fast"].clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&typed).unwrap(),
+                    model["fast"],
+                    "{id}: the fast cells"
+                );
+                fast += 1;
+            }
+            if !model["long_context"].is_null() {
+                let typed: crate::openapi::LongContextCells =
+                    serde_json::from_value(model["long_context"].clone()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&typed).unwrap(),
+                    model["long_context"],
+                    "{id}: the long-context cells"
+                );
+                long_context += 1;
+            }
+        }
+        assert!(
+            fast >= 1 && long_context >= 1,
+            "a fast set and a long-context set at least, {fast} and {long_context} found"
+        );
+    }
 }

@@ -181,7 +181,7 @@ test('a filter list opens onto its search field, the arrows move between it and 
     press(key);
     return document.activeElement === search ? 'the search field' : focused();
   });
-  assert.deepEqual(moves, ['200 OK', '429 Rate limited', '529 Overloaded', '200 OK', 'the search field'], 'ArrowDown leaves the search field for the first option, End and Home reach the ends, ArrowUp from the first option comes back');
+  assert.deepEqual(moves, ['Select all', '200 OK', '529 Overloaded', 'Select all', 'the search field'], 'ArrowDown leaves the search field for the Select all row at the head, End and Home reach the ends, ArrowUp from the row comes back');
   const escape = press('Escape');
   assert.equal(m.container.querySelector('.mselect__list'), null, 'Escape closes the list');
   assert.ok(document.activeElement === opener, 'Escape gives focus back to the trigger');

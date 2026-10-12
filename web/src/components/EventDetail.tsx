@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
-import type { RoutingEvent } from '@/api/types';
+import type { RoutingEvent, RoutingLogRow } from '@/api/types';
+import { ChipView, rowValue } from '@/components/ChipView';
 import { KeyValue } from '@/components/ui/primitives';
 import { detailPairs, type DetailPair, entityHref, logHref, requestLink } from '@/lib/routingLog';
-import { ChipView, rowValue } from './DecisionCard';
 
 /** The shedding round's pins, one row each in the round's order. */
 function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {
@@ -29,8 +29,8 @@ function PinTable({ table }: { table: NonNullable<DetailPair['table']> }) {
 }
 
 /** An event row opened: When, Account and Pool, then the kind's own pairs, and the request it names in the foot. */
-export function EventDetail({ now, row }: { now: number; row: RoutingEvent }) {
-  const pairs = detailPairs(row, now);
+export function EventDetail({ now, row, rows }: { now: number; row: RoutingEvent; rows: readonly RoutingLogRow[] }) {
+  const pairs = detailPairs(row, now, rows);
   return (
     <div className="event-detail">
       <KeyValue rows={pairs.map((p) => ({ label: p.label, value: p.table ? <PinTable table={p.table} /> : rowValue(p.chips) }))} />

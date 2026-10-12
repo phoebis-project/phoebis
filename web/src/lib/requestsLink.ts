@@ -1,4 +1,6 @@
+import { iso } from '@/api/decode';
 import type { AnalyticsGroupBy } from '@/api/types';
+import { REQUESTS_CODEC, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
 
@@ -49,7 +51,7 @@ const unlistableClient = (key: string) => key === OTHER_DIMENSION || foldRequest
 const unlistableClientPattern = (pattern: string) => pattern !== '' && !/^\*+$/.test(pattern) && matchesPattern(pattern, OTHER_DIMENSION);
 
 /** The Requests filter each grouping's row writes. The user agent grouping's counts stay plain. */
-const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, string> = {
+const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, 'accounts' | 'client' | 'efforts' | 'keys' | 'kind' | 'models' | 'pools' | 'requestClasses' | 'speeds'> = {
   account: 'accounts',
   client: 'client',
   effort: 'efforts',
@@ -57,7 +59,7 @@ const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, strin
   kind: 'kind',
   model: 'models',
   pool: 'pools',
-  request_class: 'request_classes',
+  request_class: 'requestClasses',
   speed: 'speeds',
 };
 
@@ -95,21 +97,24 @@ export function requestsLink({ count, filters, group, reason, window }: Requests
   // A client row's own class takes the pattern's place in the address, so the pattern decides nothing there.
   if (group?.by !== 'client' && unlistableClientPattern(filters.clientPattern)) return { href: null, title: CLIENT_PATTERN_PLAIN };
   const { from, to } = hourWindow(window);
-  const params = new URLSearchParams();
-  const put = (name: string, value: string) => {
-    if (value) params.set(name, value);
+  const address: RequestsAddress = {
+    ...REQUESTS_CODEC.fromParams(new URLSearchParams()),
+    accounts: filters.accountIds,
+    cacheMissReasons: [reason],
+    client: filters.clientPattern,
+    keys: filters.keyIds,
+    models: filters.models,
+    pools: filters.poolIds,
+    range: { from: iso(from), preset: 'custom', to: iso(to) },
+    search: filters.sessionId ?? '',
   };
-  put('cache_miss_reasons', reason);
-  put('from', new Date(from).toISOString());
-  put('to', new Date(to).toISOString());
-  put('accounts', filters.accountIds.join(','));
-  put('keys', filters.keyIds.join(','));
-  put('models', filters.models.join(','));
-  put('pools', filters.poolIds.join(','));
-  put('client', filters.clientPattern);
-  put('search', filters.sessionId ?? '');
   // The row is one value inside the page's selection of its own dimension, so it takes that selection's place.
-  if (group !== undefined && group.by !== 'all') put(GROUP_PARAM[group.by], group.key);
+  if (group !== undefined && group.by !== 'all') {
+    const field = GROUP_PARAM[group.by];
+    if (field === 'client') address.client = group.key;
+    else if (field === 'kind') address.kind = group.key as RequestsAddress['kind'];
+    else address[field] = [group.key];
+  }
   const probes = group?.by === 'kind' && group.key === 'probe';
-  return { href: `/requests?${params}`, title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
+  return { href: `/requests?${REQUESTS_CODEC.toParams(address)}`, title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
 }

@@ -59,6 +59,14 @@ test("a session read under a key lifetime links with that lifetime alone, in pla
   assert.equal(read.search, SESSION);
 });
 
+test("a link reads back through the Requests page's address as its custom span, its reason and its filters", () => {
+  const href = link({ filters: { accountIds: ['primary'], keyIds: ['desktop@1000'], sessionId: SESSION }, group: { by: 'request_class', key: 'conversation' } }).href;
+  const read = d.REQUESTS_CODEC.fromParams(new URL(href, 'http://console.test').searchParams);
+  assert.deepEqual(read.range, { from: '2026-09-16T11:00:00.000Z', preset: 'custom', to: '2026-09-16T14:30:00.000Z' });
+  assert.deepEqual([read.cacheMissReasons, read.accounts, read.keys, read.requestClasses, read.search], [['messages_changed'], ['primary'], ['desktop@1000'], ['conversation'], SESSION]);
+  assert.equal(d.REQUESTS_CODEC.toParams(read).toString(), new URL(href, 'http://console.test').searchParams.toString());
+});
+
 test("a breakdown cell adds its row's group as the Requests filter of that dimension", () => {
   const cases = [
     ['account', 'a', 'accounts', 'a'],

@@ -82,9 +82,9 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
     setAt({ left: rect.left, top: rect.bottom + 4 });
   };
   const hide = () => setAt(null);
-  const moved = () => {
+  const hideIfMoved = () => {
     const rect = countRef.current?.getBoundingClientRect();
-    return !rect || !anchor.current || rect.top !== anchor.current.top || rect.left !== anchor.current.left;
+    if (!rect || !anchor.current || rect.top !== anchor.current.top || rect.left !== anchor.current.left) setAt(null);
   };
   // The card's size is known once it is drawn, so it opens at the count and moves inside the viewport here.
   useLayoutEffect(() => {
@@ -96,19 +96,17 @@ export function AttemptCount({ attempts }: { attempts: TrailAttempt[] }) {
     const inside = { left: Math.max(0, Math.min(left, window.innerWidth - box.width)), top };
     if (inside.left !== at.left || inside.top !== at.top) setAt(inside);
   }, [at]);
-  // A refresh that re-sorts the rows moves the count with no scroll or resize to report it.
+  // A refresh that re-sorts the rows moves the count with no scroll or resize to report it, so every render of the
+  // open card reads the count by the same rule.
   useLayoutEffect(() => {
-    if (open && moved()) hide();
+    if (open) hideIfMoved();
   });
   useEffect(() => {
     if (!open) return;
-    const onScroll = () => {
-      if (moved()) hide();
-    };
-    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('scroll', hideIfMoved, true);
     window.addEventListener('resize', hide);
     return () => {
-      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scroll', hideIfMoved, true);
       window.removeEventListener('resize', hide);
     };
   }, [open]);

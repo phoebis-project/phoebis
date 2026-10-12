@@ -13,24 +13,32 @@
     "dev": "vite",
     "e2e": "node e2e/views.mjs",
     "e2e:mock": "npm run build:mock && node e2e/mock-pass.mjs",
+    "e2e:reference": "node e2e/reference.mjs",
+    "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",
     "sync-mock": "node scripts/sync-mock.mjs",
     "test": "vite build -c test/vite.config.ts && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@scalar/api-reference": "1.72.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "7.18.4",
     "recharts": "^2.15.4"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
     "jsdom": "25.0.1",
     "playwright": "1.63.0",
     "typescript": "^5.6.3",
+    "typescript-eslint": "8.71.1",
     "vite": "8.3.0"
   }
 }

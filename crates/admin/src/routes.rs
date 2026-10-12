@@ -14,14 +14,14 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, delete, get, patch, post, put};
+use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
 use phoebis_ledger::QuotaPoll;
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
-    PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
-    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
+    PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
+    ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
@@ -35,10 +35,13 @@ use phoebis_store::{
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use utoipa::{Modify, OpenApi, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
+use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::{
-    accounts, analytics, attention, dashboard, keepalive, keys, models, pools, pricing, requests,
-    sessions, settings, tls, AdminState, LoginError, NewAccount,
+    accounts, analytics, attention, dashboard, keepalive, keys, models, openapi, pools, pricing,
+    requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -50,90 +53,72 @@ const COOKIE_NAME: &str = "phoebis_admin";
 const LOGIN_PATH: &str = "/admin/session";
 
 pub fn router(state: Arc<AdminState>) -> Router {
-    Router::new()
-        .route("/admin/accounts", get(list_accounts).post(accounts::create))
-        .route(
-            "/admin/accounts/{id}",
-            get(show_account)
-                .patch(accounts::patch)
-                .delete(accounts::remove),
-        )
-        .route(
-            "/admin/accounts/{id}/clear-funding",
-            post(accounts::clear_funding),
-        )
-        .route(
-            "/admin/accounts/{id}/cooldowns/{scope}",
-            delete(accounts::clear_cooldown),
-        )
-        .route("/admin/accounts/{id}/credentials", delete(disconnect))
-        .route("/admin/accounts/{id}/pause", post(pause))
-        .route("/admin/accounts/{id}/catalog", get(accounts::catalog))
-        .route("/admin/accounts/{id}/quota", get(accounts::quota))
-        .route("/admin/accounts/{id}/resume", post(resume))
-        .route("/admin/accounts/{id}/usage", get(usage_latest))
-        .route("/admin/accounts/{id}/usage/refresh", post(usage_refresh))
-        .route("/admin/accounts/{id}/verify", post(verify))
-        .route("/admin/analytics/accounts", get(analytics::accounts))
-        .route("/admin/analytics/breakdown", get(analytics::breakdown))
-        .route("/admin/analytics/budgets", get(analytics::budgets))
-        .route("/admin/analytics/burn", get(analytics::burn))
-        .route("/admin/analytics/placements", get(analytics::placements))
-        .route("/admin/analytics/rewrites", get(analytics::rewrites))
-        .route("/admin/analytics/series", get(analytics::series))
-        .route("/admin/attention", get(attention::show))
-        .route("/admin/dashboard", get(dashboard::show))
-        .route("/admin/keepalive/overview", get(keepalive::overview))
-        .route("/admin/keepalive/recipes", get(keepalive::recipes))
-        .route("/admin/keys", get(keys::list).post(keys::create))
-        .route("/admin/keys/{id}", patch(keys::patch).delete(keys::remove))
-        .route("/admin/keys/{id}/models", get(models::key_models))
-        .route("/admin/keys/{id}/revoke", post(keys::revoke))
-        .route("/admin/keys/{id}/rotate", post(keys::rotate))
-        .route(
-            "/admin/ledger/parked/replay",
-            post(crate::ledger::replay_parked),
-        )
-        .route("/admin/models/state", get(models::state))
-        .route("/admin/oauth/sessions", post(pairing_start))
-        .route(
-            "/admin/oauth/sessions/{id}",
-            get(pairing_show).delete(pairing_cancel),
-        )
-        .route(
-            "/admin/oauth/sessions/{id}/callback",
-            post(pairing_callback),
-        )
-        .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
-        .route("/admin/pools", get(pools::list).post(pools::create))
-        .route(
-            "/admin/pools/{id}",
-            patch(pools::patch).delete(pools::remove),
-        )
-        .route("/admin/pools/{id}/members", put(pools::set_members))
-        .route("/admin/pools/{id}/traffic", get(pools::traffic))
-        .route("/admin/pricing", get(pricing::show))
-        .route("/admin/requests", get(requests::list))
-        .route("/admin/requests/{id}", get(requests::show))
-        .route("/admin/requests/{id}/bodies", get(requests::bodies))
-        .route(
-            "/admin/requests/{id}/decisions/{seq}",
-            get(crate::routing_log::record),
-        )
-        .route("/admin/routing-log", get(crate::routing_log::list))
-        .route("/admin/session", get(whoami).post(login).delete(logout))
-        .route("/admin/sessions", get(sessions::list))
-        .route(
-            "/admin/sessions/{key}/{session}/release",
-            post(sessions::release),
-        )
-        .route("/admin/sessions/costs", get(sessions::costs))
-        .route("/admin/settings", get(settings::show))
-        .route("/admin/system", get(system))
-        .route("/admin/tls/reload", post(tls::reload))
+    let (router, mut api) = OpenApiRouter::with_openapi(openapi::Document::openapi())
+        .routes(routes!(list_accounts, accounts::create))
+        .routes(routes!(show_account, accounts::patch, accounts::remove))
+        .routes(routes!(accounts::clear_funding))
+        .routes(routes!(accounts::clear_cooldown))
+        .routes(routes!(disconnect))
+        .routes(routes!(pause))
+        .routes(routes!(accounts::catalog))
+        .routes(routes!(accounts::quota))
+        .routes(routes!(resume))
+        .routes(routes!(usage_latest))
+        .routes(routes!(usage_refresh))
+        .routes(routes!(verify))
+        .routes(routes!(analytics::accounts))
+        .routes(routes!(analytics::breakdown))
+        .routes(routes!(analytics::budgets))
+        .routes(routes!(analytics::burn))
+        .routes(routes!(analytics::placements))
+        .routes(routes!(analytics::rewrites))
+        .routes(routes!(analytics::series))
+        .routes(routes!(attention::show))
+        .routes(routes!(dashboard::show))
+        .routes(routes!(keepalive::overview))
+        .routes(routes!(keepalive::recipes))
+        .routes(routes!(keys::list, keys::create))
+        .routes(routes!(keys::patch, keys::remove))
+        .routes(routes!(models::key_models))
+        .routes(routes!(keys::revoke))
+        .routes(routes!(keys::rotate))
+        .routes(routes!(crate::ledger::replay_parked))
+        .routes(routes!(models::state))
+        .routes(routes!(pairing_start))
+        .routes(routes!(pairing_show, pairing_cancel))
+        .routes(routes!(pairing_callback))
+        .routes(routes!(pairing_confirm))
+        .routes(routes!(pools::list, pools::create))
+        .routes(routes!(pools::patch, pools::remove))
+        .routes(routes!(pools::set_members))
+        .routes(routes!(pools::traffic))
+        .routes(routes!(pricing::show))
+        .routes(routes!(requests::list))
+        .routes(routes!(requests::show))
+        .routes(routes!(requests::bodies))
+        .routes(routes!(crate::routing_log::record))
+        .routes(routes!(crate::routing_log::list))
+        .routes(routes!(whoami, login, logout))
+        .routes(routes!(sessions::list))
+        .routes(routes!(sessions::release))
+        .routes(routes!(sessions::costs))
+        .routes(routes!(settings::show))
+        .routes(routes!(system))
+        .routes(routes!(tls::reload))
         .route("/admin", any(unknown_admin_route))
         .route("/admin/{*rest}", any(unknown_admin_route))
+        .split_for_parts();
+    openapi::Examples.modify(&mut api);
+    let document = Bytes::from(api.to_json().expect("the admin document serializes"));
+    router
         .layer(from_fn_with_state(state.clone(), gate))
+        .route(
+            openapi::DOCUMENT_PATH,
+            get(move || {
+                let document = document.clone();
+                async move { openapi::document(document) }
+            }),
+        )
         .with_state(state)
 }
 
@@ -421,12 +406,46 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
+/// The login's body.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct LoginInput {
+    /// The admin secret.
+    pub secret: String,
+}
+
+/// Whether the cookie the console holds still names a session, by the id pairing ownership uses, never by the
+/// cookie value.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionView {
+    /// The session's id as pairing ownership and the mutation log name it. `bearer` for a bearer caller.
+    #[schema(example = "bearer")]
+    pub session_id: String,
+}
+
+/// Log in with the admin secret.
+///
+/// No session required: this is the login itself. The answer sets the `phoebis_admin` cookie, with `Secure` when
+/// the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`, and carries no body. See
+/// `GET /admin/session` for what the session answers afterwards. A bearer on this operation is ignored: the login
+/// stays the cookie's door.
+#[utoipa::path(
+    post,
+    path = "/admin/session",
+    operation_id = "session_login",
+    tag = "Session",
+    request_body(content = LoginInput, description = "The admin secret", content_type = "application/json"),
+    responses(
+        (status = 204, description = "Logged in. The `phoebis_admin` cookie is set and the answer carries no body.",
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`"))),
+        (status = 400, description = "`body must carry a secret`", body = ErrorBody, example = json!({"error": "body must carry a secret"})),
+        (status = 401, description = "`secret does not match`", body = ErrorBody, example = json!({"error": "secret does not match"})),
+        (status = 429, description = "`too many failed logins, try again in a minute`", body = ErrorBody, example = json!({"error": "too many failed logins, try again in a minute"})),
+    ),
+    security(),
+)]
 async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: Bytes) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        secret: String,
-    }
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<LoginInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a secret");
     };
     match state
@@ -449,6 +468,21 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     }
 }
 
+/// End the caller's own session.
+///
+/// The gate admits this operation without a live session: a cookie that names no session, an expired one included,
+/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it.
+#[utoipa::path(
+    delete,
+    path = "/admin/session",
+    operation_id = "session_logout",
+    tag = "Session",
+    responses(
+        (status = 204, description = "The session is ended and the browser's cookie cleared.",
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0`"))),
+    ),
+    security(),
+)]
 async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
     if let Some(cookie) = presented_cookie(&headers) {
         state.sessions.logout(&cookie);
@@ -461,12 +495,35 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
     )
 }
 
-/// The console's first call: whether the cookie it holds still names a session. The body names the session by
-/// the id pairing ownership uses, never by the cookie value.
+/// Whether the cookie the console holds still names a session.
+///
+/// Answers `session_id`, the id pairing ownership uses, never the cookie value. A bearer caller answers
+/// `session_id` `bearer`.
+#[utoipa::path(
+    get,
+    path = "/admin/session",
+    operation_id = "session_show",
+    tag = "Session",
+    responses((status = 200, description = "The session's id", body = SessionView)),
+)]
 async fn whoami(Extension(caller): Extension<Caller>) -> Response {
-    Json(json!({ "session_id": caller.session_id })).into_response()
+    Json(SessionView {
+        session_id: caller.session_id,
+    })
+    .into_response()
 }
 
+/// List the accounts.
+#[utoipa::path(
+    get,
+    path = "/admin/accounts",
+    operation_id = "accounts_list",
+    tag = "Accounts",
+    responses(
+        (status = 200, description = "The accounts.", body = AccountList),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
     let rows = match state.store.accounts() {
         Ok(rows) => rows,
@@ -478,9 +535,22 @@ async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
     for row in &rows {
         accounts.push(account_view(&state, row, &ctx).await);
     }
-    Json(json!({ "accounts": accounts })).into_response()
+    Json(AccountList { accounts }).into_response()
 }
 
+/// Show an account.
+#[utoipa::path(
+    get,
+    path = "/admin/accounts/{id}",
+    operation_id = "account_show",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 200, description = "The same keys as a row of `GET /admin/accounts`, at the top level rather than nested under `accounts`.", body = Account),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 async fn show_account(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     match account(&state, &id) {
         Ok(row) => Json(account_json(&state, &row).await).into_response(),
@@ -488,10 +558,38 @@ async fn show_account(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
     }
 }
 
+/// Pause the account.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/pause",
+    operation_id = "account_pause",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 204, description = "The account is paused."),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 async fn pause(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     set_enabled(&state, &id, false).await
 }
 
+/// Resume the account.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/resume",
+    operation_id = "account_resume",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 204, description = "The account is resumed."),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 async fn resume(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     set_enabled(&state, &id, true).await
 }
@@ -510,8 +608,22 @@ async fn set_enabled(state: &AdminState, id: &str, enabled: bool) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// Disconnects the slot: the lifecycle bump deletes both credential kinds, and everything still holding
-/// the old identity's state goes with them.
+/// Disconnect the account's credential.
+#[utoipa::path(
+    delete,
+    path = "/admin/accounts/{id}/credentials",
+    operation_id = "account_credentials_delete",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 204, description = "The credential goes, request history stays, the slot lands on `disconnected`, and an `api_key` account moves on again to `unpaired`, since it has no pairing dialog to leave `disconnected` through. A re-pair stores a fresh secret in one `PATCH /admin/accounts/{id}`."),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
+// Disconnects the slot: the lifecycle bump deletes both credential kinds, and everything still holding
+// the old identity's state goes with them.
 async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -568,9 +680,35 @@ fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &
     }
 }
 
-/// `GET .../usage`: the poll's latest snapshot and standing, with no read of the endpoint. A snapshot with no
-/// windows gives way to the windows the router holds, persisted from the last run or read since, so a card
-/// never reads as an error while windows exist; the error answers only when none do.
+/// Answer the poll's latest snapshot and the poll's standing without reading the endpoint.
+///
+/// When the snapshot holds no windows, the windows the router holds answer in their place (persisted from the last
+/// run, or read since), so `error` is set only when no windows exist at all. The windows the router holds are the last
+/// reading carried forward by the router's own requests since it, so their utilization can read above that reading's
+/// while `fetched_at` names the reading's instant. Before the poll first reads an account that holds none, `error`
+/// reads `the poll has not read this account yet` and `fetched_at` is null. A disconnected or unpaired account, which
+/// the poll never reads, answers `no credential is stored for this account, so pair it to load quota` with `poll` null
+/// while the router holds no windows for it, and otherwise the windows of its last reading with `error` and `poll`
+/// null. `GET /admin/accounts` carries the same `error`, `fetched_at`, `held_until` and `poll` on each `oauth` row, as
+/// its `usage` block. While the account waits out a 429, `error` is the latest snapshot's (while no windows exist,
+/// `usage request rate-limited` after a usage 429 and `no usage fetched yet` after a profile 429 before any reading),
+/// `poll.last_error` and the `error` a refresh answers inside the hold name the endpoint and no instant, and the hold's
+/// instant rides `held_until` on the usage block and `next_attempt_at` on the poll.
+#[utoipa::path(
+    get,
+    path = "/admin/accounts/{id}/usage",
+    operation_id = "account_usage",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 200, description = "The poll's latest snapshot and standing.", body = Usage),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
+// `GET .../usage`: the poll's latest snapshot and standing, with no read of the endpoint. A snapshot with no
+// windows gives way to the windows the router holds, persisted from the last run or read since, so a card
+// never reads as an error while windows exist, and the error answers only when none do.
 async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -595,10 +733,29 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
     .into_response()
 }
 
-/// `POST .../usage/refresh`: the one manual read of the endpoint, through the poll's own path, so the reading is
-/// recorded to the ledger and handed to the router as a scheduled read is, and the answer is that reading, its
-/// error set when the read failed or the account is backing off. The hold, the concurrency cap and the coalescing
-/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
+/// Read the usage endpoint now.
+///
+/// Reads the endpoint now unless the account is backing off, through the same path as the scheduled poll: a clean
+/// reading is recorded to the ledger and handed to the router, so the account's windows change on it, and the Quota
+/// view's timeline when the reading's five-minute bucket holds no sample yet. The hold, the concurrency cap and the
+/// coalescing bound the read, so a held-down refresh makes one request per account per fetch.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/usage/refresh",
+    operation_id = "account_usage_refresh",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 200, description = "The same shape as `GET /admin/accounts/{id}/usage`, from the reading the poll made, its `error` set when the read failed or the account is backing off.", body = Usage),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, description = "The upstream error text, once the usage service itself fails.", body = ErrorBody, example = json!({"error": "<the upstream error text>"})),
+    ),
+)]
+// `POST .../usage/refresh`: the one manual read of the endpoint, through the poll's own path, so the reading is
+// recorded to the ledger and handed to the router as a scheduled read is, and the answer is that reading, its
+// error set when the read failed or the account is backing off. The hold, the concurrency cap and the coalescing
+// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
 async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -613,8 +770,24 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     }
 }
 
-/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is: the
-/// catalog discovery, which goes to the account's own host over the pool that host belongs to.
+/// Verify an API key.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/verify",
+    operation_id = "account_verify",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 200, description = "The key check's result.", body = Verify),
+        (status = 400, description = "`only an API-key account is verified this way`", body = ErrorBody, example = json!({"error": "only an API-key account is verified this way"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 409, description = "`account holds no API key`", body = ErrorBody, example = json!({"error": "account holds no API key"})),
+        (status = 500, response = StorageFailure),
+        (status = 502, description = "`upstream: {error}`", body = ErrorBody, example = json!({"error": "upstream: {error}"})),
+    ),
+)]
+// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is: the
+// catalog discovery, which goes to the account's own host over the pool that host belongs to.
 async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -635,37 +808,127 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
         }
         Err(error) => return failure(StatusCode::BAD_GATEWAY, &format!("upstream: {error}")),
     };
-    Json(json!({ "ok": ok, "status": status })).into_response()
+    Json(Verify { ok, status }).into_response()
 }
 
+/// Exactly one of `account_id` or `new`, and the login kind.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct PairingStartInput {
+    /// An existing OAuth account: its first pairing, or a re-pair after Disconnect or a credential failure.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// `claude_ai`, the default, or `console`.
+    #[serde(default)]
+    #[schema(example = "claude_ai")]
+    pub login: Option<String>,
+    /// The router reserves the id for the session and writes the row at the confirm, so a session that is
+    /// cancelled, expires or fails leaves no account.
+    #[serde(default, rename = "new")]
+    pub new_account: Option<NewAccountInput>,
+}
+
+/// An account that does not exist yet.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct NewAccountInput {
+    /// `[a-z0-9][a-z0-9-]{0,63}`.
+    pub id: String,
+    /// At most 256 bytes.
+    pub label: String,
+}
+
+/// Either `url` alone, or `code` and `state` together.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct PairingCallbackInput {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The whole callback URL the browser landed on.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// The pairing session the browser is sent to.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PairingStarted {
+    pub id: String,
+    pub authorization_url: String,
+    pub redirect_uri: String,
+    pub expires_at: i64,
+}
+
+/// A pairing session as its owner reads it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PairingSessionView {
+    /// The reserved id for a session started with `new`.
+    pub account_id: String,
+    pub expires_at: i64,
+    pub id: String,
+    /// One of eight values: `cancelled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
+    /// `failed`, `pending`.
+    #[schema(example = "cancelled")]
+    pub status: String,
+}
+
+/// The exchange's result, once the token exchange and profile lookup succeed.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Exchanged {
+    /// `exchanged`.
+    #[schema(example = "exchanged")]
+    pub status: String,
+    pub pending: PendingIdentityView,
+}
+
+/// The identity the exchange answered, which the confirm commits.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingIdentityView {
+    pub account_uuid: String,
+    pub email: String,
+    pub organization_name: Option<String>,
+    pub organization_uuid: Option<String>,
+}
+
+/// The committed pairing.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Confirmed {
+    pub account_id: String,
+    /// `confirmed`.
+    #[schema(example = "confirmed")]
+    pub status: String,
+}
+
+/// Start a pairing session.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions",
+    operation_id = "pairing_start",
+    tag = "Pairing",
+    request_body(content = PairingStartInput, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The started session.", body = PairingStarted),
+        (status = 400, description = "- `a new account needs a label`\n- `body must carry an account_id or a new account`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `login must be claude_ai or console`\n- `only an OAuth account is paired this way`", body = ErrorBody, example = json!({"error": "a new account needs a label"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 409, description = "- `a pairing session is already in progress for this account`: another admin session's pairing stands, or the account's pairing is being confirmed. A start by the admin session that owns the standing pairing replaces it, and the old link stops working.\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "a pairing session is already in progress for this account"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 async fn pairing_start(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
     body: Bytes,
 ) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        #[serde(default)]
-        account_id: Option<String>,
-        #[serde(default)]
-        login: Option<String>,
-        /// A row that does not exist yet: the confirm writes it with the credential, so a pairing nobody confirms
-        /// leaves no row.
-        #[serde(default, rename = "new")]
-        new_account: Option<NewAccountInput>,
-    }
-    #[derive(serde::Deserialize)]
-    struct NewAccountInput {
-        id: String,
-        label: String,
-    }
     let malformed = || {
         failure(
             StatusCode::BAD_REQUEST,
             "body must carry an account_id or a new account",
         )
     };
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<PairingStartInput>(&body) else {
         return malformed();
     };
     let (account_id, new_account) = match (input.account_id, input.new_account) {
@@ -769,12 +1032,12 @@ async fn pairing_start(
     );
     let mut response = (
         StatusCode::CREATED,
-        Json(json!({
-            "id": session.id,
-            "authorization_url": url,
-            "redirect_uri": redirect_uri,
-            "expires_at": session.deadline,
-        })),
+        Json(PairingStarted {
+            id: session.id.clone(),
+            authorization_url: url,
+            redirect_uri,
+            expires_at: session.deadline,
+        }),
     )
         .into_response();
     response
@@ -783,6 +1046,18 @@ async fn pairing_start(
     response
 }
 
+/// Read a pairing session.
+#[utoipa::path(
+    get,
+    path = "/admin/oauth/sessions/{id}",
+    operation_id = "pairing_show",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 200, description = "The session and its status.", body = PairingSessionView),
+        (status = 404, description = "`pairing session not found`, including for a session id that exists but belongs to a different caller's session: an unguessable handle answers the same as one that never existed.", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+    ),
+)]
 async fn pairing_show(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -791,15 +1066,29 @@ async fn pairing_show(
     let Some(session) = state.pairing.get(&id, &caller.session_id, (state.clock)()) else {
         return failure(StatusCode::NOT_FOUND, "pairing session not found");
     };
-    Json(json!({
-        "account_id": session.account_id,
-        "expires_at": session.deadline,
-        "id": session.id,
-        "status": reported_status(&session),
-    }))
+    let status = reported_status(&session).to_string();
+    Json(PairingSessionView {
+        account_id: session.account_id,
+        expires_at: session.deadline,
+        id: session.id,
+        status,
+    })
     .into_response()
 }
 
+/// Cancel a pairing session.
+#[utoipa::path(
+    delete,
+    path = "/admin/oauth/sessions/{id}",
+    operation_id = "pairing_cancel",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 204, description = "The session is cancelled."),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+    ),
+)]
 async fn pairing_cancel(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -815,18 +1104,28 @@ async fn pairing_cancel(
     }
 }
 
+/// Deliver the upstream's callback.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions/{id}/callback",
+    operation_id = "pairing_callback",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    request_body(content = PairingCallbackInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The identity the upstream answered.", body = Exchanged),
+        (status = 400, description = "- `body must carry the callback url, or a code and a state`\n- `callback does not match the registered redirect`\n- `invalid callback: <detail>`\n- `state does not match the pairing session`", body = ErrorBody, example = json!({"error": "body must carry the callback url, or a code and a state"})),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session did not accept the callback`\n- `the pairing session was closed while the code was being exchanged`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        (status = 502, description = "The upstream's detail, never the token itself, when the exchange is rejected.", body = ErrorBody, example = json!({"error": "<the upstream's detail>"})),
+    ),
+)]
 async fn pairing_callback(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        code: Option<String>,
-        state: Option<String>,
-        url: Option<String>,
-    }
     let now = (state.clock)();
     let malformed = || {
         failure(
@@ -834,7 +1133,7 @@ async fn pairing_callback(
             "body must carry the callback url, or a code and a state",
         )
     };
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<PairingCallbackInput>(&body) else {
         return malformed();
     };
     let callback = match (input.url, input.code, input.state) {
@@ -885,23 +1184,44 @@ async fn pairing_callback(
             "the pairing session was closed while the code was being exchanged",
         );
     }
-    Json(json!({
-        "status": "exchanged",
-        "pending": {
-            "account_uuid": identity.account_uuid,
-            "email": identity.email,
-            "organization_name": identity.organization_name,
-            "organization_uuid": identity.organization_uuid,
+    Json(Exchanged {
+        status: "exchanged".into(),
+        pending: PendingIdentityView {
+            account_uuid: identity.account_uuid,
+            email: identity.email,
+            organization_name: identity.organization_name,
+            organization_uuid: identity.organization_uuid,
         },
-    }))
+    })
     .into_response()
 }
 
-/// Commits a pairing. An existing row passes four checks that all have to hold at once. A row the start
-/// reserved with `new` is written by the one create, which the store refuses when another slot holds the
-/// identity or a create took the id meanwhile. Every one of them refuses rather than repairs, and every
-/// refusal drops the pending bundle, so no path through here leaves a credential behind that a later call
-/// could commit.
+/// Confirm the pairing into a credential.
+///
+/// The answer comes once the account's credential is committed, its state set to `ready`, its usage cache
+/// invalidated, and its cached catalog evicted, fetched again on the next read. The answer does not wait for the usage
+/// endpoint: the confirm reads it right after answering, records the first sample and hands it to the router, so the
+/// account's windows show within seconds. For a session started with `new`, the account row is created `ready` with
+/// its identity, its credential and its profile in one write, and the mutation log names the created account.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions/{id}/confirm",
+    operation_id = "pairing_confirm",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 200, description = "The account and the confirmed status.", body = Confirmed),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
+// Commits a pairing. An existing row passes four checks that all have to hold at once. A row the start
+// reserved with `new` is written by the one create, which the store refuses when another slot holds the
+// identity or a create took the id meanwhile. Every one of them refuses rather than repairs, and every
+// refusal drops the pending bundle, so no path through here leaves a credential behind that a later call
+// could commit.
 async fn pairing_confirm(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -1113,7 +1433,11 @@ async fn pairing_confirm(
                 }
             });
             state.ledger.track(handle);
-            Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
+            Json(Confirmed {
+                account_id: row.id.clone(),
+                status: "confirmed".into(),
+            })
+            .into_response()
         }
     };
     if created {
@@ -1125,6 +1449,137 @@ async fn pairing_confirm(
     response
 }
 
+/// The process's standing: the version, the readiness, the ledger's and the router's counters, the bus, the
+/// pricing sources, the recent gaps and the keepalive engine.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct System {
+    pub version: String,
+    pub profile: String,
+    pub uptime_seconds: i64,
+    pub storage_ok: bool,
+    pub ready: bool,
+    /// The components that died: `ledger`, `router`, `store`.
+    pub dead: Vec<String>,
+    pub ledger: LedgerStats,
+    pub router: RouterStats,
+    /// Per subscriber.
+    pub bus: Vec<BusSubscriber>,
+    /// The requests whose usage the price table could not price, counted once per request since start.
+    pub pricing_unknown_models: u64,
+    pub pricing: PricingSources,
+    /// Recent `ledger_gap` events.
+    pub gaps: Vec<crate::requests::Event>,
+    pub keepalive: KeepaliveStats,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LedgerStats {
+    pub schema_version: Option<u32>,
+    pub written: u64,
+    pub dropped: u64,
+    pub write_failures: u64,
+    /// The cache-map writes whose decision row the ledger never stored, counted and never retried.
+    pub cache_map_orphans: u64,
+    /// The router events the ledger's mirror missed because its receiver lagged, each a decision or an event row
+    /// never written.
+    pub mirror_lagged: u64,
+    pub gaps: u64,
+    pub last_gap_at: i64,
+    pub channel_depth: usize,
+    /// The records waiting in the writer channel now.
+    pub queued: usize,
+    /// Whether admission refuses with `ledger_behind` (from 2,048 queued).
+    pub behind: bool,
+    /// The requests answered `ledger_behind`.
+    pub behind_refusals: u64,
+    /// Whether a batch failed to land and the spend has not been read again since.
+    pub degraded: bool,
+    /// 1 while a batch is under retry.
+    pub retrying: u64,
+    /// The priced records parked in the ledger file.
+    pub parked_priced: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RouterStats {
+    /// The queue's size.
+    pub command_depth: usize,
+    /// The commands waiting in it now.
+    pub queued: usize,
+    /// The reports a closed queue refused at shutdown, per kind (`account_state`, `accounting`, `affinity`,
+    /// `cooldown`, `credits`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`, `pin_renewed`,
+    /// `sample`, `usage`).
+    #[schema(value_type = BTreeMap<String, u64>)]
+    pub dropped_reports: indexmap::IndexMap<String, u64>,
+    /// The refusal records a full or closed router queue refused, each a decision row never written.
+    pub dropped_refusals: u64,
+    /// The routing state writer.
+    pub writer: WriterStats,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WriterStats {
+    /// The batches waiting in its channel.
+    pub depth: usize,
+    /// The writes held in memory past its bound of 1,024 batches, one per row.
+    pub deferred: usize,
+    /// Whether writes are held in memory.
+    pub degraded: bool,
+    /// The batches the registry file as a whole refused since start.
+    pub failed_batches: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BusSubscriber {
+    pub subscriber: String,
+    pub dropped: u64,
+    pub panics: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PricingSources {
+    pub api_prices: PricingSource,
+    pub subscription_costs: PricingSource,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PricingSource {
+    /// The configured path or null when the key is unset.
+    pub path: Option<String>,
+    /// `shipped`, or `file` when that path was read.
+    #[schema(example = "shipped")]
+    pub source: String,
+    /// The table's date.
+    pub effective: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeepaliveStats {
+    pub agents: usize,
+    pub bus_gaps: u64,
+    pub retained_bytes: usize,
+    pub running_probes: usize,
+    pub sessions: usize,
+}
+
+/// Read the process's standing.
+#[utoipa::path(
+    get,
+    path = "/admin/system",
+    operation_id = "system_show",
+    tag = "System",
+    responses(
+        (status = 200, description = "The standing.", body = System),
+    ),
+)]
 async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let uptime = (now - state.started_at).max(0) / 1_000;
@@ -1154,59 +1609,82 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let keepalive_stats = state.keepalive.stats();
     let writer = state.router.writer_status();
     let dead = state.readiness.dead();
-    let dropped = state
+    let dropped_reports = state
         .router
         .dropped_reports()
         .into_iter()
-        .map(|(kind, n)| (kind.to_string(), serde_json::Value::from(n)))
-        .collect::<serde_json::Map<String, serde_json::Value>>();
+        .map(|(kind, n)| (kind.to_string(), n))
+        .collect::<indexmap::IndexMap<String, u64>>();
     let prices = state.pricing.current();
-    Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "profile": state.profile.name,
-        "uptime_seconds": uptime,
+    Json(System {
+        version: env!("CARGO_PKG_VERSION").into(),
+        profile: state.profile.name.to_string(),
+        uptime_seconds: uptime,
         // From the one store read `dead` made, so a transient failure cannot show both a working and a dead store.
-        "storage_ok": !dead.contains(&"store"),
-        "ready": dead.is_empty(),
-        "dead": dead,
-        "ledger": {
-            "schema_version": state.ledger.db().schema_version().await.ok(),
-            "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
-            "cache_map_orphans": load(&stats.cache_map_orphans), "mirror_lagged": load(&stats.mirror_lagged),
-            "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
-            "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
-            "queued": state.ledger.queued(), "behind": state.ledger.behind(),
-            "behind_refusals": load(&stats.behind_refusals),
-            "degraded": state.ledger.degraded(), "retrying": load(&stats.retrying), "parked_priced": parked,
+        storage_ok: !dead.contains(&"store"),
+        ready: dead.is_empty(),
+        dead: dead.iter().map(|d| d.to_string()).collect(),
+        ledger: LedgerStats {
+            schema_version: state.ledger.db().schema_version().await.ok(),
+            written: load(&stats.written),
+            dropped: load(&stats.dropped),
+            write_failures: load(&stats.write_failures),
+            cache_map_orphans: load(&stats.cache_map_orphans),
+            mirror_lagged: load(&stats.mirror_lagged),
+            gaps: load(&stats.gaps),
+            last_gap_at: stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
+            channel_depth: phoebis_ledger::CHANNEL_DEPTH,
+            queued: state.ledger.queued(),
+            behind: state.ledger.behind(),
+            behind_refusals: load(&stats.behind_refusals),
+            degraded: state.ledger.degraded(),
+            retrying: load(&stats.retrying),
+            parked_priced: parked,
         },
-        "router": {
-            "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
-            "dropped_refusals": state.router.dropped_refusals(),
-            "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
-        },
-        "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
-        "pricing_unknown_models": state.pricing.unknown_models(),
-        "pricing": {
-            "api_prices": {
-                "path": state.settings.api_prices_path,
-                "source": prices.source,
-                "effective": prices.effective,
+        router: RouterStats {
+            command_depth: phoebis_routing::COMMANDS,
+            queued: state.router.queued(),
+            dropped_reports,
+            dropped_refusals: state.router.dropped_refusals(),
+            writer: WriterStats {
+                depth: writer.depth,
+                deferred: writer.deferred,
+                degraded: writer.degraded,
+                failed_batches: writer.failed_batches,
             },
-            "subscription_costs": {
-                "path": state.settings.subscription_costs_path,
-                "source": state.tables.source,
-                "effective": state.tables.costs.effective,
+        },
+        bus: state
+            .bus
+            .stats()
+            .iter()
+            .map(|(name, s)| BusSubscriber {
+                subscriber: name.to_string(),
+                dropped: load(&s.dropped),
+                panics: load(&s.panics),
+            })
+            .collect(),
+        pricing_unknown_models: state.pricing.unknown_models(),
+        pricing: PricingSources {
+            api_prices: PricingSource {
+                path: state.settings.api_prices_path.clone(),
+                source: prices.source.clone(),
+                effective: prices.effective.clone(),
+            },
+            subscription_costs: PricingSource {
+                path: state.settings.subscription_costs_path.clone(),
+                source: state.tables.source.clone(),
+                effective: state.tables.costs.effective.clone(),
             },
         },
-        "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
-        "keepalive": {
-            "agents": keepalive_stats.agents,
-            "bus_gaps": keepalive_stats.bus_gaps,
-            "retained_bytes": keepalive_stats.retained_bytes,
-            "running_probes": keepalive_stats.running_probes,
-            "sessions": keepalive_stats.sessions,
+        gaps: gaps.iter().map(crate::requests::event_json).collect(),
+        keepalive: KeepaliveStats {
+            agents: keepalive_stats.agents,
+            bus_gaps: keepalive_stats.bus_gaps,
+            retained_bytes: keepalive_stats.retained_bytes,
+            running_probes: keepalive_stats.running_probes,
+            sessions: keepalive_stats.sessions,
         },
-    }))
+    })
     .into_response()
 }
 
@@ -1395,16 +1873,272 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     }
 }
 
+/// The accounts, one row each.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountList {
+    /// Each row carries the account's fields, the same shape `GET /admin/accounts/{id}` answers at the top level.
+    pub accounts: Vec<Account>,
+}
+
+/// An account as the registry, the router and the ledger see it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Account {
+    pub id: String,
+    /// `api_key` or `oauth`.
+    #[schema(example = "api_key")]
+    pub kind: String,
+    pub label: String,
+    pub enabled: bool,
+    /// Set only on an `oauth` account. An `api_key` account always reads false.
+    pub cancelled: bool,
+    /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
+    #[schema(example = "disconnected")]
+    pub state: String,
+    /// Epoch milliseconds or null: the instant a `funding_required` account is next tried, null in any other state,
+    /// and null after a restart until the first retry claims the account and stamps that request's instant.
+    pub funding_retry_at: Option<i64>,
+    pub identity: Option<AccountIdentity>,
+    /// Never a token.
+    pub credential: Option<AccountCredential>,
+    pub lifecycle_generation: u64,
+    /// The row's edit token, which `PATCH /admin/accounts/{id}` takes back as `expected_revision`.
+    pub revision: u64,
+    pub cooldowns: Vec<Cooldown>,
+    pub overage: Option<Overage>,
+    pub profile: Option<AccountProfile>,
+    /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
+    /// cancelled.
+    pub subscription: Option<AccountSubscription>,
+    pub windows: Vec<AccountWindow>,
+    /// The whole object null until an answer to a fast request carried the fast headers.
+    pub fast_lane: Option<FastLane>,
+    pub extra_usage: Option<ExtraUsage>,
+    pub pool: Option<PoolMembership>,
+    pub requests: RequestCounts,
+    /// Null for an `api_key` account. For an `oauth` account `error`, `fetched_at`, `held_until` and `poll`, as
+    /// `GET /admin/accounts/{id}/usage` answers them, so one list read carries every account's standing.
+    pub usage: Option<UsageStanding>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountIdentity {
+    pub email: String,
+    pub account_uuid: String,
+    pub organization_uuid: Option<String>,
+}
+
+/// The credential's standing.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountCredential {
+    pub access_expires_at: i64,
+    pub refresh_expires_at: Option<i64>,
+    pub generation: u64,
+    pub last_refresh_at: Option<i64>,
+    /// The reason of the last failed or uncertain refresh, or of the last credential failure that opened no
+    /// refresh (a backoff or a quarantine), whichever is newer.
+    pub last_error: Option<String>,
+    pub quarantined: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Cooldown {
+    pub scope: String,
+    pub until: i64,
+    pub reason: String,
+    pub window: String,
+    pub set_at: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Overage {
+    pub in_use: bool,
+    pub since: Option<i64>,
+    pub reset: Option<i64>,
+    pub observed_at: i64,
+}
+
+/// Six values read off the stored profile document as they are.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountProfile {
+    /// Usually a string, null when the document lacks it.
+    pub billing_type: Value,
+    /// Usually a string, null when the document lacks it.
+    pub display_name: Value,
+    /// Usually a boolean, null when the document lacks it.
+    pub has_extra_usage_enabled: Value,
+    /// Usually a string, null when the document lacks it.
+    pub organization_name: Value,
+    /// Usually a string, null when the document lacks it.
+    pub organization_type: Value,
+    /// Usually a string, null when the document lacks it.
+    pub rate_limit_tier: Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountSubscription {
+    /// `max`, `pro`, or null when the profile lacks it.
+    pub plan: Option<String>,
+    /// Null when the profile lacks it.
+    pub tier: Option<String>,
+    /// Epoch milliseconds, null when the profile lacks it.
+    pub since: Option<i64>,
+    /// Epoch milliseconds, null when the profile lacks it.
+    pub trial_ends_at: Option<i64>,
+    /// The end the operator saved, standing only while `cancelled` is set.
+    pub ends_at: Option<i64>,
+    /// The account form's prefill derived from `since` and the trial, null with no `since` to derive from.
+    pub derived_ends_at: Option<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountWindow {
+    pub id: String,
+    pub utilization: Option<f64>,
+    pub resets_at: Option<i64>,
+    pub observed_at: i64,
+}
+
+/// The fast lane's input and output buckets as the router last read them off an answer's head.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FastLane {
+    pub input: Option<LaneReading>,
+    pub output: Option<LaneReading>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LaneReading {
+    pub utilization: f64,
+    pub resets_at: Option<i64>,
+    pub observed_at: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExtraUsage {
+    pub currency: Option<String>,
+    pub disabled_reason: Option<String>,
+    pub in_use: Option<bool>,
+    pub is_enabled: bool,
+    pub monthly_limit: Option<i64>,
+    pub used_credits: Option<i64>,
+    pub utilization: Option<f64>,
+    pub observed_at: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolMembership {
+    pub pool_id: String,
+    pub priority: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestCounts {
+    pub last_24h: u64,
+    pub last_7d: u64,
+    pub lifetime: u64,
+}
+
+/// The poll's standing on an `oauth` account, as `GET /admin/accounts/{id}/usage` answers it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UsageStanding {
+    pub error: Option<String>,
+    pub fetched_at: Option<i64>,
+    /// The instant the next attempt may run while the account is held, Unix milliseconds, null otherwise.
+    pub held_until: Option<i64>,
+    pub poll: Option<PollStatusView>,
+}
+
+/// The poll's standing. The instants are Unix milliseconds, `backoff_since` null outside a run of 429s and
+/// `next_attempt_at` null once the account's next slot may ask it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PollStatusView {
+    pub backoff_since: Option<i64>,
+    pub last_attempt_at: i64,
+    pub last_clean_at: Option<i64>,
+    /// The message of the last attempt that was not clean, null after a clean one.
+    pub last_error: Option<String>,
+    /// `clean`, `failed`, or `rate_limited`.
+    #[schema(example = "clean")]
+    pub last_outcome: String,
+    pub next_attempt_at: Option<i64>,
+    pub rate_limited_in_a_row: u32,
+}
+
+/// The poll's latest snapshot and standing, or the error that stands in for a snapshot when there is none, with
+/// every other member null or empty.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Usage {
+    pub account_id: String,
+    pub error: Option<String>,
+    pub extra_usage: Option<UsageExtra>,
+    pub fable_window: Option<UsageWindowView>,
+    pub fetched_at: Option<i64>,
+    /// The instant the next attempt may run while the account is held, Unix milliseconds, null otherwise, the
+    /// instant the poll's `next_attempt_at` names.
+    pub held_until: Option<i64>,
+    /// Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
+    pub identity_generation: u64,
+    /// Null until the poll first asks.
+    pub poll: Option<PollStatusView>,
+    pub raw_keys: Vec<String>,
+    pub windows: Vec<UsageWindowView>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UsageWindowView {
+    pub key: String,
+    pub resets_at: Option<i64>,
+    pub utilization: Option<f64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UsageExtra {
+    pub currency: Option<String>,
+    pub disabled_reason: Option<String>,
+    pub is_enabled: bool,
+    pub monthly_limit: Option<i64>,
+    pub used_credits: Option<i64>,
+    pub utilization: Option<f64>,
+}
+
+/// Whether an API key still works, for an `api_key` account only, asked over the cheapest authenticated endpoint
+/// there is: the catalog discovery, against the account's own host.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Verify {
+    pub ok: bool,
+    /// The upstream HTTP status.
+    pub status: u16,
+}
+
 /// Never a token, in any branch: an account view is the one place a credential could plausibly be shown
 /// and must not be.
-pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Value {
+pub(crate) async fn account_json(state: &AdminState, row: &AccountRow) -> Account {
     let ctx = account_context(state).await;
     account_view(state, row, &ctx).await
 }
 
 /// The view over a context the caller already holds, so listing every account asks the router and the
 /// ledger once.
-async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Value {
+async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext) -> Account {
     let overage = ctx.overages.get(&row.id);
     let credential = state.store.credential_metadata(&row.id).ok().flatten();
     let attempt = state
@@ -1430,23 +2164,19 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             )
         })
         .and_then(|attempt| attempt.resolved_at.map(|at| (at, attempt.detail.clone())));
-    // Built ahead of the `json!` call below: the profile block pushes the macro past its expansion depth,
-    // as `attempt_json` found for the request log.
     let profile = state
         .store
         .profile_json(&row.id)
         .ok()
         .flatten()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .map(|p| {
-            json!({
-                "billing_type": p["organization"]["billing_type"],
-                "display_name": p["account"]["display_name"],
-                "has_extra_usage_enabled": p["account"]["has_extra_usage_enabled"],
-                "organization_name": p["organization"]["name"],
-                "organization_type": p["organization"]["organization_type"],
-                "rate_limit_tier": p["organization"]["rate_limit_tier"],
-            })
+        .map(|p| AccountProfile {
+            billing_type: p["organization"]["billing_type"].clone(),
+            display_name: p["account"]["display_name"].clone(),
+            has_extra_usage_enabled: p["account"]["has_extra_usage_enabled"].clone(),
+            organization_name: p["organization"]["name"].clone(),
+            organization_type: p["organization"]["organization_type"].clone(),
+            rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
         });
     // The stored flag and end read through this alone, with no profile join, so a cancelled account answers
     // them even before it ever pairs.
@@ -1470,21 +2200,24 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 Default::default()
             }
         })
-        .map(|s| {
-            json!({
-                "plan": s.plan,
-                "tier": s.tier,
-                "since": s.since,
-                "trial_ends_at": s.trial_ends_at,
-                "ends_at": term.ends_at,
-                "derived_ends_at": phoebis_routing::term::derived_end(&term, (state.clock)()),
-            })
+        .map(|s| AccountSubscription {
+            plan: s.plan,
+            tier: s.tier,
+            since: s.since,
+            trial_ends_at: s.trial_ends_at,
+            ends_at: term.ends_at,
+            derived_ends_at: phoebis_routing::term::derived_end(&term, (state.clock)()),
         });
-    let mut windows: Vec<Value> = ctx
+    let mut windows: Vec<AccountWindow> = ctx
         .quota
         .iter()
         .filter(|q| q.account_id == row.id)
-        .map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 }))
+        .map(|q| AccountWindow {
+            id: q.window.clone(),
+            utilization: q.utilization,
+            resets_at: q.reset_at,
+            observed_at: q.bucket * 1_000,
+        })
         .collect();
     // The ledger's samples reach back a day, and the router keeps routing on older windows persisted across a
     // restart whose startup read was refused; the card shows what selection reads rather than no windows.
@@ -1492,7 +2225,12 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         if let Some(sample) = ctx.held.get(&row.id) {
             windows = held_windows(sample)
                 .into_iter()
-                .map(|(key, reading)| json!({ "id": key, "utilization": reading.utilization, "resets_at": reading.reset, "observed_at": reading.observed_at }))
+                .map(|(key, reading)| AccountWindow {
+                    id: key,
+                    utilization: Some(reading.utilization),
+                    resets_at: reading.reset,
+                    observed_at: reading.observed_at,
+                })
                 .collect();
         }
     }
@@ -1511,67 +2249,103 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             _ => ctx.held.get(&row.id).cloned(),
         };
         let answer = compose_usage(&row.id, latest, held);
-        json!({
-            "error": answer.as_ref().map_or(Some(unread), |s| s.error.as_deref()),
-            "fetched_at": answer.as_ref().map(|s| s.fetched_at),
-            "held_until": held_until(poll.as_ref()),
-            "poll": poll.as_ref().map(poll_json),
-        })
+        UsageStanding {
+            error: answer
+                .as_ref()
+                .map_or(Some(unread), |s| s.error.as_deref())
+                .map(str::to_string),
+            fetched_at: answer.as_ref().map(|s| s.fetched_at),
+            held_until: held_until(poll.as_ref()),
+            poll: poll.as_ref().map(poll_json),
+        }
     });
-    json!({
-        "id": row.id,
-        "kind": kind_name(row.kind),
-        "label": row.label,
-        "enabled": row.enabled,
-        "cancelled": term.cancelled,
-        "state": state_name(row.state),
-        "funding_retry_at": funding_retry_at,
-        "identity": row.identity.as_ref().map(|identity| json!({
-            "email": identity.email,
-            "account_uuid": identity.account_uuid,
-            "organization_uuid": identity.organization_uuid,
-        })),
-        "credential": credential.map(|credential| json!({
-            "access_expires_at": credential.expires_at,
-            "refresh_expires_at": credential.refresh_expires_at,
-            "generation": credential.generation,
-            "last_refresh_at": attempt.as_ref().and_then(|attempt| attempt.resolved_at),
-            "last_error": match (&attempt_error, credential.last_error.as_ref()) {
+    Account {
+        id: row.id.clone(),
+        kind: kind_name(row.kind).to_string(),
+        label: row.label.clone(),
+        enabled: row.enabled,
+        cancelled: term.cancelled,
+        state: state_name(row.state).to_string(),
+        funding_retry_at,
+        identity: row.identity.as_ref().map(|identity| AccountIdentity {
+            email: identity.email.clone(),
+            account_uuid: identity.account_uuid.clone(),
+            organization_uuid: identity.organization_uuid.clone(),
+        }),
+        credential: credential.map(|credential| AccountCredential {
+            access_expires_at: credential.expires_at,
+            refresh_expires_at: credential.refresh_expires_at,
+            generation: credential.generation,
+            last_refresh_at: attempt.as_ref().and_then(|attempt| attempt.resolved_at),
+            last_error: match (&attempt_error, credential.last_error.as_ref()) {
                 (Some((at, detail)), Some(text)) => {
                     // A tie favors the credential error: a backoff recorded right after the attempt that
                     // armed it lands in the same millisecond on the store's clock as often as not.
-                    if credential.last_error_at >= *at { Some(text.clone()) } else { detail.clone() }
+                    if credential.last_error_at >= *at {
+                        Some(text.clone())
+                    } else {
+                        detail.clone()
+                    }
                 }
                 (Some((_, detail)), None) => detail.clone(),
                 (None, Some(text)) => Some(text.clone()),
                 (None, None) => None,
             },
-            "quarantined": quarantined,
-        })),
-        "lifecycle_generation": row.lifecycle_generation,
-        "revision": row.edit_token(),
-        "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
-            "scope": cooldown.scope,
-            "until": cooldown.until,
-            "reason": cooldown.reason,
-            "window": cooldown.window,
-            "set_at": cooldown.set_at,
-        })).collect::<Vec<_>>(),
-        "overage": overage.map(|overage| json!({
-            "in_use": overage.in_use,
-            "since": overage.since,
-            "reset": overage.reset,
-            "observed_at": overage.observed_at,
-        })),
-        "profile": profile,
-        "subscription": subscription,
-        "windows": windows,
-        "fast_lane": fast_lane,
-        "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
-        "pool": ctx.members.iter().find(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })),
-        "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
-        "usage": usage,
-    })
+            quarantined,
+        }),
+        lifecycle_generation: row.lifecycle_generation,
+        revision: row.edit_token(),
+        cooldowns: ctx
+            .cooldowns
+            .iter()
+            .filter(|cooldown| cooldown.account_id == row.id)
+            .map(|cooldown| Cooldown {
+                scope: cooldown.scope.clone(),
+                until: cooldown.until,
+                reason: cooldown.reason.clone(),
+                window: cooldown.window.clone(),
+                set_at: cooldown.set_at,
+            })
+            .collect(),
+        overage: overage.map(|overage| Overage {
+            in_use: overage.in_use,
+            since: overage.since,
+            reset: overage.reset,
+            observed_at: overage.observed_at,
+        }),
+        profile,
+        subscription,
+        windows,
+        fast_lane,
+        extra_usage: ctx
+            .extra
+            .iter()
+            .find(|e| e.account_id == row.id)
+            .map(|e| ExtraUsage {
+                currency: e.currency.clone(),
+                disabled_reason: e.disabled_reason.clone(),
+                in_use: e.in_use,
+                is_enabled: e.is_enabled,
+                monthly_limit: e.monthly_limit,
+                used_credits: e.used_credits,
+                utilization: e.utilization,
+                observed_at: e.bucket * 1_000,
+            }),
+        pool: ctx
+            .members
+            .iter()
+            .find(|m| m.account_id == row.id)
+            .map(|m| PoolMembership {
+                pool_id: m.pool_id.clone(),
+                priority: m.priority,
+            }),
+        requests: RequestCounts {
+            last_24h: ctx.day.get(&row.id).map_or(0, |t| t.requests),
+            last_7d: ctx.week.get(&row.id).map_or(0, |t| t.requests),
+            lifetime: ctx.lifetime.get(&row.id).map_or(0, |t| t.requests),
+        },
+        usage,
+    }
 }
 
 fn has_windows(snapshot: &UsageSnapshot) -> bool {
@@ -1599,17 +2373,19 @@ fn held_windows(sample: &UtilizationSample) -> Vec<(String, WindowReading)> {
 
 /// The fast lane's input and output buckets as the router last read them off an answer's head; `None` while it
 /// holds neither, since only an answer to a fast request carries them.
-fn fast_lane_json(sample: &UtilizationSample) -> Option<Value> {
+fn fast_lane_json(sample: &UtilizationSample) -> Option<FastLane> {
     let reading = |window: &str| {
-        sample.reading(window).map(|r| {
-            json!({ "utilization": r.utilization, "resets_at": r.reset, "observed_at": r.observed_at })
+        sample.reading(window).map(|r| LaneReading {
+            utilization: r.utilization,
+            resets_at: r.reset,
+            observed_at: r.observed_at,
         })
     };
     let (input, output) = (
         reading(phoebis_relay::FAST_INPUT),
         reading(phoebis_relay::FAST_OUTPUT),
     );
-    (input.is_some() || output.is_some()).then(|| json!({ "input": input, "output": output }))
+    (input.is_some() || output.is_some()).then_some(FastLane { input, output })
 }
 
 /// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account.
@@ -1663,16 +2439,22 @@ fn compose_usage(
 }
 
 /// The poll's standing as the usage `GET` and every account row answer it.
-fn poll_json(status: &PollStatus) -> Value {
-    json!({
-        "backoff_since": status.backoff_since,
-        "last_attempt_at": status.last_attempt_at,
-        "last_clean_at": status.last_clean_at,
-        "last_error": status.last_error,
-        "last_outcome": status.last_outcome,
-        "next_attempt_at": status.next_attempt_at,
-        "rate_limited_in_a_row": status.rate_limited_in_a_row,
-    })
+fn poll_json(status: &PollStatus) -> PollStatusView {
+    PollStatusView {
+        backoff_since: status.backoff_since,
+        last_attempt_at: status.last_attempt_at,
+        last_clean_at: status.last_clean_at,
+        last_error: status.last_error.clone(),
+        // The words `PollOutcome`'s snake_case serialization writes.
+        last_outcome: match status.last_outcome {
+            PollOutcome::Clean => "clean",
+            PollOutcome::Failed => "failed",
+            PollOutcome::RateLimited => "rate_limited",
+        }
+        .to_string(),
+        next_attempt_at: status.next_attempt_at,
+        rate_limited_in_a_row: status.rate_limited_in_a_row,
+    }
 }
 
 /// The hold's deadline as the console prints it: the poll's next attempt while the account waits out a 429, null
@@ -1686,53 +2468,51 @@ fn usage_json(
     id: &str,
     snapshot: Result<&UsageSnapshot, &str>,
     poll: Option<&PollStatus>,
-) -> Value {
+) -> Usage {
     let held_until = held_until(poll);
     let poll = poll.map(poll_json);
     let snapshot = match snapshot {
         Ok(snapshot) => snapshot,
         // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
         Err(error) => {
-            return json!({
-                "account_id": id,
-                "error": error,
-                "extra_usage": null,
-                "fable_window": null,
-                "fetched_at": null,
-                "held_until": held_until,
-                "identity_generation": 0,
-                "poll": poll,
-                "raw_keys": [],
-                "windows": [],
-            });
+            return Usage {
+                account_id: id.to_string(),
+                error: Some(error.to_string()),
+                extra_usage: None,
+                fable_window: None,
+                fetched_at: None,
+                held_until,
+                identity_generation: 0,
+                poll,
+                raw_keys: vec![],
+                windows: vec![],
+            };
         }
     };
-    let window = |window: &UsageWindow| {
-        json!({
-            "key": window.key,
-            "resets_at": window.resets_at,
-            "utilization": window.utilization,
-        })
+    let window = |window: &UsageWindow| UsageWindowView {
+        key: window.key.clone(),
+        resets_at: window.resets_at,
+        utilization: window.utilization,
     };
-    json!({
-        "account_id": snapshot.account_id,
-        "error": snapshot.error,
-        "extra_usage": snapshot.extra_usage.as_ref().map(|extra| json!({
-            "currency": extra.currency,
-            "disabled_reason": extra.disabled_reason,
-            "is_enabled": extra.is_enabled,
-            "monthly_limit": extra.monthly_limit,
-            "used_credits": extra.used_credits,
-            "utilization": extra.utilization,
-        })),
-        "fable_window": snapshot.fable_window.as_ref().map(&window),
-        "fetched_at": snapshot.fetched_at,
-        "held_until": held_until,
-        "identity_generation": snapshot.identity_generation,
-        "poll": poll,
-        "raw_keys": snapshot.raw_keys,
-        "windows": snapshot.windows.iter().map(&window).collect::<Vec<_>>(),
-    })
+    Usage {
+        account_id: snapshot.account_id.clone(),
+        error: snapshot.error.clone(),
+        extra_usage: snapshot.extra_usage.as_ref().map(|extra| UsageExtra {
+            currency: extra.currency.clone(),
+            disabled_reason: extra.disabled_reason.clone(),
+            is_enabled: extra.is_enabled,
+            monthly_limit: extra.monthly_limit,
+            used_credits: extra.used_credits,
+            utilization: extra.utilization,
+        }),
+        fable_window: snapshot.fable_window.as_ref().map(window),
+        fetched_at: Some(snapshot.fetched_at),
+        held_until,
+        identity_generation: snapshot.identity_generation,
+        poll,
+        raw_keys: snapshot.raw_keys.clone(),
+        windows: snapshot.windows.iter().map(window).collect(),
+    }
 }
 
 pub(crate) fn kind_name(kind: AccountKind) -> &'static str {
@@ -1929,6 +2709,7 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{same_authority, spend_rows};
+    use crate::openapi::round_trip::round_trips;
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
 
@@ -2010,5 +2791,15 @@ mod tests {
             spend_rows(&spends, "other", "a").is_empty(),
             "the same account under another pool reads none"
         );
+    }
+
+    #[test]
+    fn the_pairing_start_fixture_round_trips_through_its_declared_type() {
+        round_trips::<super::PairingStarted>("pairing_started");
+    }
+
+    #[test]
+    fn the_system_fixture_round_trips_through_its_declared_type() {
+        round_trips::<super::System>("system");
     }
 }

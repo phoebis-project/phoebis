@@ -449,8 +449,11 @@ conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round w
 pool's own sessions on each member ahead of pace, leaves out the pins of a subscription account on its plan whose tier
 the cost model does not size, which the round still ranks on the model's anchor rates and sheds, and keeps a pin whose
 burn the cost model cannot price in the order unmarked, as the round does. The Utilization thresholds group draws each
-member's used share and, under it, each window's lead over pace with the shedding margin and the cool band marked, and
-the form's preview names the members ahead of pace by the margin with their window and lead.
+member's used share and, under it, each window's lead over pace with the shedding margin and the cool band marked, the
+margin a line that stands past the track on both sides and that the bar's legend names Shedding margin, and the form's
+preview names the members ahead of pace by the margin with their window and lead. On the pool card, a member's Pins cell
+counts the pins under the pool's keys on that account as the engine holds them, one per agent and model, so a session
+whose subagents run on another model counts more than once, and the column sums to the card's Active pins.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the

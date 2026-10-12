@@ -132,6 +132,27 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
   assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
 
+test('a pool save reads the resolved figures off the saved members, so a member of another kind moves them', async () => {
+  const api = await signedIn();
+  // The work pool's one member is a subscription, so its figures are the plan's alone.
+  const work = poolInputOf((await api.listPools()).find((p) => p.id === 'work'));
+  const before = (await api.listPools()).find((p) => p.id === 'work').keepaliveResolved;
+  assert.ok(before !== null && work.members.length === 1, 'the story seeds work with one member and its figures');
+  await api.createAccount({ id: 'metered', kind: 'api_key', label: 'Metered', secret: 'sk-ant-api03-not-a-key' });
+  const saved = await api.updatePool('work', { ...work, members: [...work.members, { accountId: 'metered', priority: 1 }] });
+  assert.notDeepEqual(saved.keepaliveResolved, before, 'an API-key member brings the dollar figures');
+  assert.ok(saved.keepaliveResolved.breakEvenSeconds.min < before.breakEvenSeconds.min, `the low end reads ${saved.keepaliveResolved.breakEvenSeconds.min} against ${before.breakEvenSeconds.min}`);
+});
+
+test('a created and a rotated key answer a sixteen-character prefix', async () => {
+  const api = await signedIn();
+  const created = await api.createKey({ ...keyInput, name: 'prefixed' });
+  const rotated = await api.rotateKey('laptop');
+  for (const [name, { key, secret }] of [['created', created], ['rotated', rotated]]) {
+    assert.deepEqual([key.prefix.length, key.prefix.startsWith('phoebis-'), secret.startsWith(key.prefix)], [16, true, true], `the ${name} key's prefix ${key.prefix}`);
+  }
+});
+
 test('the story reads a member at its budget as the route does, and a member half way as under it', async () => {
   const api = await signedIn();
   const pools = await api.listPools();
@@ -445,6 +466,7 @@ test('a pairing started for a new account writes its row at the confirm and none
   await api.confirmPairing(started.id);
   const created = await storyAccount(api, 'fresh');
   assert.deepEqual([created?.kind, created?.label, created?.status, created?.email], ['oauth', 'Fresh', 'ready', 'operator+new@example.com'], 'the confirm writes the row ready with the identity it paired');
+  assert.deepEqual([typeof created?.credential.accessTokenExpiresAt, typeof created?.credential.refreshTokenExpiresAt], ['string', 'string'], 'the confirm stores both expiries the tokens it exchanged carry');
   const cancelled = await api.startPairing({ id: 'fresh2', label: 'Fresh 2' });
   await api.cancelPairing(cancelled.id);
   assert.equal(await storyAccount(api, 'fresh2'), undefined, 'a cancel leaves no row');

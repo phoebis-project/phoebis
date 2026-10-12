@@ -10,7 +10,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } 
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
-import { isFastScope } from '@/lib/quota';
+import { isFastScope, planLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
@@ -174,15 +174,6 @@ export function planName(sub: Subscription | null): string | null {
   return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
 }
 
-/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
- *  anything else is shown as sent. */
-export function planLabel(tier: string): string {
-  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
-  if (!m) return tier;
-  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
-  return m[2] ? `${name} ${m[2]}x` : name;
-}
-
 export function decodeCatalogModel(v: unknown): CatalogModel {
   const m = rec(v);
   return { createdAt: str(m.created_at), displayName: str(m.display_name), effortLevels: strings(m.effort_levels), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
@@ -242,11 +233,13 @@ export function decodeAttention(v: unknown): AttentionItem {
   const a = rec(v);
   const subject = rec(a.subject);
   const link = a.link ? rec(a.link) : null;
+  // A page this build does not know has no place to open the subject on, so the item draws no link.
+  const page = link ? ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) : undefined;
   return {
     detail: rec(a.detail),
     // A kind this build does not know reads as the worst one, so it is never drawn quieter than it may be.
     kind: ATTENTION_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'pool_exhausted',
-    link: link && { id: str(link.id), page: ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) ?? 'pools' },
+    link: link && page !== undefined ? { id: str(link.id), page } : null,
     pools: strings(a.pools),
     since: isoOr(a.since, epoch),
     subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },
@@ -366,6 +359,7 @@ export function decodePool(v: unknown): Pool {
     keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
     members: list(p.members).map(rec).map((m) => ({
       accountId: str(m.account_id),
+      activePins: num(m.active_pins),
       budgetDailyUsd: numOrNull(m.budget_daily_usd),
       budgetMonthlyUsd: numOrNull(m.budget_monthly_usd),
       budgetUntil: isoOrNull(m.budget_until),
@@ -454,7 +448,7 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), startedAt: isoOr(a.started_at, epoch), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
     diagnosticsSource: DIAGNOSTICS_SOURCE_VALUES.find((s) => s === str(r.diagnostics_source)) ?? null,
@@ -484,7 +478,7 @@ const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null ||
 const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
 const holdOf = (v: unknown) => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort) }));
 const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
-const refusalOf = (v: unknown) => orNull(v, (x) => ({ kind: str(x.kind), reason: str(x.reason) }));
+const refusalOf = (v: unknown) => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
 const factOf = (v: unknown): SummaryFact[] => {
   const f = rec(v);
@@ -605,7 +599,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), canonicalModel: str(q.canonical_model),
       chain: { boundaries: num(chain.boundaries), staticBoundaries: num(chain.static_boundaries), staticHash: bool(chain.static_hash) }, clientClass: str(q.client_class),
       flags: { contextCompacted: bool(flags.context_compacted), count: bool(flags.count), fast: bool(flags.fast), marker: bool(flags.marker), portable: bool(flags.portable), probe: bool(flags.probe) },
-      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms) })),
+      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms), ranOut: bool(h.ran_out) })),
       keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
       registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id), seq: num(q.seq, 1),
     },
@@ -921,7 +915,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
-    listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
+    listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },

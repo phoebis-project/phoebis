@@ -57,6 +57,27 @@ export function useDescription(text: string | undefined): { id: string; sibling:
   return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
 }
 
+/**
+ * Describes the element `children` draws by `text` for a reader: through the card's description host where one
+ * stands, else through a hidden node after the element, as the attempt trail's is. `hostedOnly` keeps a chip's hover
+ * to its title outside a host, since a node beside a chip would join the text of the cell or the row that holds it.
+ */
+export function Described({ children, hostedOnly = false, text }: { children: (describedBy: string | undefined) => ReactNode; hostedOnly?: boolean; text: string | undefined }) {
+  const described = useDescription(text);
+  const hosted = described && !described.sibling ? described.id : null;
+  const own = described?.sibling && !hostedOnly ? described.id : null;
+  return (
+    <>
+      {children(hosted ?? own ?? undefined)}
+      {own !== null && (
+        <span id={own} className="sr-only" data-descriptions="">
+          {text}
+        </span>
+      )}
+    </>
+  );
+}
+
 export function Badge({ tone = 'neutral', children, dot = false, title, describe = true }: { children: ReactNode; describe?: boolean; dot?: boolean; title?: string; tone?: BadgeTone }) {
   // A title that only repeats the badge's text would have a reader say it twice under a host, so such a caller keeps
   // the hover and turns the description off.
@@ -97,9 +118,10 @@ export function Button({ variant = 'secondary', size = 'md', icon, children, cla
   );
 }
 
-export function Pill({ children, active = false, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
+/** A caller that passes `active` is a toggle and reads as pressed or not, and a one-shot action passes none. */
+export function Pill({ children, active, onClick, disabled, title, icon }: { active?: boolean; children: ReactNode; disabled?: boolean; icon?: ReactNode; onClick?: () => void; title?: string }) {
   return (
-    <button type="button" className={`pill ${active ? 'is-active' : ''}`} onClick={onClick} disabled={disabled} title={title} aria-pressed={onClick ? active : undefined}>
+    <button type="button" className={`pill ${active ? 'is-active' : ''}`} onClick={onClick} disabled={disabled} title={title} aria-pressed={typeof active === 'boolean' ? active : undefined}>
       {icon}
       {children}
     </button>
@@ -290,7 +312,7 @@ function copyByCommand(text: string, button: HTMLElement): boolean {
   host.appendChild(area);
   area.focus();
   area.select();
-  let copied = false;
+  let copied: boolean;
   try {
     copied = document.execCommand('copy');
   } catch {
@@ -307,7 +329,8 @@ function copyByCommand(text: string, button: HTMLElement): boolean {
   return copied;
 }
 
-export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string }) {
+/** `text` as a function is read at each click, so a text that is long to build waits until it is copied. */
+export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: string; size?: 'md' | 'sm'; text: string | (() => string) }) {
   const [state, setState] = useState<'copied' | 'failed' | 'idle'>('idle');
   useEffect(() => {
     if (state === 'idle') return;
@@ -323,18 +346,19 @@ export function CopyButton({ text, label = 'Copy', size = 'sm' }: { label?: stri
       onClick={(e) => {
         // React resets the synthetic event's currentTarget once the handler returns, so the button is read first.
         const button = e.currentTarget;
+        const value = typeof text === 'function' ? text() : text;
         // Saying Copied without a write matters most in the secret dialog: the operator could close the only
         // display of a secret they never received. The command runs inside the click, the user gesture it honors.
         // After a rejected write it runs in the rejection callback, where it relies on the click's transient
         // activation still standing: a browser that counts the activation spent answers false, and the button lands
         // at the failed state rather than claiming the copy.
         if (!navigator.clipboard) {
-          setState(copyByCommand(text, button) ? 'copied' : 'failed');
+          setState(copyByCommand(value, button) ? 'copied' : 'failed');
           return;
         }
-        void navigator.clipboard.writeText(text).then(
+        void navigator.clipboard.writeText(value).then(
           () => setState('copied'),
-          () => setState(copyByCommand(text, button) ? 'copied' : 'failed'),
+          () => setState(copyByCommand(value, button) ? 'copied' : 'failed'),
         );
       }}
     >
@@ -357,7 +381,9 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   // The latest `onClose` and `unsaved` behind one stable `request`, so the `cancel` listener is attached once per
   // element and never reads a stale prop.
   const latest = useRef({ onClose, unsaved });
-  latest.current = { onClose, unsaved };
+  useLayoutEffect(() => {
+    latest.current = { onClose, unsaved };
+  });
   // The last control inside the dialog that took the focus: a click on the backdrop moves the focus off the control
   // before the dialog hears the click, so the active element alone would miss it.
   const lastFocused = useRef<HTMLElement | null>(null);
@@ -380,11 +406,21 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     refocus.current = true;
     setAsking(false);
   }, []);
+  // A closed dialog drops its question in the render that closes it.
+  if (!open && asking) setAsking(false);
   useEffect(() => {
-    if (open) return;
-    setAsking(false);
-    lastFocused.current = null;
+    if (!open) lastFocused.current = null;
   }, [open]);
+  // Ahead of the showModal effect, so a dialog that mounts open records the control its showModal focuses.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onFocusIn = (e: Event) => {
+      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
+    };
+    el.addEventListener('focusin', onFocusIn);
+    return () => el.removeEventListener('focusin', onFocusIn);
+  }, []);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -401,15 +437,6 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     const target = was?.isConnected && el.contains(was) && was.matches(HELD_FOCUS) && !was.matches(':disabled') ? was : el.querySelector<HTMLElement>(TABBABLE);
     target?.focus();
   }, [asking]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const onFocusIn = (e: Event) => {
-      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
-    };
-    el.addEventListener('focusin', onFocusIn);
-    return () => el.removeEventListener('focusin', onFocusIn);
-  }, []);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -659,6 +686,11 @@ export function GroupedDialog({
   // the mode on in the same update, so no render shows a chosen group the rail lacks.
   const shown = expertView ? groups : groups.filter((g) => !g.expertOnly || g.refused);
   const expertOnlyOff = (id: string) => !expertView && groups.some((g) => g.id === id && g.expertOnly && !g.refused);
+  // The open effect reads the rule through a ref, since the page hands in a new groups array on every render.
+  const hides = useRef(expertOnlyOff);
+  useLayoutEffect(() => {
+    hides.current = expertOnlyOff;
+  });
   // A reset or a first group can name a group the filter took off, which would leave the dialog on a hidden panel
   // with no rail entry current, so the first shown group takes its place. The rail and the panels draw it in this
   // render: a page's reset that runs after the hand-off and names the hidden group again leaves the page's state as
@@ -688,10 +720,13 @@ export function GroupedDialog({
     if (id !== chosen) onChoose(id);
   };
   // Every group shown starts the body at its top. Focus moves only for a choice, to the group's heading or, for Go
-  // to, its refused control, and for the group the address named: the page's reset chooses that group after this
-  // effect has run, so the choice waits here until `chosen` matches it. A group the mode hid mounts its section only in
-  // the render after the mode turns on, so the choice also waits for the group to be shown, even when the page already
-  // holds it. A group the page sets itself on open leaves focus where the browser's dialog focusing put it.
+  // to, its refused control, and for the group the address named. A page's reset chooses that group in the render that
+  // opens the dialog, before this effect runs, or after this effect has run, so the choice waits here until `chosen`
+  // matches it and moves focus at once when it already does. Only a reset that runs after this effect can name a group
+  // the mode hid: the hand-off above runs first and replaces a hidden group named in the opening render before this
+  // effect turns the mode on. A group the mode hid mounts its section only in the render after the mode turns on, so
+  // the choice also waits for the group to be shown, even when the page already holds it. A group the page sets itself
+  // on open leaves focus where the browser's dialog focusing put it.
   useEffect(() => {
     if (!open) {
       wasOpen.current = false;
@@ -701,7 +736,7 @@ export function GroupedDialog({
     if (!wasOpen.current) {
       wasOpen.current = true;
       if (initialGroup !== null) {
-        if (expertOnlyOff(initialGroup)) setExpertView(true);
+        if (hides.current(initialGroup)) setExpertView(true);
         pending.current = { focus: 'heading', id: initialGroup };
       }
     }
@@ -711,7 +746,7 @@ export function GroupedDialog({
     pending.current = null;
     focusIn(chosen, choice.focus);
     // Only a choice moves focus; the helpers and the body ref change without one.
-  }, [open, chosen, chosenShown, initialGroup]);
+  }, [chosen, chosenShown, initialGroup, open, setExpertView]);
   // The notice sits above the groups and is about the whole save, so one raised by a save pressed low in a long group
   // would land out of view; the body returns to its top when one appears.
   const noticed = Boolean(notice);
@@ -874,13 +909,20 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
   // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
   // mounts and one that unmounts open still reports itself closed.
   const openChange = useRef(onOpenChange);
-  openChange.current = onOpenChange;
+  useLayoutEffect(() => {
+    openChange.current = onOpenChange;
+  });
   useEffect(() => {
     if (!open) return;
     openChange.current?.(true);
     return () => openChange.current?.(false);
   }, [open]);
   const [placement, setPlacement] = useState<MenuPlacement>(IN_FLOW);
+  // Each opening measures the list in flow, so a closed menu drops the last opening's placement as it closes.
+  if (!open && placement !== IN_FLOW) setPlacement(IN_FLOW);
+  // Where a floating list is portalled, read with the placement: a modal dialog sits in the top layer, so a layer
+  // portalled to the body would draw under it.
+  const [host, setHost] = useState<HTMLElement | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -900,11 +942,7 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
   // too short for the list on either side inside its wrap (a table filtered to one row) moves the list out of the
   // wrap, into a fixed layer at the trigger.
   useLayoutEffect(() => {
-    if (!open) {
-      setPlacement(IN_FLOW);
-      return;
-    }
-    if (!ref.current) return;
+    if (!open || !ref.current) return;
     const trigger = ref.current.getBoundingClientRect();
     // A wrap bounds the list only while it clips: the pool dialog's key table sets its wrap `overflow: visible`. The
     // clipping values are named because a page without styles, as in the smoke run, reads the property empty.
@@ -912,7 +950,8 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     const clip = wrap && CLIPPING.has(getComputedStyle(wrap).overflowY) ? wrap : null;
     const next = menuPlacement(trigger, clip, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight, align);
     setPlacement(next.kind === 'down' ? IN_FLOW : next);
-  }, [open]);
+    setHost(ref.current.closest<HTMLElement>('dialog[open]') ?? document.body);
+  }, [align, open]);
   const floating = open && placement.kind === 'float';
   // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for
   // the portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it
@@ -923,18 +962,18 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     anchor.current = trigger;
     const at = floatAt(trigger, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight, align);
     setPlacement((p) => (p.kind === 'float' && p.left === at.left && p.top === at.top ? p : at));
-  }, [floating]);
+  }, [align, floating]);
   // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
   // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can
   // report after the click that opened the list, and a scroll inside the list or in another pane moves nothing.
-  const moved = () => {
+  const closeIfMoved = () => {
     const at = ref.current?.getBoundingClientRect();
-    return !at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left;
+    if (!at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left) setOpen(false);
   };
   // A refresh that re-sorts the rows moves the trigger with no scroll or resize to report it, so every render of the
   // open layer reads the trigger by the same rule.
   useLayoutEffect(() => {
-    if (floating && moved()) setOpen(false);
+    if (floating) closeIfMoved();
   });
   // Focus enters the list as it opens, so the list's keys reach it, and returns to the trigger when the list closes;
   // focus already elsewhere by then stays. A list that floats draws in flow first and moves into the portal, taking the
@@ -986,14 +1025,11 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
   };
   useEffect(() => {
     if (!floating) return;
-    const onScroll = () => {
-      if (moved()) setOpen(false);
-    };
     const onResize = () => setOpen(false);
-    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('scroll', closeIfMoved, true);
     window.addEventListener('resize', onResize);
     return () => {
-      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scroll', closeIfMoved, true);
       window.removeEventListener('resize', onResize);
     };
   }, [floating]);
@@ -1028,8 +1064,7 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
       <button type="button" ref={triggerRef} className="menu__trigger" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen((v) => !v)}>
         <span aria-hidden>···</span>
       </button>
-      {/* A modal dialog sits in the top layer, so a layer portalled to the body would draw under it. */}
-      {floating && ref.current ? createPortal(list, ref.current.closest('dialog[open]') ?? document.body) : list}
+      {floating && host !== null ? createPortal(list, host) : list}
     </div>
   );
 }
@@ -1060,7 +1095,9 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
 export function Toast({ onDone, queue }: { onDone: (id: number) => void; queue: ToastItem[] }) {
   // Keyed on the item rather than the callback, so a fresh callback on a re-render does not restart the dwell.
   const done = useRef(onDone);
-  done.current = onDone;
+  useLayoutEffect(() => {
+    done.current = onDone;
+  });
   const showing = queue[0];
   const id = showing?.id;
   const dwellMs = showing?.dwellMs;

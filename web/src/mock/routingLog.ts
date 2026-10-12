@@ -66,7 +66,7 @@ interface Spec {
   pin: { cause: string; idleMs: number; warmth: 'cold' | 'refresh' | 'untouched' } | 'none' | PinReason;
   /** Per member, the deepest entry per rung and its match, where the story sets a deeper refused entry beside one. */
   prefix?: Record<string, Partial<RecordCandidate['prefix']>>;
-  refusal?: { kind: string; reason: string };
+  refusal?: { code: string; kind: string; reason: string };
   request: RequestLog;
   round?: ShedRound;
   rule?: string;
@@ -142,7 +142,7 @@ interface CooldownRow {
 
 const cooldownRows: CooldownRow[] = [
   ...ACCOUNTS.flatMap((a) =>
-    a.cooldowns.map((c) => ({ accountId: a.id, reason: c.reason.startsWith('rate_limited') ? 'rate_limited' : c.reason, scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until), window: c.scope === 'fast' ? 'fast' : c.windowId === '5h' ? 'five_hour' : c.scope.startsWith('model:') ? 'model_rejection' : (c.windowId ?? 'retry_after') })),
+    a.cooldowns.map((c) => ({ accountId: a.id, reason: c.reason.startsWith('rate_limit') ? 'rate_limit' : c.reason, scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until), window: c.scope === 'fast' ? 'fast' : c.windowId === '5h' ? 'five_hour' : c.scope.startsWith('model:') ? 'model_rejection' : (c.windowId ?? 'retry_after') })),
   ),
   ...REQUESTS.flatMap((r) =>
     r.attempts.flatMap((a) => {
@@ -152,7 +152,7 @@ const cooldownRows: CooldownRow[] = [
       const reason = a.cooldownSet.reason;
       if (reason === 'model_rejected') return [{ accountId: a.accountId, reason, scope: `model:${r.canonicalModel}`, setAt, until, window: 'model_rejection' }];
       if (reason === 'fast_rate_limit') return [{ accountId: a.accountId, reason, scope: 'fast', setAt, until, window: 'fast' }];
-      return [{ accountId: a.accountId, reason: 'rate_limited', scope: 'account', setAt, until, window: windowOfReason(reason) }];
+      return [{ accountId: a.accountId, reason: 'rate_limit', scope: 'account', setAt, until, window: windowOfReason(reason) }];
     }),
   ),
 ];
@@ -207,7 +207,7 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
  */
 function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const state = stateAt(a, at);
-  if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: state, until: null, window: null };
+  if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, until: null, window: null };
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;
   if (endsAt !== null && endsAt <= at) return { name: 'subscription_ended', reason: null, until: null, window: null };
   const live = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until && holds(c, model, fast));
@@ -216,7 +216,8 @@ function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast:
   if (blocking) return cooldown(blocking);
   const credits = fast ? creditsAt(a.id, at) : null;
   if (credits?.blocked) return { name: 'credits', reason: credits.blocked, until: null, window: null };
-  const reached = budgetsAt(pool, a.id, at).find((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd);
+  // The engine names the reached budget whose period ends last, the one that keeps the member out longest.
+  const reached = budgetsAt(pool, a.id, at).filter((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd).sort((x, y) => Date.parse(y.periodEnd ?? '') - Date.parse(x.periodEnd ?? ''))[0];
   if (reached) return { name: 'budget', reason: reached.period, until: reached.periodEnd, window: null };
   const fastLimited = live.find((c) => c.scope === 'fast');
   if (fastLimited) return cooldown(fastLimited);
@@ -470,32 +471,55 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
 const tierKey = (t: [number, number, number]) => t.join('/');
 
 /**
- * The pick among the eligible members of the best tier, or among a move's destinations: the chosen account first, the
- * rest by score.
+ * The pick among the members the partitions kept in the chosen account's tier, the set the engine's `choose` orders:
+ * the chosen account first, the rest by score.
  */
-function pickOf(candidates: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined, among?: string[]): { runnerUp: Score | null; score: Score | null; tierSize: number } {
-  const eligible = candidates.filter((c) => c.obstacle === null && c.accountId !== source && (among === undefined || among.includes(c.accountId)));
+function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
-  const tier = eligible.filter((c) => tierKey(c.tier) === tierKey(winner.tier));
   const unit = (c: RecordCandidate) => (c.kind === 'api_key' ? 'percent' : 'percent_per_hour');
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
-  const rest = tier.filter((c) => c !== winner).sort((x, y) => scoreOf(y) - scoreOf(x));
-  // The trace names who the strategy chose, so the record reads the chosen account's score at the top of its tier.
-  const top = Math.max(scoreOf(winner), ...rest.map((c) => scoreOf(c) + 0.0001));
+  const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
-  winner.score = strategy === 'pace' ? top : null;
+  winner.score = strategy === 'pace' ? scoreOf(winner) : null;
   rest.forEach((c, i) => {
     c.rank = i + 2;
     c.score = strategy === 'pace' ? scoreOf(c) : null;
   });
-  if (strategy !== 'pace') return { runnerUp: null, score: null, tierSize: tier.length };
+  const tierSize = rest.length + 1;
+  if (strategy !== 'pace') return { runnerUp: null, score: null, tierSize };
   const best = rest[0];
-  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: top, unit: unit(winner) }, tierSize: tier.length };
+  return { runnerUp: best ? { accountId: best.accountId, score: scoreOf(best), unit: unit(best) } : null, score: { accountId: winner.accountId, score: scoreOf(winner), unit: unit(winner) }, tierSize };
+}
+
+/** Whether one tier ranks before another, compared member by member as the engine orders them. */
+function tierBefore(x: [number, number, number], y: [number, number, number]): boolean {
+  const i = x.findIndex((n, j) => n !== y[j]);
+  return i >= 0 && x[i] < y[i];
+}
+
+/**
+ * The story names the member each pick chose, drawn or written by hand, and the record reads the walk back's windows,
+ * so the pick holds by the slots: every member of a better tier, and under Pace every tier mate scoring above the
+ * chosen member and above the floor, is full, so the cap passes it over. A token count takes no slot, so the request
+ * generator places it on the engine's pick instead.
+ */
+function capTheRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
+  const winner = candidates.find((c) => c.accountId === spec.accountId);
+  if (!winner || spec.request.kind === 'count_tokens') return;
+  const top = pool.strategy === 'pace' ? winner.pace?.score : undefined;
+  const outscores = (c: RecordCandidate) => top !== undefined && c.pace !== null && c.pace.score > top && c.pace.remaining > pool.paceFloor;
+  for (const c of candidates) {
+    if (c === winner || c.obstacle !== null || c.accountId === spec.from) continue;
+    if (tierBefore(c.tier, winner.tier) || (tierKey(c.tier) === tierKey(winner.tier) && outscores(c))) c.inFlight = c.inFlightCap;
+  }
 }
 
 /** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
 const spentForFable = (utilization: (window: string) => number | null | undefined) => [...PLAN_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+
+/** One reading of whether extra usage funds a spent member, so the partition and a run-out's servable set agree. */
+const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
 
 /**
  * The five partitions' facts in the engine's order, and the members left after them, which the step's verdict reads.
@@ -514,7 +538,7 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog): { fact
     // A spent member is out rather than passed over, so this partition never falls through. An `allow` pool keeps one
     // whose extra usage the record reads as unblocked, and a member without a credits reading is not funded.
     const spent = (c: RecordCandidate) => spentForFable((w) => c.windows[w]?.utilization);
-    const funded = (c: RecordCandidate) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
+    const funded = (c: RecordCandidate) => fundedBy(pool, c.credits);
     const kept = left.filter((c) => !spent(c) || funded(c));
     facts.push(fact('spent', left.length - kept.length));
     left = kept;
@@ -562,6 +586,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const pool = poolById.get(r.poolId ?? '')!;
   const fast = r.shape.requestedSpeed === 'fast';
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'moved') && !spec.rung) capTheRivals(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -668,7 +693,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     else if (!matched) {
       // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
       // the hold rather than a score.
-      const ranked = pickOf(candidates, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, movedAmong);
+      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined);
       if (spec.kind !== 'held') pick = ranked;
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
@@ -838,22 +863,30 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   return [...(expired ? [{ kind: 'pin_expired', reason: reasons[0] ?? null }] : []), ...(created ? [{ kind: 'pin_created', reason: null }] : [])];
 }
 
+/**
+ * A placement's summary fact, by the router's own rules. Exported so a test drives the strategies no pool of the story
+ * contests a tier under.
+ */
+export function placementFactOf(record: DecisionRecord, pick: ReturnType<typeof pickOf>, strategy: string): SummaryFact[] {
+  const rung = record.outcome.rung;
+  if (rung?.rung === 'with_main') return [];
+  if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
+  const others = record.candidates.filter((c) => c.accountId !== record.outcome.accountId);
+  if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
+  if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
+  if (strategy === 'pace' && pick.score && pick.runnerUp) {
+    return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
+  }
+  // A round-robin pick reads its turn as the engine names it. The story keeps no cursor, so the chosen member reads
+  // first, as a rank does.
+  return [summaryFact(strategy === 'round_robin' ? 'turn' : 'rank', `1 of ${pick.tierSize}`, 'text')];
+}
+
 /** The row's By and Fact, by the router's own rules for the summary it writes beside the record. */
 function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof pickOf>, pool: PoolSeed): { by: DecisionSummary['by']; fact: SummaryFact[] } {
   const by = (kind: DecisionSummary['by']['kind'], value: string, tier: [number, number, number] | null = null) => ({ kind, tier, value });
   const r = spec.request;
-  const placementFact = (): SummaryFact[] => {
-    const rung = record.outcome.rung;
-    if (rung?.rung === 'with_main') return [];
-    if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
-    const others = record.candidates.filter((c) => c.accountId !== spec.accountId);
-    if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
-    if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
-    if (pool.strategy === 'pace' && pick.score && pick.runnerUp) {
-      return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
-    }
-    return [summaryFact('rank', `1 of ${pick.tierSize}`, 'text')];
-  };
+  const placementFact = () => placementFactOf(record, pick, pool.strategy);
   const inFlight = (): SummaryFact[] => {
     const m = record.candidates.find((c) => c.accountId === spec.accountId);
     return m ? [summaryFact('in_flight', `${m.inFlight}/${m.inFlightCap}`, 'text')] : [];
@@ -903,23 +936,31 @@ function derivedSpecs(r: RequestLog): Spec[] {
   // strategy's pick, and a request the bound ran out on waited so too.
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
   const holds: RecordRequest['holds'] = [];
+  let waitsRecorded = 0;
   // Every member was at its cap until the bound ran out, so the router answered the request without a dispatch.
   const ranOut = (seq: number, attempt: number, onAt: number, attempted: string[]) => {
-    const waitedOn = r.held?.waitedOn[r.held.waitedOn.length - 1] ?? null;
+    // The row's hold sums every wait, and a wait before the first attempt already has its one record, however many
+    // accounts it named.
+    const waitedOn = (r.held?.waitedOn ?? []).slice(waitsRecorded);
     const bound = (pool?.retryInPlaceSeconds ?? 60) * 1_000;
-    if (waitedOn !== null) {
-      specs.push({ ...base, accountId: waitedOn, at: onAt, attempt, attempted, fact: [summaryFact('answer', 429, 'count'), summaryFact('held', bound, 'ms')], hold: { cohort: null, place: 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
-      holds.push({ accountId: waitedOn, attempt, cohort: null, heldMs: bound });
-    }
+    // One held record per re-selection the hold made, each carrying the in-flight facts a held row reads.
+    waitedOn.forEach((accountId, i) => {
+      specs.push({ ...base, accountId, at: onAt + i * bound, attempt, attempted, hold: { cohort: null, place: 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq: seq + i });
+      holds.push({ accountId, attempt, cohort: null, heldMs: bound, ranOut: i === waitedOn.length - 1 });
+    });
+    const answeredAt = onAt + waitedOn.length * bound;
     // Past the bound the relay passes each account it could hold on over and selects again, so the selection that
     // answers finds every one of them attempted and nothing left to place on. A Fable request's spent member drops
     // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
     // reads.
     const fast = r.shape.requestedSpeed === 'fast';
-    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, onAt + bound, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
-    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, onAt + bound, r.canonicalModel, fast, []) === null && !spent(id));
-    const passedOver = [...new Set([...attempted, ...(waitedOn ? [waitedOn] : []), ...servable])];
-    specs.push({ ...base, accountId: null, at: onAt + bound, attempt, attempted: passedOver, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + 1 });
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_OF[x.id] === w)?.utilization);
+    // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
+    const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
+    const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountOf.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
+    const passedOver = [...new Set([...attempted, ...waitedOn, ...servable])];
+    // The builder names the exhaustion off the members' obstacles, which a block among them dates or explains.
+    specs.push({ ...base, accountId: null, at: answeredAt, attempt, attempted: passedOver, fact: [summaryFact('held', bound, 'ms'), summaryFact('answer', 429, 'count')], holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + waitedOn.length });
   };
   if (r.attempts.length === 0) {
     if (r.errorCode === 'accounts_at_cap') ranOut(1, 1, at, []);
@@ -938,7 +979,8 @@ function derivedSpecs(r: RequestLog): Spec[] {
       const heldOn = hold.waitedOn[hold.waitedOn.length - 1] ?? a.accountId;
       seq += 1;
       specs.push({ ...base, accountId: heldOn, at: start - hold.heldMs, attempt: i + 1, attempted, hold: { cohort: hold.cohort, place: hold.cohort ? 'cohort' : 'strategy_pick' }, holds: [...holds], inFlight: allAtCap(), kind: 'held', pin: noPin, seq });
-      holds.push({ accountId: heldOn, attempt: i + 1, cohort: hold.cohort, heldMs: hold.heldMs });
+      holds.push({ accountId: heldOn, attempt: i + 1, cohort: hold.cohort, heldMs: hold.heldMs, ranOut: false });
+      waitsRecorded += hold.waitedOn.length;
     }
     seq += 1;
     const moved = s?.moved ?? null;
@@ -1030,6 +1072,7 @@ function storySpecs(): Spec[] {
       prefix: { primary: { static: mainStatic(t(14, 2, 11), t(13, 58, 2)), staticMatch: mainStatic(t(14, 2, 11), t(13, 58, 2)) }, secondary: { content: message('bcc805b6', 8, 58_900, t(14, 2, 11), t(14, 0, 24), ONE_HOUR), contentMatch: null } },
       rung: placedStatic,
     }),
+    at('req_7a2d4c18-e95', 1, 1, t(14, 3), 'placed', 'primary'),
     // Secondary reads its 5-hour window spent from 14:02:11 and cools for its retry-after alone, so the session's next
     // request finds it spent and free: the spent rule moves the pin to primary.
     at('req_da52d141-a5a', 1, 1, t(14, 5, 12), 'moved', 'primary', {
@@ -1055,8 +1098,8 @@ function storySpecs(): Spec[] {
       },
       rung: placedStatic,
     }),
-    at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'key', reason: 'the key was revoked' } }),
-    at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'client', reason: 'hash' } }),
+    at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }),
+    at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'drift', kind: 'client', reason: 'hash' } }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
@@ -1065,12 +1108,16 @@ function storySpecs(): Spec[] {
     at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, pin: 'pinning_off', prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
     at('req_69e30548-32e', 2, 1, t(14, 21, 14), 'placed', 'primary', {
       heldBefore: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] },
-      holds: [{ accountId: 'primary', attempt: 1, cohort: 'primary', heldMs: 2_000 }],
+      holds: [{ accountId: 'primary', attempt: 1, cohort: 'primary', heldMs: 2_000, ranOut: false }],
       inFlight: { nightly: 16, primary: 15 },
       pin: 'pinning_off',
       prefix: { primary: { static: cohort(t(14, 21, 14)), staticMatch: cohort(t(14, 21, 14)) } },
       rung: { depth: 1, prefixTokens: 18_400, rung: 'static' },
     }),
+    // The router keyed the laptop turn by the root its content matched and placed it on primary, whose head arrived
+    // before the relay found the stream past it undecodable.
+    at('req_5e2f7a19-b03', 1, 1, t(14, 22, 48), 'placed', 'primary'),
+    at('req_a6c19e73-5d2', 1, 1, t(14, 23, 30), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 1, 1, t(14, 24, 9), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 2, 2, t(14, 24, 10), 'placed', 'nightly', { attempted: ['primary'], failover: 'cooldown', from: 'primary', pin: live() }),
     at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
@@ -1152,6 +1199,41 @@ function expiries(): EventSeed[] {
   ];
 }
 
+const ttlRulesDiff = (r: PoolSeed['cacheTtl']['plan']) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
+
+/** A pool edit's diff as the store's `pool_diff` writes it: the whole row after the save, under its column names. */
+function poolDiff(p: PoolSeed): Record<string, unknown> {
+  return {
+    affinity_mode: p.affinityMode,
+    affinity_ttl_seconds: p.affinityTtlSeconds,
+    auto_mode_server: p.autoModeServer,
+    body_capture_hours: p.bodyCaptureHours,
+    burn_window_seconds: p.burnWindowSeconds,
+    cache_diagnostics: p.cacheDiagnostics,
+    cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: ttlRulesDiff(p.cacheTtl.metered), plan: ttlRulesDiff(p.cacheTtl.plan) },
+    enabled: p.status !== 'disabled',
+    in_flight_cap: p.inFlightCap,
+    label: p.name,
+    migrate_when_spent: p.migrateWhenSpent,
+    min_shared_prefix_tokens: p.minSharedPrefixTokens,
+    model_rules: p.modelRules.map((r) => ({ not: r.not, pattern: r.pattern })),
+    overage_move_grace_minutes: p.overageMoveGraceMinutes,
+    overage_policy: p.overagePolicy,
+    pace_floor: p.paceFloor,
+    prefer_subscription: p.preferSubscription,
+    retry_in_place_seconds: p.retryInPlaceSeconds,
+    select_below_utilization: p.selectBelowUtilization,
+    session_placement: p.sessionPlacement,
+    shed_ahead_of_pace: p.shedAheadOfPace,
+    shed_share: p.shedShare,
+    source_dwell_seconds: p.sourceDwellSeconds,
+    strategy: p.strategy,
+    subagent_placement: p.subagentPlacement,
+    warm_sessions: p.warmSessions,
+    wind_down_minutes: p.windDownMinutes,
+  };
+}
+
 /**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
@@ -1185,14 +1267,22 @@ function buildEvents(): RoutingEvent[] {
   for (const r of REQUESTS) {
     for (const a of r.attempts) {
       const answeredAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
-      if (!a.cooldownSet || a.cooldownSet.reason === 'model_rejected') continue;
+      if (!a.cooldownSet) continue;
+      const rejected = a.cooldownSet.reason === 'model_rejected';
       const fast = a.cooldownSet.reason === 'fast_rate_limit';
       const until = Date.parse(a.cooldownSet.until);
       seeds.push({
         accountId: a.accountId,
         at: iso(answeredAt),
-        detail: { reason: fast ? 'fast_rate_limit' : 'rate_limited', scope: fast ? 'fast' : 'account', source_request_id: r.id, until, window: fast ? 'fast' : windowOfReason(a.cooldownSet.reason) },
+        detail: {
+          reason: rejected ? 'model_rejected' : fast ? 'fast_rate_limit' : 'rate_limit',
+          scope: rejected ? `model:${r.canonicalModel}` : fast ? 'fast' : 'account',
+          source_request_id: r.id,
+          until,
+          window: rejected ? 'model_rejection' : fast ? 'fast' : windowOfReason(a.cooldownSet.reason),
+        },
         kind: 'cooldown_set',
+        ...(rejected ? { model: r.canonicalModel } : {}),
         requestId: r.id,
       });
     }
@@ -1257,7 +1347,7 @@ function buildEvents(): RoutingEvent[] {
       requestId: 'req_1eaa9bc1-a18',
       sessionId: sessionId('407dd39b'),
     },
-    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: { shed_ahead_of_pace: { from: null, to: pool.shedAheadOfPace } }, kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
+    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: poolDiff(pool), kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
     // The ci key's revocation, after the last request it reached selection with.
     { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, keyId: 'ci', kind: 'registry_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
@@ -1267,12 +1357,16 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'nightly', actor: 'admin', agentId: 'e90b', at: iso(t(12, 40, 5)), detail: { agent_id: 'e90b' }, keyId: 'desktop', kind: 'pin_released', model: 'claude-sonnet-5-5', sessionId: sessionId('407dd39b') },
     { accountId: 'primary', at: iso(Date.parse('2026-09-12T20:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW), detail: { since: Date.parse('2026-09-11T16:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW }, kind: 'overage_ended' },
     { accountId: 'legacy', at: iso(NOW - 2 * DAY - 2 * HOUR), detail: { cause: 'refresh_failed', detail: 'refresh_token rejected: invalid_grant', from: 'ready', to: 'reauth_required' }, kind: 'account_state_changed' },
+    // The Overflow workspace's balance ran out once before, three days back, and the router's own retry past its
+    // five minutes found it funded again.
+    { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
+    { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR + 5 * MINUTE + 40_000), detail: { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' }, kind: 'account_state_changed' },
     { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'cancelled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
   );
-  if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'deadline', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
+  if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.kind.localeCompare(b.kind))

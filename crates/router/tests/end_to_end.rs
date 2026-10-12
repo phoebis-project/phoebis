@@ -4217,6 +4217,116 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     up.shutdown().await;
 }
 
+/// The reference page and its document through the router's own app, where the admin router and the ui crate's
+/// fallback are merged: the document tests and the ui crate's tests each see one half alone. The browser smoke
+/// over the real document runs when PHOEBIS_E2E_BROWSER=1, as the console's pass does.
+#[tokio::test]
+async fn the_reference_page_and_its_document_are_served_by_the_merged_app() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: warm_answer(),
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    probe_soon_on();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    logged_in(
+        &client,
+        &format!("http://127.0.0.1:{admin_port}/admin/session"),
+    )
+    .await;
+    probe_soon_off();
+    let anonymous = reqwest::Client::new();
+    let document = anonymous
+        .get(format!(
+            "http://127.0.0.1:{admin_port}/api-reference/openapi.json"
+        ))
+        .header("authorization", "Bearer not-the-secret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        document.status(),
+        200,
+        "the document is served without the gate, a wrong bearer ignored"
+    );
+    assert_eq!(document.headers()["cache-control"], "no-store");
+    let document: serde_json::Value = document.json().await.unwrap();
+    assert_eq!(document["openapi"], "3.1.0");
+    assert_eq!(document["paths"].as_object().unwrap().len(), 51);
+    let page = anonymous
+        .get(format!("http://127.0.0.1:{admin_port}/api-reference/"))
+        .send()
+        .await
+        .unwrap();
+    if phoebis_ui::is_placeholder() {
+        assert_eq!(
+            page.status(),
+            404,
+            "a placeholder build carries no reference page"
+        );
+    } else {
+        assert_eq!(page.status(), 200);
+        assert!(page.text().await.unwrap().contains(r#"<div id="app">"#));
+    }
+    if std::env::var("PHOEBIS_E2E_BROWSER").as_deref() != Ok("1") {
+        println!("skipped the browser half: set PHOEBIS_E2E_BROWSER=1 to run the reference smoke");
+    } else {
+        let web = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web");
+        // Awaited, never blocked on: the router is a task on this same current-thread runtime.
+        let status = tokio::process::Command::new("node")
+            .arg("e2e/reference.mjs")
+            .current_dir(&web)
+            .env("PHOEBIS_E2E_BASE", format!("http://127.0.0.1:{admin_port}"))
+            .env("PHOEBIS_E2E_SECRET", "admin-secret-001")
+            .status()
+            .await
+            .expect("node runs");
+        assert!(
+            status.success(),
+            "the reference smoke failed against the router"
+        );
+    }
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 /// The relayed answer the pass seeds its cache figures from: a five-minute write of 2,000 tokens beside a read
 /// of the same size, so the recipe arms and the keepalive views have a saving to show.
 fn warm_answer() -> Respond {

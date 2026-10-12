@@ -1,5 +1,5 @@
-import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy, Session } from '@/api/types';
-import { fmtPeriodEnd, fmtRelative } from './format';
+import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime } from './format';
 import { endOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
@@ -21,10 +21,14 @@ export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget
 export type LastResort = 'floor' | 'winding_down';
 export const LAST_RESORT_LABEL: Record<LastResort, string> = { floor: 'at the Pace floor', winding_down: 'winding down' };
 
-/** `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. */
+/**
+ * `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. `end`:
+ * the end an engine rule reads off the account, which a winding-down badge counts down to.
+ */
 export interface Placement {
   account: Account;
   deferred: boolean;
+  end: number | null;
   ineligible: Ineligible | null;
   lastResort: LastResort | null;
   pins: number;
@@ -39,6 +43,35 @@ export interface Tier {
 
 const HOUR_MS = 3_600_000;
 const WEEK_HOURS = 168;
+
+/** A Standing badge's words and the sentence its title carries. */
+export interface StandingBadge {
+  text: string;
+  title: string | undefined;
+}
+
+/** A cooldown verdict's badge: the time left on the account's own cooldown where the account names its end. */
+export function cooldownBadge(until: string | undefined, now: number): StandingBadge {
+  if (until === undefined) return { text: 'cooldown', title: undefined };
+  const left = Date.parse(until) - now;
+  return left > 0 ? { text: `cooldown ${fmtDuration(left)}`, title: `In a cooldown that ends ${fmtAbsolute(until)}` } : { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(until)}` };
+}
+
+/**
+ * An overage verdict's badge: the time the overage resets at where the account knows it, and its date too when the
+ * reset falls on another day than `now` in the viewer's zone, so a reset days out never reads as today's.
+ */
+export function overageBadge(reset: string | null, now: number): StandingBadge {
+  if (reset === null) return { text: 'overage', title: 'In overage, reset unknown' };
+  const sameDay = new Date(reset).toDateString() === new Date(now).toDateString();
+  return { text: `overage until ${sameDay ? fmtShortTime(reset) : fmtPeriodEnd(reset)}`, title: `In overage until ${fmtAbsolute(reset)}` };
+}
+
+/** A winding-down member's badge: the time left before the plan's end, which the member is held back for. */
+export function windingDownBadge(end: number, now: number): StandingBadge {
+  const at = fmtAbsolute(new Date(end).toISOString());
+  return end > now ? { text: `winding down ${fmtDuration(end - now)}`, title: `Winding down to the plan's end at ${at}` } : { text: 'winding down', title: `Winding down past the plan's end at ${at}` };
+}
 
 /**
  * Remaining allowance and the reset that refills it: a subscription account reads the shared 7-day window, an
@@ -90,9 +123,8 @@ function resortOf(pool: Pool, account: Account, now: number): { lastResort: Last
 const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' ? 2 : account?.extraUsage?.inUse ? 1 : 0);
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
-export function selectionOrder(pool: Pool, accounts: Account[], sessions: Session[], now: number = Date.now()): Tier[] {
+export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
   const grouped = kindOrdered(pool);
   const groupFor = (accountId: string) => (grouped ? groupOf(byId.get(accountId)) : 0);
   const tiers = [...new Map(pool.members.map((m) => [`${groupFor(m.accountId)}:${m.priority}`, { group: groupFor(m.accountId), priority: m.priority }])).values()].sort(
@@ -114,9 +146,12 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
             // Under the kind order an account in overage already has a tier of its own, so deferring it inside
             // one would rank it behind its own siblings twice.
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse),
+            end: endOf(account, now),
             ineligible,
             lastResort: ineligible === null ? lastResort : null,
-            pins: pinsOf(m.accountId),
+            // The engine's count, one pin per agent and model, so a session whose subagents run on another model
+            // counts more than once, as the pool's Active pins does.
+            pins: m.activePins,
             rank: null,
           },
         ];
@@ -179,9 +214,9 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
  * a budget holds the member, and under a pool's `never` overage policy the account's overage holds it until its window
  * resets. So a member in cooldown can sit at its budget and in overage too, and it returns at the latest of its
  * budget's period end (daily, monthly, or plain "budget" when no spend report names the period), its latest
- * account-scope cooldown end and its overage window's reset. A blocker without an end (unavailable, overage, a cooldown
- * without an account-scope row, an overage window without a reset) gives no return, and so does a budget verdict
- * without an end.
+ * account-scope cooldown end and its overage window's reset, which an overage verdict returns at too. A blocker
+ * without an end (unavailable, a cooldown without an account-scope row, an overage window without a reset) gives no
+ * return, and so does a budget verdict without an end.
  */
 function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
   const ends: { at: number; parts: StatusPart[] }[] = [];
@@ -198,6 +233,10 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
       .pop();
     if (!until) return null;
     ends.push({ at: Date.parse(until), parts: [name, { text: `'s cooldown ends ${fmtRelative(until, now)}` }] });
+  } else if (member.eligible === 'overage') {
+    const reset = account?.overage?.reset ?? null;
+    if (reset === null) return null;
+    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
   } else if (member.eligible !== 'budget') {
     return null;
   }
@@ -214,7 +253,7 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
  * `accounts` is null until the account list is read: without it the order places no member and no return or name can
  * be read, so the sentence says what the pool's own verdicts carry and names no account.
  */
-export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessions: Session[], now: number = Date.now()): PoolStatusSentence {
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number = Date.now()): PoolStatusSentence {
   const { status } = pool;
   const word = STATUS_WORD[status];
   const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
@@ -240,7 +279,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessi
   const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
-  const next = selectionOrder(pool, accounts, sessions, now).find((tier) => tier.next.length > 0)?.next ?? [];
+  const next = selectionOrder(pool, accounts, now).find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
   return say([{ text: `${count}, and the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

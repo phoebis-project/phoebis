@@ -208,10 +208,10 @@ Body capture is off until a key or a pool asks for it. Once asked for, a capture
 bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
 the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
 once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
-bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console shows a
-captured body in the request drawer, with a control to copy it. A captured request body is the body as the
-client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
-included, whether or not the router dropped it on the way upstream.
+bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console lists a
+captured body in the request drawer, with a control to copy it, and draws it in the wide view. A captured request body
+is the body as the client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's
+permission rules and paths included, whether or not the router dropped it on the way upstream.
 
 ## The ledger writer
 
@@ -311,24 +311,28 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 ## The console's views
 
+Every filtered view keeps its filters in the page's address under one grammar, the Accounts view's search and status
+staying on the page: a preset range travels by its name and reads from the moment the page loads, and a custom span
+travels as its two instants, `from` and `to`.
+
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
 pool or key where it is fixed, or nothing for an item with no such place (a drift refusal that named no key, a parked
-record without a pool, a pool deleted since, one of the router's own writers); it reads the same conditions the
-[`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
+record without a pool, a pool deleted since, one of the router's own writers, a page unknown to the console); it reads
+the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
 [routing log](#routing-log) instead, on the pool's exhausted decisions from the moment the condition began. Four tiles
 report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them says when the
-figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled 5-hour and 7-day
-capacity is left: each subscription account is weighed by its tier's capacity on the window from the subscription cost
-model, in Max 20x windows, and listed with its own remaining share, and the line under the ring reads the windows left
-against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading
-since counts as a full allowance. An account whose tier the model does not size, or whose tier has no capacity on the
-window, is named under the ring instead, with the reason. Each account keeps one color across the Dashboard, the Quota
-view and the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the
-registry no longer lists draws muted. The 5-hour ring's subtitle opens the cost reference on its Tiers and peak band
-tab. The page ends with the most recent requests and a sessions card that leads with the router's live pins and the
-accounts they sit on.
+figures were read, by the oldest of the page's reads, or names the read whose last refresh failed and why. Two cards
+below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account is weighed by its tier's
+capacity on the window from the subscription cost model, in Max 20x windows, and listed with its own remaining share,
+and the line under the ring reads the windows left against the pooled capacity, such as 0.39 of 1.30 Max 20x windows
+left. A window whose reset has passed with no reading since counts as a full allowance. An account whose tier the model
+does not size, or whose tier has no capacity on the window, is named under the ring instead, with the reason. Each
+account keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
+cycling past eight accounts, and an account the registry no longer lists draws muted. The 5-hour ring's subtitle opens
+the cost reference on its Tiers and peak band tab. The page ends with the most recent requests and a sessions card that
+leads with the router's live pins and the accounts they sit on.
 
 ### Quota
 
@@ -343,28 +347,28 @@ rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and
 the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
 holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
 A usage read the endpoint rate-limited shows that error with the next attempt beside it, to the minute in your zone. A
-window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
-reading. Each live window's meter carries a pace mark at the share of the window still to come, or of its span to the
-subscription's end when that comes before the reset, so a remaining share that reaches past the mark is behind pace and
-one short of it ahead, and the meter's title names the lead: 12% ahead of pace, 5% behind pace, or on pace, and 12%
-ahead of pace to its end at 15:42 when the pace runs to the end. The Extra usage line reads the month's spend against
-its limit, in the serious tone while requests bill as extra usage and in the muted ink while they do not, and reads off
-or not reported in the muted ink when extra usage is disabled or the account has not reported it. The reason the
-provider gave for it sits inside the line, cut to the line's width, with the whole message on hover. The chips start
-with the plan, named by its tier (Max 20x, Max 5x or Pro), then say when the plan of an account marked cancelled ends,
-in the serious tone inside a week, and when the trial of an account on the Claude Code trial ends. The poll reading
-takes one or two lines: when the poll last asked the endpoint and how it answered, a failed poll naming its reason cut
-to the line's width, and, while the account backs off, the next attempt in the serious tone. The line's title carries
-the rest: the attempt's instant, a failed poll's whole message, when the snapshot shown was read, since when the account
-backs off, and how many rate-limited answers it has had in a row. Refresh reads the endpoint now unless the account is
-backing off, and records the reading as the poll does. The page counts a card that shows an error, whose last poll
-failed, or that is backing off as needing attention.
+window whose reset has passed with no reading since reads `expired 4h 47m ago`, with the reset's time on hover, and
+draws no share and an empty meter until the next reading. Each live window's meter carries a pace mark at the share of
+the window still to come, or of its span to the subscription's end when that comes before the reset, so a remaining
+share that reaches past the mark is behind pace and one short of it ahead, and the meter's title names the lead: 12%
+ahead of pace, 5% behind pace, or on pace, and 12% ahead of pace to its end at 15:42 when the pace runs to the end. The
+Extra usage line reads the month's spend against its limit, in the serious tone while requests bill as extra usage and
+in the muted ink while they do not, and reads off or not reported in the muted ink when extra usage is disabled or the
+account has not reported it. The reason the provider gave for it sits inside the line, cut to the line's width, with the
+whole message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then say when the
+plan of an account marked cancelled ends, in the serious tone inside a week, and when the trial of an account on the
+Claude Code trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint and how it
+answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next attempt in
+the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message, when the
+snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a row.
+Refresh reads the endpoint now unless the account is backing off, and records the reading as the poll does. The page
+counts a card that shows an error, whose last poll failed, or that is backing off as needing attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view. Each lane's current bar fills from the window's start to its used share in the window's tone, so a fill past the
-now line is ahead of pace and one short of it behind, and the lane's chips take the tone of their share, as the cards'
-do. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
-window opens after it, and the window that spans it stops there.
+view. Each lane's current bar, in a neutral tint, fills from the window's start to its used share in the window's tone,
+so a fill past the now line is ahead of pace and one short of it behind, and the lane's chips take the tone of their
+share, as the cards' do. An account marked cancelled with a saved end shows the end on its lane where it falls inside
+the drawn period: no window opens after it, and the window that spans it stops there.
 
 The fast-mode reading is on the account page's Usage card: a Fast mode line with the share of the fast lane's input and
 output buckets used, as the last answer reported them, with the reset, a bucket past its reset reading as refilled, and
@@ -379,16 +383,19 @@ a chip while the account's fast lane cools, naming the reason (rate limited, or 
 
 The Models view lists a key's processed rules with their level and the accounts cooling for a matching model, every
 model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model rejected and
-model permitted rows ([routing](routing.md#model-rules)).
+model permitted rows ([routing](routing.md#model-rules)). The chosen key lives in the page's address as `key`, and the
+first key leaves it out.
 
 ### Requests
 
 The table offers thirteen columns, ten shown by default (pool, kind and transport start hidden, since the drawer
 names all three, and the Columns control turns any on): time, key, pool, account, model, client, kind,
-transport, status, attempts, TTFB, tokens, and cost (window shares for a request a subscription window paid, dollars for
-an overage, fast mode or API key request). A request whose 200 answer ended short reads `incomplete` with the code that
-says how: `stream_cut` for a connection cut mid-body or a body past its bound, `stream_incomplete` when the stream
-closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound,
+transport, status, attempts, TTFB, tokens, and cost (window shares for a request a subscription window paid, each with
+its window's short word, as `0.12% Fable week` over `0.42% 5h`, with the full labels on hover, and dollars for an
+overage, fast mode or API key request). A table that does not show the client column, the one that
+fills the room the others leave, takes its content width. A request whose 200 answer ended short reads `incomplete` with
+the code that says how: `stream_cut` for a connection cut mid-body or a body past its bound, `stream_incomplete` when
+the stream closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound,
 `stream_undecodable` when the router could not decode the body. The model column reads the family and version, with the
 whole id on hover. The client column shows the class the router derived from the user agent (`claude-code/<entrypoint>`
 or `other`), whole where the window has the room and cut with an ellipsis where it has not, whole on
@@ -412,36 +419,48 @@ the requests that waited for a slot, the cache miss reason filter picks the reas
 known reasons in their reading order and then any other name the rows or the address carry, the effort filter picks a
 level as the hourly rollups fold it (`low` to `max`, `none` for a request that asked for none, `other` for a level
 outside the five), and the request class filter picks a class as the rollups fold it (`unattributed` for a request that
-sent none, `other` for a value outside the identifier charset or past 64 bytes). The search and the two pattern fields
-apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and
-the page size live in the page's address, so a reload or a shared link keeps them. An address carrying `from` and `to`
-as instants lists that window under a Custom range entry of the range control, which Refresh reads again and which a
-preset or Reset drops. A filter whose list did not load is disabled and says why. Selecting a row opens a drawer with
-the request's detail, which shows the outcome beneath the status, the
-user agent, the model as the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode
-standing (asked for a server-side check under an on setting; carried the safeguards member under an off setting, which
-the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent type, the compaction
-and context-compacted markers, the turn origin, and the tool time before the turn. The drawer's Request section names
-the upstream's request id for each attempt and, on the answer that served, the message id a Claude Code transcript's
-assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a per-turn control
-entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
-still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
-it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the answer's facts:
-the status, the outcome, the serving account and model, the answer's stop reason and geography (global, us, or not
-available for a model that takes no geography), and the cache miss reason, with a Diagnostics row below it that names
-the cache diagnostics member's source: sent by the client, added by the router, or none. The phases follow as a
-waterfall from received to finished, each phase with its offset and a phase the ledger holds no instant for marked not
-measured, then the usage, opened by a bar of the token kinds in the Tokens chart's colors over the table, then the
-request's identity with the upstream request and message ids under it, its shape, the client hints and the captured
-bodies. The usage ends with the request's estimated cost in its native unit: a request a subscription window paid reads
-its share of the account's 5-hour, 7-day and model-week windows with the dollar equivalent after them, an overage, fast
-mode or API key request reads dollars with why, and a subscription request the cost model prices no share for reads the
-dollar equivalent alone. Its head carries a "Routing log" link and each row a "Routing" link beside "Details", both
-opening the [routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the
-table shows a compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The
-drawer shows the captured request and response bodies highlighted, a streamed answer as its events with each `event:`
-line over its data, each with Copy, which copies the text as shown, and an "Open wide" link that opens the body in a
-wide dialog. A body past 256 KiB shows compact until Pretty-print is pressed.
+sent none, `other` for a value outside the identifier charset or past 64 bytes). Each multi-select opens with a Select
+all row that checks the options the search shows, and clears them when all are checked. The search and the two pattern
+fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range
+and the page size live in the page's address, so a reload or a shared link keeps them: a preset range by its name, a
+custom range as `from` and `to`. The range control offers Custom range with two instant inputs, which Refresh reads
+again and a preset or Reset drops. A filter whose list did not load is disabled and says why. Selecting a row opens a
+drawer with the request's detail, which shows the outcome beneath the status,
+the user agent, the model as the client spelled it and, when it differs, the canonical id the router recorded,
+its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under an off
+setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent type,
+the compaction and context-compacted markers, the turn origin, and the tool time before the turn. The drawer's Request
+section names the upstream's request id for each attempt and, on the answer that served, the message id a Claude Code
+transcript's assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a
+per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
+with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
+moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now.
+
+Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes the newest page and
+each page after it until a page brings no row the table lacks, so it takes every row that arrived since the read before,
+up to eight pages of them. When more arrived than that, a line above the table reads "More rows arrived than Follow
+could fetch. Reload to read them.", and Next reads on from the last row Follow fetched. A new row lands at the top in
+the accent tint until the next read. The log lists a request by when it was received and records it when it finishes, so
+a long request can finish below rows already shown: it lands in its place, in the same tint, when every page above it
+brought a new row, and Refresh shows it otherwise. A filter change keeps Follow on, paging to an older page turns it
+off, and the open drawer pauses it until it closes. When the table's own read failed, the first read Follow answers
+takes its place, and Next reads on from there.
+
+The drawer opens on the answer's facts: the status, the outcome, the serving account and model, the answer's stop
+reason, geography (global, us, or not available for a model that takes no geography) and service tier, and the cache
+miss reason, with a Diagnostics row below it that names the cache diagnostics member's source: sent by the client, added
+by the router, or none. The phases follow as a waterfall from received to finished, each phase with its offset and a
+phase the ledger holds no instant for marked not measured, then the usage, opened by a bar of the token kinds in the
+Tokens chart's colors over the table, then the request's identity with the upstream request and message ids under it,
+its shape, the client hints and the captured bodies. The usage ends with the request's estimated cost in its native
+unit: a request a subscription window paid reads its share of the account's 5-hour, 7-day and model-week windows with
+the dollar equivalent after them, an overage, fast mode or API key request reads dollars with why, and a subscription
+request the cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and
+each row a "Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter
+hour either side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts),
+and the chosen set returns when it closes. The drawer lists the captured request and response bodies, each with
+Copy all, which copies the whole text, and an "Open wide" link. The wide view draws a body of any size pretty-printed
+and highlighted in a window of its lines, a streamed answer as its events with each `event:` line over its data.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -478,11 +497,13 @@ row reads `retry none` and `answer 429`.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
-page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`
-as ISO instants (`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and
-`session` and `request`. A `kinds` value replaces the default set, so `kinds=probe` lists probe decisions alone. A
-kind this build does not know stays in the address, and the route's refusal shows where the rows would be. A filter
-change returns to the first page, and Refresh reads up to now.
+page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: a preset range
+as its name (`range=3h`, nothing for the last hour), a custom range as `from` and `to`, two UTC instants
+(`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and `session` and
+`request`. A reload under a preset reads the window back from the reload. A `kinds` value replaces the default set, so
+`kinds=probe` lists probe decisions alone. A kind this build does not know stays in the address, and the route's refusal
+shows where the rows would be. A filter change returns to the first page, and Refresh reads a preset up to now and a
+custom range again as it stands.
 
 A request filter opens a line above the table that counts the request's decisions and events and offers three
 widenings: this session (an hour either side of the request's time), this account (a quarter hour either side) and this
@@ -493,7 +514,8 @@ Follow, off by default, reads the list every 5 seconds with the range ending now
 arrived since the read before, up to eight pages of them. When more arrived than that, a line above the list reads
 "More rows arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched.
 A new row lands at the top in the accent tint until the next read, a filter change keeps Follow on, and paging to an
-older page turns it off.
+older page turns it off. When the list's own read failed, the first read Follow answers takes its place, and Next
+reads on from there.
 
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.
@@ -515,31 +537,32 @@ stand at the line's end as termini (Chosen, Held for a slot, Refused) with the o
 tone, and a pinned request's strip draws Chosen alone, or beside it the way out its outcome names. A step the record
 does not carry is drawn dashed before the decisive station and reads "not run" after it. A refusal's walk is two
 stations, the admission refused and the rest of the walk not run, with the reason on the verdict line and in the
-outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover: a table of the members
-for the eligibility, the cool reading, the cap filter and the pick (whose scores read as the candidate table's Pace
-column does), a grouped list for the pin (lookup, age, warmth) and the shed (windows, round, destinations), a rung's
-entry (the boundary's hash as its first eight characters with the whole hash on hover, its depth, prefix, write, TTL
-with the warm-until time and the gate that refused it), a hold's place, account, slot and bound, a candidate's plan,
-tier, requests in flight, Pace and windows, the outcome's rows on the terminus the decision reached, and, for a rule
-that a fired rule cut short, the names of the rules that did not run. Every list row is a label with its chips, and a
-step that did not run says so. Tab walks the stations, the candidates and the termini in the record's order, Enter or
-Space opens the focused one's popover and moves into it, and Escape closes it and returns.
+outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover, which replaces any
+other popover open on the page: a table of the members for the eligibility, the cool reading, the cap filter and the
+pick (whose scores read as the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and
+the shed (windows, round, destinations), a rung's entry (the boundary's hash as its first eight characters with the
+whole hash on hover, its depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's
+place, account, slot and bound, a candidate's plan, tier, requests in flight, Pace and windows, the outcome's rows on
+the terminus the decision reached, and, for a rule that a fired rule cut short, the names of the rules that did not run.
+Every list row is a label with its chips, and a step that did not run says so. Tab walks the stations, the candidates
+and the termini in the record's order, Enter or Space opens the focused one's popover and moves into it, and Escape
+closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
 each (the utilization, the reset, the reading's source and age), or an API key's one merged reading, the requests
 in flight against the cap, the Pace score under a header that names the window it read (the 7-day window or the model's
-week), each cell's hover spelling the share left, the hours to the reset or the subscription's end and the rate, the
-highest winning, the prefix entry, and the verdict with the one chip that decided it (`429 on 5h until 15:42`, `budget
-$1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until opened, hold the request's
-facts, the pin and its warmth (a record that pins nothing reads why: not looked up or pinning off) and the
-twenty settings in force. A
-refusal under a key or pool the registry no longer holds says so in its place. The outcome lists the pin written, the
-cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the
-hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The foot repeats the three widenings
-for the row, names the record's version (Record v1), and Copy as JSON copies the record route's answer whole, every
-field the card does not draw included. A record the retention purged reads "The record left with the retention" in the
-card's place.
+week), each cell's hover spelling the share left, the time to the reset or the subscription's end, in minutes under an
+hour and in whole hours from one, and the rate, the highest above the pace floor winning inside its tier, the prefix
+entry, and the verdict with the one chip that decided it (`429 on 5h until 15:42`, `budget $1.10 of $5.00`), whose hover
+says why the member was passed over. Three folds, closed until opened, hold the request's facts, the pin and its warmth
+(a record that pins nothing reads why: not looked up or pinning off) and the twenty settings in force.
+A refusal under a key or pool the
+registry no longer holds says so in its place. The outcome lists the pin written, the cache-map entries the answer wrote
+(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, the answer an exhaustion or
+a refusal gave, and the spend against a budget. The foot repeats the three widenings for the row, names the record's
+version (Record v1), and Copy as JSON copies the record route's answer whole, every field the card does not draw
+included. A record the retention purged reads "The record left with the retention" in the card's place.
 
 An event row opens to a bordered panel of pairs: When to the second in UTC, the account and the pool as links, then the
 kind's own pairs. An event that names a request ends with Source request, which opens the log on that request a quarter
@@ -577,9 +600,10 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 | window spent | A response head or the poll read a quota window at its limit. |
 
 An account state change names who moved the state in the console's words: `credential refused` when the upstream refused
-the account's credential, `credit balance` when it named the credit balance, `refresh failed` when the token refresh
-failed for good, `by hand` for an operator's change, and `paired` for a pairing's confirm. A deleted account's last row
-reads `deleted`, as its new state and as who moved it.
+the account's credential, `credit balance` when it named the credit balance, `funding retried` when a retry on an
+account that needed funding succeeded, `refresh failed` when the token refresh failed for good, `by hand` for an
+operator's change, and `paired` for a pairing's confirm. A deleted account's last row reads `deleted`, as its new state
+and as who moved it.
 
 Other views open the log on what they show. A Requests row and its drawer open it on the request a quarter hour either
 side. The Sessions row menu's "View in routing log" opens the session's decisions an hour either side of its last
@@ -618,44 +642,48 @@ folded token while the request log's matches the raw header, so a pattern over t
 selects nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
 `claude-cli/2.0.*` as two groups, every other agent under `other`. The charts' day ticks print the date in your zone,
 with the time beside a tick where a bucket boundary is not midnight there, and the axis says that days start at 00:00
-UTC.
+UTC. The range, the group-by, every filter, the client groups, the probes switch and the burn grouping live in the
+page's address, a preset range by its name (`range=7d`) and a custom span as its two instants `from` and `to`, so a
+reload or a shared link keeps them. The custom inputs take a pair only while its end is after its start.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
 it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
 by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
 the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
-an API-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account, key,
-request class, or session; the 5-hour share carries the peak band's weight, the 7-day share the week's own band factor,
-1 in the shipped model. The shares read under the account grouping alone, since shares of different accounts' windows do
-not add, and the Spend per minute chart draws dollars alone, a subscription account's among them for its fast-mode and
-overage answers. Past the seven lines a chart draws, the subscription accounts folded into the rest draw those dollars
-as Other (fast mode or overage), or Other (fast mode or overage, tier unknown) for those whose tier the cost model does
-not size. The account, key and request class groupings read the hourly rollups, which fold a request under the hour it
-arrived in and weigh it by that hour's band rather than at its completion, where the meter charges it. Grouped by
-account, it adds a Plan per hour chart: the share of each subscription account's 5-hour window, solid, and of its 7-day
-window, dashed, that its traffic used per hour, a bucket the cost model cannot price (a model it has no weight for, or a
-tier it has no capacity for on that window) listed under one model unlisted legend entry and drawn as a gap, a priced
-hour with a gap or the range's edge on both sides marked with a dot, an hour with no traffic counted as zero on a window
-the account priced in the range, a window with no priced bucket shown as a dash, and an account whose tier the cost
-model does not size listed as tier unknown. The chart shades the hours inside the peak band behind the 5-hour lines,
-none when the browser cannot read the band's zone, and its note opens the cost reference on the same Tiers and peak band
-tab. Latency reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that
-expired between turns, the share of input served from cache, the output split into thinking and plain output, and write
-cost against read cost in dollars or, under Window shares with one account named, as shares of that account's windows;
-Cost reports the estimated spend for the range under a Unit control with four positions (every request in dollars at the
-API price list, the billed dollars alone for the overage, fast mode and API key requests, a subscription account's
-requests as shares of its own 5-hour, 7-day and model-week windows under the account grouping, and the subscription
-requests' dollar equivalent, the position kept in the page's address as `unit`) and a Fast mode spend tile, the dollars
-fast-mode answers drew from usage credits; Cache warming reports what probes cost, the requests they kept warm and the
-probes wasted, a fast-mode session's under speed `fast`, the probe cost reading as a share under Window shares with one
-account named; and Accounts reports peak utilization, each window's usage and lead over pace per account from the quota
-samples under a window toggle, ineligible time, and pin churn per account.
+an API-key account's in dollars, grouped by account, key, request class, or session; the 5-hour share carries the peak
+band's weight, the 7-day share the week's own band factor, 1 in the shipped model. The shares read under the account
+grouping alone, since shares of different accounts' windows do not add, and the Spend per minute chart draws dollars
+alone, a subscription account's among them for its fast-mode and overage answers. Past the seven lines a chart draws,
+the subscription accounts folded into the rest draw those dollars as Other (fast mode or overage), or Other (fast mode
+or overage, tier unknown) for those whose tier the cost model does not size. The account, key and request class
+groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band
+rather than at its completion, where the meter charges it. Grouped by account, it adds a Plan per hour chart: the share
+of each subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a
+bucket the cost model cannot price (a model it has no weight for, or a tier it has no capacity for on that window)
+listed under one model unlisted legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both
+sides marked with a dot, an hour with no traffic counted as zero on a window the account priced in the range, a window
+with no priced bucket shown as a dash, and an account whose tier the cost model does not size listed as tier unknown.
+The chart shades the hours inside the peak band behind the 5-hour lines, none when the browser cannot read the band's
+zone, and its note opens the cost reference on the same Tiers and peak band tab. Latency reports percentiles read from
+the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input
+served from cache, the output split into thinking and plain output, and write cost against read cost in dollars or,
+under Window shares with one account named, as shares of that account's windows; Cost reports the estimated spend for
+the range under a Unit control with four positions (every request in dollars at the API price list, the billed dollars
+alone for the overage, fast mode and API key requests, a subscription account's requests as shares of its own 5-hour,
+7-day and model-week windows under the account grouping, and the subscription requests' dollar equivalent, the position
+kept in the page's address as `unit`) and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits;
+Cache warming reports what probes cost, the requests they kept warm and the probes wasted, a fast-mode session's under
+speed `fast`, the probe cost reading as a share under Window shares with one account named; and Accounts reports peak
+utilization, each window's usage and lead over pace per account from the quota samples under a window toggle, ineligible
+time, and pin churn per account.
 
 The Misses by reason panel counts, under the console's labels (No divergence, Model changed, System prompt changed,
 Tools changed, History edited, Previous message not found, Unavailable, Not requested), the requests whose answer
 reported each reason, conversation turns alone, since a helper request carries no member and reports nothing, with a
-per-group table below it. Every count except the Expired between turns column links to the Requests view on those
+per-group table below it, whose headers read one short word per reason (None, Model, System, Tools, History, No
+previous, Unavailable, Not asked) with the full label on hover, and a reason the console has no label for its own name,
+broken after each underscore. Every count except the Expired between turns column links to the Requests view on those
 requests: the reason set, the window as the whole hours the panel read, and the page's account, client, key, model and
 pool filters carried over, a table cell adding its row's group as the matching filter, an effort or a request class
 included. A session view's links carry its exact window instead, the session's id as the search text and the key
@@ -694,7 +722,8 @@ listener, the four storage paths (the price table's and the cost model's each wi
 secret's standing. About closes on a pointer: the values the configuration file sets are on the
 [installation page](installation.md), and `phoebis check-config` prints them. The page closes on the downstream client
 configuration, the environment block that points Claude Code at the router with a reason under each line. Its base URL
-is a placeholder for the URL that reaches the proxy listener, and the address the listener binds shows beside the block.
+carries the proxy listener's scheme, `https` where the listener terminates TLS, and the port it binds, on a placeholder
+host for the name that reaches it, and the address the listener binds shows beside the block.
 
 ## Conditions and gauges
 
@@ -769,7 +798,9 @@ nothing was pending. The detail counts the run's failures and gives the newest a
 **`certificate_expiring`** holds while the leaf a listener serves is within 30 days of its end, past the end included.
 It reads the pair the router loaded rather than the files, so a pair replaced on disk counts once `phoebis tls reload`
 loads it. The subject is the listener key, and the item opens nothing. It dates from 30 days before the leaf's end, so a
-restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past.
+restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past,
+which the dashboard's line words as `expires in 12 days` or `expired 3 days ago`, and as `expires today` and
+`expired today` in the day before the end and the day after it.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
 tried again once at the next start or on the dashboard's Replay, and the condition clears when the table empties. The

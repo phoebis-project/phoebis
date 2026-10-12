@@ -1,6 +1,6 @@
 import type {
   AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
-  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowSample,
+  QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -102,7 +102,10 @@ const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_AC
 /** The model a request asked for: Sonnet 4.6 wherever secondary served one of its attempts, else the lane's draw. */
 const modelOf = (attempts: Attempt[], drawn: string) => (attempts.some((a) => a.accountId === UNPRICED_ACCOUNT && a.cooldownSet?.reason !== 'model_rejected') ? 'claude-sonnet-4-6' : drawn);
 
-/** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
+/**
+ * Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by
+ * one.
+ */
 export function warmsCaches(keyId: string, poolId: string): boolean {
   return poolById.get(poolId)?.keepalive.enabled === true && keyById.get(keyId)?.keepaliveOptOut !== true;
 }
@@ -131,7 +134,9 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
   const phase = 1 - (resetThen - atMs) / period;
   const ceiling = shift === 0 ? 1 : Math.min(1, phase + EARLIER_LEAD);
   const utilization = Math.min(ceiling, Math.max(0.02, w.utilization * (shift === 0 ? phase / Math.max(0.05, 1 - (resetsAt - NOW) / period) : olderFactor())));
-  return { id: w.id, resetsAt: iso(resetThen), utilization: Math.round(utilization * 100) / 100 };
+  // A walked-back reading never reaches the limit by rounding or by its factor: only a story point says a window is
+  // spent. The nudge keeps a product that lands on a whole hundredth, 0.29 read as 28.999..., from losing one.
+  return { id: w.id, resetsAt: iso(resetThen), utilization: Math.min(Math.floor(utilization * 100 + 1e-9) / 100, 0.99) };
 };
 
 export const oauthWindows = (accountId: string, atMs: number, olderFactor: () => number = () => rng.float(0.4, 1.1)): AttemptWindow[] => {
@@ -143,7 +148,7 @@ export const oauthWindows = (accountId: string, atMs: number, olderFactor: () =>
   // rest send nothing and the detail panel reads n/a. A fixed factor rather than
   // a draw keeps the seeded stream the other fixtures read from where it was.
   if (!account.fableWindow) return reported;
-  return [...reported, walkBack(account.fableWindow, atMs, () => 0.8)];
+  return [...reported, storyReading(accountId, account.fableWindow, walkBack(account.fableWindow, atMs, () => 0.8), atMs)];
 };
 
 /** Neither a probe nor a token count thinks or reaches a server tool, so both carry the counts at zero. */
@@ -238,24 +243,26 @@ function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null 
 export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 
 /**
- * The story's own readings of a window where the walk back's even climb would not tell it: secondary's 5-hour window
- * runs hot from its opening at 10:42, so it leads its pace by the pool's 0.9 margin through the 11:00 shedding round
- * and the shed move after it, and reads spent from the head of 14:02:11.
+ * The story's own readings of a window where the walk back's even climb would not tell it, per account and window:
+ * secondary's 5-hour window runs hot from its opening at 10:42, so it leads its pace by the pool's 0.9 margin through
+ * the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
  */
-const STORY_READINGS: Record<string, { at: number; utilization: number }[]> = {
-  secondary: [
-    { at: clock(10, 42), utilization: 0 },
-    { at: clock(11, 0), utilization: 0.97 },
-    { at: clock(11, 8, 30), utilization: 0.99 },
-    { at: clock(14, 2, 10), utilization: 0.99 },
-    { at: clock(14, 2, 11), utilization: 1 },
-  ],
+const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
+  secondary: {
+    '5h': [
+      { at: clock(10, 42), utilization: 0 },
+      { at: clock(11, 0), utilization: 0.97 },
+      { at: clock(11, 8, 30), utilization: 0.99 },
+      { at: clock(14, 2, 10), utilization: 0.99 },
+      { at: clock(14, 2, 11), utilization: 1 },
+    ],
+  },
 };
 
-/** A 5-hour reading inside the window the story's readings cover, read off them. Any other reads as walked back. */
+/** A reading inside the live window the story's readings cover, read off them. Any other reads as walked back. */
 function storyReading(accountId: string, w: RateLimitWindow, read: AttemptWindow, atMs: number): AttemptWindow {
-  const points = STORY_READINGS[accountId];
-  if (!points || w.id !== '5h' || read.resetsAt !== w.resetsAt || atMs < points[0].at) return read;
+  const points = STORY_READINGS[accountId]?.[w.id];
+  if (!points || read.resetsAt !== w.resetsAt || atMs < points[0].at) return read;
   const after = points.findIndex((p) => p.at > atMs);
   if (after < 0) return { ...read, utilization: points[points.length - 1].utilization };
   const [from, to] = [points[after - 1], points[after]];
@@ -287,6 +294,37 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
 
+/**
+ * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
+ * the walk back. A count takes no slot, so no cap passes a member over for it and a draw cannot stand where the
+ * engine picks another. Nightly reads in overage from its spend cap's raise, the earliest its overage starts. An API
+ * key shares its tier with no other member here, so it keeps the pool's order, and outside Pace the drawn account
+ * leads its tier.
+ */
+function countOrder(ids: string[], poolId: string, atMs: number, model: string, drawn: string): string[] {
+  const pool = poolById.get(poolId);
+  if (!pool) return ids;
+  const tierOf = (id: string): number[] => {
+    const overage = id === 'nightly' && atMs >= clock(11, 30, 12) ? 1 : 0;
+    return [pool.preferSubscription ? (kindOf(id) === 'api_key' ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
+  };
+  const windowId = model.includes('fable') ? '7d_fable' : '7d';
+  const scoreOf = (id: string): number => {
+    if (pool.strategy !== 'pace') return id === drawn ? 1 : 0;
+    if (kindOf(id) === 'api_key') return 0;
+    const reading = oauthWindows(id, atMs, () => SERVED_FACTOR).find((w) => w.id === windowId && w.utilization !== null);
+    const deadlines = [reading?.resetsAt, accountById.get(id)?.subscription?.endsAt].flatMap((x) => (x ? [Date.parse(x)] : []));
+    const hours = deadlines.length ? Math.max(1, (Math.min(...deadlines) - atMs) / HOUR) : 168;
+    return Math.max(0, 1 - (reading?.utilization ?? 0)) / hours;
+  };
+  const ranked = ids.map((id) => ({ id, score: scoreOf(id), tier: tierOf(id) }));
+  ranked.sort((x, y) => {
+    const i = x.tier.findIndex((n, j) => n !== y.tier[j]);
+    return i >= 0 ? x.tier[i] - y.tier[i] : y.score - x.score;
+  });
+  return ranked.map((x) => x.id);
+}
+
 /** The story's one shedding round: secondary's 5-hour window leads its pace by the pool's margin at 11:00. */
 export const SHED_ROUND = { accountId: UNPRICED_ACCOUNT, at: clock(11, 0) };
 
@@ -313,7 +351,7 @@ const CHAIN_FROM = new Map<string, number>();
  * `drawnHead` is where the draws end when secondary is barred from a fast request's earlier attempts alone and every
  * drawn attempt runs. The usage draw is sized by it, so every row keeps the draws the stream gives it.
  */
-function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
+function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean, count: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
   const attempts: Attempt[] = [];
   const trail: string[] = [];
   const drawnTrail: string[] = [];
@@ -329,13 +367,14 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     if (idx >= 0 && pool.length > 1) pool.splice(idx, 1);
     // The stream draws as it always has, so a request handed off an account keeps every later draw where it was: an
     // account it tried already, or one that could not serve then, hands the attempt to the lane's first account that
-    // could and was not tried, and with none left the request ends at the attempt before.
+    // could and was not tried, and with none left the request ends at the attempt before. A token count goes where the
+    // engine's order puts it among the accounts that could take it.
     const upstreamStatus = last ? finalStatus : rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
     const outcome: AttemptOutcome = upstreamStatus === 200 ? 'succeeded' : upstreamStatus === 429 ? 'rate_limited' : 'upstream_error';
     // Secondary serves Sonnet 4.6 alone, so it takes a request only as its last attempt, where the request is the
     // Sonnet 4.6 turn it serves rather than the model the lane drew.
     const untried = (id: string) => !trail.includes(id) && servable(id, cursor, model, fast) && !(!last && id === UNPRICED_ACCOUNT);
-    const handedTo = untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
+    const handedTo = count ? countOrder(lane.accountIds.filter(untried), lane.poolId, cursor, model, drawnId)[0] : untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
     if (handedTo === undefined) ended = true;
     // The trail `drawnHead` reads, on the hand-off the usage draw is sized by.
     const drawnUntried = (id: string) => !drawnTrail.includes(id) && servable(id, cursor, model, fast) && !(fast && !last && id === UNPRICED_ACCOUNT);
@@ -361,6 +400,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
+      // An answer's usage names the tier it ran on, and a token count's answer carries no usage. Every drawn answer ran
+      // on the standard tier.
+      serviceTier: upstreamStatus === 200 && !count ? 'standard' : null,
       startedAt: iso(cursor),
       // The upstream names its request on every answer, an error document included, and a message on a 200 alone.
       upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
@@ -378,16 +420,17 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   }
   // A 429 fails over until no member of the pool is left that could serve, so a request that answered one tried each
   // member the draw left, on no draw, in the order the reselect takes them: the pool's tiers, which its order follows
-  // (the plan-funded subscriptions, nightly once in overage, the API key). They answer 429 too, but secondary,
-  // which serves Sonnet 4.6 alone: it refuses any other model, as the rejection story's account does, and its plan draws
-  // no usage credits for a fast request.
+  // (the plan-funded subscriptions, nightly once in overage, the API key), and a token count's by its Pace score
+  // inside a tier. They answer 429 too, but secondary, which serves Sonnet 4.6 alone: it refuses any other model, as
+  // the rejection story's account does, and its plan draws no usage credits for a fast request.
   const tail = attempts[attempts.length - 1];
   let added = 0;
   if (tail?.upstreamStatus === 429) {
     const sonnet46 = attempts.some((a) => a.accountId === UNPRICED_ACCOUNT);
     // A request secondary took is the Sonnet 4.6 turn it serves, which is no fast one.
     const stillFast = fast && !sonnet46;
-    for (const { accountId } of poolById.get(lane.poolId)?.members ?? []) {
+    const members = (poolById.get(lane.poolId)?.members ?? []).map((m) => m.accountId);
+    for (const accountId of count ? countOrder(members, lane.poolId, cursor, model, '') : members) {
       if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
       const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
       const refuses = accountId === UNPRICED_ACCOUNT && !sonnet46;
@@ -428,7 +471,8 @@ function buildRequests(): RequestLog[] {
     const lane = rng.weighted([{ value: LANES[0], weight: 11 }, { value: LANES[1], weight: 5 }, { value: LANES[2], weight: 1.6 }]);
     // Skew toward recent hours so the dashboard's "recent" table is dense.
     const offset = Math.pow(rng.next(), 1.4) * span;
-    // Whole milliseconds, as the ledger stamps an instant, so the figures read off the row's instants carry no fraction.
+    // Whole milliseconds, as the ledger stamps an instant, so the figures read off the row's instants carry no
+    // fraction.
     const atMs = Math.floor(NOW - offset - rng.int(1, 60) * 1000);
     const hourOfDay = new Date(atMs).getHours();
     if (hourOfDay >= 1 && hourOfDay <= 6 && rng.chance(0.65)) continue;
@@ -436,7 +480,7 @@ function buildRequests(): RequestLog[] {
     const drawn = rng.weighted(lane.models);
     const finalStatus = kind === 'probe' ? (rng.chance(0.97) ? 200 : 502) : rng.weighted([{ value: 200, weight: 88 }, { value: 429, weight: 5 }, { value: 529, weight: 3 }, { value: 502, weight: 2 }]);
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
-    const { attempts: tried, chainFrom, drawnHead, whole } = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind));
+    const { attempts: tried, chainFrom, drawnHead, whole } = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind), kind === 'count_tokens');
     // A request no account could serve still draws its answer below, so every later row keeps its draws.
     const head = tried[tried.length - 1] as Attempt | undefined;
     const model = modelOf(tried, drawn);
@@ -756,6 +800,8 @@ interface StorySeed {
   at: number;
   attempts: StoryAttempt[];
   canonical?: string;
+  /** Whether the bodies were captured, where it is not the laptop key's rule. */
+  capturedBodies?: boolean;
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
@@ -771,6 +817,8 @@ interface StorySeed {
   /** The client's session, a prefix of the story's own ids. */
   session: string;
   status?: number;
+  /** The tier the answer ran on, where it is not the standard one. */
+  tier?: 'priority';
   usage?: Partial<Usage>;
   userAgent?: string;
 }
@@ -778,15 +826,20 @@ interface StorySeed {
 /** The routing log's hand-written requests: the story hour, the morning's shedding round and its move. */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1',
-  'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_69e30548-32e', 'req_6c3a9e27-5b1',
-  'req_868264bc-611', 'req_9a07c4e1-d55', 'req_a1f04c2e-7b3', 'req_b2bed817-a58', 'req_b72e9d05-c14',
-  'req_c41d0311-200', 'req_c90d3f61-a28', 'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118',
-  'req_e5a1c093-4d7', 'req_ef099b34-453', 'req_f3b6d218-85a', 'req_f8085653-422',
+  'req_3b8e51f4-0a9', 'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_5e2f7a19-b03', 'req_69e30548-32e',
+  'req_6c3a9e27-5b1', 'req_7a2d4c18-e95', 'req_868264bc-611', 'req_9a07c4e1-d55', 'req_a1f04c2e-7b3',
+  'req_a6c19e73-5d2', 'req_b2bed817-a58', 'req_b72e9d05-c14', 'req_c41d0311-200', 'req_c90d3f61-a28',
+  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e5a1c093-4d7', 'req_ef099b34-453',
+  'req_f3b6d218-85a', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
 /** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
+/** The session a laptop client sent. */
+export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
+/** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
+export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
@@ -814,6 +867,8 @@ function storyRow(seed: StorySeed): RequestLog {
       response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
+      // The tier is read off the answer's usage, which a token count's answer carries none of.
+      serviceTier: a.status === 200 && kind !== 'count_tokens' ? (seed.tier ?? 'standard') : null,
       startedAt: iso(a.at),
       upstreamMessageId: a.status === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
@@ -825,7 +880,8 @@ function storyRow(seed: StorySeed): RequestLog {
   const durationMs = seed.attempts.length ? last.at + last.ms - seed.attempts[0].at + (seed.held?.heldMs ?? 0) : null;
   // The head lands 640 ms into the serving attempt and the first content 270 ms after it, each held under the finish.
   const headRoom = durationMs === null ? 0 : durationMs - STREAM_TAIL;
-  const ttfbMs = answered && kind !== 'count_tokens' ? Math.min(last.at - seed.at + 640, headRoom) : null;
+  // A request the relay answered with an error of its own forwarded no head, whatever the upstream's head was.
+  const ttfbMs = answered && (seed.status ?? 200) === 200 && kind !== 'count_tokens' ? Math.min(last.at - seed.at + 640, headRoom) : null;
   const ttftMs = ttfbMs === null ? null : kind === 'inference' ? Math.min(ttfbMs + 270, headRoom) : ttfbMs;
   const status = seed.status ?? last?.status ?? 429;
   return {
@@ -837,7 +893,7 @@ function storyRow(seed: StorySeed): RequestLog {
     attempts,
     autoMode: null,
     canonicalModel: seed.canonical ?? seed.model,
-    capturedBodies: seed.keyId === 'laptop',
+    capturedBodies: seed.capturedBodies ?? seed.keyId === 'laptop',
     client: CLIENTS[seed.keyId] ?? null,
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
@@ -883,7 +939,8 @@ function storyRequests(): RequestLog[] {
   // A 429 whose head rejects no plan window cools its account for the retry-after alone.
   const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
   const seeds: StorySeed[] = [
-    { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
+    // An answer the upstream ran on its priority tier.
+    { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
     {
       agentId: 'main',
       at: t(14, 26, 58),
@@ -1001,6 +1058,25 @@ function storyRequests(): RequestLog[] {
       session: '0d588de5',
       usage: { cacheRead: 21_400, cacheWrite5m: 3_100, input: 1_500, output: 880 },
     },
+    // Primary's head arrived and the relay could not decode the stream after it, so it forwarded none and answered 502.
+    {
+      agentId: 'main',
+      at: t(14, 22, 48),
+      attempts: [{ accountId: 'primary', at: t(14, 22, 48), ms: 1_900, status: 200 }],
+      errorCode: 'stream_undecodable',
+      id: 'req_5e2f7a19-b03',
+      keyId: 'laptop',
+      model: 'claude-sonnet-4-6',
+      outcome: 'failed',
+      requestClass: 'main',
+      session: CLIENT_SESSION_ID,
+      status: 502,
+    },
+    // A Fable turn on primary's plan whose bodies were captured, so the drawer reads a plan-funded answer of the model.
+    { agentId: 'main', at: t(14, 23, 30), attempts: [{ accountId: 'primary', at: t(14, 23, 30), ms: 8_200, status: 200 }], capturedBodies: true, id: 'req_a6c19e73-5d2', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 52_300, cacheWrite1h: 3_400, input: 2_100, output: 1_650, thinking: 640 } },
+    // The one turn of the session the mod released whole later. The release ends the keepalive record alone, so the
+    // pin this turn wrote stays.
+    { agentId: 'main', at: t(14, 3), attempts: [{ accountId: 'primary', at: t(14, 3), ms: 5_600, status: 200 }], id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1128,7 +1204,8 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429. The reason is
     // drawn and set aside so the stream stays where it was. The move stands where a rule takes the pin there.
     const lane = LANES.find((l) => l.keyId === r.keyId);
-    // One draw either way for this seed only: the chance the forced row skips comes up false here, and a seed where it came up true would spend a weighted draw as well and shift every later row.
+    // One draw either way for this seed only. The chance the forced row skips comes up false here, and a seed where it
+    // came up true would spend a weighted draw as well and shift every later row.
     if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
       const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
       if (!spentOwed) h.weighted(MIGRATION_REASONS);
@@ -1195,10 +1272,15 @@ function storyEvents(): Map<string, RequestEvent[]> {
   return out;
 }
 
-/** The events the mock's request detail answers, by request id; a failover writes one, a few rows carry a spent or a hot window. */
+/**
+ * The events the mock's request detail answers, by request id. A failover writes one, and a few rows carry a spent or
+ * a hot window.
+ */
 export const REQUEST_EVENTS: Map<string, RequestEvent[]> = buildRequestEvents();
 
-/** The obstacles a fresh placement's passed-over members are drawn from; being ranked behind another is the usual one. */
+/**
+ * The obstacles a fresh placement's passed-over members are drawn from. Being ranked behind another is the usual one.
+ */
 const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
   { value: 'above_ceiling', weight: 2 },
   { value: 'at_cap', weight: 1 },
@@ -1341,6 +1423,11 @@ function identifyRequests() {
   // A second fork on its base's own account, so the Sessions table reads both relations.
   const second = turnOf(SESSION_IDS[5]);
   if (second) Object.assign(second, { forkDepth: 2, forkedFrom: SESSION_IDS[3] });
+  // A fork of an unpinned session, so the Sessions table reads one that holds no pin. The draw skips by the local hour,
+  // so either of two such sessions can open on a token count: the other takes the fork then, its base a session of its
+  // own key.
+  const pinless = [{ base: SESSION_IDS[7], r: turnOf(SESSION_IDS[12]) }, { base: SESSION_IDS[1], r: turnOf(SESSION_IDS[13]) }].find((f) => f.r !== undefined);
+  if (pinless?.r) Object.assign(pinless.r, { forkDepth: 2, forkedFrom: pinless.base });
 }
 
 /**
@@ -1576,10 +1663,33 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
   return last?.overageInUse === true ? 'overage' : 'plan';
 };
 
-function rollups(): HourlyRollup[] {
+/**
+ * An hour's plan-window shares: each request priced at its own band and completion, then summed, so a request across a
+ * band edge reads as its own shares do. A request is priced here rather than its cost shares read, which are null on
+ * every request the plan did not fund. A window any request prices null reads null, and a request with no token, or on
+ * an account without a tier, prices nothing.
+ */
+function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Record<string, number | null> {
+  const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
+  const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, model)];
+  const out: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
+  for (const { at, usage } of priced) {
+    if (tier === undefined || tokensTotal(usage) === 0) continue;
+    for (const w of windows) {
+      const share = shareOf(TABLES, w, tier, model, usage, at);
+      const sum = out[w];
+      out[w] = share === null || sum === null ? null : sum + share;
+    }
+  }
+  return out;
+}
+
+const upstreamFailed = (r: RequestLog) => r.status !== 200 && r.status !== 429 && r.status !== 529;
+
+export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
-  for (const r of REQUESTS) {
+  for (const r of rows) {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
@@ -1614,12 +1724,12 @@ function rollups(): HourlyRollup[] {
       const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}`;
       parts.set(part, [...(parts.get(part) ?? []), r]);
     }
-    for (const [part, rows] of parts) {
+    for (const [part, partRows] of parts) {
       const [effort, requestClass] = part.split('|');
-      const ok = rows.filter((r) => r.status === 200);
+      const ok = partRows.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
-      for (const r of rows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
-      const keptHere = rows.filter((r) => kept.has(r));
+      for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+      const keptHere = partRows.filter((r) => kept.has(r));
       out.push({
         hour,
         client: CLIENTS[keyId] ?? '-',
@@ -1636,38 +1746,43 @@ function rollups(): HourlyRollup[] {
         speed,
         requests: {
           // A stream that ended short committed its 200 and still is no success, so it counts on its own.
-          incomplete: rows.filter((r) => r.outcome === 'incomplete').length,
+          incomplete: partRows.filter((r) => r.outcome === 'incomplete').length,
           ok: ok.filter((r) => r.outcome === 'succeeded').length,
-          rate_limited: rows.filter((r) => r.status === 429).length,
+          rate_limited: partRows.filter((r) => r.status === 429).length,
           // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-          overloaded: rows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
-          upstream_error: rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
+          overloaded: partRows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
+          // the same status filter, so the error split that subtracts it never reads negative.
+          undecodable: partRows.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+          upstream_error: partRows.filter(upstreamFailed).length,
           // The ledger files a stream the client closed as failed, under the code the relay gave it.
-          client_gone: rows.filter((r) => r.errorCode === 'client_gone').length,
+          client_gone: partRows.filter((r) => r.errorCode === 'client_gone').length,
         },
         // Every attempt but the last one moved the request to another member.
-        failovers: rows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        failovers: partRows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
         // The lane hour draws one migration, filed with the first request that moved.
-        migrations: rows.includes(moved[0]) ? migrations : 0,
+        migrations: partRows.includes(moved[0]) ? migrations : 0,
         effort,
         tokens: {
-          uncachedInput: rows.reduce((s, r) => s + r.usage.input, 0),
-          cacheRead: rows.reduce((s, r) => s + r.usage.cacheRead, 0),
-          cacheWrite5m: rows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
-          cacheWrite1h: rows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
-          output: rows.reduce((s, r) => s + r.usage.output, 0),
-          thinking: rows.reduce((s, r) => s + r.usage.thinking, 0),
-          webFetch: rows.reduce((s, r) => s + r.usage.webFetch, 0),
-          webSearch: rows.reduce((s, r) => s + r.usage.webSearch, 0),
+          uncachedInput: partRows.reduce((s, r) => s + r.usage.input, 0),
+          cacheRead: partRows.reduce((s, r) => s + r.usage.cacheRead, 0),
+          cacheWrite5m: partRows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
+          cacheWrite1h: partRows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
+          output: partRows.reduce((s, r) => s + r.usage.output, 0),
+          thinking: partRows.reduce((s, r) => s + r.usage.thinking, 0),
+          webFetch: partRows.reduce((s, r) => s + r.usage.webFetch, 0),
+          webSearch: partRows.reduce((s, r) => s + r.usage.webSearch, 0),
         },
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
         expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
-        costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
-        cost: sumSplit(rows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
-        histograms: histogramsOf(rows),
+        costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
+        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
+        // At each answer's completion, the instant its own shares price it at.
+        shares: hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        histograms: histogramsOf(partRows),
         keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
@@ -1683,7 +1798,7 @@ function rollups(): HourlyRollup[] {
   return out.sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 }
 
-export const ROLLUPS: HourlyRollup[] = rollups();
+export const ROLLUPS: HourlyRollup[] = rollups(REQUESTS);
 
 /** Log-normal-ish samples so the synthesized hours have the same tail shape as the logged ones. */
 function sampled(h: Rng, n: number, median: number, spread: number): number[] {
@@ -1792,7 +1907,7 @@ function historicalRollups(): HourlyRollup[] {
         sessionId,
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
-        requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
+        requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, undecodable: 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
@@ -1802,6 +1917,9 @@ function historicalRollups(): HourlyRollup[] {
         uncached: Math.max(0, ok - Math.round(ok * 0.85)),
         costUsd: costOf(model, usage, fast),
         cost: costSplitOf(model, usage, fast),
+        // A synthesized hour holds no request of its own, so its tokens price as one answer at the hour, as its dollars
+        // do.
+        shares: hourShares(accountId, model, [{ at: t, usage }]),
         histograms: {
           durationMs: histogramOf(duration),
           outputTps: histogramOf(sampled(h, ok, big ? 55 : 80, 0.35)),
@@ -1841,7 +1959,7 @@ function historicalRollups(): HourlyRollup[] {
           sessionId,
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
-          requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
+          requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, undecodable: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
@@ -1851,6 +1969,7 @@ function historicalRollups(): HourlyRollup[] {
           uncached: 0,
           costUsd: probeCost,
           cost: costSplitOf(model, probeUsage),
+          shares: hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
           keptWarm: { requests: 0, tokens: 0 },
           probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
@@ -2057,6 +2176,8 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   // its object. The opening frame carries the message with its usage, no content and no stop reason, as the
   // upstream sends it, the reason arriving on the message_delta frame.
   const cut = ANSWER_TEXT.indexOf('Moving');
+  // A stream that did not succeed stopped after the content it reached, so its capture holds no close.
+  const closed = request.outcome === 'succeeded';
   const response =
     request.transport === 'sse'
       ? [
@@ -2064,9 +2185,13 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
           sseFrame('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
           sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(0, cut) } }),
           sseFrame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER_TEXT.slice(cut) } }),
-          sseFrame('content_block_stop', { type: 'content_block_stop', index: 0 }),
-          sseFrame('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: request.usage.output } }),
-          sseFrame('message_stop', { type: 'message_stop' }),
+          ...(closed
+            ? [
+                sseFrame('content_block_stop', { type: 'content_block_stop', index: 0 }),
+                sseFrame('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: request.usage.output } }),
+                sseFrame('message_stop', { type: 'message_stop' }),
+              ]
+            : []),
         ].join('')
       : { ...message, content: [{ type: 'text', text: ANSWER_TEXT }] };
   // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.

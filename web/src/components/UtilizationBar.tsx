@@ -123,6 +123,7 @@ export function UtilizationBar({ expert, margin, now, readings, selectBelow }: {
         items={[
           { color: 'var(--series-1)', label: '5-hour reading' },
           { color: 'var(--series-4)', label: '7-day reading' },
+          ...(margin !== null ? [{ color: 'var(--serious)', label: 'Shedding margin' }] : []),
         ]}
       />
     </div>

@@ -97,7 +97,7 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
-        reason: 'rate_limited (5h window exhausted)',
+        reason: 'rate_limit (5h window exhausted)',
         scope: 'account',
         setAt: ago(20 * MINUTE + 29_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
@@ -287,13 +287,13 @@ const HISTORY_SPAN = 7 * DAY;
 // Concave climb: usage lands early in a window and tapers as the session cools.
 const climb = (phase: number) => Math.min(1, Math.pow(Math.max(0, phase), 0.75));
 
-function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: number): QuotaSample[] {
+function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: number, endMs: number): QuotaSample[] {
   const rng = createRng(seed);
   const samples: QuotaSample[] = [];
   const start = NOW - HISTORY_SPAN;
   const currentStart = resetsAtMs - periodMs;
   const peakFor = new Map<number, number>();
-  for (let t = start; t <= NOW; t += SAMPLE_STEP) {
+  for (let t = start; t <= endMs; t += SAMPLE_STEP) {
     const windowIndex = Math.floor((t - currentStart) / periodMs);
     const windowStart = currentStart + windowIndex * periodMs;
     let peak = peakFor.get(windowIndex);
@@ -318,10 +318,16 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
 
 const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
+/** Where an account's samples end: legacy's at its last clean poll, since every poll after it failed, the rest now. */
+const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
+  const clean = account.usage?.poll?.lastCleanAt;
+  return account.id === 'legacy' && clean ? Date.parse(clean) : NOW;
+};
+
 export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
   [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
     accountId: account.id,
     windowId: w.id,
-    samples: sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization),
+    samples: sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account)),
   })),
 );

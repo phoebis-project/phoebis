@@ -112,6 +112,44 @@ test('Keep editing hands the focus back to the last control the dialog held when
   focusedIs(save, 'the last control the dialog held has the focus again');
 });
 
+test('a focusin on the dialog element itself is ignored, so Keep editing returns to the last control before it', () => {
+  // The dialog element is no control to hand the focus back to: recorded, it would send Keep editing to the X.
+  const { closes, element, save } = dialog(true);
+  act(() => save.focus());
+  act(() => save.blur());
+  act(() => element.dispatchEvent(new window.Event('focusin', { bubbles: true })));
+  clickOn(element);
+  assert.ok(question(), 'the dialog asks');
+  act(() => buttonIn(question(), 'Keep editing').click());
+  assert.equal(closes.count, 0);
+  focusedIs(save, 'the control the dialog held before its own focusin has the focus again');
+});
+
+test('a dialog that mounts open records the focus showModal gives it', () => {
+  // A browser's showModal moves the focus into the dialog before any later effect runs, and the control it lands on
+  // need not be the first one, so the shim focuses Save (the X comes first) as it opens.
+  const shim = window.HTMLDialogElement.prototype.showModal;
+  window.HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute('open', '');
+    buttonIn(this, 'Save')?.focus();
+  };
+  try {
+    const { close, closes, element, save } = dialog(true);
+    focusedIs(save, 'showModal focused Save');
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    act(() => outside.focus());
+    clickOn(element);
+    assert.ok(question(), 'the dialog asks');
+    act(() => buttonIn(question(), 'Keep editing').click());
+    assert.equal(closes.count, 0);
+    focusedIs(save, 'the control showModal focused has the focus again');
+    assert.ok(document.activeElement !== close, 'the first control did not take it');
+  } finally {
+    window.HTMLDialogElement.prototype.showModal = shim;
+  }
+});
+
 test('Keep editing focuses the first control of the dialog when none held the focus', () => {
   const { close, element } = dialog(true);
   focusedIs(document.body, 'nothing holds the focus before the click');

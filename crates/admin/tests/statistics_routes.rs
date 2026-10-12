@@ -174,7 +174,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     assert_eq!(
         pricing,
-        phoebis_admin::table_envelopes(&shipped, &loaded),
+        serde_json::to_value(phoebis_admin::table_envelopes(&shipped, &loaded)).unwrap(),
         "the price route answers both envelopes the settings echo carries"
     );
     assert!(

@@ -15,7 +15,8 @@ forms bound, in the route's own wording, so a form that drifts from its route fa
 
 ```sh
 npm install
-npm run dev                        # http://127.0.0.1:5173, /admin proxied to a router on 127.0.0.1:8081
+npm run dev                        # http://127.0.0.1:5173, /admin and /api-reference/openapi.json proxied to a router
+                                   # on 127.0.0.1:8081
 VITE_PHOEBIS_MOCK=1 npm run dev    # the same page against the mock; sign in with the secret admin
 npm run build                      # typecheck, then bundle into dist/
 ```
@@ -26,6 +27,8 @@ The other scripts:
 - `npm run e2e` runs the browser pass against a running router ([e2e/README.md](e2e/README.md)).
 - `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port. Its shots go to
   `PHOEBIS_SCREENSHOT_DIR`, or to `phoebis-screenshots` under the system's temporary directory when that is unset.
+- `npm run lint` runs ESLint over the sources, the tests, the smoke checks, the browser pass and the scripts. ESLint
+  needs Node 22.13 or later on the 22 line, a later 22 than the build needs.
 - `npm run smoke` mounts every view in jsdom against the mock and checks what it draws.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.

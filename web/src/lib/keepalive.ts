@@ -1,4 +1,5 @@
 import type { KeepaliveRecipe, KeepaliveState, RecipeCause } from '@/api/types';
+import { REQUEST_RANGES } from '@/lib/address';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -161,13 +162,6 @@ export function orderRecipes(agents: readonly KeepaliveRecipe[]): KeepaliveRecip
 }
 
 export type RequestsRange = '1h' | '6h' | '24h';
-
-/** The request log's ranges by name and width, as the Requests page lists them: a page never imports another page. */
-const REQUEST_RANGES: readonly { ms: number; name: RequestsRange }[] = [
-  { ms: 3_600_000, name: '1h' },
-  { ms: 6 * 3_600_000, name: '6h' },
-  { ms: 24 * 3_600_000, name: '24h' },
-];
 
 /**
  * A minute under each width: the request log measures its window from its own load, a moment after the click that

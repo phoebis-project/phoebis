@@ -2,12 +2,13 @@ import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
-import { decodeSettings, effectiveLabel, planLabel } from '@/api/decode';
+import { decodeSettings, effectiveLabel } from '@/api/decode';
 import { ApiError, call, reportFailure, SessionNotKept } from '@/api/http';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { installClock } from '@/lib/clock';
+import { planLabel } from '@/lib/quota';
 import { SETTINGS_WIRE } from '@/mock/operations';
 import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 import { SETTINGS_SAMPLE } from '@/mock/samples';
@@ -20,6 +21,8 @@ export { AttentionRows } from '@/components/AttentionRows';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';
+// The viewer's row height and margin, so a body check bounds the drawn rows by the figures the viewer draws by.
+export { ROW_PX, WINDOW_ROWS } from '@/components/BodyViewer';
 // The two cost panels a check mounts alone, on a cost model the mock does not answer.
 export { PeakBand } from '@/components/costs/PeakBand';
 export { PlanRates } from '@/components/costs/PlanRates';
@@ -30,7 +33,7 @@ export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { fmtCompact, fmtPct, fmtShare, shortModel } from '@/lib/format';
+export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
 export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';

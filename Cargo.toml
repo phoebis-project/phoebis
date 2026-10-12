@@ -66,6 +66,8 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2"
+utoipa = { version = "6.0.0", features = ["axum_extras", "preserve_order", "preserve_path_order"] }
+utoipa-axum = "0.3.0"
 xxhash-rust = { version = "0.8.18", features = ["xxh64"] }
 zeroize = { version = "1.9.0", features = ["derive"] }
 zstd = "0.14.0"

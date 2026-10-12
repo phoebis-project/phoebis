@@ -1,8 +1,8 @@
 import { type FocusEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { ChipView, rowValue } from '@/components/DecisionCard';
+import { ChipView, rowValue } from '@/components/ChipView';
 import { HashChip } from '@/components/EntryChips';
-import { Badge, useDescription } from '@/components/ui/primitives';
+import { Badge, Described, useDescription } from '@/components/ui/primitives';
 import type { StripLayout } from '@/lib/decisionStrip';
 import type { Chip } from '@/lib/routingLog';
 import type { PlanGroup, PlanRow, PlanTable, PopoverPlan, WindowRow } from '@/lib/stripFacts';
@@ -20,24 +20,6 @@ const WINDOW_COLUMNS: { key: keyof WindowRow; label: string; numeric: boolean }[
   { key: 'source', label: 'Source', numeric: false },
   { key: 'age', label: 'Age', numeric: true },
 ];
-
-/**
- * Describes the element `children` draws by `text` for a reader: through the card's description host where one
- * stands, else through a hidden node after the element, as the attempt trail's is.
- */
-export function Described({ children, text }: { children: (describedBy: string | undefined) => ReactNode; text: string | undefined }) {
-  const described = useDescription(text);
-  return (
-    <>
-      {children(described?.id)}
-      {described?.sibling && (
-        <span id={described.id} className="sr-only" data-descriptions="">
-          {text}
-        </span>
-      )}
-    </>
-  );
-}
 
 /** A chip's hover described through the host as a `Badge`'s is. Outside one the title alone describes it. */
 function DescribedChip({ chip, marked }: { chip: Chip; marked?: boolean }) {

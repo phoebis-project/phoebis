@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -111,7 +111,9 @@ const columnClasses = (table) => {
     rows: rows.length,
   };
 };
-/** Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class. */
+/**
+ * Every header of `table` fit or fill, the fill ones reading `fill` in order, and every row's cell its header's class.
+ */
 const columnsMarked = (name, table, fill) => {
   const read = columnClasses(table);
   results.push({
@@ -132,12 +134,54 @@ const fillTitles = (name, table) => {
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
+/** A multi-select's own options: the Select all row heads every list, so a count, a list or a first pick reads past it. */
+const CHOICE = '.mselect__option:not(.mselect__option--all)';
 /** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
 const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 /** The discard question while it is up, the topmost open dialog (the question's own modal makes it so), or null. */
 const discardQuestion = (root) => {
   const last = [...root.querySelectorAll('dialog[open]')].pop();
   return last && (last.textContent ?? '').includes('Discard changes?') ? last : null;
+};
+/** The open dialogs of a mount, topmost last, and their titles. */
+const openDialogs = (m) => [...m.container.querySelectorAll('dialog[open]')];
+const dialogTitles = (m) => openDialogs(m).map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+/** A click on the dialog's own element (its backdrop), then a settle. */
+const outsideOf = async (m, dialog) => {
+  clickOutside(dialog);
+  await m.settle(200);
+};
+/** The Escape key on the focused element, which the run's shim hands to the topmost open dialog. */
+const escapeOn = async (m) => {
+  document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+  await m.settle(200);
+};
+/**
+ * A Discard check: the open dialogs counted before `act` and after it, each against its expected count, so a dialog
+ * that never opened fails the check too. `extra` is the check's own reading after the click and `detail` what its
+ * failure prints beside the counts.
+ */
+const discardCounted = async (m, name, act, expected, extra = () => true, detail = () => []) => {
+  const before = openDialogs(m).length;
+  await act();
+  const after = openDialogs(m).length;
+  results.push({
+    name,
+    ok: before === expected.before && after === expected.after && extra(),
+    missing: [`${before} open before, ${after} after, ${expected.before} and ${expected.after} expected: ${dialogTitles(m).join(', ')}`, ...detail()],
+  });
+};
+/**
+ * Polls `pred` every 50 ms of wall time, up to `limit` ms, for a check that waits on what the page draws rather than
+ * on a fixed span. Answers whether it held, so a check whose wait expired fails by its own reading.
+ */
+const until = async (m, pred, limit = 3_000) => {
+  const from = performance.now();
+  while (!pred()) {
+    if (performance.now() - from >= limit) return false;
+    await m.settle(50);
+  }
+  return true;
 };
 
 /**
@@ -486,10 +530,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 10, 0 and 0 pins, the pinned sessions under their keys, all on primary or nightly, and the
-  // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
+  // The story's pools hold 20, 0 and 0 pins, one per key, session, agent and model under their keys, all on primary or
+  // nightly, over 12 pinned rows, so a hero counting the pinned rows or a note counting every row's account reads
+  // otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '10' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '20' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -637,7 +682,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
-  const absolute = /^[A-Z][a-z]{2} \d{2}, \d{4}/;
+  const absolute = /^no reading since the reset, [A-Z][a-z]{2} \d{2}, \d{4}/;
   const drawn = {
     chip: [chip?.textContent?.trim(), chip?.classList.contains('qchip--absent'), chip?.getAttribute('title')],
     meter: meter?.classList.contains('meter--absent'),
@@ -646,10 +691,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
-    reset: ['expired 2d 0h ago, no reading since', true, true],
+    reset: ['expired 2d 0h ago', true, true],
   };
   results.push({
-    name: '/quota an expired window reads expired with no share and an empty meter',
+    name: '/quota the expired cell reads ago with the reset on its title',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn)],
   });
@@ -682,7 +727,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   });
   const titleOf = (name) => rows.find((r) => r.account === 'primary' && r.name === name)?.title ?? 'no title';
   results.push({
-    name: '/quota the story holds one window ahead of pace and one behind',
+    name: "/quota primary's 5h window reads ahead of pace and its 7d window behind",
     ok: titleOf('5h').endsWith('ahead of pace') && titleOf('7d').endsWith('behind pace'),
     missing: [titleOf('5h'), titleOf('7d')],
   });
@@ -1126,8 +1171,39 @@ await readsAgain('/', 'getOverview');
   const failed = line()?.textContent ?? '';
   results.push({
     name: '/ the as-of line moves after a refresh and names a failed one',
-    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh failed: ledger locked') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
+    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
     missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
+  });
+  page.unmount();
+}
+{
+  // The line reads the oldest of the page's five reads, so a refresh of the sessions that fails holds the line at the
+  // sessions' last answer and names them, though the 24-hour figures refreshed.
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const line = () => page.container.querySelector('.dash__asof');
+  const first = line()?.getAttribute('title') ?? null;
+  failNextCall('listSessions', '/admin/sessions', 'store busy');
+  tick(30_000);
+  await page.settle();
+  const text = line()?.textContent ?? '';
+  const held = line()?.getAttribute('title') ?? null;
+  results.push({
+    name: '/ the as-of line names a failed read and reads the oldest of the five',
+    ok: first !== null && text.startsWith('Last refresh of the sessions failed: store busy. Showing data as of ') && held === first,
+    missing: [text || 'no line', `title ${first} then ${held}`],
+  });
+  page.unmount();
+}
+{
+  // A read whose first load failed holds nothing to be as old as, and its card names the error already.
+  failNextCall('getOverview', '/admin/dashboard', 'ledger locked');
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const text = page.container.querySelector('.dash__asof')?.textContent ?? '';
+  const errors = [...page.container.querySelectorAll('.empty--error .empty__title')].map((t) => t.textContent);
+  results.push({
+    name: '/ the as-of line leaves a read that never answered to its card',
+    ok: text.startsWith('As of ') && errors.includes('Could not load the 24-hour figures'),
+    missing: [text || 'no line', JSON.stringify(errors)],
   });
   page.unmount();
 }
@@ -1411,11 +1487,10 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
 {
   // The Add account dialog: the id derives from the label, and the OAuth kind opens the pairing with no row written.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const open = () => [...m.container.querySelectorAll('dialog[open]')];
   const openAdd = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
     await m.settle(300);
-    return open().pop() ?? null;
+    return openDialogs(m).pop() ?? null;
   };
   /** A dialog's field by its label, and the input inside it. */
   const fieldOf = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label) ?? null;
@@ -1434,7 +1509,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const names = () => [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
 
   let dlg = await openAdd();
-  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(open().length)] });
+  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(openDialogs(m).length)] });
   const oauthHint = inputOf(dlg, 'Label')?.getAttribute('placeholder') ?? null;
   await typeInto(inputOf(dlg, 'Label'), '!!!');
   results.push({
@@ -1457,19 +1532,19 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const cancels = countCalls('cancelPairing');
   primary(dlg)?.click();
   await m.settle(500);
-  const pairingDlg = open().pop() ?? null;
+  const pairingDlg = openDialogs(m).pop() ?? null;
   const pairingTitle = pairingDlg?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
   results.push({
     name: '/accounts Start pairing opens the pairing dialog with no new row in the list',
-    ok: open().length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
-    missing: [`${open().length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+    ok: openDialogs(m).length === 1 && pairingTitle === 'Pair Fresh desk' && reads.calls.length === 0 && rowCount() === rowsBefore,
+    missing: [`${openDialogs(m).length} open`, pairingTitle || 'no title', `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
   });
   buttonIn(pairingDlg, 'Cancel')?.click();
   await m.settle(300);
   results.push({
     name: "/accounts Cancel on a new account's pairing leaves the list unchanged",
-    ok: pairingTitle === 'Pair Fresh desk' && open().length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
-    missing: [pairingTitle || 'no pairing dialog', `${open().length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
+    ok: pairingTitle === 'Pair Fresh desk' && openDialogs(m).length === 0 && cancels.calls.length === 1 && reads.calls.length === 0 && rowCount() === rowsBefore && !names().includes('Fresh desk'),
+    missing: [pairingTitle || 'no pairing dialog', `${openDialogs(m).length} open`, `cancelPairing ${cancels.calls.length}`, `listAccounts ${reads.calls.length}`, `rows ${rowCount()} from ${rowsBefore}`],
   });
   reads.restore();
   cancels.restore();
@@ -1498,16 +1573,16 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       enabled: primary(dlg)?.disabled === false,
       id: inputOf(dlg, 'Id')?.value ?? 'no Id input',
       label: inputOf(dlg, 'Label')?.value ?? 'no Label input',
-      open: open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
+      open: openDialogs(m).map((d) => d.querySelector('.dialog__title')?.textContent?.trim()),
     };
     primary(dlg)?.click();
     await m.settle(500);
-    const retried = open().pop() ?? null;
+    const retried = openDialogs(m).pop() ?? null;
     const retriedTitle = retried?.querySelector('.dialog__title')?.textContent?.trim() ?? '';
     results.push({
       name: "/accounts a refused pairing start keeps the Add account form open with the typed label and id, the route's sentence in its callout and Start pairing enabled, and a second start reaches the pairing dialog",
-      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && open().length === 1 && retriedTitle === 'Pair Home desk',
-      missing: [JSON.stringify(refused), `${open().length} open`, retriedTitle || 'no title'],
+      ok: JSON.stringify(refused) === JSON.stringify({ callout: refusal, enabled: true, id: 'home-desk', label: 'Home desk', open: ['Add account'] }) && openDialogs(m).length === 1 && retriedTitle === 'Pair Home desk',
+      missing: [JSON.stringify(refused), `${openDialogs(m).length} open`, retriedTitle || 'no title'],
     });
     buttonIn(retried, 'Cancel')?.click();
     await m.settle(300);
@@ -1550,18 +1625,18 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await typeInto(inputOf(dlg, 'Label'), 'Fresh desk');
   primary(dlg)?.click();
   await m.settle(500);
-  const pair = open().pop() ?? null;
+  const pair = openDialogs(m).pop() ?? null;
   const pairState = new URLSearchParams((pair?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
   await typeInto(pair?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${pairState}`);
   buttonIn(pair, 'Submit')?.click();
-  await m.settle(900);
+  const submitted = await until(m, () => buttonIn(pair, 'Confirm')?.disabled === false);
   buttonIn(pair, 'Confirm')?.click();
-  await m.settle(900);
+  const confirmed = await until(m, () => openDialogs(m).length === 0 && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk'));
   const toast = m.container.querySelector('.toast')?.textContent ?? '';
   results.push({
     name: '/accounts Confirm adds the row and selects it',
-    ok: open().length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
-    missing: [`${open().length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
+    ok: submitted && confirmed && openDialogs(m).length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
+    missing: [`Confirm enabled ${submitted}, the row selected ${confirmed}`, `${openDialogs(m).length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
   });
   // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
   // the page returns to primary for the checks that follow.
@@ -1574,7 +1649,6 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     // holding a URL no row answers, where the detail pane would draw nothing until the next refresh. On a mount of
     // its own, so the failed read's standing reaches none of the checks that follow.
     const lost = await mount('/accounts/primary');
-    const openIn = () => [...lost.container.querySelectorAll('dialog[open]')];
     const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
     const type = async (input, value) => {
       if (!input) return;
@@ -1584,23 +1658,25 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     };
     [...lost.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
     await lost.settle(300);
-    const add = openIn().pop() ?? null;
+    const add = openDialogs(lost).pop() ?? null;
     await type(fieldIn(add, 'Label'), 'Fresh lamp');
     buttonIn(add, 'Start pairing')?.click();
     await lost.settle(500);
-    const lamp = openIn().pop() ?? null;
+    const lamp = openDialogs(lost).pop() ?? null;
     const lampState = new URLSearchParams((lamp?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
     await type(lamp?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${lampState}`);
     buttonIn(lamp, 'Submit')?.click();
-    await lost.settle(900);
+    const submitted = await until(lost, () => buttonIn(lamp, 'Confirm')?.disabled === false);
     failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable', { quiet: true });
     buttonIn(lamp, 'Confirm')?.click();
-    await lost.settle(900);
+    // The address reads primary before the confirm too, so the wait holds for the closed dialog with it: the confirm
+    // moves the address to the new row's before the dialog closes, and the failed reload lands back here.
+    const landed = await until(lost, () => openDialogs(lost).length === 0 && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null);
     const listed = [...lost.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
     results.push({
       name: '/accounts a confirm whose reload fails lands on the first account with its detail drawn',
-      ok: openIn().length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
-      missing: [`${openIn().length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
+      ok: submitted && landed && openDialogs(lost).length === 0 && !listed.includes('Fresh lamp') && lost.location().pathname === '/accounts/primary' && lost.container.querySelector('.accounts__detail .detail') !== null,
+      missing: [`Confirm enabled ${submitted}, landed ${landed}`, `${openDialogs(lost).length} open`, listed.join(', '), lost.location().pathname, lost.container.querySelector('.accounts__detail .detail') ? 'detail drawn' : 'no detail'],
     });
     lost.unmount();
     await api.deleteAccount('fresh-lamp').catch((e) => {
@@ -1610,33 +1686,43 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
 
   // The discard question: an unchanged dialog closes on an outside click, a typed label asks first.
   dlg = await openAdd();
-  clickOutside(dlg);
-  await m.settle(200);
-  results.push({ name: '/accounts Add account closes on an outside click while unchanged', ok: dlg !== null && open().length === 0, missing: [dlg ? 'opened' : 'no dialog', `${open().length} open`] });
+  await discardCounted(m, '/accounts Add account closes on an outside click while unchanged', () => outsideOf(m, dlg), { before: 1, after: 0 });
   dlg = await openAdd();
   await typeInto(inputOf(dlg, 'Label'), 'Draft');
-  clickOutside(dlg);
-  await m.settle(200);
+  await discardCounted(m, '/accounts Add account asks after a typed label', () => outsideOf(m, dlg), { before: 1, after: 2 }, () => discardQuestion(m.container) !== null && dlg?.hasAttribute('open') === true, () => [discardQuestion(m.container) ? 'asked' : 'no question']);
   const asked = discardQuestion(m.container);
-  results.push({ name: '/accounts Add account asks after a typed label', ok: open().length === 2 && asked !== null && dlg?.hasAttribute('open') === true, missing: [`${open().length} open`, asked ? 'asked' : 'no question'] });
-  buttonIn(asked, 'Keep editing')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Add account Keep editing keeps the label', ok: open().length === 1 && inputOf(dlg, 'Label')?.value === 'Draft', missing: [`${open().length} open`, inputOf(dlg, 'Label')?.value ?? 'no Label input'] });
-  clickOutside(dlg);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts Add account Keep editing keeps the label',
+    async () => {
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 1 },
+    () => inputOf(dlg, 'Label')?.value === 'Draft',
+    () => [inputOf(dlg, 'Label')?.value ?? 'no Label input'],
+  );
+  await outsideOf(m, dlg);
   const askedAgain = discardQuestion(m.container);
-  buttonIn(askedAgain, 'Discard')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Add account Discard closes it', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`] });
+  await discardCounted(
+    m,
+    '/accounts Add account Discard closes it',
+    async () => {
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 0 },
+    () => askedAgain !== null,
+    () => [askedAgain ? 'asked' : 'no question'],
+  );
 }
 {
   // The pairing dialog: the link, the paste field and the redirect on one page, the identity on the Confirm page.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const open = () => [...m.container.querySelectorAll('dialog[open]')];
   const openRepair = async () => {
     [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
     await m.settle(500);
-    return open().pop() ?? null;
+    return openDialogs(m).pop() ?? null;
   };
   const type = async (input, value) => {
     if (!input) return;
@@ -1659,7 +1745,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect("/accounts the pairing's Confirm page reads the identity", dlg?.textContent ?? '', ['Email', 'operator@example.com', 'Organization', 'Confirm', 'Cancel']);
     buttonIn(dlg, 'Confirm')?.click();
     await m.settle(600);
-    results.push({ name: '/accounts pairing closes after confirm', ok: open().length === 0, missing: [] });
+    results.push({ name: '/accounts pairing closes after confirm', ok: openDialogs(m).length === 0, missing: [] });
   } else {
     results.push({ name: '/accounts pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
   }
@@ -1678,31 +1764,45 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   }
   // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
   const unchanged = await openRepair();
-  clickOutside(unchanged);
-  await m.settle(300);
-  results.push({ name: '/accounts the pairing dialog closes on an outside click before anything is pasted', ok: unchanged !== null && open().length === 0, missing: [unchanged ? 'opened' : 'no pairing dialog', `${open().length} open`] });
+  await discardCounted(m, '/accounts the pairing dialog closes on an outside click before anything is pasted', () => outsideOf(m, unchanged), { before: 1, after: 0 });
   // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
   const cancels = countCalls('cancelPairing');
   const pasted = await openRepair();
   const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
   await type(pastedInput, 'abc123');
-  clickOutside(pasted);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts the pairing dialog asks once the field holds text',
+    () => outsideOf(m, pasted),
+    { before: 1, after: 2 },
+    () => discardQuestion(m.container) !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
+    () => [discardQuestion(m.container) ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  );
   const asked = discardQuestion(m.container);
-  results.push({
-    name: '/accounts the pairing dialog asks once the field holds text',
-    ok: open().length === 2 && asked !== null && pasted?.hasAttribute('open') === true && cancels.calls.length === 0,
-    missing: [`${open().length} open`, asked ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
-  });
-  buttonIn(asked, 'Keep editing')?.click();
-  await m.settle(200);
-  results.push({ name: '/accounts Keep editing keeps the pasted text in the pairing field', ok: open().length === 1 && pastedInput?.value === 'abc123', missing: [`${open().length} open`, pastedInput?.value ?? 'no field'] });
-  clickOutside(pasted);
-  await m.settle(200);
+  await discardCounted(
+    m,
+    '/accounts Keep editing keeps the pasted text in the pairing field',
+    async () => {
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+    },
+    { before: 2, after: 1 },
+    () => pastedInput?.value === 'abc123',
+    () => [pastedInput?.value ?? 'no field'],
+  );
+  await outsideOf(m, pasted);
   const askedAgain = discardQuestion(m.container);
-  buttonIn(askedAgain, 'Discard')?.click();
-  await m.settle(300);
-  results.push({ name: '/accounts Discard cancels the pairing and closes the dialog', ok: askedAgain !== null && open().length === 0 && cancels.calls.length === 1, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open`, `cancelPairing ${cancels.calls.length}`] });
+  await discardCounted(
+    m,
+    '/accounts Discard cancels the pairing and closes the dialog',
+    async () => {
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(300);
+    },
+    { before: 2, after: 0 },
+    () => askedAgain !== null && cancels.calls.length === 1,
+    () => [askedAgain ? 'asked' : 'no question', `cancelPairing ${cancels.calls.length}`],
+  );
   cancels.restore();
 }
 await m.navigate('/accounts/legacy');
@@ -1727,7 +1827,7 @@ expect('/accounts/secondary', m.text(), [
   'claude-opus-5',
   'Clear',
   "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
-  'rate_limited',
+  'rate_limit (5h window exhausted)',
   'n/a',
   'Pro since',
   'Trial ends',
@@ -2338,6 +2438,40 @@ m.unmount();
   page.unmount();
 }
 {
+  // An end save held while the operator selects another account, then refused as stale: its callout left with the
+  // detail, so the shell's toast names the account the save was for and the router's reason.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const identity = () => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  identity()?.querySelector('label.row input[type="checkbox"]')?.click();
+  await page.settle(100);
+  const field = identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  setter.call(field, '2027-03-01T10:00');
+  field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await page.settle(100);
+  const held = deferNextCall('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(100);
+  // Another operator's write moves the row past the token the held save carries.
+  await api.renameAccount('primary', 'primary');
+  page.container.querySelector('a.account-row[href="/accounts/secondary"]')?.click();
+  await page.settle(400);
+  const left = page.location().pathname;
+  held.release();
+  await page.settle(600);
+  held.restore();
+  const read = { path: left, stored: (await api.listAccounts()).find((a) => a.id === 'primary')?.cancelled, toast: page.container.querySelector('.toast')?.textContent ?? '' };
+  results.push({
+    name: '/accounts a save refused after the operator left the account raises the toast',
+    ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,
+    missing: [`path ${read.path}`, read.toast || 'no toast', `stored cancelled ${read.stored}`],
+  });
+  page.unmount();
+}
+{
   // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
   // callout and raises no toast.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
@@ -2374,6 +2508,36 @@ m.unmount();
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
+}
+{
+  // The create path's toast, on a frozen mount so the toast's own timer cannot take it down before the read.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+  await page.settle(300);
+  const dlg = openDialogs(page).pop() ?? null;
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
+  await page.settle(150);
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  for (const [label, value] of [
+    ['Label', 'Toast workspace'],
+    ['API key', 'sk-ant-api03-not-a-key'],
+  ]) {
+    const input = [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    if (input) {
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await page.settle(100);
+  }
+  buttonIn(dlg, 'Add API key')?.click();
+  await page.settle(600);
+  const toast = page.container.querySelector('.toast')?.textContent ?? '';
+  results.push({ name: `/accounts a created API key's toast reads "API key added"`, ok: openDialogs(page).length === 0 && toast.includes('API key added'), missing: [`${openDialogs(page).length} open`, toast || 'no toast'] });
+  page.unmount();
+  // The story as it was, for the account lists and pickers the later checks read.
+  await api.deleteAccount('toast-workspace').catch((e) => {
+    if (e?.status !== 404) throw e;
+  });
 }
 {
   // The mock stamps the link's expiry off its load-time anchor, a moment past CLOCK_ORIGIN, while the page reads the
@@ -2430,7 +2594,7 @@ m.unmount();
 }
 {
   // The Requests card counts the account's traffic, so its action opens the routing log on the account for the last
-  // hour, read on the frozen clock so the range is the one the page computed.
+  // hour, the log's default preset, which the address leaves out.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests');
   const actions = [...(card?.querySelectorAll('.card__actions a') ?? [])];
@@ -2443,7 +2607,7 @@ m.unmount();
     ok:
       actions.length === 1 &&
       actions[0].textContent?.trim() === 'Routing log' &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary', from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary' }) &&
       `${landed.pathname}${landed.search}` === href,
     missing: [`${actions.length} actions`, href ?? 'no link', JSON.stringify(landed)],
   });
@@ -2493,13 +2657,32 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
   const keyLink = (name) => card(name)?.querySelector('.pool__keys');
   const links = ['all', 'jobs', 'work'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
-  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
+  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pools=${id}`]);
   const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
   results.push({
     name: '/pools each card links its key count to the Keys page filtered to the pool',
     ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'jobs', 'work'].filter((id) => !keyCount.get(id))),
     missing: [...links.flat().map(String), ...wanted.flat(), ...none],
   });
+  {
+    // The member column reads the engine's count on each member, one pin per agent and model, so a session whose
+    // subagents run on a second model counts twice there, and the card's Active pins is the column's sum.
+    const listedPools = await api.listPools();
+    const wrong = [];
+    for (const pool of listedPools) {
+      const table = [...(card(pool.name)?.querySelectorAll('table') ?? [])].find((t) => [...t.querySelectorAll('thead th')].some((th) => th.textContent?.trim() === 'Pins'));
+      const at = [...(table?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === 'Pins');
+      // A listed member links to its account, and an unlisted one names its id on the Account cell's title.
+      const memberOf = (tr) => tr.querySelector('a[href^="/accounts/"]')?.getAttribute('href')?.split('/').pop() ?? tr.children[1]?.getAttribute('title') ?? '';
+      const drawn = new Map([...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [memberOf(tr), Number(tr.children[at]?.textContent?.trim())]));
+      const sum = [...drawn.values()].reduce((n, v) => n + v, 0);
+      const active = Number([...(card(pool.name)?.querySelectorAll('dt') ?? [])].find((dt) => dt.textContent?.trim() === 'Active pins')?.nextElementSibling?.textContent?.trim());
+      for (const member of pool.members) if (drawn.get(member.accountId) !== member.activePins) wrong.push(`${pool.name} ${member.accountId}: ${drawn.get(member.accountId)} drawn, ${member.activePins} on the member`);
+      if (sum !== active || active !== pool.activePins) wrong.push(`${pool.name}: the column sums ${sum}, Active pins reads ${active}, the route ${pool.activePins}`);
+    }
+    const twice = listedPools.some((pool) => pool.members.some((member) => member.activePins > 1));
+    results.push({ name: '/pools the member column reads one pin per agent and model against the mock', ok: listedPools.length > 0 && twice && wrong.length === 0, missing: [`a member over one pin ${twice}`, ...wrong] });
+  }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   results.push({
     name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
@@ -2625,7 +2808,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(verdicts[0].badges) === '[["next","badge--accent",""]]' &&
       verdicts[0].next &&
       verdicts[0].why === 'primary: where the next fresh session lands' &&
-      verdicts[1].badges[0]?.[0]?.startsWith('cooldown ends') &&
+      /^cooldown (\d+h )?\d+m$/.test(verdicts[1].badges[0]?.[0] ?? '') &&
       verdicts[1].badges[0]?.[1] === 'badge--warning' &&
       verdicts[2].badges[0]?.[0] === 'eligible' &&
       JSON.stringify(verdicts[3].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
@@ -2633,6 +2816,39 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: verdicts.map((v) => JSON.stringify(v)),
   });
   results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'secondary').why === 'secondary: in cooldown, skipped by selection', missing: [standing('all', 'secondary').why] });
+  {
+    // The story's pools admit overage, so no member reads the overage verdict there: the route answers it under a
+    // policy that admits none, which the stub reads into all for nightly, the account in overage. A member winding down
+    // inside a pool's window is no story member's, so that badge's words are the unit case's.
+    const accounts = await api.listAccounts();
+    const until = accounts.find((a) => a.id === 'secondary')?.cooldowns.find((c) => c.scope === 'account')?.until ?? '';
+    const reset = accounts.find((a) => a.id === 'nightly')?.overage?.reset ?? '';
+    const { listPools } = api;
+    api.listPools = async () =>
+      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'nightly' ? { ...x, eligible: 'overage' } : x)), overagePolicy: 'never' } : p));
+    const never = await mount('/pools');
+    api.listPools = listPools;
+    const badgeOf = (label) => {
+      const card = [...never.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+      const tr = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((r) => r.children[1]?.querySelector('a')?.textContent?.trim() === label);
+      const badge = tr?.children[2]?.querySelector('.badge');
+      return [badge?.textContent?.trim() ?? null, badge?.className.replace('badge ', '') ?? null, badge?.getAttribute('title') ?? null];
+    };
+    const cooled = badgeOf('secondary');
+    const over = badgeOf('nightly');
+    results.push({
+      name: '/pools the Standing badges read cooldown and overage until with their sentences on the title',
+      ok:
+        until !== '' &&
+        reset !== '' &&
+        /^cooldown (\d+h )?\d+m$/.test(cooled[0] ?? '') &&
+        cooled[1] === 'badge--warning' &&
+        cooled[2] === `In a cooldown that ends ${fmtAbsolute(until)}` &&
+        JSON.stringify(over) === JSON.stringify([`overage until ${fmtPeriodEnd(reset)}`, 'badge--serious', `In overage until ${fmtAbsolute(reset)}`]),
+      missing: [JSON.stringify(cooled), JSON.stringify(over)],
+    });
+    never.unmount();
+  }
   const spend = (name, label) =>
     [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
   results.push({ name: '/pools an API-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
@@ -2669,12 +2885,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
 {
-  // The pool card's links into the routing log, read on the frozen clock so each range is the one the page computed.
+  // The pool card's links into the routing log, read on the frozen clock so a condition's range is the one the page
+  // computed. The last hour is the log's default preset, which the address leaves out.
   const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
   const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
-  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool, from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) });
+  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool });
   const read = ['all', 'jobs'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
   results.push({
     name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
@@ -2838,7 +3055,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/keys#<key id> under reduced motion brings the row into view without the smooth scroll', ok: reduced.scrolled === JSON.stringify([['TR', 'laptop', 'auto']]) && reduced.focused, missing: [reduced.scrolled, `focused ${reduced.focused}`] });
   reduced.page.unmount();
   // laptop is all's key, so a filter to jobs would hide its row.
-  const filtered = await arrive('/keys?pool=jobs#laptop', null, row);
+  const filtered = await arrive('/keys?pools=jobs#laptop', null, row);
   const cleared = filtered.page.location();
   results.push({
     name: '/keys#<key id> clears a pool filter that hides the row, then lands on it',
@@ -2940,6 +3157,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
       missing: [String(past), String(zero), String(linesOf(dlg)[0])],
     });
+    // The router caps the parked and the scheduled ceilings at the same break-even, so one switched on past it reads
+    // the figure it runs to, as the idle window does.
+    const switchOn = async (label, value) => {
+      hint(dlg)?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.click();
+      await m.settle(120);
+      const field = hint(dlg)?.querySelector(`input[aria-label="${label}"]`);
+      if (field) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(field, value);
+      field?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await switchOn('Max parked (s)', '200000');
+    const parked = linesOf(dlg);
+    await switchOn('Scheduled horizon (s)', '200000');
+    const both = linesOf(dlg);
+    results.push({
+      name: '/pools a parked or a scheduled ceiling switched on past the break-even reads the break-even it runs to',
+      ok:
+        JSON.stringify(parked) === JSON.stringify(['Costs 2% of one re-write', 'Capped at the break-even, 1d 20h', 'Break-even: 1d 20h']) &&
+        JSON.stringify(both) === JSON.stringify(['Costs 2% of one re-write', 'Capped at the break-even, 1d 20h', 'Capped at the break-even, 1d 20h']),
+      missing: [...parked, ...both].map(String),
+    });
     await cancel(dlg);
   }
   // The story's `all` resolves to a range: the card and the dialog read both ends.
@@ -2962,7 +3200,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -3106,6 +3344,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const selection = group(dlg, 'Selection');
     const strategy = selection?.querySelector('select[aria-label="Strategy"]');
     const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
+    expect('/pools the Prioritize subscription accounts hint reads "then API keys"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then API keys']);
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     const choose = async (value) => {
@@ -3594,8 +3833,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
       // closes the Move dialog alone. After another pool is picked it asks, Keep editing keeps the pick, and Discard
       // closes the Move dialog and leaves the pool dialog open.
-      const open = () => [...m.container.querySelectorAll('dialog[open]')];
-      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
       const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
       const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
       const pick = async (dialog, value) => {
@@ -3603,49 +3840,96 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
         await m.settle(120);
       };
-      const outside = async (dialog) => {
-        clickOutside(dialog);
-        await m.settle(200);
-      };
-      const escape = async () => {
-        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
-        await m.settle(200);
-      };
       let move = await openMove();
-      await outside(move);
-      results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
+      await discardCounted(m, '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', () => outsideOf(m, move), { before: 2, after: 1 }, () => dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false);
       move = await openMove();
       const openedOn = destination(move)?.value;
       const second = destination(move)?.options[1]?.value;
       await pick(move, second);
-      await outside(move);
+      await discardCounted(
+        m,
+        '/pools the Move key dialog asks before an outside click discards a changed pick',
+        () => outsideOf(m, move),
+        { before: 2, after: 3 },
+        () => openedOn === 'jobs' && second === 'work' && discardQuestion(m.container) !== null && document.activeElement === buttonIn(discardQuestion(m.container), 'Keep editing'),
+        () => [`opened on ${openedOn}, picked ${second}`],
+      );
       const asked = discardQuestion(m.container);
-      results.push({
-        name: '/pools the Move key dialog asks before an outside click discards a changed pick',
-        ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
-        missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
-      });
-      buttonIn(asked, 'Keep editing')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
-      await outside(move);
+      await discardCounted(
+        m,
+        '/pools Keep editing returns to the Move key dialog with the pick kept',
+        async () => {
+          buttonIn(asked, 'Keep editing')?.click();
+          await m.settle(200);
+        },
+        { before: 3, after: 2 },
+        () => move?.hasAttribute('open') === true && destination(move)?.value === second,
+        () => [destination(move)?.value ?? 'no select'],
+      );
+      await outsideOf(m, move);
       const askedAgain = discardQuestion(m.container);
-      buttonIn(askedAgain, 'Discard')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      await discardCounted(
+        m,
+        '/pools Discard closes the Move key dialog and leaves the pool dialog open',
+        async () => {
+          buttonIn(askedAgain, 'Discard')?.click();
+          await m.settle(200);
+        },
+        { before: 3, after: 1 },
+        () => askedAgain !== null && dlg?.hasAttribute('open') === true,
+        () => [askedAgain ? 'asked' : 'no question'],
+      );
       // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
       move = await openMove();
       await pick(move, second);
-      await escape();
-      const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
-      if (askedByEscape) await escape();
-      results.push({
-        name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
-        ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
-        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
-      });
+      let askedByEscape = false;
+      await discardCounted(
+        m,
+        '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
+        async () => {
+          await escapeOn(m);
+          askedByEscape = openDialogs(m).length === 3 && discardQuestion(m.container) !== null;
+          if (askedByEscape) await escapeOn(m);
+        },
+        { before: 2, after: 2 },
+        () => askedByEscape && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
+        () => [`asked ${askedByEscape}`, destination(move)?.value ?? 'no select'],
+      );
       footButton(move, 'Cancel')?.click();
       await m.settle(200);
+      // A move in flight holds the question as well as the close: with another pool picked the dialog is unsaved, yet
+      // an Escape while the move is out neither asks nor closes it, and the answer closes it. The key is the scratch
+      // one the pool dialog created, since the checks after this block move laptop.
+      move = await openMove('from-pool');
+      await pick(move, second);
+      const held = deferNextCall('updateKey');
+      footButton(move, 'Move key')?.click();
+      await m.settle(100);
+      await discardCounted(
+        m,
+        '/pools Escape on a Move key dialog whose move is in flight neither asks nor closes it, though another pool is picked',
+        () => escapeOn(m),
+        { before: 2, after: 2 },
+        () => held.calls.length === 1 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null,
+        () => [`updateKey held ${held.calls.length}`, discardQuestion(m.container) ? 'asked' : 'no question'],
+      );
+      await discardCounted(
+        m,
+        '/pools the Move key dialog whose move was in flight closes once the move answers',
+        async () => {
+          held.release();
+          await m.settle(600);
+        },
+        { before: 2, after: 1 },
+        () => move?.hasAttribute('open') === false && dlg?.hasAttribute('open') === true,
+      );
+      held.restore();
+      // Back into the pool it left, for the stale move check below, which reads the key there.
+      const scratch = (await api.listKeys()).find((k) => k.id === 'from-pool');
+      if (scratch) {
+        const { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes } = scratch;
+        await api.updateKey(scratch.id, { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId: 'all' });
+      }
     }
   }
 
@@ -3814,15 +4098,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // The pool dialog's outside path: unchanged, a backdrop click closes it at once. After an edit it asks, Keep
       // editing returns to the edit, and Discard closes. Every close reopens Edit pool all, so the checks after this
       // one read the open dialog they expect.
-      const open = () => [...m.container.querySelectorAll('dialog[open]')];
-      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
       const reopen = async () => {
         [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
         await m.settle(300);
-      };
-      const outside = async () => {
-        clickOutside(dlg);
-        await m.settle(200);
       };
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       const name = () => group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
@@ -3831,42 +4109,63 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
         await m.settle(120);
       };
-      const escape = async () => {
-        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
-        await m.settle(200);
-      };
       await reopen();
-      await outside();
-      results.push({ name: '/pools the pool dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+      await discardCounted(m, '/pools the pool dialog closes on an outside click while unchanged', () => outsideOf(m, dlg), { before: 1, after: 0 });
       await reopen();
       await typeName('all2');
-      await outside();
+      await discardCounted(
+        m,
+        '/pools the pool dialog asks before an outside click discards a change',
+        () => outsideOf(m, dlg),
+        { before: 1, after: 2 },
+        () => {
+          const asked = discardQuestion(m.container);
+          const askedText = asked?.textContent ?? '';
+          return asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing');
+        },
+        () => [`focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+      );
       const asked = discardQuestion(m.container);
-      const askedText = asked?.textContent ?? '';
-      results.push({
-        name: '/pools the pool dialog asks before an outside click discards a change',
-        ok: open().length === 2 && asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing'),
-        missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
-      });
-      buttonIn(asked, 'Keep editing')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Keep editing returns to the pool dialog with the typed value', ok: open().length === 1 && dlg?.hasAttribute('open') === true && name()?.value === 'all2', missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
-      await outside();
+      await discardCounted(
+        m,
+        '/pools Keep editing returns to the pool dialog with the typed value',
+        async () => {
+          buttonIn(asked, 'Keep editing')?.click();
+          await m.settle(200);
+        },
+        { before: 2, after: 1 },
+        () => dlg?.hasAttribute('open') === true && name()?.value === 'all2',
+        () => [name()?.value ?? 'no name input'],
+      );
+      await outsideOf(m, dlg);
       const askedAgain = discardQuestion(m.container);
-      buttonIn(askedAgain, 'Discard')?.click();
-      await m.settle(200);
-      results.push({ name: '/pools Discard closes the pool dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      await discardCounted(
+        m,
+        '/pools Discard closes the pool dialog',
+        async () => {
+          buttonIn(askedAgain, 'Discard')?.click();
+          await m.settle(200);
+        },
+        { before: 2, after: 0 },
+        () => askedAgain !== null,
+        () => [askedAgain ? 'asked' : 'no question'],
+      );
       // Once for the grouped dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
       await reopen();
       await typeName('all2');
-      await escape();
-      const askedByEscape = open().length === 2 && discardQuestion(m.container) !== null;
-      await escape();
-      results.push({
-        name: '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
-        ok: askedByEscape && open().length === 1 && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
-        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'],
-      });
+      let askedByEscape = false;
+      await discardCounted(
+        m,
+        '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
+        async () => {
+          await escapeOn(m);
+          askedByEscape = openDialogs(m).length === 2 && discardQuestion(m.container) !== null;
+          await escapeOn(m);
+        },
+        { before: 1, after: 1 },
+        () => askedByEscape && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
+        () => [`asked ${askedByEscape}`, name()?.value ?? 'no name input'],
+      );
       [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
       await m.settle(200);
     }
@@ -4000,7 +4299,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // jsdom lays nothing out, so the body keeps its scroll position by hand: what the dialog writes is what it reads.
   let scrolled = 0;
   if (body) {
-    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => scrolled, set: (top) => (scrolled = top) });
+    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => scrolled, set: (top) => { scrolled = top; } });
     body.scrollTo = (to) => (scrolled = to.top ?? scrolled);
     body.scrollTop = 1_200;
   }
@@ -4514,9 +4813,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
-  // work's one primary pin (the busy laptop session) is its slice's last unmarked pin, so its preview sheds nothing,
-  // whatever desktop, still all's key, holds there. The mock's cost model has no weight for the pin's Sonnet 4.6 either,
-  // so the 0 holds from both causes.
+  // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
+  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round
+  // sheds nothing.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -4554,8 +4853,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
-    // count that it ran over laptop's one pin alone.
-    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 1 pin the cost model cannot price stays\.$/.test(line),
+    // count that it ran over laptop's two pins alone.
+    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 2 pins the cost model cannot price stay\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -5068,6 +5367,27 @@ localStorage.removeItem('phoebis.expertView');
     missing: [`held ${heldPools.calls.length}`, `opened ${JSON.stringify(opened)}`, `switched ${switched}`, `after release ${enabled()?.getAttribute('aria-checked') ?? 'no switch'}`, shown(q), focused()],
   });
   q.unmount();
+  // A filter chosen while the key list is still out keeps the dialog query, which opens once the list lands.
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop')?.name ?? 'laptop';
+  const heldKeys = deferNextCall('listKeys');
+  q = await mount('/keys?edit=laptop&group=access');
+  await q.settle(200);
+  const statusSelect = q.container.querySelector('.table-toolbar select[aria-label="Status"]');
+  if (statusSelect) {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(statusSelect, 'active');
+    statusSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  await q.settle(100);
+  const beforeList = [titleOf(q), q.location().search];
+  heldKeys.release();
+  heldKeys.restore();
+  await q.settle(300);
+  results.push({
+    name: '/keys a status chosen before the key list lands keeps the dialog query, and the dialog then opens on its group',
+    ok: heldKeys.calls.length > 0 && JSON.stringify(beforeList) === JSON.stringify(['no dialog', '?status=active&edit=laptop&group=access']) && titleOf(q) === `Edit ${laptop}` && shown(q) === 'Access' && q.location().search === '?status=active',
+    missing: [`held ${heldKeys.calls.length}`, JSON.stringify(beforeList), titleOf(q), shown(q), q.location().search],
+  });
+  q.unmount();
   q = await mount('/keys?edit=nope');
   await q.settle(200);
   results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
@@ -5538,7 +5858,7 @@ localStorage.removeItem('phoebis.expertView');
 // As on the pools, the key dialog checks below read the expert fields too.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
-expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a1c4e', 'phoebis-c41d7b09', 'phoebis-19e7f6d4', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 columnsMarked('/keys every header cell is fit or fill, and Name, Models and Status are the fill columns', m.container.querySelector('.card--table table'), ['Name', 'Models', 'Status']);
 {
   // A fill column cuts its lines with an ellipsis, so each line under a name, the Models summary of a key without
@@ -5607,7 +5927,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const count = bar?.querySelector('.hbars__head .num .muted')?.textContent?.trim();
   results.push({ name: '/keys a key with one lifetime request reads 1 request', ok: count === '1 request', missing: [count ?? 'no notebook bar'] });
 }
-// The Pool select is the address: `?pool=<id>` filters the rows, All pools clears it, and an unknown id reads as All
+// The Pool select is the address: `?pools=<id>` filters the rows, All pools clears it, and an unknown id reads as All
 // pools and leaves the address.
 {
   // The /pools checks above move a key into jobs and create one in all, so every count is the store's at this point.
@@ -5617,8 +5937,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
   const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
   const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
-  let k = await mount('/keys?pool=jobs');
-  results.push({ name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
+  let k = await mount('/keys?pools=jobs');
+  results.push({ name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   const choosePool = async (page, id) => {
     const target = select(page);
@@ -5630,13 +5950,13 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   await choosePool(k, '');
   results.push({ name: '/keys All pools lists every key and leaves /keys', ok: !!select(k) && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, JSON.stringify(k.location())] });
   await choosePool(k, 'all');
-  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
   k.unmount();
-  k = await mount('/keys?pool=all');
-  results.push({ name: "/keys?pool=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k = await mount('/keys?pools=all');
+  results.push({ name: "/keys?pools=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pools=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
   k.unmount();
-  k = await mount('/keys?pool=nope');
-  results.push({ name: '/keys?pool=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  k = await mount('/keys?pools=nope');
+  results.push({ name: '/keys?pools=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
   k.unmount();
   // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
   // key count link lands on the pool's rows from the first render, never on every key.
@@ -5644,7 +5964,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
   const jobsName = (await api.listPools()).find((p) => p.id === 'jobs')?.name;
   const heldPools = deferNextCall('listPools');
-  k = await mount('/keys?pool=jobs');
+  k = await mount('/keys?pools=jobs');
   const waiting = poolCells(k);
   const waitingSearch = k.location().search;
   const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
@@ -5652,38 +5972,38 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   heldPools.restore();
   await k.settle(300);
   results.push({
-    name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
+    name: "/keys?pools=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
     ok:
       narrows('jobs') &&
       heldPools.calls.length > 0 &&
       waiting.length === inPool('jobs') &&
       waiting.every((c) => c === 'jobs') &&
-      waitingSearch === '?pool=jobs' &&
+      waitingSearch === '?pools=jobs' &&
       JSON.stringify(waitingSelect) === JSON.stringify(['jobs', [['', 'All pools'], ['jobs', 'jobs']]]) &&
       poolCells(k).length === inPool('jobs') &&
       select(k)?.value === 'jobs' &&
       JSON.stringify(options(k).filter(([value]) => value === 'jobs')) === JSON.stringify([['jobs', jobsName]]) &&
-      k.location().search === '?pool=jobs',
+      k.location().search === '?pools=jobs',
     missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
   });
   k.unmount();
   failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
-  k = await mount('/keys?pool=jobs');
+  k = await mount('/keys?pools=jobs');
   const failed = poolCells(k);
   const failedValue = select(k)?.value ?? 'no select';
   await choosePool(k, '');
   results.push({
-    name: '/keys?pool=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
+    name: '/keys?pools=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
     ok: narrows('jobs') && failed.length === inPool('jobs') && failed.every((c) => c === 'jobs') && failedValue === 'jobs' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
     missing: [`expected ${inPool('jobs')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
   });
   k.unmount();
-  k = await mount('/keys?pool=jobs&edit=batch&group=models');
+  k = await mount('/keys?pools=jobs&edit=batch&group=models');
   await k.settle(200);
   const dlg = k.container.querySelector('dialog[open]');
   results.push({
     name: '/keys the pool filter survives the dialog query',
-    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=jobs' && narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs'),
+    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pools=jobs' && narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs'),
     missing: [k.location().search, `expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k)],
   });
   k.unmount();
@@ -5943,17 +6263,11 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     // The edit dialog's outside path: unchanged, a backdrop click closes it at once. After a typed change it asks,
     // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
     // the checks after this one read the open dialog they expect.
-    const open = () => [...m.container.querySelectorAll('dialog[open]')];
-    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
     const reopen = async () => {
       m.container.querySelector('.menu__trigger')?.click();
       await m.settle(100);
       [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
       await m.settle(300);
-    };
-    const outside = async () => {
-      clickOutside(editDlg);
-      await m.settle(200);
     };
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const name = () => group(editDlg, 'Key')?.querySelector('input[placeholder="workstation"]');
@@ -5963,25 +6277,42 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
       await m.settle(120);
     };
     const openedAs = name()?.value ?? '';
-    await outside();
-    results.push({ name: '/keys the key dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+    await discardCounted(m, '/keys the key dialog closes on an outside click while unchanged', () => outsideOf(m, editDlg), { before: 1, after: 0 });
     await reopen();
     await typeName(`${openedAs}2`);
-    await outside();
+    await discardCounted(
+      m,
+      '/keys the key dialog asks before an outside click discards a change',
+      () => outsideOf(m, editDlg),
+      { before: 1, after: 2 },
+      () => discardQuestion(m.container) !== null && document.activeElement === buttonIn(discardQuestion(m.container), 'Keep editing'),
+      () => [`focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+    );
     const asked = discardQuestion(m.container);
-    results.push({
-      name: '/keys the key dialog asks before an outside click discards a change',
-      ok: open().length === 2 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
-      missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
-    });
-    buttonIn(asked, 'Keep editing')?.click();
-    await m.settle(200);
-    results.push({ name: '/keys Keep editing returns to the key dialog with the typed value', ok: open().length === 1 && editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`, missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
-    await outside();
+    await discardCounted(
+      m,
+      '/keys Keep editing returns to the key dialog with the typed value',
+      async () => {
+        buttonIn(asked, 'Keep editing')?.click();
+        await m.settle(200);
+      },
+      { before: 2, after: 1 },
+      () => editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`,
+      () => [name()?.value ?? 'no name input'],
+    );
+    await outsideOf(m, editDlg);
     const askedAgain = discardQuestion(m.container);
-    buttonIn(askedAgain, 'Discard')?.click();
-    await m.settle(200);
-    results.push({ name: '/keys Discard closes the key dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+    await discardCounted(
+      m,
+      '/keys Discard closes the key dialog',
+      async () => {
+        buttonIn(askedAgain, 'Discard')?.click();
+        await m.settle(200);
+      },
+      { before: 2, after: 0 },
+      () => askedAgain !== null,
+      () => [askedAgain ? 'asked' : 'no question'],
+    );
     await reopen();
   }
   {
@@ -6361,6 +6692,30 @@ await readsAgain('/keys', 'listKeys');
   late.unmount();
 }
 {
+  // Create key opened before the pools land has no pool to start on, so the first pool fills the Pool select once they
+  // do, and the dialog's opening values take it too: an outside click then closes it without asking.
+  const held = deferNextCall('listPools');
+  const page = await mount('/keys');
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
+  await page.settle(200);
+  const dlg = openDialogs(page).pop() ?? null;
+  const select = () => [...(group(dlg, 'Key')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Pool')?.querySelector('select');
+  const waiting = { invalid: select()?.getAttribute('aria-invalid') ?? null, options: select()?.options.length ?? null };
+  held.release();
+  await page.settle(400);
+  const filled = { first: select()?.options[0]?.value ?? null, invalid: select()?.getAttribute('aria-invalid') ?? null, value: select()?.value ?? null };
+  await discardCounted(
+    page,
+    '/keys Create key opened before the pools land fills the first pool into its Pool select once they do',
+    () => outsideOf(page, dlg),
+    { before: 1, after: 0 },
+    () => held.calls.length > 0 && waiting.options === 0 && waiting.invalid === 'true' && filled.first !== null && filled.value === filled.first && filled.invalid === null,
+    () => [`listPools held ${held.calls.length}`, `waiting ${JSON.stringify(waiting)}`, `filled ${JSON.stringify(filled)}`],
+  );
+  held.restore();
+  page.unmount();
+}
+{
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const spy = countCalls('listKeys');
   const trigger = page.container.querySelector('tbody .menu__trigger');
@@ -6427,10 +6782,17 @@ m = await mount('/models');
     });
   }
   const state = await api.getModelsState();
-  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === c.querySelector('.card__title')?.textContent));
+  // A group's heading reads the short model id and carries the whole one on its title, which the block is found by.
+  const headingOf = (c) => c.querySelector('.card__title [title]');
+  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === headingOf(c)?.getAttribute('title')));
+  const headings = groups.map((c) => [headingOf(c)?.textContent, headingOf(c)?.getAttribute('title')]);
   const groupRows = groups.flatMap((c) => [...c.querySelectorAll('tbody tr')].map((tr) => cells(tr).slice(0, 2).join(' | ')));
   const answeredGroupRows = state.cooldowns.flatMap((g) => g.rows.map((r) => `${r.accountId} | ${g.model}`));
-  results.push({ name: '/models draws one cooling-down block per model, each row naming its account', ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows), missing: [JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)] });
+  results.push({
+    name: '/models draws one cooling-down block per model, each row naming its account',
+    ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(headings) === JSON.stringify(state.cooldowns.map((g) => [shortModel(g.model), g.model])) && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows),
+    missing: [JSON.stringify(headings), JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)],
+  });
   {
     // Recorded rather than sent, so the story's cooldowns stay for the checks after this one.
     const original = api.clearCooldown;
@@ -6479,7 +6841,7 @@ m = await mount('/models');
 m.unmount();
 {
   // The rejections and permits are read in the routing log, so one link below the cooling-down blocks opens it on the
-  // two model kinds over the last 24 hours, read on the frozen clock so the range is the one the page computed.
+  // two model kinds over the last 24 hours, a preset the log reads from its own load.
   const page = await mount('/models', { now: CLOCK_ORIGIN });
   const links = [...page.container.querySelectorAll('a')].filter((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
   const link = links[0];
@@ -6496,7 +6858,7 @@ m.unmount();
       link.classList.contains('btn--secondary') &&
       cards.length > 1 &&
       cards.every((c) => c.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING) &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', range: '24h' }) &&
       `${landed.pathname}${landed.search}` === href,
     missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
   });
@@ -6582,6 +6944,19 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await turn('Kind');
   await turn('Pool');
   await turn('Transport');
+  // A table whose drawn columns hold no fill takes its content width. jsdom lays nothing out, so the class is read
+  // here and the browser pass reads the width.
+  const noFill = () => m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') ?? null;
+  const fillReads = [noFill()];
+  await turn('Client');
+  fillReads.push(noFill());
+  await turn('Client');
+  fillReads.push(noFill());
+  results.push({
+    name: '/requests the table takes its content width when no visible column is a fill',
+    ok: JSON.stringify(fillReads) === JSON.stringify([false, true, false]),
+    missing: [`no-fill with Client, none, Client again: ${JSON.stringify(fillReads)}`],
+  });
   colsButton()?.click();
   await m.settle(100);
   results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: m.container.querySelector('.cols-popover') === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
@@ -6690,7 +7065,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   if (!speed) controlMissing(speedCheck, 'Speed');
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  const speedOptions = [...(speed?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim());
+  const speedOptions = [...(speed?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
   results.push({ name: '/requests the Speed control offers fast and standard', ok: JSON.stringify(speedOptions) === JSON.stringify(['fast', 'standard']), missing: speedOptions });
   [...(speed?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'fast')?.click();
   await m.settle(700);
@@ -6780,7 +7155,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
   }
   // A subscription request the story prices reads its shares: the model week's or the 7-day share over the 5-hour
-  // one, every share and the dollar equivalent on the title. An overage row of nightly and a fast row read dollars.
+  // one in their windows' short words, every share in full and the dollar equivalent on the title. An overage row of
+  // nightly and a fast row read dollars.
   const sharedRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'shares' && u.shares.length >= 2; });
   const overageRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
   const fastRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'fast'; });
@@ -6789,9 +7165,23 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const sharedCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   if (sharedRow) {
     const shared = sharedCell;
+    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': '7-day Fable' };
+    const full = (short) => {
+      const read = /^(\d[\d.]*%) (5h|7d|Fable week)$/.exec(short ?? '');
+      return read ? `${read[1]} of ${FULL[read[2]]}` : null;
+    };
+    const parts = (shared.title ?? '').split(', ');
+    const named = parts.slice(0, -1);
     results.push({
-      name: '/requests a subscription row\'s Cost cell reads a share with "of", its sub line the 5-hour share and its title the dollar equivalent',
-      ok: /^\d[\d.]*% of 7-day( Fable)?$/.test(shared.main) && /^\d[\d.]*% of 5-hour$/.test(shared.sub ?? '') && /, \$[\d,.]+ equivalent$/.test(shared.title ?? '') && (shared.title ?? '').includes(shared.main) && (shared.title ?? '').includes(shared.sub ?? ''),
+      name: "/requests a subscription row's Cost cell reads its shares in their windows' short words, its sub line the 5-hour share, and its title every share in full with the dollar equivalent",
+      ok:
+        /^\d[\d.]*% (7d|Fable week)$/.test(shared.main) &&
+        /^\d[\d.]*% 5h$/.test(shared.sub ?? '') &&
+        /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
+        named.length === costUnitOf(sharedRow).shares.length &&
+        named.every((n) => /^\d[\d.]*% of (5-hour|7-day|7-day Fable)$/.test(n)) &&
+        named.includes(full(shared.main)) &&
+        named.includes(full(shared.sub)),
       missing: [sharedRow.id, JSON.stringify(shared)],
     });
   }
@@ -6820,7 +7210,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
   }
   if (sharedRow && sharedCell) {
-    // The chips read the shares in the cell's title order, and the equivalent follows them muted.
+    // The chips read the shares in the cell's title order, and the equivalent follows them muted in the one run that
+    // ends at the cell's edge.
     const cell = sharedCell;
     await m.navigate(`/requests/${sharedRow.id}`);
     await m.settle(300);
@@ -6831,7 +7222,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const titled = (cell.title ?? '').split(', ');
     results.push({
       name: "/requests the drawer's cost row of a subscription row reads the share chips in order with the equivalent after them",
-      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.lastElementChild?.classList.contains('muted') === true,
+      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
       missing: [sharedRow.id, JSON.stringify(chips), String(equivalent), cell.title ?? 'no title'],
     });
   }
@@ -6846,6 +7237,33 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
       const chip = drawerChips(drawerRowOf(m, 'Answer')).find((c) => c.label === 'geography');
       results.push({ name, ok: chip !== undefined && chip.value === 'not available' && (chip.title ?? '').includes('Not available means the model does not take the inference geography parameter'), missing: [unavailable.id, JSON.stringify(chip ?? null)] });
     }
+  }
+  {
+    // The Answer row ends with the tier the serving attempt answered under: the story's priority row, a drawn row's
+    // standard, and nothing on a token count, whose answer names no tier.
+    const name = "/requests the drawer's Answer row ends with the answer's service tier, priority on the tier seed and standard on a drawn row, and a token count draws none";
+    const drawn = requests.find((r) => r.kind === 'inference' && r.id !== 'req_f8085653-422' && servedBy(r)?.serviceTier === 'standard');
+    const count = requests.find((r) => r.kind === 'count_tokens' && servedBy(r) !== null);
+    const answerOf = async (id) => {
+      await m.navigate(`/requests/${id}`);
+      await m.settle(300);
+      // A drawer with no Answer row reads null, so a token count that drew none cannot pass for one without a tier.
+      const row = drawerRowOf(m, 'Answer');
+      return row === undefined ? null : drawerChips(row);
+    };
+    const seed = (await answerOf('req_f8085653-422')) ?? [];
+    const standard = (drawn ? await answerOf(drawn.id) : null) ?? [];
+    const counted = count ? await answerOf(count.id) : null;
+    const tier = (chips) => chips.filter((c) => c.value.startsWith('tier '));
+    const last = (chips) => chips[chips.length - 1] ?? null;
+    results.push({
+      name,
+      ok:
+        last(seed)?.value === 'tier priority' && last(seed)?.title === "The answer's service tier" && tier(seed).length === 1 &&
+        last(standard)?.value === 'tier standard' && tier(standard).length === 1 &&
+        counted !== null && tier(counted).length === 0,
+      missing: [JSON.stringify(last(seed)), drawn?.id ?? 'no drawn standard row', JSON.stringify(last(standard)), count?.id ?? 'no token count', JSON.stringify(counted)],
+    });
   }
   await m.navigate('/requests');
   await m.settle(300);
@@ -7036,12 +7454,51 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const three = requests.filter((r) => r.attempts.length === 3);
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
+/** The drawer's body block under `label`. */
+const bodyBlockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
+/**
+ * The rows a body viewer `pre` draws, each a line of its text. jsdom lays nothing out, so the window is the margin
+ * below an empty viewport: the text's first WINDOW_ROWS lines, which `firstRows` reads off an expected text.
+ */
+const drawnRows = (pre) => [...(pre?.querySelectorAll('.body-row') ?? [])].map((row) => row.textContent ?? '');
+const firstRows = (text) => text.split('\n').slice(0, WINDOW_ROWS).join('\n');
+/** What "Copy all" under `node` hands the clipboard, through a stub that stands for the one click. */
+const copiedByCopyAll = async (node) => {
+  const copied = [];
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
+  [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy all'].includes(b.textContent?.trim() ?? ''))?.click();
+  await m.settle(100);
+  delete window.navigator.clipboard;
+  return copied;
+};
+/** Opens `block` wide on `page` and answers the open dialog, whose viewer draws the body. */
+const openWide = async (page, block) => {
+  [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Open wide')?.click();
+  await page.settle(100);
+  return page.container.querySelector('dialog[open]');
+};
+const closeWide = async (page) => {
+  page.container.querySelector('dialog[open] .dialog__close')?.click();
+  await page.settle(100);
+};
 await m.navigate(`/requests/${laptopRow.id}`);
+results.push({
+  name: "/requests the drawer's compact set holds no fill, so the table takes its content width beside the drawer",
+  ok: m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') === true,
+  missing: [m.container.querySelector('.requests__table')?.className ?? 'no table'],
+});
 {
   // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
+  // The drawer draws no body text, so the bodies' needles are read from what Copy all hands over.
   const titles = [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
-  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response', 'cache_control', 'ephemeral_5m_input_tokens'];
-  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n))];
+  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response'];
+  const [request = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Request')?.querySelector('.body-block__head'));
+  const [response = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Response')?.querySelector('.body-block__head'));
+  const bodyNeedles = [
+    ['cache_control', request],
+    ['ephemeral_5m_input_tokens', response],
+  ];
+  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n)), ...bodyNeedles.filter(([n, text]) => !text.includes(n)).map(([n]) => `${n} in the copied body`)];
   results.push({ name: '/requests/:laptop drawer', ok: missing.length === 0, missing });
 }
 {
@@ -7155,26 +7612,38 @@ await m.navigate(`/requests/${laptopRow.id}`);
 }
 // Back on the laptop request's drawer, which the search above left for the list.
 await m.navigate(`/requests/${laptopRow.id}`);
-// A captured body is serialized once per answer: a small one is indented at once, one past 256 KiB shows compact until
-// Pretty-print is pressed, Copy takes the text on screen, and a clock tick that redraws the drawer serializes nothing.
+// A captured body draws in the drawer as its head alone and opens wide indented whatever its size. Copy all takes the
+// whole text, and the indent runs once, when the body is first opened wide or copied, so neither the drawer's first
+// draw nor a clock tick that redraws it serializes a body.
 {
-  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
-  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
-  const shown = (block) => block?.querySelector('.body-block__pre')?.textContent ?? '';
-
-  const small = ['Request', 'Response'].map((label) => ({ label, pretty: pretty(blockOf(m, label)) !== undefined, text: shown(blockOf(m, label)) }));
-  results.push({
-    name: '/requests a captured body under the threshold is indented',
-    ok: small.every((b) => b.text.includes('\n  "') && !b.pretty),
-    missing: small.map((b) => `${b.label}: ${b.text.slice(0, 40)}${b.pretty ? ' with Pretty-print' : ''}`),
-  });
+  const pretty = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  {
+    const read = [];
+    for (const label of ['Request', 'Response']) {
+      const block = bodyBlockOf(m, label);
+      const [text = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+      read.push({ drawn: block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, label, pretty: pretty(block) !== undefined, text });
+    }
+    results.push({
+      name: '/requests a captured body draws its head alone in the drawer and copies indented',
+      ok: read.every((b) => b.drawn === 0 && !b.pretty && b.text.includes('\n  "')),
+      missing: read.map((b) => `${b.label}: ${b.drawn} drawn${b.pretty ? ', with Pretty-print' : ''}, ${JSON.stringify(b.text.slice(0, 40))}`),
+    });
+  }
   {
     // The laptop row streamed, and its stored capture is the text of its events: each `event:` line over its data,
-    // indented, the frames the upstream sends in order.
+    // indented, the frames the upstream sends in order. The frames run past the rows the wide view draws, so their
+    // order is read from the whole text Copy all hands over, and the drawn event spans from the rows it draws.
     const EVENTS = ['message_start', 'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'];
-    const block = blockOf(m, 'Response');
-    const text = shown(block);
-    const events = [...(block?.querySelector('.body-block__pre')?.querySelectorAll('.tok-event') ?? [])].map((s) => s.textContent);
+    const block = bodyBlockOf(m, 'Response');
+    const [text = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const pre = (await openWide(m, block))?.querySelector('.body-block__pre');
+    const drawn = drawnRows(pre).join('\n');
+    const events = [...(pre?.querySelectorAll('.tok-event') ?? [])].map((s) => s.textContent);
+    await closeWide(m);
+    const eventRows = firstRows(text)
+      .split('\n')
+      .filter((line) => line.startsWith('event:')).length;
     // Each frame is found past the one before it, so the two deltas are two frames rather than one found twice.
     let from = 0;
     const ordered = EVENTS.every((e) => {
@@ -7184,12 +7653,12 @@ await m.navigate(`/requests/${laptopRow.id}`);
     });
     results.push({
       name: "/requests a streamed story row's Response block draws its events over indented data",
-      ok: laptopRow.transport === 'sse' && events.length === EVENTS.length && ordered && text.includes('"ephemeral_5m_input_tokens"'),
-      missing: [laptopRow.id, `${events.length} event spans: ${events.join(', ')}`, JSON.stringify(text.slice(0, 80))],
+      ok: laptopRow.transport === 'sse' && eventRows > 0 && events.length === eventRows && drawn === firstRows(text) && ordered && text.includes('"ephemeral_5m_input_tokens"'),
+      missing: [laptopRow.id, `${events.length} event spans for ${eventRows} event rows drawn: ${events.join(', ')}`, drawn === firstRows(text) ? '' : "the drawn rows are not the copied text's first rows", JSON.stringify(text.slice(0, 80))],
     });
   }
 
-  const largeCheck = '/requests a body over 256 KiB renders unindented with a Pretty-print action';
+  const largeCheck = '/requests a body over 256 KiB draws no Pretty-print and opens wide indented';
   const other = requests.find((r) => r.capturedBodies && r.id !== laptopRow.id);
   if (!other) results.push({ name: largeCheck, ok: false, missing: ['fixture'] });
   else {
@@ -7200,29 +7669,18 @@ await m.navigate(`/requests/${laptopRow.id}`);
       const answer = await original.call(api, id);
       return { ...answer, requestId: id, response: large, responseBytesStored: 300_000 };
     };
-    const copied = [];
-    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
-    // The button reads Copied for a moment after a write and still copies when pressed again.
-    const copy = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''))?.click();
     await m.navigate(`/requests/${other.id}`);
-    const response = () => blockOf(m, 'Response');
-    const before = { button: pretty(response()) !== undefined, text: shown(response()) };
-    copy(response());
-    await m.settle(100);
-    // Pressed from the keyboard's place: the button leaves as it is pressed, and the focus has to land on the text.
-    const pressed = pretty(response());
-    pressed?.focus();
-    pressed?.click();
-    await m.settle();
-    const after = { button: pretty(response()) !== undefined, focused: document.activeElement === response()?.querySelector('.body-block__pre'), text: shown(response()) };
-    copy(response());
-    await m.settle(100);
     api.getCapturedBodies = original;
-    delete window.navigator.clipboard;
+    const block = bodyBlockOf(m, 'Response');
+    const head = { drawn: block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, pretty: pretty(block) !== undefined };
+    const [copied = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const dialog = await openWide(m, block);
+    const wide = { pretty: pretty(dialog) !== undefined, text: drawnRows(dialog?.querySelector('.body-block__pre')).join('\n') };
+    await closeWide(m);
     results.push({
       name: largeCheck,
-      ok: before.button && before.text.length > 300_000 && !before.text.includes('\n') && !after.button && after.focused && after.text.includes('\n  "') && copied.length === 2 && copied[0] === before.text && copied[1] === after.text,
-      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text.length} characters, ${before.text.includes('\n') ? 'indented' : 'compact'}`, `after: ${after.button ? 'Pretty-print' : 'no Pretty-print'}, ${after.text.includes('\n') ? 'indented' : 'compact'}, focus on ${after.focused ? 'the text' : (document.activeElement?.tagName ?? 'nothing')}`, `copied ${copied.map((t) => t.length).join(', ')}`],
+      ok: head.drawn === 0 && !head.pretty && copied.length > 300_000 && copied.includes('\n  "') && !wide.pretty && wide.text === firstRows(copied) && wide.text.includes('\n  "'),
+      missing: [`drawer: ${head.drawn} drawn${head.pretty ? ', with Pretty-print' : ''}`, `copied ${copied.length} characters, ${copied.includes('\n  "') ? 'indented' : 'compact'}`, `wide: ${wide.pretty ? 'with Pretty-print, ' : ''}${wide.text === firstRows(copied) ? "the copied text's first rows" : 'other rows'}`],
     });
   }
 
@@ -7230,7 +7688,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
   // The request is a JSON object, serialized once, and the response is the text of a stream, split into its frames
   // once. The split is counted on the line split the frame reader runs over the stored text, since the reader itself
   // is a binding inside the bundle.
-  const firstCheck = '/requests the first draw serializes each captured body once';
+  const firstCheck = "/requests the drawer's first draw serializes no captured body";
+  const onceCheck = '/requests a captured body is serialized once, when it is first opened wide or copied';
   const tickCheck = '/requests a clock tick does not serialize the bodies again';
   const original = api.getCapturedBodies;
   const answered = [];
@@ -7253,11 +7712,26 @@ await m.navigate(`/requests/${laptopRow.id}`);
     return split.apply(this, rest);
   };
   let frozen;
-  let first = { ...serialized };
+  let first;
+  let opened;
+  let drawer;
   try {
     frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
     api.getCapturedBodies = original;
     first = { ...serialized };
+    drawer = { blocks: frozen.container.querySelectorAll('.drawer .body-block').length, drawn: frozen.container.querySelectorAll('.drawer .body-block__pre').length };
+    // Opened wide twice and copied in between, the request still serializes once, and the response's frames split once.
+    const request = bodyBlockOf(frozen, 'Request');
+    await openWide(frozen, request);
+    await closeWide(frozen);
+    await copiedByCopyAll(request?.querySelector('.body-block__head'));
+    await openWide(frozen, request);
+    await closeWide(frozen);
+    const response = bodyBlockOf(frozen, 'Response');
+    await copiedByCopyAll(response?.querySelector('.body-block__head'));
+    await openWide(frozen, response);
+    await closeWide(frozen);
+    opened = { ...serialized };
     serialized.request = 0;
     serialized.response = 0;
     tick(15_000);
@@ -7268,24 +7742,24 @@ await m.navigate(`/requests/${laptopRow.id}`);
     api.getCapturedBodies = original;
   }
   const bodies = answered.at(-1);
-  const drawn = frozen.container.querySelectorAll('.drawer .body-block__pre').length;
-  results.push({ name: firstCheck, ok: bodies !== undefined && typeof bodies.response === 'string' && drawn === 2 && first.request === 1 && first.response === 1, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `request ${first.request} serializations, response ${first.response} frame splits on the first draw`] });
+  const answers = `${answered.length} answers`;
+  results.push({ name: firstCheck, ok: bodies !== undefined && typeof bodies.response === 'string' && drawer.blocks === 2 && drawer.drawn === 0 && first.request === 0 && first.response === 0, missing: [answers, `${drawer.blocks} blocks, ${drawer.drawn} bodies drawn`, `request ${first.request} serializations, response ${first.response} frame splits on the first draw`] });
+  const openedOnce = { request: opened.request - first.request, response: opened.response - first.response };
+  results.push({ name: onceCheck, ok: bodies !== undefined && openedOnce.request === 1 && openedOnce.response === 1, missing: [answers, `request ${openedOnce.request} serializations, response ${openedOnce.response} frame splits over the openings and copies`] });
   const after = serialized.request + serialized.response;
-  results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && after === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${after} serializations after the tick`] });
+  results.push({ name: tickCheck, ok: bodies !== undefined && drawer.blocks === 2 && after === 0, missing: [answers, `${drawer.blocks} blocks`, `${after} serializations after the tick`] });
   frozen.unmount();
 }
-// A streamed capture draws as its events over indented data and both blocks carry token spans, "Open wide" opens
-// the block in a dialog with the same text, Escape with the dialog open leaves the drawer, a plain string draws
-// unquoted, and a large stream stays its stored text until Pretty-print splits it. Each stubbed answer lands on a
-// captured row the drawer is not showing: a navigation to the shown path reads no bodies, and the block keyed on the
-// request keeps its Pretty-print state.
+// A streamed capture opens wide as its events over indented data and both blocks carry token spans, "Open wide" opens
+// the block in a dialog holding the text Copy all hands over, Escape with the dialog open leaves the drawer, a plain
+// string draws unquoted, and a large stream opens wide as its events. Each stubbed answer lands on a captured row the
+// drawer is not showing: a navigation to the shown path reads no bodies.
 {
-  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
-  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
-  const shown = (block) => block?.querySelector(':scope > .body-block__pre')?.textContent ?? '';
-  const spans = (block, cls) => [...(block?.querySelector(':scope > .body-block__pre')?.querySelectorAll(`.${cls}`) ?? [])].map((s) => s.textContent);
+  const pretty = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  const shownWide = (dialog) => drawnRows(dialog?.querySelector('.body-block__pre')).join('\n');
+  const spans = (dialog, cls) => [...(dialog?.querySelectorAll(`.body-block__pre .${cls}`) ?? [])].map((s) => s.textContent);
   const wide = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Open wide');
-  const copy = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''));
+  const copy = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy all'].includes(b.textContent?.trim() ?? ''));
   const original = api.getCapturedBodies;
   /** The next bodies read answers the row's own capture with `patch` over it, once. */
   const stub = (patch) => {
@@ -7297,39 +7771,42 @@ await m.navigate(`/requests/${laptopRow.id}`);
   };
   const shownPath = m.location().pathname;
   const [streamRow, plainRow, largeRow] = requests.filter((r) => r.capturedBodies && !r.responseTruncated && shownPath !== `/requests/${r.id}`).slice(-3);
-  const streamCheck = '/requests a captured stream draws its events over indented data and both blocks carry key spans';
+  const streamCheck = '/requests a captured stream opens wide as its events over indented data and both blocks carry key spans';
   const wideCheck = "/requests Open wide opens a dialog titled with the block's label and the request id holding the same text";
   const escapeCheck = '/requests Escape with the wide dialog open leaves the drawer open';
   const plainCheck = '/requests a plain string capture draws unquoted with its newlines';
-  const largeCheck = '/requests a large stream capture stays its stored text until Pretty-print splits it';
+  const largeCheck = '/requests a large stream capture opens wide as its events over indented data';
   if (!streamRow || !plainRow || !largeRow) {
     for (const name of [streamCheck, wideCheck, escapeCheck, plainCheck, largeCheck]) results.push({ name, ok: false, missing: ['fixture: three captured rows'] });
   } else {
     const sse = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
     stub({ response: sse, responseBytesStored: sse.length });
     await m.navigate(`/requests/${streamRow.id}`);
-    const request = blockOf(m, 'Request');
-    const response = blockOf(m, 'Response');
-    const text = shown(response);
-    const keys = spans(request, 'tok-key');
-    const events = spans(response, 'tok-event');
+    const request = bodyBlockOf(m, 'Request');
+    const responseWide = await openWide(m, bodyBlockOf(m, 'Response'));
+    const text = shownWide(responseWide);
+    const events = spans(responseWide, 'tok-event');
+    await closeWide(m);
+    const [requestText = ''] = await copiedByCopyAll(request?.querySelector('.body-block__head'));
+
+    wide(request)?.click();
+    await m.settle(100);
+    const dialog = m.container.querySelector('dialog[open]');
+    const keys = spans(dialog, 'tok-key');
     results.push({
       name: streamCheck,
       ok: text.includes('event: message_start\n{\n  "type"') && text.includes('event: message_stop') && keys.includes('"model"') && events.length === 2,
       missing: [`response: ${JSON.stringify(text.slice(0, 60))}`, `request keys: ${keys.slice(0, 3).join(', ')}`, `${events.length} event spans`],
     });
 
-    wide(request)?.click();
-    await m.settle(100);
-    const dialog = m.container.querySelector('dialog[open]');
     const title = dialog?.querySelector('.dialog__title')?.textContent ?? '';
     const expectedTitle = `Request of ${streamRow.id.length > 24 ? `${streamRow.id.slice(0, 24)}…` : streamRow.id}`;
-    const dialogText = dialog?.querySelector('.body-block__pre')?.textContent ?? '';
+    const dialogText = shownWide(dialog);
     const footCopy = copy(dialog?.querySelector('.dialog__foot')) !== undefined;
     results.push({
       name: wideCheck,
-      ok: dialog !== null && title === expectedTitle && dialogText.length > 0 && dialogText === shown(request) && footCopy,
-      missing: [dialog ? `title "${title}", expected "${expectedTitle}"` : 'no open dialog', dialogText === shown(request) ? '' : 'the dialog text differs from the block', footCopy ? '' : 'no Copy in the footer'],
+      ok: dialog !== null && title === expectedTitle && dialogText.length > 0 && dialogText === firstRows(requestText) && footCopy,
+      missing: [dialog ? `title "${title}", expected "${expectedTitle}"` : 'no open dialog', dialogText === firstRows(requestText) ? '' : 'the dialog text differs from the copied text', footCopy ? '' : 'no Copy all in the footer'],
     });
 
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
@@ -7347,28 +7824,111 @@ await m.navigate(`/requests/${laptopRow.id}`);
 
     stub({ request: 'line one\nline two', requestBytesStored: 17 });
     await m.navigate(`/requests/${plainRow.id}`);
-    const plain = shown(blockOf(m, 'Request'));
+    const plain = shownWide(await openWide(m, bodyBlockOf(m, 'Request')));
+    await closeWide(m);
     results.push({ name: plainCheck, ok: plain === 'line one\nline two', missing: [JSON.stringify(plain.slice(0, 40))] });
 
-    // One frame a few KiB long reaches the threshold in about a hundred frames, so the split draws thousands of
-    // spans rather than tens of thousands.
+    // One frame a few KiB long passes 256 KiB in about a hundred frames, so the split stays quick.
     const delta = `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(3_000)}"}}\n\n`;
     let stored = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n';
     while (stored.length <= 256 * 1024) stored += delta;
     stub({ response: stored, responseBytesStored: stored.length });
     await m.navigate(`/requests/${largeRow.id}`);
-    const large = () => blockOf(m, 'Response');
-    const before = { button: pretty(large()) !== undefined, events: spans(large(), 'tok-event').length, text: shown(large()) };
-    pretty(large())?.click();
-    await m.settle();
-    const after = shown(large());
+    const large = bodyBlockOf(m, 'Response');
+    const head = { drawn: large?.querySelectorAll('.body-block__pre, .body-row').length ?? -1, pretty: pretty(large) !== undefined };
+    const [copied = ''] = await copiedByCopyAll(large?.querySelector('.body-block__head'));
+    const largeWide = await openWide(m, large);
+    const drawn = shownWide(largeWide);
+    const largeEvents = spans(largeWide, 'tok-event').length;
+    await closeWide(m);
     results.push({
       name: largeCheck,
-      ok: before.button && before.text === stored && before.events === 0 && !/\n {2}/.test(before.text) && after.startsWith('event: message_start\n{\n  "type"'),
-      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text === stored ? 'the stored text' : 'another text'}, ${before.events} event spans, ${/\n {2}/.test(before.text) ? 'indented' : 'compact'}`, `after: ${JSON.stringify(after.slice(0, 40))}`],
+      ok: head.drawn === 0 && !head.pretty && copied.startsWith('event: message_start\n{\n  "type"') && copied.includes('event: content_block_delta\n{\n  "type"') && drawn === firstRows(copied) && largeEvents > 0,
+      missing: [`drawer: ${head.drawn} drawn${head.pretty ? ', with Pretty-print' : ''}`, `copied: ${JSON.stringify(copied.slice(0, 40))}`, `wide: ${drawn === firstRows(copied) ? "the copied text's first rows" : 'other rows'}, ${largeEvents} event spans`],
     });
   }
   api.getCapturedBodies = original;
+}
+// A body of any size draws in the drawer as its head alone and opens wide in a window of its lines: 20,000 indented
+// lines draw a bounded count of rows in the dialog, scrolled to its end the dialog draws the last line at its offset,
+// and Copy all in the drawer's head and in the dialog's footer hands over the whole text the DOM never holds.
+{
+  const check = '/requests a 20,000-line body draws no row in the drawer, the visible rows plus the margin wide, its last row at the end, and Copy all copies the whole text';
+  const shownPath = m.location().pathname;
+  const row = requests.find((r) => r.capturedBodies && shownPath !== `/requests/${r.id}`);
+  if (!row) results.push({ name: check, ok: false, missing: ['fixture: a captured row'] });
+  else {
+    // An array of 19,998 numbers indents to 20,000 lines.
+    const value = Array.from({ length: 19_998 }, (_, i) => i);
+    const expected = JSON.stringify(value, null, 2).split('\n');
+    const original = api.getCapturedBodies;
+    api.getCapturedBodies = async (id) => {
+      api.getCapturedBodies = original;
+      const answer = await original.call(api, id);
+      return { ...answer, request: value, requestBytesStored: JSON.stringify(value).length, requestId: id };
+    };
+    await m.navigate(`/requests/${row.id}`);
+    api.getCapturedBodies = original;
+    const block = bodyBlockOf(m, 'Request');
+    const inDrawer = block?.querySelectorAll('.body-block__pre, .body-row').length ?? -1;
+    const [copied = ''] = await copiedByCopyAll(block?.querySelector('.body-block__head'));
+    const dialog = await openWide(m, block);
+    const pre = dialog?.querySelector('.body-block__pre');
+    /** Each drawn row as its line number, read off its offset, with the text it holds. */
+    const rowsOf = () => [...(pre?.querySelectorAll('.body-row') ?? [])].map((r) => ({ at: parseFloat(r.style.top) / ROW_PX, text: r.textContent ?? '' }));
+    const inPlace = (rows) => rows.every((r, i) => r.text === expected[r.at] && (i === 0 || r.at === rows[i - 1].at + 1));
+    // jsdom lays nothing out, so before the geometry below the box reads 0 px tall and draws the margin alone.
+    const opened = rowsOf();
+    const height = pre?.querySelector('.body-rows')?.style.height;
+    // The geometry a browser gives the dialog's box, about its height at 1280 by 800, scrolled to the bottom offset
+    // it allows.
+    const box = 700;
+    let top = 0;
+    if (pre) {
+      Object.defineProperty(pre, 'clientHeight', { configurable: true, get: () => box });
+      Object.defineProperty(pre, 'scrollHeight', { configurable: true, get: () => 20_000 * ROW_PX });
+      Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => top, set: (to) => { top = to; } });
+      pre.scrollTop = pre.scrollHeight - pre.clientHeight;
+      pre.dispatchEvent(new window.Event('scroll'));
+    }
+    await m.settle(100);
+    const scrolled = rowsOf();
+    // The footer's copy sits beside the drawn rows, so it is where a copy of those rows alone would show.
+    const [footer = ''] = await copiedByCopyAll(dialog?.querySelector('.dialog__foot'));
+    await closeWide(m);
+    const bound = Math.ceil(box / ROW_PX) + 2 * WINDOW_ROWS;
+    const last = scrolled.at(-1);
+    results.push({
+      name: check,
+      ok:
+        expected.length === 20_000 &&
+        inDrawer === 0 &&
+        height === `${20_000 * ROW_PX}px` &&
+        opened.length === WINDOW_ROWS &&
+        opened[0]?.at === 0 &&
+        inPlace(opened) &&
+        scrolled.length > WINDOW_ROWS &&
+        scrolled.length <= bound &&
+        inPlace(scrolled) &&
+        last?.at === 19_999 &&
+        last?.text === expected[19_999] &&
+        copied === expected.join('\n') &&
+        footer === expected.join('\n'),
+      missing: [
+        `${expected.length} lines, ${inDrawer} drawn in the drawer, the block ${height ?? 'not drawn'} tall`,
+        `opened: ${opened.length} rows from line ${opened[0]?.at}${inPlace(opened) ? '' : ', a row off its line'}`,
+        `scrolled: ${scrolled.length} rows of at most ${bound}, the last at line ${last?.at} reading ${JSON.stringify(last?.text)}${inPlace(scrolled) ? '' : ', a row off its line'}`,
+        `copied ${copied.length} characters from the drawer's head, ${footer.length} from the dialog's footer`,
+        `the text holds ${expected.join('\n').length}`,
+      ],
+    });
+  }
+}
+{
+  // The rows sit at ROW_PX offsets while the stylesheet sizes each at --body-row, so the two figures must agree.
+  const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8');
+  const token = /--body-row:\s*(\d+(?:\.\d+)?)px/.exec(css)?.[1];
+  results.push({ name: "/requests the row height token and the viewer's constant agree", ok: token !== undefined && Number(token) === ROW_PX, missing: [`--body-row ${token ?? 'absent'}, ROW_PX ${ROW_PX}`] });
 }
 {
   const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
@@ -7387,19 +7947,21 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 }
 {
-  // Moving to another request while its bodies fail to load must not leave the previous prompt on screen.
+  // Moving to another request while its bodies fail to load must not leave the previous request's bodies in the drawer.
   const [first, second] = requests.filter((r) => r.capturedBodies && r.id !== laptopRow.id);
   if (first && second) {
     await m.navigate(`/requests/${first.id}`);
-    const drew = m.text().includes('cache_control');
+    const [prompt = ''] = await copiedByCopyAll(bodyBlockOf(m, 'Request')?.querySelector('.body-block__head'));
+    const drew = prompt.includes('cache_control');
     failNextCall('getCapturedBodies', `/admin/requests/${second.id}/bodies`, 'the ledger is unavailable');
     await m.navigate(`/requests/${second.id}`);
     await m.settle(400);
     const text = m.text();
+    const left = m.container.querySelectorAll('.drawer .body-block').length;
     results.push({
       name: '/requests a failed bodies load reports itself and never draws the request before it',
-      ok: drew && text.includes('Could not load the captured bodies') && !text.includes('cache_control'),
-      missing: [drew ? '' : 'the first request drew no bodies', text.includes('Could not load the captured bodies') ? '' : 'no failed-load state', text.includes('cache_control') ? 'the previous bodies are still drawn' : ''],
+      ok: drew && text.includes('Could not load the captured bodies') && left === 0,
+      missing: [drew ? '' : 'the first request drew no bodies', text.includes('Could not load the captured bodies') ? '' : 'no failed-load state', left > 0 ? 'the previous bodies are still drawn' : ''],
     });
   } else {
     results.push({ name: '/requests two captured rows for the bodies check', ok: false, missing: ['fixture'] });
@@ -7800,6 +8362,32 @@ m.unmount();
     missing: [trigger(applied, 'Keys'), trigger(applied, 'Status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
   });
   applied.unmount();
+  {
+    // A lifetime the address names reads by its holder: an earlier holder of an id by its deleted label, checked, while
+    // the live key's own lifetime is no deleted holder's.
+    const live = (await api.listKeys()).find((k) => k.id === 'desktop');
+    const keyOptions = async (page) => {
+      const control = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
+      control?.querySelector('.mselect__trigger')?.click();
+      await page.settle(60);
+      const options = [...(control?.querySelectorAll(CHOICE) ?? [])].map((o) => [o.textContent?.trim() ?? '', o.getAttribute('aria-selected')]);
+      control?.querySelector('.mselect__trigger')?.click();
+      await page.settle(60);
+      return options;
+    };
+    const earlier = await mount(`/requests?keys=desktop@${DELETED_HOLDER_GENERATION}`);
+    const held = await keyOptions(earlier);
+    earlier.unmount();
+    const current = await mount(`/requests?keys=desktop@${Date.parse(live?.createdAt ?? '')}`);
+    const own = await keyOptions(current);
+    current.unmount();
+    const label = earlierHolderLabel('desktop', DELETED_HOLDER_GENERATION);
+    results.push({
+      name: "/requests the Keys control lists an earlier holder's lifetime from the address as a checked option",
+      ok: label.startsWith('desktop (deleted, created ') && held.some(([l, on]) => l === label && on === 'true') && live !== undefined && own.length > 0 && !own.some(([l]) => l.includes('(deleted')),
+      missing: [label, JSON.stringify(held), JSON.stringify(own)],
+    });
+  }
 
   // The drawer is a route of its own, so a row, its Details link, Close and Escape each carry the address's filters.
   const drawerCheck = '/requests opening and closing the drawer keeps the filters in the address';
@@ -7894,7 +8482,7 @@ m.unmount();
       filter.querySelector('.mselect__trigger')?.click();
       await page.settle(150);
     }
-    return [...(filterOf(page, label)?.querySelectorAll('.mselect__option') ?? [])];
+    return [...(filterOf(page, label)?.querySelectorAll(CHOICE) ?? [])];
   };
   const pick = async (page, label, text) => {
     (await openOptions(page, label)).find((o) => o.textContent?.trim() === text)?.click();
@@ -7947,7 +8535,9 @@ m.unmount();
   const FROM = '2026-09-16T12:00:00.000Z';
   const TO = '2026-09-16T13:00:00.000Z';
   const inside = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
-  const windowCheck = '/requests mounts with from and to under Custom range and lists that window alone';
+  const windowCheck = '/requests mounts with from and to under Custom range, draws its two instant inputs on the window and lists that window alone';
+  // The two instant inputs, read in the smoke run's zone, UTC.
+  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
   const windowSpy = countCalls('listRequests');
   const linked = await mount(`/requests?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
   windowSpy.restore();
@@ -7959,15 +8549,17 @@ m.unmount();
     name: windowCheck,
     ok:
       range?.options.length === 4 &&
-      (option?.textContent ?? '').startsWith('Custom range') &&
+      range.value === 'custom' &&
+      option?.textContent === 'Custom range' &&
       (option?.getAttribute('title') ?? '').includes(FROM) &&
       (option?.getAttribute('title') ?? '').includes(TO) &&
+      JSON.stringify(bounds(linked)) === JSON.stringify(['2026-09-16T12:00', '2026-09-16T13:00']) &&
       inside.length > 0 &&
       windowed.length === Math.min(25, inside.length) &&
       windowed.every((r) => r !== null && inside.includes(r)) &&
       sent.length > 0 &&
       sent.every((s) => s === `${FROM} ${TO}`),
-    missing: [`${range?.options.length} options`, option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', `${windowed.length} rows of ${inside.length}`, ...sent],
+    missing: [`${range?.options.length} options`, range?.value ?? 'no select', option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', JSON.stringify(bounds(linked)), `${windowed.length} rows of ${inside.length}`, ...sent],
   });
 
   const refreshCheck = '/requests Refresh reads the custom range again and says so';
@@ -7989,7 +8581,7 @@ m.unmount();
   const presetCheck = '/requests choosing a preset drops the custom range';
   if (range) choose(range, '6h');
   await linked.settle();
-  results.push({ name: presetCheck, ok: param(linked, 'range') === '6h' && param(linked, 'from') === null && param(linked, 'to') === null && rangeOf(linked)?.options.length === 3, missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`] });
+  results.push({ name: presetCheck, ok: linked.location().search === '?range=6h' && rangeOf(linked)?.options.length === 4 && JSON.stringify(bounds(linked)) === JSON.stringify([null, null]), missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`, JSON.stringify(bounds(linked))] });
   linked.unmount();
 
   // A half window, one that runs backwards, and an instant past the date range each read as the preset, quietly.
@@ -8004,7 +8596,38 @@ m.unmount();
     half.unmount();
   }
   const thrown = problems.slice(seen);
-  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 3 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 4 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+
+  // Choosing Custom range writes the window the list shows as its two instants, so the choice holds. An edited bound
+  // writes its own instant, and one that would end the window before it starts writes nothing.
+  const chooseCheck = '/requests choosing Custom range writes the shown window as from and to, and an edited bound writes its instant';
+  const typeInto = (input, text) => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const chosen = await mount('/requests', { now: CLOCK_ORIGIN });
+  if (!rangeOf(chosen)) controlMissing(chooseCheck, 'Date range');
+  else {
+    choose(rangeOf(chosen), 'custom');
+    await chosen.settle();
+    const opened = { bounds: bounds(chosen), from: param(chosen, 'from'), range: param(chosen, 'range'), select: rangeOf(chosen)?.value ?? null, to: param(chosen, 'to') };
+    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T10:00');
+    await chosen.settle();
+    const edited = { from: param(chosen, 'from'), to: param(chosen, 'to') };
+    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T15:00');
+    await chosen.settle();
+    const backward = { from: param(chosen, 'from'), select: rangeOf(chosen)?.value ?? null };
+    results.push({
+      name: chooseCheck,
+      ok:
+        JSON.stringify(opened) === JSON.stringify({ bounds: ['2026-09-15T14:30', '2026-09-16T14:30'], from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), range: null, select: 'custom', to: isoAt(CLOCK_ORIGIN) }) &&
+        JSON.stringify(edited) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', to: isoAt(CLOCK_ORIGIN) }) &&
+        JSON.stringify(backward) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', select: 'custom' }),
+      missing: [JSON.stringify(opened), JSON.stringify(edited), JSON.stringify(backward)],
+    });
+  }
+  chosen.unmount();
 
   const effortCheck = '/requests the Effort filter offers the levels, none and other, and choosing none lists the rows without an effort and writes efforts';
   const efforts = await mount('/requests', { now: CLOCK_ORIGIN });
@@ -8050,6 +8673,195 @@ m.unmount();
     missing: [JSON.stringify(offered), JSON.stringify({ ...classless, rows: classless.rows.length }), JSON.stringify({ ...mains, rows: mains.rows.length })],
   });
   classes.unmount();
+}
+
+// Follow reads the list again every 5 seconds over the page's filters with the range ending at the poll, and lands
+// what arrived at the top in the accent tint. The open drawer pauses it, an older page stops it, and the address never
+// holds it.
+{
+  const HOUR = 3_600_000;
+  const followSwitch = (page) => page.container.querySelector('.filters__cols button[role="switch"][aria-label="Follow"]');
+  const requestRows = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
+  // The time cell carries the whole id on its title, the one place a row names its request.
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const nextPage = (page) => page.container.querySelector('button[aria-label="Next page"]');
+  {
+    // Mounted two seconds before the newest row the page's filters list, so the first poll's range is the first to
+    // reach it. The row reaches the table through the poll's read alone.
+    const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
+    const t = Date.parse(newest.at);
+    const page = await mount('/requests', { now: t - 2_000 });
+    const before = idOf(requestRows(page)[0]);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const first = requestRows(page)[0];
+    const sent = polls.calls[0]?.[0] ?? {};
+    // The first page brings the new row, so the poll reads the second, which brings none.
+    const landed = { calls: polls.calls.length, cursor: sent.cursor, id: idOf(first), isNew: first?.classList.contains('is-new') ?? false, second: polls.calls[1]?.[0]?.cursor, to: sent.to };
+    first?.click();
+    await page.settle();
+    const paused = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    paused.restore();
+    const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null };
+    page.container.querySelector('button[aria-label="Close details"]')?.click();
+    await page.settle();
+    // The poll arms again at the close, so its next read ends a full period later and finds nothing new to tint.
+    const resumed = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    resumed.restore();
+    const after = { calls: resumed.calls.length, id: idOf(requestRows(page)[0]), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length, to: resumed.calls[0]?.[0]?.to };
+    nextPage(page)?.click();
+    await page.settle();
+    const stopped = { checked: followSwitch(page)?.getAttribute('aria-checked') ?? null, rows: requestRows(page).length };
+    results.push({
+      name: '/requests Follow merges a new row under the fresh tint, keeps it under the drawer and stops on Next',
+      ok:
+        before !== newest.id &&
+        landed.calls === 2 && landed.cursor === undefined && typeof landed.second === 'string' && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
+        drawer.open && drawer.calls === 0 && drawer.id === newest.id &&
+        after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
+        stopped.checked === 'false' && stopped.rows > 0,
+      missing: [`first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(stopped)],
+    });
+    page.unmount();
+  }
+  {
+    // The ledger writes a request when it finishes, so one that ran long lands below rows the list already shows. The
+    // list's tenth row finishes after the page loaded, and the newest row arrives above the list, which puts the late
+    // row on the poll's second page.
+    const [newest] = (await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 1, to: isoAt(CLOCK_ORIGIN + 60_000) })).requests;
+    const loaded = Date.parse(newest.at) - 2_000;
+    const before = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 11, to: isoAt(loaded) })).requests;
+    const late = before[9];
+    const slot = requests.findIndex((r) => r.id === late.id);
+    const [held] = requests.splice(slot, 1);
+    const page = await mount('/requests?rows=10', { now: loaded });
+    const listed = requestRows(page).map(idOf);
+    // The late request finishes, so the ledger holds its row from here on.
+    requests.splice(slot, 0, held);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const end = isoAt(loaded + 5_000);
+    const all = (await api.listRequests({ from: isoAt(loaded - 24 * HOUR), limit: 30, to: end })).requests.map((r) => r.id);
+    const expected = all.slice(0, all.indexOf(before[10].id) + 1);
+    const drawn = requestRows(page).map(idOf);
+    const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+    const sent = polls.calls.map((c) => c[0]);
+    results.push({
+      name: '/requests Follow reads on past a page that brought a new row and lands a request that finished late in its place',
+      ok:
+        JSON.stringify(listed) === JSON.stringify([...before.slice(0, 9), before[10]].map((r) => r.id)) && all.indexOf(late.id) >= 10 &&
+        JSON.stringify(drawn) === JSON.stringify(expected) && tinted.includes(late.id) && tinted.includes(newest.id) &&
+        sent.length === 3 && sent[0].cursor === undefined && sent.every((q) => q.to === end),
+      missing: [`late ${late.id} at ${all.indexOf(late.id)}`, `listed ${listed.join(' | ')}`, `drawn ${drawn.join(' | ')}`, `expected ${expected.join(' | ')}`, `tinted ${tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+    });
+    page.unmount();
+  }
+  {
+    // The list's own read fails and leaves the page on its error, so the first poll that answers stands in for it: its
+    // rows drawn untinted, the error gone, and Next walking on from the poll's page under the end the poll read to.
+    failNextCall('listRequests', '/admin/requests', 'ledger locked');
+    const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
+    const errorOf = () => page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
+    const failed = { error: errorOf(), rows: requestRows(page).map(idOf).filter((id) => id !== null).length };
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const end = isoAt(CLOCK_ORIGIN + 5_000);
+    const answer = await api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit: 10, to: end });
+    const drawn = requestRows(page).map(idOf);
+    const stood = { calls: polls.calls.length, error: errorOf(), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length };
+    const next = countCalls('listRequests');
+    nextPage(page)?.click();
+    await page.settle();
+    next.restore();
+    const read = next.calls.map((c) => c[0]);
+    results.push({
+      name: '/requests a Follow poll that answers after the list read failed draws its rows with no error, and Next reads on from them',
+      ok:
+        failed.error === 'Could not load the request log' && failed.rows === 0 &&
+        stood.calls === 1 && stood.error === null && stood.tinted === 0 && answer.requests.length === 10 && JSON.stringify(drawn) === JSON.stringify(answer.requests.map((r) => r.id)) &&
+        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === end,
+      missing: [JSON.stringify(failed), JSON.stringify(stood), `${drawn.length} drawn of ${answer.requests.length}`, `cursor ${answer.nextCursor}`, JSON.stringify(read.map((q) => [q.cursor, q.to]))],
+    });
+    page.unmount();
+  }
+  {
+    // A day back, the list holds the window's first hour, and the first poll, whose range ends now, finds more arrived
+    // than its eight pages of ten read. Next reads on from the last row the poll read, up to the poll's end.
+    const from = CLOCK_ORIGIN - 24 * HOUR;
+    const page = await mount(`/requests?from=${isoAt(from)}&to=${isoAt(from + HOUR)}&rows=10`, { now: CLOCK_ORIGIN });
+    const listed = requestRows(page).map(idOf);
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRequests');
+    tick(5_000);
+    await page.settle(2_000);
+    polls.restore();
+    const sent = polls.calls.map((c) => c[0]);
+    const end = isoAt(CLOCK_ORIGIN + 5_000);
+    // Every row under the poll's bounds, newest first.
+    const all = [];
+    for (let cursor; ; ) {
+      const answer = await api.listRequests({ cursor, from: isoAt(from), limit: 100, to: end });
+      all.push(...answer.requests.map((r) => r.id));
+      if (answer.nextCursor === null) break;
+      cursor = answer.nextCursor;
+    }
+    const arrived = listed.length > 0 ? all.indexOf(listed[0]) : all.length;
+    const overrun = sent.length === 8 ? (await api.listRequests(sent[7])).nextCursor : null;
+    const line = page.container.querySelector('.requests__overrun')?.textContent ?? null;
+    const drawn = requestRows(page).map(idOf);
+    const next = countCalls('listRequests');
+    nextPage(page)?.click();
+    await page.settle();
+    next.restore();
+    const read = next.calls.map((c) => c[0]);
+    const after = requestRows(page).map(idOf);
+    results.push({
+      name: '/requests Next past a Follow overrun reads the rows the poll left up to its end',
+      ok:
+        arrived > 90 && sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10) && line === 'More rows arrived than Follow could fetch. Reload to read them.' &&
+        drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
+        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
+      missing: [`${arrived} arrived over ${listed.length} listed`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    followSwitch(page)?.click();
+    await page.settle(100);
+    const on = page.location().search;
+    const range = page.container.querySelector('select[aria-label="Date range"]');
+    if (range) {
+      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(range, '6h');
+      range.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    await page.settle();
+    const changed = page.location().search;
+    const checked = followSwitch(page)?.getAttribute('aria-checked') ?? null;
+    results.push({
+      name: '/requests the Follow switch is never in the address',
+      ok: on === '' && changed === '?range=6h' && checked === 'true',
+      missing: [JSON.stringify(on), JSON.stringify(changed), String(checked)],
+    });
+    page.unmount();
+  }
 }
 
 // A filter fed by a list that did not load offers nothing to pick, so it is disabled and says why where a pointer and a
@@ -8168,7 +8980,7 @@ m.unmount();
   const openOptions = async (page, filter) => {
     filter?.querySelector('.mselect__trigger')?.click();
     await page.settle(150);
-    return [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    return [...(filter?.querySelectorAll(CHOICE) ?? [])];
   };
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
@@ -8298,7 +9110,7 @@ m.unmount();
       name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
       ok:
         sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
-        hour.rows.length === 44 && hour.nextCursor === null && drawn.length === 25 &&
+        hour.rows.length === 51 && hour.nextCursor === null && drawn.length === 25 &&
         JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
         JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
         hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
@@ -8311,7 +9123,7 @@ m.unmount();
     const trigger = filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
     filter?.querySelector('.mselect__trigger')?.click();
     await m.settle(100);
-    const entries = [...(filter?.querySelectorAll('.mselect__group, .mselect__option') ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
+    const entries = [...(filter?.querySelectorAll(`.mselect__group, ${CHOICE}`) ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
     filter?.querySelector('.mselect__trigger')?.click();
     await m.settle(100);
     const events = entries.indexOf('# Events');
@@ -8459,6 +9271,8 @@ m.unmount();
     await page.settle();
     const first = trs(page)[0];
     const call = polls.calls[0]?.[0] ?? {};
+    // The first page brings the new row, so the poll reads the second, which brings none. The next poll brings nothing
+    // and reads the first page alone.
     const landed = { calls: polls.calls.length, cursor: call.cursor, isNew: first?.classList.contains('is-new') ?? false, time: cell(first, 'time')?.firstChild?.textContent ?? '', to: call.to };
     tick(5_000);
     await page.settle();
@@ -8468,8 +9282,8 @@ m.unmount();
       name: '/routing-log Follow polls every 5 s with the range\'s end at now and lands a new row in the accent tint',
       ok:
         firstBefore !== clockText(top.at) && label() === 'polling every 5 s, the range ends now' &&
-        landed.calls === 1 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
-        after.calls === 2 && after.isNew === 0,
+        landed.calls === 2 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
+        after.calls === 3 && after.isNew === 0,
       missing: [firstBefore, label(), JSON.stringify(landed), JSON.stringify(after)],
     });
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
@@ -8514,11 +9328,12 @@ m.unmount();
     await page.settle(100);
     held.release();
     await page.settle();
-    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    // The held page brings the new row, so the poll reads its second page, and no later poll starts a first one.
+    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', pages: held.calls.map((c) => c[0]?.cursor === undefined), tinted: tinted(page) };
     held.restore();
     results.push({
       name: '/routing-log a poll that answers after Follow is turned off lands nothing',
-      ok: after.calls === 1 && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
+      ok: after.calls === 2 && JSON.stringify(after.pages) === JSON.stringify([true, false]) && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
       missing: [JSON.stringify(after)],
     });
     page.unmount();
@@ -8580,7 +9395,7 @@ m.unmount();
   const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
   {
     // The list ends an hour back, so the first poll, whose range ends now, finds the whole last hour arrived: more
-    // rows than one page holds.
+    // rows than two pages hold.
     const from = CLOCK_ORIGIN - 2 * HOUR;
     const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(CLOCK_ORIGIN - HOUR)}`, { now: CLOCK_ORIGIN });
     const listed = trs(page).length;
@@ -8595,10 +9410,11 @@ m.unmount();
     const arrived = all.filter((r) => Date.parse(r.at) > CLOCK_ORIGIN - HOUR).length;
     const expected = all.slice(0, arrived + listed).map(rowKey);
     const drawn = drawnKeys(page);
+    // The poll reads every page an arrival is on, then the first page that brings none.
     results.push({
       name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
       ok:
-        listed > 0 && arrived > 25 && sent.length === 2 && sent[0].cursor === undefined && typeof sent[1].cursor === 'string' && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        listed > 0 && arrived > 50 && sent.length === Math.ceil(arrived / 25) + 1 && sent[0].cursor === undefined && sent.slice(1).every((q) => typeof q.cursor === 'string') && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
         JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
       missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
     });
@@ -8708,16 +9524,19 @@ m.unmount();
     });
   }
   {
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
+    const sessionOf = new Map(hour.rows.map((r) => [r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`, r.sessionId]));
     for (const tr of trs(m)) {
       const time = cell(tr, 'time')?.firstChild?.textContent ?? '';
       const say = (what) => wrong.push(`${time}: ${what}`);
       if (!all(cell(tr, 'time'), ['request'])) say(`time ${hrefs(cell(tr, 'time'))}`);
       const session = cell(tr, 'session')?.querySelector('a');
-      if (session && params(session.getAttribute('href')).session !== session.getAttribute('title')) say(`session ${session.getAttribute('href')}`);
+      // The Sessions page reads no session key, so the link opens the view and its title names the row's own session.
+      const own = sessionOf.get(tr.getAttribute('data-row') ?? '');
+      if (session && (session.getAttribute('href') !== '/sessions' || own == null || session.getAttribute('title') !== own)) say(`session ${session.getAttribute('href')} ${session.getAttribute('title')} for ${own}`);
       if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
       if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
       const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
@@ -8864,8 +9683,8 @@ m.unmount();
   const onTrack = (s) => s?.button.classList.contains('strip-station--track') ?? false;
   const pairsOf = (card) => stationsOf(card).map((s) => [s.step, s.verdict]);
   /** The pairs the model gives, the line's before the track's, for a record whose sequence a check does not spell. */
-  const modelPairs = (record, row) => {
-    const { stations } = stationModel(record, row, CLOCK_ORIGIN);
+  const modelPairs = (record) => {
+    const { stations } = stationModel(record, CLOCK_ORIGIN);
     return [...stations.filter((s) => s.level === 'line'), ...stations.filter((s) => s.level === 'track')].map((s) => [s.word, s.badge]);
   };
   const RENEWAL_STATIONS = [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'renewed']];
@@ -8944,8 +9763,8 @@ m.unmount();
    * least of 720 px, the window less 16, the card less 16 and the card's part on screen less 16, which jsdom's empty
    * boxes floor at 0.
    */
-  const popoversOpen = async (what, page, card, record, row) => {
-    const model = stationModel(record, row, CLOCK_ORIGIN);
+  const popoversOpen = async (what, page, card, record) => {
+    const model = stationModel(record, CLOCK_ORIGIN);
     const buttons = [...(card?.querySelectorAll('.decision-strip .strip-station, .decision-strip .strip-candidate, .decision-strip .strip-terminus') ?? [])];
     const wrong = [];
     for (const button of buttons) {
@@ -8976,10 +9795,10 @@ m.unmount();
   };
 
   {
-    const { card, page, panel, record, row: summary } = await story('req_f8085653-422');
+    const { card, page, panel, record } = await story('req_f8085653-422');
     scan('renewal', card);
     stripDrawn('renewal', card, RENEWAL_STATIONS);
-    await popoversOpen('renewal', page, card, record, summary);
+    await popoversOpen('renewal', page, card, record);
     const stations = stationsOf(card);
     // The engine recorded all five rules `no` before it renewed, so each one is on the taken path under its bracket.
     const moves = stations.filter((s) => ['spent', 'overage', 'return to plan', 'drain', 'shed'].includes(s.step));
@@ -9034,7 +9853,6 @@ m.unmount();
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
-          JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
           JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
@@ -9058,10 +9876,10 @@ m.unmount();
   }
   {
     // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
-    const { card, page, record, row } = await story('req_b2bed817-a58');
+    const { card, page, record } = await story('req_b2bed817-a58');
     scan('static placement', card);
-    stripDrawn('static placement', card, modelPairs(record, row));
-    await popoversOpen('static placement', page, card, record, row);
+    stripDrawn('static placement', card, modelPairs(record));
+    await popoversOpen('static placement', page, card, record);
     const rungs = stationsOf(card).filter((s) => ['content', 'with main', 'static'].includes(s.step));
     const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
     const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
@@ -9107,10 +9925,10 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_da52d141-a5a');
+    const { card, page, record } = await story('req_da52d141-a5a');
     scan('spent move', card);
-    stripDrawn('spent move', card, modelPairs(record, row));
-    await popoversOpen('spent move', page, card, record, row);
+    stripDrawn('spent move', card, modelPairs(record));
+    await popoversOpen('spent move', page, card, record);
     const stations = stationsOf(card);
     const steps = stations.map((s) => `${s.step} ${s.verdict}`);
     const cool = stations.find((s) => s.step === 'Cool reading');
@@ -9142,13 +9960,13 @@ m.unmount();
   }
   {
     // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
-    const { card, page, record, row } = await story('req_868264bc-611');
+    const { card, page, record } = await story('req_868264bc-611');
     scan('shed move', card);
     stripDrawn('shed move', card, [
       ...[['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'fired'], ['Renew', 'not run']],
       ...[['Move', 'moved'], ['Cool reading', 'preferred'], ['Cap filter', 'passed'], ['Partitions', 'match'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen']],
     ]);
-    await popoversOpen('shed move', page, card, record, row);
+    await popoversOpen('shed move', page, card, record);
     const shed = stationsOf(card).find((s) => s.step === 'shed');
     // The fired rule's popover reads its round in the Round group.
     const fired = groupOfPopover(await popoverOf(page, shed?.button), 'Round');
@@ -9165,7 +9983,7 @@ m.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
     stripDrawn('shedding round', round.card, RENEWAL_STATIONS);
-    await popoversOpen('shedding round', round.page, round.card, round.record, round.row);
+    await popoversOpen('shedding round', round.page, round.card, round.record);
     const ran = stationsOf(round.card).find((s) => s.step === 'shed');
     // The round's shed rule reads its marks in its popover's Round group, each a chip linking its session.
     const roundGroup = groupOfPopover(await popoverOf(round.page, ran?.button), 'Round');
@@ -9177,17 +9995,17 @@ m.unmount();
       ok:
         record.outcome.rule === 'shed' && shed?.verdict === 'fired' && (popoverRowOf(fired, 'round') ?? []).includes('round within dwell') && (popoverRowOf(fired, 'marked') ?? []).includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
         ran?.verdict === 'no' && (popoverRowOf(roundGroup, 'round') ?? []).includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
-        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+        marks.every((c) => c.querySelector('a')?.getAttribute('href') === '/sessions') && JSON.stringify(marks.map((c) => c.getAttribute('title')?.split('/')[1])) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
       missing: [shed ? `${shed.step} ${shed.verdict}: ${rowsRead(fired)}` : 'no shed station', JSON.stringify(ddWords(mark?.dd)), ran ? rowsRead(roundGroup) : 'no round station'],
     });
     results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_69e30548-32e', 1);
+    const { card, page, record } = await story('req_69e30548-32e', 1);
     scan('hold', card);
-    stripDrawn('hold', card, modelPairs(record, row));
-    await popoversOpen('hold', page, card, record, row);
+    stripDrawn('hold', card, modelPairs(record));
+    await popoversOpen('hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
     const out = outcomeOf(card);
@@ -9211,8 +10029,8 @@ m.unmount();
     const placed = after?.querySelector('.decision-card');
     scan('placement after the hold', placed);
     const second = await api.getDecision('req_69e30548-32e', 2);
-    stripDrawn('placement after the hold', placed, modelPairs(second, undefined));
-    await popoversOpen('placement after the hold', page, placed, second, undefined);
+    stripDrawn('placement after the hold', placed, modelPairs(second));
+    await popoversOpen('placement after the hold', page, placed, second);
     const { cohort, heldMs } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the account a hold waited on and how long it waited',
@@ -9223,10 +10041,10 @@ m.unmount();
   }
   {
     // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
-    const { card, page, record, row } = await story('req_e8b7eb13-060', 1);
+    const { card, page, record } = await story('req_e8b7eb13-060', 1);
     scan('strategy hold', card);
-    stripDrawn('strategy hold', card, modelPairs(record, row));
-    await popoversOpen('strategy hold', page, card, record, row);
+    stripDrawn('strategy hold', card, modelPairs(record));
+    await popoversOpen('strategy hold', page, card, record);
     const hold = stationsOf(card).find((s) => s.step === 'Hold');
     const held = await popoverOf(page, hold?.button);
     results.push({
@@ -9237,8 +10055,8 @@ m.unmount();
     const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
     scan('placement after a strategy hold', after);
     const second = await api.getDecision('req_e8b7eb13-060', 2);
-    stripDrawn('placement after a strategy hold', after, modelPairs(second, undefined));
-    await popoversOpen('placement after a strategy hold', page, after, second, undefined);
+    stripDrawn('placement after a strategy hold', after, modelPairs(second));
+    await popoversOpen('placement after a strategy hold', page, after, second);
     const { heldMs, waitedOn } = second.outcome.cohortHold;
     results.push({
       name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
@@ -9248,24 +10066,28 @@ m.unmount();
     page.unmount();
   }
   {
-    // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
+    // A request held until its bound ran out answers 429 without a dispatch, whatever the exhaustion after the hold
+    // names: the Hold row reads that it ran out, and the Answer row reads the status the request row carries.
     const [id, seq] = ['req_77634945-72b', 2];
-    const { card, page, record, row } = await story(id, seq);
+    const { card, page, record } = await story(id, seq);
     scan('exhaustion after a hold', card);
-    stripDrawn('exhaustion after a hold', card, modelPairs(record, row));
-    await popoversOpen('exhaustion after a hold', page, card, record, row);
+    stripDrawn('exhaustion after a hold', card, modelPairs(record));
+    await popoversOpen('exhaustion after a hold', page, card, record);
+    const answered = requests.find((r) => r.id === id)?.status;
     results.push({
-      name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
-      ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
-      missing: [JSON.stringify(outcomeOf(card))],
+      name: '/routing-log a hold whose bound ran out reads ran out on its hold and 429 on the exhaustion after it, with nothing dispatched',
+      ok:
+        record.outcome.kind === 'exhausted' && record.request.holds.at(-1)?.ranOut === true && record.outcome.completion === null && answered === 429 &&
+        outcomeOf(card).Hold?.at(-1) === 'ran out' && outcomeOf(card).Answer?.[0] === 'status 429' && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
+      missing: [JSON.stringify(outcomeOf(card)), `the request row answered ${answered}`],
     });
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_51d0e2b8-7a0');
+    const { card, page, record } = await story('req_51d0e2b8-7a0');
     scan('exhaustion', card);
-    stripDrawn('exhaustion', card, modelPairs(record, row));
-    await popoversOpen('exhaustion', page, card, record, row);
+    stripDrawn('exhaustion', card, modelPairs(record));
+    await popoversOpen('exhaustion', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'Exhausted');
     const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
     // The story's obstacles name no account, so each one's chip is keyed `obstacle`, and its hover says why.
@@ -9290,10 +10112,10 @@ m.unmount();
     page.unmount();
   }
   {
-    const { card, page, record, row } = await story('req_e0a4c6f2-118');
+    const { card, page, record } = await story('req_e0a4c6f2-118');
     scan('refusal', card);
     stripDrawn('refusal', card, [['Admission', 'refused'], ['Rest of the walk', 'not run']]);
-    await popoversOpen('refusal', page, card, record, row);
+    await popoversOpen('refusal', page, card, record);
     const stations = stationsOf(card);
     // The admission's popover reads the refusal's reason, and the rest of the walk's says what did not run.
     const admission = await popoverOf(page, stationButton(card, 'admission'));
@@ -9318,10 +10140,10 @@ m.unmount();
   }
   {
     // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
-    const { card, page, record, row } = await story('req_c41d0311-200', 1, 'probe');
+    const { card, page, record } = await story('req_c41d0311-200', 1, 'probe');
     scan('probe', card);
-    stripDrawn('probe', card, modelPairs(record, row));
-    await popoversOpen('probe', page, card, record, row);
+    stripDrawn('probe', card, modelPairs(record));
+    await popoversOpen('probe', page, card, record);
     const steps = stationsOf(card).map((s) => s.step);
     results.push({
       name: "/routing-log the probe's card is the decision card",
@@ -9333,8 +10155,8 @@ m.unmount();
   {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
-    stripDrawn('failover attempt', card, modelPairs(record, row));
-    await popoversOpen('failover attempt', page, card, record, row);
+    stripDrawn('failover attempt', card, modelPairs(record));
+    await popoversOpen('failover attempt', page, card, record);
     results.push({
       name: "/routing-log a failover attempt's card reads attempt n of m",
       ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
@@ -9344,7 +10166,7 @@ m.unmount();
   }
   {
     // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
-    const { card, page, record, row } = await story('req_ef099b34-453');
+    const { card, page, record } = await story('req_ef099b34-453');
     scan('fresh placement', card);
     stripDrawn('fresh placement', card, [
       ['Pin', 'none'],
@@ -9359,7 +10181,7 @@ m.unmount();
       ['static', 'none'],
       ['Pick', 'chosen'],
     ]);
-    await popoversOpen('fresh placement', page, card, record, row);
+    await popoversOpen('fresh placement', page, card, record);
     const stations = stationsOf(card);
     const pick = stations.find((s) => s.step === 'Pick');
     const lookup = groupOfPopover(await popoverOf(page, stations[0]?.button), 'Lookup');
@@ -9418,6 +10240,35 @@ m.unmount();
     page.unmount();
   }
   {
+    // One popover is open on the page across the cards: a pin in the second card's strip replaces the first card's
+    // pinned popover, and a hover in the first replaces that one in turn, pinned as it is.
+    const { card, page } = await story('req_69e30548-32e', 1);
+    const placed = (await openRow(page, 'req_69e30548-32e/2'))?.querySelector('.decision-card') ?? null;
+    const open = () => [...document.querySelectorAll('.strip-popover')];
+    const selected = (c) => c?.querySelectorAll('.decision-strip .is-selected').length ?? null;
+    const firstStation = (c) => c?.querySelector('.decision-strip .strip-station') ?? null;
+    const seen = [];
+    const read = (what) => seen.push(`${what}: ${open().length} open, pinned ${open()[0]?.classList.contains('is-pinned') ?? null}, selected ${selected(card)} and ${selected(placed)}`);
+    firstStation(card)?.click();
+    await page.settle(150);
+    read('a pin in the first card');
+    firstStation(placed)?.click();
+    await page.settle(150);
+    read('a pin in the second card');
+    firstStation(card)?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+    await page.settle(150);
+    read('a hover in the first card');
+    results.push({
+      name: "/routing-log one popover is open across two cards, a pin or a hover in one replacing the other's",
+      ok:
+        placed !== null &&
+        JSON.stringify(seen) ===
+          JSON.stringify(['a pin in the first card: 1 open, pinned true, selected 1 and 0', 'a pin in the second card: 1 open, pinned true, selected 0 and 1', 'a hover in the first card: 1 open, pinned false, selected 0 and 0']),
+      missing: seen,
+    });
+    page.unmount();
+  }
+  {
     // The strip by keyboard and by ear on the fresh placement and the shed move: the buttons' names in the record's
     // order, Enter or Space into the pick's popover, Escape and Shift+Tab back to the station, a pinned popover closing
     // once focus leaves it and its station or Tab passes its last link, and a drawing that says nothing.
@@ -9428,9 +10279,9 @@ m.unmount();
       ['fresh placement', 'req_ef099b34-453'],
       ['shed move', 'req_868264bc-611'],
     ]) {
-      const { card, page, record, row } = await story(id);
+      const { card, page, record } = await story(id);
       const strip = card?.querySelector('.decision-strip') ?? null;
-      const model = stationModel(record, row, CLOCK_ORIGIN);
+      const model = stationModel(record, CLOCK_ORIGIN);
       const names = [...(strip?.querySelectorAll('.strip-station, .strip-candidate, .strip-terminus') ?? [])].map((b) => b.getAttribute('aria-label'));
       const expected = [
         ...[...model.stations.filter((s) => s.level === 'line'), ...model.stations.filter((s) => s.level === 'track')].map(stationName),
@@ -9572,9 +10423,12 @@ m.unmount();
     const chip = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip');
     const hint = chip?.getAttribute('title') ?? '';
     results.push({
-      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover and the By chip its hint",
+      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover in minutes or whole hours and the tier sentence, and the By chip its hint",
       ok:
-        header === paceWord(record) && header !== 'Pace' && oauth.length > 0 && oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ h/.test(t.title)) &&
+        header === paceWord(record) &&
+        header !== 'Pace' &&
+        oauth.length > 0 &&
+        oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ (min|h) /.test(t.title) && t.title.endsWith('. Inside its tier, the highest above the pace floor wins.')) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
     });
@@ -9588,10 +10442,10 @@ m.unmount();
   }
   {
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
-    const { card, page, record, row } = await story('req_4b0e9d17-c31', 2);
+    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
-    stripDrawn('fast failover', card, modelPairs(record, row));
-    await popoversOpen('fast failover', page, card, record, row);
+    stripDrawn('fast failover', card, modelPairs(record));
+    await popoversOpen('fast failover', page, card, record);
     const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
     const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
     results.push({
@@ -9603,10 +10457,10 @@ m.unmount();
   }
   {
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
-    const { card, page, record, row } = await story('req_52f62e67-839');
+    const { card, page, record } = await story('req_52f62e67-839');
     scan('with main placement', card);
-    stripDrawn('with main placement', card, modelPairs(record, row));
-    await popoversOpen('with main placement', page, card, record, row);
+    stripDrawn('with main placement', card, modelPairs(record));
+    await popoversOpen('with main placement', page, card, record);
     const line = stationsOf(card).find((s) => s.step === 'with main');
     // A placement beside the main conversation names no entry, so its rung's popover draws no Entry group and no hash.
     const rung = await popoverOf(page, line?.button);
@@ -9759,7 +10613,7 @@ m.unmount();
       refresh_failed: ['Error'],
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
-      registry_changed: ['Change', 'shed ahead of pace', 'Actor', 'Reading it'],
+      registry_changed: ['Change', 'Fields', 'Actor'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
       shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
@@ -9774,13 +10628,12 @@ m.unmount();
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
-    // The pairs the event carries the facts for: the state's effect, the gap's meaning, a registry edit's reading, the
-    // spent window's effect and the backoff's span.
+    // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect and
+    // the backoff's span.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
-      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace none`] }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
     };
     const modelLinks = {};
@@ -9800,7 +10653,7 @@ m.unmount();
       const pairs = kvRows(detail?.querySelector(':scope > .kv'));
       const href = (label) => pairs.find((p) => p.label === label)?.dd?.querySelector('a')?.getAttribute('href') ?? null;
       const head = [['When', utc(at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
-      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])) };
+      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])), texts: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.textContent)])) };
       results.push({
         name: `/routing-log the ${kind} detail reads its pairs`,
         ok:
@@ -9815,16 +10668,42 @@ m.unmount();
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;
     const permitted = modelLinks.model_permitted;
-    const model = (id) => `/models?model=${id}`;
+    // The Models page reads no model key, so each model's link opens the view itself and its text names the model.
+    const model = (pair, id) => JSON.stringify([pair.links, pair.texts]) === JSON.stringify([['/models'], [id]]);
+    const pairOf = (entry, label) => ({ links: entry.links[label], texts: entry.texts[label] });
     results.push({
       name: '/routing-log the model rejected and permitted details link each account and model they name',
       ok:
         rejected !== undefined && permitted !== undefined &&
+        rejected.event.detail.wire_model !== rejected.event.model &&
         JSON.stringify(permitted.links['Rejected by']) === JSON.stringify(permitted.event.detail.rejected_by.map((id) => `/accounts/${id}`)) &&
-        JSON.stringify(rejected.links['Model sent']) === JSON.stringify([model(rejected.event.detail.wire_model)]) && JSON.stringify(rejected.links['Model resolved']) === JSON.stringify([model(rejected.event.model)]) &&
-        JSON.stringify(permitted.links['Model sent']) === JSON.stringify([model(permitted.event.detail.wire_model)]) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
-      missing: [JSON.stringify(rejected?.links), JSON.stringify(permitted?.links)],
+        model(pairOf(rejected, 'Model sent'), rejected.event.detail.wire_model) && model(pairOf(rejected, 'Model resolved'), rejected.event.model) &&
+        model(pairOf(permitted, 'Model sent'), permitted.event.detail.wire_model) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
+      missing: [JSON.stringify(rejected?.links), JSON.stringify(rejected?.texts), JSON.stringify(permitted?.links), JSON.stringify(permitted?.texts)],
     });
+  }
+  {
+    // A model rejection's until is on the cooldown row its answer wrote at the same instant, so the detail reads it
+    // where the page lists that row beside it, and the rejection listed alone reads none.
+    const name = '/routing-log a model rejection listed beside its cooldown reads the until off that row, and none alone';
+    const range = { from: iso(CLOCK_ORIGIN - 7 * DAY), limit: 25, to: iso(CLOCK_ORIGIN) };
+    const [rejected] = (await api.listRoutingLog({ ...range, kinds: ['model_rejected'] })).rows;
+    const set = rejected && (await api.listRoutingLog({ ...range, kinds: ['cooldown_set'] })).rows.find((r) => r.accountId === rejected.accountId && r.at === rejected.at && r.detail.scope === `model:${rejected.model}`);
+    if (!rejected || !set) results.push({ name, ok: false, missing: ['no model rejection beside its cooldown in the story'] });
+    else {
+      const at = Date.parse(rejected.at);
+      const untilOf = async (kinds) => {
+        const page = await mount(`/routing-log?kinds=${kinds}&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+        const panel = await openRow(page, `event/${rejected.id}`);
+        const pair = kvRows(panel?.querySelector('.event-detail > .kv')).find((p) => p.label === 'Until');
+        page.unmount();
+        return pair === undefined ? null : ddWords(pair.dd);
+      };
+      const beside = await untilOf('cooldown_set,model_rejected');
+      const alone = await untilOf('model_rejected');
+      const want = new Date(set.detail.until).toISOString().slice(11, 16);
+      results.push({ name, ok: JSON.stringify(beside) === JSON.stringify([want]) && alone === null, missing: [JSON.stringify(beside), JSON.stringify(alone), want] });
+    }
   }
   {
     // Source request opens the log on the event's request alone, a quarter hour either side of the event.
@@ -9873,8 +10752,8 @@ m.unmount();
       ok: opened === 1 && shut === 0 && paged === 0 && back === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
       missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, back on the first page ${back}, chevrons ${chevrons}`],
     });
-    // Every decision and every event of the default hour opens, the second page's rows and then the first's, and the
-    // cards and details join the scan.
+    // Every decision and every event of the default hour opens, the second and third pages' rows and then the first's,
+    // and the cards and details join the scan.
     const openAll = async () => {
       const rows = trs(page).filter((tr) => tr.classList.contains('routing-log__row'));
       for (const tr of rows) tr.querySelector('td.routing-log__kind')?.click();
@@ -9884,13 +10763,16 @@ m.unmount();
       return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-strip, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
     };
     const second = await openAll();
+    pager('Next page')?.click();
+    await page.settle(300);
+    const third = await openAll();
     [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
     await page.settle(300);
     const firstPage = await openAll();
     results.push({
       name: '/routing-log every row of a page opens to its card or its detail',
-      ok: [second, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + firstPage.rows === hour.rows.length,
-      missing: [JSON.stringify({ firstPage, second }), `${hour.rows.length} rows in the hour`],
+      ok: [second, third, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + third.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, second, third }), `${hour.rows.length} rows in the hour`],
     });
     page.unmount();
   }
@@ -9957,7 +10839,7 @@ m.unmount();
     for (const trigger of page.container.querySelectorAll('.filters .mselect__trigger')) {
       trigger.click();
       await page.settle(60);
-      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll('.mselect__option').length ?? 0}`);
+      counts.push(`${trigger.textContent?.trim()} ${trigger.parentElement?.querySelectorAll(CHOICE).length ?? 0}`);
       trigger.click();
       await page.settle(60);
     }
@@ -10177,12 +11059,12 @@ m.unmount();
   });
   ended.unmount();
 
-  // One bucket at 14:00 holding 18,000 tokens: its rate is 18,000 over the minutes the read saw of it.
+  // One bucket at 14:00 holding $18: its rate is $18 over the minutes the read saw of it.
   const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 0 }] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 18 }] });
   const burnPage = await mount('/analytics#burn', { now: at14 + 20 * 60_000 });
   const rate = () => {
-    const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+    const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
     return card?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
   };
   const regroup = async (value) => {
@@ -10204,54 +11086,42 @@ m.unmount();
   // Past 15:00 the page's instant moves, the custom window and its answer stay.
   const pastBoundary = rate();
   delete api.getAnalyticsBurn;
-  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['900', '600', '600']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
+  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['$0.90', '$0.60', '$0.60']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
   burnPage.unmount();
 }
 
-// The running burn bucket keeps its rate but draws lighter and says so, and until it covers a tenth of its width it
-// does not set the axis. jsdom lays nothing out, so the chart containers read a browser's size here.
+// The running burn bucket keeps its rate, and until it covers a tenth of its width it does not set the axis. jsdom lays
+// nothing out, so the chart containers read a browser's size here.
 {
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const burnAt = (tokens) => async () => ({
+  const burnAt = (usd) => async () => ({
     bucketSeconds: 3_600,
-    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: tokens[i], uncachedTokens: tokens[i], unit: 'usd', usd: 0 })),
+    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: 'usd', usd: usd[i] })),
   });
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
   };
-  const tokensCard = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+  const spendCard = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
+  // A tick's dollars in whole cents, so two steps compare without a float's error.
+  const centsOf = (label) => Math.round(Number.parseFloat(label.replace('$', '')) * 100);
+  const ticksOf = (page) => [...(spendCard(page)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
 
-  const partialCheck = '/analytics the running burn bucket draws in the partial tone and the note names it';
-  api.getAnalyticsBurn = burnAt([60_000, 30_000]);
-  const running = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
-  const card = tokensCard(running);
-  const bars = [...(card?.querySelectorAll('.recharts-bar-rectangle path') ?? [])];
-  const partial = bars.filter((b) => b.classList.contains('is-partial'));
-  const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
-  results.push({
-    name: partialCheck,
-    ok: bars.length === 2 && partial.length === 1 && partial[0] === bars[1] && subtitle.includes('The last bucket is partial'),
-    missing: [`${bars.length} bars, ${partial.length} partial`, subtitle],
-  });
-  running.unmount();
-
-  // 20 seconds into 14:00, 1,000 tokens read as 3,000 a minute against the full hour's 1,000.
+  // 20 seconds into 14:00, $1 reads as $3 a minute against the full hour's $1.
   const floorCheck = '/analytics a running bucket under a tenth of its width does not set the axis';
-  api.getAnalyticsBurn = burnAt([60_000, 1_000]);
+  api.getAnalyticsBurn = burnAt([60, 1]);
   const early = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const ticks = [...(tokensCard(early)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
-  const valueOf = (label) => Number.parseFloat(label) * (label.endsWith('K') ? 1_000 : 1);
-  results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(valueOf)) <= 1_000, missing: ticks });
+  const ticks = ticksOf(early);
+  results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(centsOf)) <= 100, missing: ticks });
   early.unmount();
 
-  // 61,380 tokens over the full hour are 1,023 a minute, a top no tick step of five reaches evenly.
+  // $61.38 over the full hour is $1.023 a minute, a top no tick step of five reaches evenly.
   const evenCheck = '/analytics a capped burn axis ends on a round tick and steps evenly to it';
-  api.getAnalyticsBurn = burnAt([61_380, 1_000]);
+  api.getAnalyticsBurn = burnAt([61.38, 1]);
   const capped = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const cappedTicks = [...(tokensCard(capped)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? '')).sort((a, b) => a - b);
+  const cappedTicks = ticksOf(capped).map(centsOf).sort((a, b) => a - b);
   const steps = cappedTicks.slice(1).map((v, i) => v - cappedTicks[i]);
-  results.push({ name: evenCheck, ok: cappedTicks.length === 5 && cappedTicks[4] >= 1_023 && steps.every((s) => s === steps[0]), missing: cappedTicks.map(String) });
+  results.push({ name: evenCheck, ok: cappedTicks.length === 5 && cappedTicks[4] >= 102.3 && steps.every((s) => s === steps[0]), missing: cappedTicks.map(String) });
   capped.unmount();
 
   // A lone bucket 20 seconds old sets no scale, so recharts spans its $0.004 a minute alone, and the labels have to
@@ -10259,24 +11129,23 @@ m.unmount();
   const precisionCheck = "/analytics a spend axis recharts spans on its own labels its ticks at the drawn rows' precision";
   api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at13 + 3_600_000).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'overflow', sevenDayShare: null, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 }] });
   const lone = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
-  const spendCard = [...lone.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
-  const labels = [...(spendCard?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
+  const labels = ticksOf(lone);
   results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
   lone.unmount();
 
   // Opened on Traffic at 14:05 and switched to Burn at 14:30, inside the same hour, with the page's range clock still
-  // at the mount. The read's own instant rates the running hour over its 30 minutes, 600 a minute, half its width and
-  // so enough to set the axis over the full 13:00 hour's 200; the legend reads the 30,000 tokens over the 90 minutes
-  // the two buckets cover, 333 a minute.
+  // at the mount. The read's own instant rates the running hour over its 30 minutes, $0.60 a minute, half its width and
+  // so enough to set the axis over the full 13:00 hour's $0.20; the legend reads the $30 over the 90 minutes the two
+  // buckets cover, $0.33 a minute.
   const instantCheck = "/analytics a burn read opened on a later tab rates the running hour up to the read's own instant";
-  api.getAnalyticsBurn = burnAt([12_000, 18_000]);
+  api.getAnalyticsBurn = burnAt([12, 18]);
   const opened = await mount('/analytics', { now: at13 + 3_600_000 + 5 * 60_000 });
   tick(25 * 60_000);
   await opened.settle();
   await tab(opened, 'Burn');
-  const legend = tokensCard(opened)?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
-  const axis = [...(tokensCard(opened)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? ''));
-  results.push({ name: instantCheck, ok: legend === '333' && axis.length > 1 && Math.max(...axis) >= 600, missing: [`legend ${legend}`, `axis ${axis.join(', ')}`] });
+  const legend = spendCard(opened)?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
+  const axis = ticksOf(opened).map(centsOf);
+  results.push({ name: instantCheck, ok: legend === '$0.33' && axis.length > 1 && Math.max(...axis) >= 60, missing: [`legend ${legend}`, `axis ${axis.join(', ')}`] });
   opened.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
@@ -10351,7 +11220,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await m.settle(700);
   };
   await tab(m, 'Burn');
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour']);
+  expect('/analytics burn section', m.text(), ['Burn', 'Spend per minute', 'Plan per hour']);
+  results.push({ name: '/analytics the Burn tab draws Spend per minute and Plan per hour and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
+  expect('/analytics the Burn tab draws the spend per minute note', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ["Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers."]);
   await tab(m, 'Traffic');
   {
     expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range']);
@@ -10616,6 +11487,31 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       paced.unmount();
     }
     {
+      // The story holds a 5-hour lead just behind pace in the day, which rounds to no lead at all: a hover over every
+      // bucket reads it as 0%, and no figure that rounds to zero carries a sign.
+      const sampled = await api.listAccountRollups(day.from, day.to);
+      const nearZero = sampled.filter((r) => r.windows.five_hour?.lead !== null && r.windows.five_hour?.lead !== undefined && r.windows.five_hour.lead * 100 > -0.5 && r.windows.five_hour.lead < 0).map((r) => r.accountId);
+      const paced = await mount('/analytics#accounts');
+      const pace = () => [...paced.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pace');
+      const values = new Map();
+      for (let x = 44; x <= 600; x += 8) {
+        pace()?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+        await paced.settle(40);
+        for (const row of pace()?.querySelectorAll('.chart-tip .chart-tip__row') ?? []) {
+          const label = row.querySelector('.chart-tip__label')?.textContent?.trim() ?? '';
+          const value = row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '';
+          if (!label.startsWith('Pace score')) values.set(`${label} ${value}`, [label, value]);
+        }
+      }
+      const read = [...values.values()];
+      results.push({
+        name: '/analytics a lead that rounds to zero reads 0% and never -0%',
+        ok: nearZero.length > 0 && read.some(([label, value]) => nearZero.includes(label) && value === '0%') && !read.some(([, value]) => value === '-0%' || value === '+0%'),
+        missing: [`near zero ${JSON.stringify(nearZero)}`, JSON.stringify(read.filter(([, value]) => /^[+-]?0%$/.test(value)))],
+      });
+      paced.unmount();
+    }
+    {
       // One sampled hour between two empty ones: the lines leave their null buckets unconnected, so the bucket draws
       // as a dot on the Window usage and the Pace cards alike, as the share chart draws an isolated priced bucket.
       const now = Date.now();
@@ -10827,9 +11723,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   });
 
   await burnGroup('request_class');
-  const classes = legendOf('Tokens per minute');
+  const classes = legendOf('Spend per minute');
   results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
-  expect('/analytics burn by request class', m.text(), ['conversation', 'overhead', 'compaction, main, subagent']);
+  expect('/analytics burn by request class glosses the two classes under Spend per minute', card('Spend per minute')?.querySelector('.card__subtitle')?.textContent ?? '', ['Conversation is compaction, main, subagent', 'Overhead is every other class']);
   await burnGroup('key');
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
@@ -10947,17 +11843,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Cache');
     await tab(m, 'Burn');
     await burnGroup('key');
-    const keyed = card('Tokens per minute')?.textContent ?? '';
-    const keyedLegend = legendOf('Tokens per minute');
+    const keyed = card('Spend per minute')?.textContent ?? '';
+    const keyedLegend = legendOf('Spend per minute');
     await burnGroup('account');
-    const accounted = card('Tokens per minute')?.textContent ?? '';
+    const accounted = card('Spend per minute')?.textContent ?? '';
     api.getSettings = getSettings;
     await tab(m, 'Cache');
     await tab(m, 'Burn');
     results.push({
       name: '/analytics a failed settings read leaves the burn charts of a grouping that reads no tier',
-      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load tokens per minute'),
-      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load tokens per minute') ? 'the error drawn' : 'no error'}`],
+      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load spend per minute'),
+      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load spend per minute') ? 'the error drawn' : 'no error'}`],
     });
   }
 
@@ -11190,14 +12086,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Key');
   }
   await tab(m, 'Cache');
+  // The table heads each reason with a short word and the panel's full label on the word's title.
+  const shortWords = ['History', 'Model', 'None', 'Not asked', 'No previous', 'System', 'Tools', 'Unavailable'];
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
-  results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
+  results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
-    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
-    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns']), missing: heads });
+    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked'];
+    const ths = [...(table?.querySelectorAll('thead th') ?? [])];
+    const heads = ths.map((th) => th.textContent?.trim());
+    const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
+    results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...shortOrder, 'Expired between turns']), missing: heads });
+    results.push({ name: '/analytics the misses headers read their short words with the full label on the title', ok: JSON.stringify(titles) === JSON.stringify(order), missing: titles.map(String) });
     const panel = Object.fromEntries([...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
@@ -11215,10 +12117,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       select?.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(800);
     };
-    // Each reason cell of the table, under its column's label, read with the link it draws.
+    // Each reason cell of the table, under its column's label, read with the link it draws. A reason header's label is
+    // its word's title, the full label the panel names it by.
     const cellsOf = (dimension) => {
       const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith(`Misses by reason by ${dimension}`));
-      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? th.textContent?.trim() ?? '');
       return [...(table?.querySelectorAll('tbody tr') ?? [])].flatMap((tr) =>
         [...tr.children].slice(1).map((td, i) => ({ column: heads[i + 1], count: countOf(td), link: td.querySelector('a'), row: tr.children[0]?.textContent?.trim() ?? '', title: td.querySelector('[title]')?.getAttribute('title') ?? '' })),
       );
@@ -11392,8 +12295,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         page.unmount();
         return read;
       };
-      let utc = { label: '', ticks: [] };
-      let zoned = { label: '', ticks: [] };
+      let utc;
+      let zoned;
       try {
         utc = await monthAxis();
         process.env.TZ = 'America/Los_Angeles';
@@ -11451,14 +12354,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({ name: "/analytics the key grouping's total equals the ungrouped total", ok: unfiltered.size > 1 && meta.endsWith('errors') && grouped === shown, missing: [meta, String(grouped)] });
     }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
-    // after the eight it knows, and the panel draws a bar for it.
+    // after the eight it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
     await tab(m, 'Cache');
-    const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    const reasonThs = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])];
+    const reasonHeads = reasonThs.map((th) => th.textContent?.trim());
+    const unknownHead = reasonThs.find((th) => th.textContent?.trim() === 'future_reason')?.querySelector('span[title]');
+    const unknownParts = [...(unknownHead?.childNodes ?? [])].map((n) => (n.nodeType === 1 ? `<${n.nodeName.toLowerCase()}>` : n.textContent));
     const monthBars = [...([...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason')?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
     results.push({
       name: '/analytics a miss reason the console does not know keeps its own column and bar',
-      ok: JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not requested', 'future_reason', 'Expired between turns']) && monthBars.length === 9 && monthBars.includes('future_reason'),
-      missing: [...reasonHeads, ...monthBars],
+      ok:
+        JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not asked', 'future_reason', 'Expired between turns']) &&
+        JSON.stringify(unknownParts) === JSON.stringify(['future_', '<wbr>', 'reason']) &&
+        unknownHead?.getAttribute('title') === 'future_reason' &&
+        monthBars.length === 9 &&
+        monthBars.includes('future_reason'),
+      missing: [...reasonHeads, JSON.stringify(unknownParts), ...monthBars],
     });
     await tab(m, 'Traffic');
     const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
@@ -11570,7 +12481,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // grouping before a change until the new read lands; the reads are held here so that beat can be read.
       m = await mount('/analytics');
       const trigger = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-      const listed = (label) => [...(trigger(label)?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
+      const listed = (label) => [...(trigger(label)?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim() ?? '');
       const optionsOf = async (label) => {
         trigger(label)?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
@@ -11628,7 +12539,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const pool = trigger('Pool');
         pool?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
-        const picked = pool?.querySelector('.mselect__option');
+        const picked = pool?.querySelector(CHOICE);
         const poolName = picked?.textContent?.trim() ?? '';
         picked?.click();
         await m.settle(700);
@@ -11677,13 +12588,18 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
     m = await mount('/analytics');
-    // The range is the page's own state, so a fresh mount opens on the day; the session checks below read the three
-    // days the Custom range opens on, as they did before the remount.
+    // A fresh mount opens on the day, and the session checks below read the three days Custom opens on, which the
+    // choice writes into the address as two instants.
     [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
     await m.settle(300);
     const range = [...m.container.querySelectorAll('[aria-label="Range"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim()).join();
     const pickers = m.container.querySelectorAll('.filters input[type="datetime-local"]').length;
-    results.push({ name: '/analytics the session checks after the remount read the Custom range', ok: range === 'Custom' && pickers === 2 && m.location().search === '', missing: [`range ${range}`, `pickers ${pickers}`, m.location().search] });
+    const custom = new URLSearchParams(m.location().search);
+    results.push({
+      name: '/analytics the session checks after the remount read the Custom range',
+      ok: range === 'Custom' && pickers === 2 && custom.get('to') !== null && custom.get('from') === isoAt(Date.parse(custom.get('to')) - 3 * 24 * 3_600_000) && custom.get('range') === null,
+      missing: [`range ${range}`, `pickers ${pickers}`, m.location().search],
+    });
   }
   {
     const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
@@ -12059,8 +12975,9 @@ m.unmount();
   };
   const expected = (s) => {
     const last = s.lastRequestAt === null ? null : Date.parse(s.lastRequestAt);
-    const range = last === null ? { from: CLOCK_ORIGIN - HOUR, to: CLOCK_ORIGIN } : { from: last - HOUR, to: Math.min(last + HOUR, CLOCK_ORIGIN) };
-    return { path: '/routing-log', session: s.sessionId, from: isoAt(range.from), to: isoAt(range.to) };
+    // A session without a request opens on the log's default last hour, which the address leaves out.
+    if (last === null) return { path: '/routing-log', session: s.sessionId };
+    return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
   };
   const entryOf = async (tr) => {
     tr?.querySelector('.menu__trigger')?.click();
@@ -12143,8 +13060,8 @@ m.unmount();
     const keys = keysFilter(page);
     return {
       keyFilter: keys?.querySelector('.mselect__trigger')?.textContent?.trim() ?? null,
-      // The live-key options list bare ids, so a lifetime is a value none of them carries: the trigger still counts
-      // it and offers its Clear.
+      // The live keys' options list bare ids and an earlier holder's lifetime takes an option of its own, so a live key's
+      // own lifetime is a value no option carries: the trigger still counts it and offers its Clear.
       keyFilterSet: keys?.classList.contains('has-value') === true && keys.querySelector('.mselect__clear[aria-label="Clear Keys"]') !== null,
       keys: params.get('keys'),
       path: at.pathname,
@@ -12211,7 +13128,7 @@ m.unmount();
     const filter = keysFilter(page);
     filter?.querySelector('.mselect__trigger')?.click();
     await page.settle(150);
-    const options = [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+    const options = [...(filter?.querySelectorAll(CHOICE) ?? [])];
     const unscoped = read === undefined ? [] : (await listRequests.call(api, { ...read.query, cursor: undefined, keyIds: [], limit: 500 })).requests;
     pair.push({
       checked: options.filter((o) => o.getAttribute('aria-selected') === 'true').length,
@@ -12260,7 +13177,7 @@ m.unmount();
       off.disabled &&
       (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === f.want && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === (f.want === '24h' ? null : f.want) && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClick.path === '/requests' &&
       atClick.keys === lifetime(moved) &&
@@ -12268,7 +13185,7 @@ m.unmount();
       atClick.select === '6h' &&
       pair.length === 2 &&
       pair[0].key !== pair[1].key &&
-      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === 0) &&
+      pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === (p.historical ? 1 : 0)) &&
       pair.every((p) => (pair.find((x) => x.historical)?.unscoped ?? []).includes(p.key)),
     missing: [
       labels.join('|'),
@@ -12279,6 +13196,264 @@ m.unmount();
       `the shared pair ${pair.length === 0 ? 'not found' : pair.map((p) => JSON.stringify(p)).join(' ')}`,
     ],
   });
+}
+
+// Every filtered view reads its filters from the address under one grammar: a link sets the controls, a preset reads
+// from the load, and a control's change rewrites the address with every other key and the hash kept.
+{
+  const HOUR = 3_600_000;
+  const chooseIn = async (page, select, value) => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await page.settle(300);
+  };
+  const typeIn = (input, text) => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
+  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
+  const pressed = (page) => page.container.querySelector('.segmented[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? null;
+  const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
+
+  {
+    const name = '/analytics reads the group-by, range, probes switch, agent pattern and Account picker from the address, and a unit change keeps every key and the tab';
+    const page = await mount('/analytics?by=account&range=7d&probes=1&agent=claude&accounts=primary#cost', { now: CLOCK_ORIGIN });
+    const read = {
+      account: [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Account'))?.textContent?.trim() ?? null,
+      agent: page.container.querySelector('input[aria-label="User agent pattern"]')?.value ?? null,
+      groupBy: page.container.querySelector('.filters select.groupby-select')?.value ?? null,
+      probes: page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.getAttribute('aria-checked') ?? null,
+      range: pressed(page),
+    };
+    const unit = page.container.querySelector('select[aria-label="Cost unit"]');
+    if (!unit) controlMissing(name, 'Cost unit');
+    else {
+      await chooseIn(page, unit, 'usd');
+      const after = { hash: page.location().hash, query: query(page) };
+      results.push({
+        name,
+        ok: JSON.stringify(read) === JSON.stringify({ account: 'Account (1)', agent: 'claude', groupBy: 'account', probes: 'true', range: '7d' }) && after.hash === '#cost' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude', by: 'account', probes: '1', range: '7d', unit: 'usd' }).sort()),
+        missing: [JSON.stringify(read), JSON.stringify(after)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // The day before the pinned origin, so the end stands under now and the reads carry it to the millisecond.
+    const name = "/analytics sends a custom address's millisecond bounds to the API unchanged";
+    const spy = countCalls('getAnalyticsSeries');
+    const page = await mount('/analytics?from=2026-09-15T14:00:00.123Z&to=2026-09-15T15:59:59.999Z', { now: CLOCK_ORIGIN });
+    spy.restore();
+    const sent = [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))];
+    results.push({
+      name,
+      ok: pressed(page) === 'Custom' && JSON.stringify(sent) === JSON.stringify(['2026-09-15T14:00:00.123Z 2026-09-15T15:59:59.999Z']) && JSON.stringify(bounds(page)) === JSON.stringify(['2026-09-15T14:00', '2026-09-15T15:59']),
+      missing: [`range ${pressed(page)}`, ...sent, JSON.stringify(bounds(page))],
+    });
+    page.unmount();
+  }
+  {
+    // A typed pair that does not end after it starts stays beside the address, which would read it as the preset, and
+    // an edit writes its own minute with the other bound kept to the millisecond.
+    const name = '/analytics a backward pair typed into the Custom inputs reads End must be after start. with the address unchanged, and a valid edit writes from and to';
+    const FROM = '2026-09-15T14:00:00.123Z';
+    const TO = '2026-09-15T15:59:59.999Z';
+    const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const to = () => page.container.querySelector('input[aria-label="To"]');
+    const message = () => [...page.container.querySelectorAll('.filters__range .pairing__expired')].map((e) => e.textContent?.trim()).join();
+    const sentDuring = async (text) => {
+      const spy = countCalls('getAnalyticsSeries');
+      typeIn(to(), text);
+      await page.settle(300);
+      spy.restore();
+      return { bounds: bounds(page), message: message(), query: query(page), sent: [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))] };
+    };
+    if (!to()) controlMissing(name, 'To');
+    else {
+      const backward = await sentDuring('2026-09-15T13:00');
+      const edited = await sentDuring('2026-09-15T15:30');
+      results.push({
+        name,
+        ok:
+          JSON.stringify(backward) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T13:00'], message: 'End must be after start.', query: { from: FROM, to: TO }, sent: [] }) &&
+          JSON.stringify(edited) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T15:30'], message: '', query: { from: FROM, to: '2026-09-15T15:30:00.000Z' }, sent: [`${FROM} 2026-09-15T15:30:00.000Z`] }),
+        missing: [JSON.stringify(backward), JSON.stringify(edited)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // A From typed past the To stays in the draft, and the To typed next ends the pair that From began.
+    const name = '/analytics a From typed past the To and a To typed after it write both new instants';
+    const FROM = '2026-09-12T10:00:00.123Z';
+    const TO = '2026-09-13T10:00:00.999Z';
+    const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    const input = (label) => page.container.querySelector(`input[aria-label="${label}"]`);
+    if (!input('From') || !input('To')) controlMissing(name, input('From') ? 'To' : 'From');
+    else {
+      typeIn(input('From'), '2026-09-14T10:00');
+      await page.settle(300);
+      const drafted = { bounds: bounds(page), query: query(page) };
+      typeIn(input('To'), '2026-09-15T10:00');
+      await page.settle(300);
+      const written = { bounds: bounds(page), query: query(page) };
+      results.push({
+        name,
+        ok:
+          JSON.stringify(drafted) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-13T10:00'], query: { from: FROM, to: TO } }) &&
+          JSON.stringify(written) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-15T10:00'], query: { from: '2026-09-14T10:00:00.000Z', to: '2026-09-15T10:00:00.000Z' } }),
+        missing: [JSON.stringify(drafted), JSON.stringify(written)],
+      });
+    }
+    page.unmount();
+  }
+  // Two story sessions with requests in the default day under two keys, so each lifetime is its own.
+  const inDay = (r) => r.sessionId !== null && r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 23 * HOUR && Date.parse(r.at) <= CLOCK_ORIGIN;
+  const first = requests.find((r) => inDay(r) && r.keyId === 'desktop');
+  const second = requests.find((r) => inDay(r) && first !== undefined && r.keyId !== first.keyId && r.sessionId !== first.sessionId);
+  const lifetime = (r) => `${r.keyId}@${r.keyGeneration}`;
+  {
+    const name = '/analytics a session address without a key reads the session\'s traffic unscoped';
+    if (first === undefined) results.push({ name, ok: false, missing: ['no desktop session in the default range'] });
+    else {
+      const spy = countCalls('listRequests');
+      const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}`, { now: CLOCK_ORIGIN });
+      spy.restore();
+      const keyed = spy.calls.filter(([q]) => q?.search === first.sessionId).map(([q]) => q?.keyIds ?? []);
+      results.push({ name, ok: keyed.length > 0 && keyed.every((ids) => ids.every((id) => !id.includes('@'))) && total(page) > 0, missing: [JSON.stringify(keyed), `total ${total(page)}`] });
+      page.unmount();
+    }
+  }
+  {
+    const name = '/analytics a new session drops the earlier lifetime';
+    if (first === undefined || second === undefined) results.push({ name, ok: false, missing: ['no two sessions under two keys in the default range'] });
+    else {
+      const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}&key=${encodeURIComponent(lifetime(first))}`, { now: CLOCK_ORIGIN });
+      const spy = countCalls('listRequests');
+      const field = page.container.querySelector('input[aria-label="Session id"]');
+      typeIn(field, second.sessionId);
+      field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+      await page.settle(900);
+      spy.restore();
+      const keyed = spy.calls.filter(([q]) => q?.search === second.sessionId).map(([q]) => q?.keyIds ?? []);
+      results.push({
+        name,
+        ok: JSON.stringify(query(page)) === JSON.stringify({ session: second.sessionId }) && keyed.length > 0 && keyed.every((ids) => !ids.includes(lifetime(first))) && total(page) > 0,
+        missing: [page.location().search, JSON.stringify(keyed), `total ${total(page)}`],
+      });
+      page.unmount();
+    }
+  }
+  {
+    // The unit is a view control, so a change reads the funded series and breakdown alone: the series, the breakdowns,
+    // the speed series, the placements and a session's fold read once, at the load, and stay.
+    const name = '/analytics a unit change on Cache reads the funded series and breakdown alone, and nothing in a session view';
+    const READS = ['analyticsPlacements', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'listRequests'];
+    const across = async (address) => {
+      const page = await mount(address, { now: CLOCK_ORIGIN });
+      const select = page.container.querySelector('#cache .analytics-section__head select[aria-label="Cost unit"]');
+      const spies = READS.map((method) => [method, countCalls(method)]);
+      if (select) await chooseIn(page, select, 'usd');
+      for (const [, spy] of spies) spy.restore();
+      const read = { calls: spies.flatMap(([method, spy]) => spy.calls.map(([q]) => [method, q?.groupBy ?? null, q?.funding ?? null].join(' ').trim())), unit: query(page).unit ?? null };
+      page.unmount();
+      return read;
+    };
+    if (first === undefined) results.push({ name, ok: false, missing: ['no desktop session in the default range'] });
+    else {
+      const unscoped = await across('/analytics#cache');
+      const session = await across(`/analytics?session=${encodeURIComponent(first.sessionId)}#cache`);
+      results.push({
+        name,
+        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsSeries key billed'], unit: 'usd' }) && JSON.stringify(session) === JSON.stringify({ calls: [], unit: 'usd' }),
+        missing: [JSON.stringify(unscoped), JSON.stringify(session)],
+      });
+    }
+  }
+  {
+    // A reload reads the preset from its own load, so the label and the window agree an hour on.
+    const name = '/routing-log reads range=3h as Last 3 hours over the three hours before the load, and Custom writes the window as from and to';
+    const windowsOf = (spy) => [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to} ${(q?.kinds ?? []).join(',')}`))];
+    const reads = [];
+    const labels = [];
+    for (const at of [CLOCK_ORIGIN, CLOCK_ORIGIN + HOUR]) {
+      const spy = countCalls('listRoutingLog');
+      const page = await mount('/routing-log?range=3h&kinds=held', { now: at });
+      spy.restore();
+      const select = page.container.querySelector('select[aria-label="Range"]');
+      labels.push(select?.selectedOptions[0]?.textContent?.trim() ?? null);
+      reads.push(windowsOf(spy));
+      if (at === CLOCK_ORIGIN) {
+        if (select) await chooseIn(page, select, 'custom');
+        reads.push(query(page));
+      }
+      page.unmount();
+    }
+    const want = (at) => [`${isoAt(at - 3 * HOUR)} ${isoAt(at)} held`];
+    results.push({
+      name,
+      ok: JSON.stringify(labels) === JSON.stringify(['Last 3 hours', 'Last 3 hours']) && JSON.stringify(reads) === JSON.stringify([want(CLOCK_ORIGIN), { kinds: 'held', from: isoAt(CLOCK_ORIGIN - 3 * HOUR), to: isoAt(CLOCK_ORIGIN) }, want(CLOCK_ORIGIN + HOUR)]),
+      missing: [JSON.stringify(labels), JSON.stringify(reads)],
+    });
+  }
+  {
+    const name = '/keys reads the pool, search and status from the address, and a status change keeps the others and the hash';
+    const page = await mount('/keys?pools=all&search=lap&status=active#laptop');
+    const status = page.container.querySelector('.table-toolbar select[aria-label="Status"]');
+    const read = {
+      pool: page.container.querySelector('.table-toolbar select[aria-label="Pool"]')?.value ?? null,
+      rows: [...page.container.querySelectorAll('.card--table tbody tr')].map((tr) => tr.id),
+      search: page.container.querySelector('.table-toolbar input[type="search"]')?.value ?? null,
+      status: status?.value ?? null,
+    };
+    if (status) await chooseIn(page, status, 'all');
+    const after = page.location();
+    results.push({
+      name,
+      ok: read.pool === 'all' && read.search === 'lap' && read.status === 'active' && read.rows.includes('laptop') && after.search === '?pools=all&search=lap' && after.hash === '#laptop',
+      missing: [JSON.stringify(read), JSON.stringify(after)],
+    });
+    page.unmount();
+  }
+  {
+    // The Pools, Quota and Sessions views carry no filter, so their addresses keep the hash and nothing else.
+    const name = '/pools#jobs, /quota#quota-windows and /sessions land on their hash with no key in the address';
+    const landed = [];
+    for (const path of ['/pools#jobs', '/quota#quota-windows', '/sessions']) {
+      const page = await mount(path);
+      landed.push({ ...page.location(), card: path === '/pools#jobs' ? page.container.querySelector('.pool#jobs') !== null : undefined, timeline: path === '/quota#quota-windows' ? page.container.querySelector('.timeline') !== null : undefined });
+      page.unmount();
+    }
+    results.push({
+      name,
+      ok: JSON.stringify(landed) === JSON.stringify([{ hash: '#jobs', pathname: '/pools', search: '', card: true }, { hash: '#quota-windows', pathname: '/quota', search: '', timeline: true }, { hash: '', pathname: '/sessions', search: '' }]),
+      missing: landed.map((l) => JSON.stringify(l)),
+    });
+  }
+  {
+    const name = '/models reads the key from the address, and the first key writes nothing';
+    const firstKey = (await api.listKeys())[0]?.id;
+    const page = await mount('/models?key=laptop');
+    const select = page.container.querySelector('select[aria-label="Key"]');
+    const read = select?.value ?? null;
+    if (select && firstKey !== undefined) await chooseIn(page, select, firstKey);
+    const cleared = page.location().search;
+    if (select) await chooseIn(page, select, 'laptop');
+    results.push({ name, ok: firstKey !== 'laptop' && read === 'laptop' && cleared === '' && page.location().search === '?key=laptop' && select?.value === 'laptop', missing: [`first ${firstKey}`, `read ${read}`, `cleared ${cleared}`, page.location().search] });
+    page.unmount();
+  }
+  {
+    const name = '/models reads a key the list does not carry as the first key, its rules and its name';
+    const [first] = await api.listKeys();
+    const spy = countCalls('getKeyModels');
+    const page = await mount('/models?key=nope');
+    spy.restore();
+    const read = { last: spy.calls.at(-1)?.[0] ?? null, select: page.container.querySelector('select[aria-label="Key"]')?.value ?? null, title: page.container.querySelector('.models__rules .card__title')?.textContent?.trim() ?? null };
+    results.push({ name, ok: first !== undefined && JSON.stringify(read) === JSON.stringify({ last: first.id, select: first.id, title: `Processed rules for ${first.name}` }), missing: [`first ${first?.id}`, JSON.stringify(read)] });
+    page.unmount();
+  }
 }
 
 m = await mount('/sessions');
@@ -12322,8 +13497,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
     results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
-    // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
-    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
+    // Twelve of the story's nineteen rows hold a recipe. The overview's own count is every session row.
+    results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 12 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   {
     // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
@@ -12352,6 +13527,21 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `hidden ${hidden}`, agentsTitle || 'no Agents title'],
     });
+  }
+  {
+    // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone.
+    const ov = await api.getKeepaliveOverview();
+    const { listKeepaliveRecipes } = api;
+    api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
+    const none = await mount('/sessions');
+    const title = [...none.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
+    api.listKeepaliveRecipes = listKeepaliveRecipes;
+    results.push({
+      name: "/sessions the Agents tile's title carries one sentence at zero hidden",
+      ok: title === `The engine holds ${ov.limits?.agents.count} agent records against the cap.`,
+      missing: [title || 'no Agents title'],
+    });
+    none.unmount();
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
@@ -12385,7 +13575,17 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 19, missing: [String(rows().length)] });
+  {
+    // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
+    // draws no line.
+    const whole = new Map();
+    for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+    const released = [...whole].filter(([, all]) => all).map(([id]) => id);
+    const row = rows().find((r) => released.includes(cell(r, 'Session')?.getAttribute('title') ?? ''));
+    const badge = row ? cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined;
+    results.push({ name: '/sessions lists the session the mod released whole with its released badge', ok: released.length === 1 && badge === 'released', missing: [released.join(',') || 'no such session', String(badge)] });
+  }
   await showColumn(m, 'Next probe');
   const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
   results.push({ name: '/sessions still lists the ci key\'s sessions', ok: ci.length === 2, missing: [String(ci.length)] });
@@ -12405,7 +13605,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
-      ok: kinds.length === 16 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      ok: kinds.length === 18 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
       missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
     });
   }
@@ -12461,7 +13661,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 17 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 16, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 19 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 17, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -12491,6 +13691,38 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok: JSON.stringify(all) === JSON.stringify(['', 'Session', ...COLUMNS, '']) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
       missing: all,
     });
+    {
+      // The session the mod released whole draws no agent line, so its expanded detail says why in one sentence, its
+      // row keeps the released badge, whose title words a released main agent too, and its Agents cell reads 0.
+      const whole = new Map();
+      for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+      const id = [...whole].find(([, all]) => all)?.[0];
+      const row = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+      row?.click();
+      await m.settle(150);
+      const detail = row?.nextElementSibling?.classList.contains('srow__detail') ? row.nextElementSibling : null;
+      const read = {
+        agents: cell(row, 'Agents')?.textContent?.trim() ?? null,
+        badge: cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() ?? null,
+        lines: detail?.querySelectorAll('.agents__row').length ?? null,
+        sentences: m.container.querySelectorAll('.agents__released').length,
+        text: detail?.querySelector('.agents__released')?.textContent?.trim() ?? null,
+        title: cell(row, 'Cache warming')?.querySelector('.badge')?.getAttribute('title') ?? null,
+      };
+      row?.click();
+      await m.settle(150);
+      results.push({
+        name: "/sessions the session the mod released whole reads one sentence in its expanded detail, keeps its released badge with a title that words a released main agent, and counts 0 agents",
+        ok:
+          read.text === 'The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.' &&
+          read.sentences === 1 &&
+          read.lines === 0 &&
+          read.badge === 'released' &&
+          read.title === 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.' &&
+          read.agents === '0',
+        missing: [String(id), JSON.stringify(read)],
+      });
+    }
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a re-created pin says so under the session id',
@@ -12586,14 +13818,23 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
           title: link?.getAttribute('title') ?? '',
         };
       });
-    const badgeWords = (f) => `fork of ${f.session.forkedFrom.slice(0, 13)}… at ${f.session.forkDepth}, ${f.relation}`;
+    const badgeWords = (f) => `fork, ${f.relation}`;
     const titleOf = (f) => `Branched from session ${f.session.forkedFrom} at depth ${f.session.forkDepth} on ${accountLabel.get(f.base?.accountId ?? '') ?? 'no base account'}. Follow to its row`;
-    const wrongFork = forks.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
-    const wrongTarget = forks.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
+    // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
+    const related = forks.filter((f) => f.session.pinned);
+    const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== badgeWords(f) || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
+    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
     results.push({
-      name: '/sessions each fork badge names its base at 13, the depth and whether the base is on the same account, the base\'s account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base\'s row',
-      ok: forks.length === 2 && forks.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
+      name: "/sessions each pinned fork's badge reads whether the base is on the same account, the base's whole id, the depth and its account label on the title and in its description (both story bases sit on primary, whose label is its id), and links to the base's row",
+      ok: forks.length === 3 && related.length === 2 && related.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
       missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
+    });
+    // The story's fork with no pin of its own claims no relation, so its badge reads the depth where the two part.
+    const unpinned = forks.filter((f) => !f.session.pinned);
+    results.push({
+      name: '/sessions the unpinned fork of the story reads fork at 2 and still links to its base',
+      ok: unpinned.length === 1 && unpinned[0].link?.textContent?.trim() === 'fork at 2' && unpinned[0].target === unpinned[0].baseRow,
+      missing: unpinned.map((f) => f.link?.outerHTML ?? 'no link'),
     });
     const same = forks.find((f) => f.relation === 'same account');
     const target = same?.target ?? null;
@@ -12770,11 +14011,16 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: [mainAgent || 'absent'],
     });
   }
-  results.push({
-    name: '/sessions agent rows carry their own model and account',
-    ok: (detail?.textContent ?? '').includes('claude-fable-5-1') && (detail?.textContent ?? '').includes('claude-sonnet-5') && (detail?.textContent ?? '').includes('nightly'),
-    missing: [detail?.textContent?.slice(0, 160) ?? 'absent'],
-  });
+  {
+    // A line's model reads the short id and carries the whole one on its title.
+    const models = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((r) => [r.children[1]?.textContent?.trim(), r.children[1]?.getAttribute('title')]);
+    const read = (id) => models.some(([shown, title]) => shown === shortModel(id) && title === id);
+    results.push({
+      name: '/sessions agent rows carry their own model and account',
+      ok: read('claude-fable-5-1') && read('claude-sonnet-5') && (detail?.textContent ?? '').includes('nightly'),
+      missing: [JSON.stringify(models), detail?.textContent?.slice(0, 160) ?? 'absent'],
+    });
+  }
   const agentRows = detail?.querySelectorAll('.agents__row').length ?? 0;
   results.push({ name: '/sessions expanded row lists a head plus one line per agent', ok: agentRows >= 2, missing: [String(agentRows)] });
   rows()[0]?.click();
@@ -12786,7 +14032,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 19, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -12944,7 +14190,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const modelFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Model'));
     modelFilter?.querySelector('.mselect__trigger')?.click();
     await m.settle(150);
-    const unused = [...(modelFilter?.querySelectorAll('.mselect__option') ?? [])].find((o) => !used.includes(o.textContent?.trim()));
+    const unused = [...(modelFilter?.querySelectorAll(CHOICE) ?? [])].find((o) => !used.includes(o.textContent?.trim()));
     unused?.click();
     await m.settle(900);
     results.push({
@@ -12983,7 +14229,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const at = (id) => lines.findIndex((l) => l.id === id);
     const long = lines.find((l) => l.id === '4f0c2a9e7b61d3c58');
     results.push({
-      name: '/sessions the recipe lines run main, busy, idle, parked, newest last request first inside a group',
+      name: '/sessions the recipe lines run main, busy, idle, parked',
       ok:
         lines[0]?.id === 'main' &&
         JSON.stringify(after.filter((l) => l.word !== 'released').map((l) => l.word)) === JSON.stringify(['busy', 'idle', 'parked']) &&
@@ -12998,7 +14244,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     await m.settle(150);
   }
   // A subagent the mod released under a live session draws no line, and the Agents column and tile leave the released
-  // lines out of their counts by taking them off the engine's record counts. The column stays on.
+  // lines out of their counts by taking them off the engine's record counts. A line the session's end released stays
+  // listed and counted. The column stays on.
   {
     const hidden = (await api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
     const ov = await api.getKeepaliveOverview();
@@ -13014,8 +14261,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
     const want = `${ov.limits?.agents.count - hidden.length} of 1,024`;
     results.push({
-      name: '/sessions a released line is not listed and the Agents column and tile leave it out of their counts',
-      ok: hidden.length > 0 && lines.length === 4 && lines.every((l) => l.word !== 'released' && !['e7c1', '91aa'].includes(l.id)) && count === '4' && count === String(lines.length) && tile === want,
+      name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
+      ok:
+        hidden.length > 0 &&
+        lines.length === 5 &&
+        JSON.stringify(lines.filter((l) => l.word === 'released').map((l) => l.id)) === JSON.stringify(['c3a9']) &&
+        lines.every((l) => !['e7c1', '91aa'].includes(l.id)) &&
+        count === '5' &&
+        count === String(lines.length) &&
+        tile === want,
       missing: [...lines.map((l) => `${l.id} ${l.word}`), `Agents cell ${count ?? 'absent'}`, `tile ${tile ?? 'absent'}, want ${want}`],
     });
     row?.click();
@@ -13032,7 +14286,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 16, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 18, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
@@ -13040,7 +14294,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
   }
   {
-    // A fork whose base is no longer listed names the base and links nowhere.
+    // A fork whose base is no longer listed reads its depth, names the base on its title and links nowhere.
     const forked = (await api.listSessions()).find((s) => s.forkedFrom !== null);
     const base = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.forkedFrom);
     (await openMenu(base)).find((b) => b.textContent?.trim() === 'Release')?.click();
@@ -13053,8 +14307,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const describedBy = badge?.getAttribute('aria-describedby');
     const description = describedBy ? (m.container.querySelector(`[id="${describedBy}"]`)?.textContent ?? null) : null;
     results.push({
-      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link, the unheld base on its title and in its description',
-      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
+      name: '/sessions a fork whose base is not listed reads its depth, with no link, the unheld base on its title and in its description',
+      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork at ${forked.forkDepth}` && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,
       missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined), String(description)],
     });
   }
@@ -13281,6 +14535,10 @@ m.unmount();
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
       missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
+    // A sub-row's first cell carries the hover, the row itself none.
+    const titles = [fast?.children[0]?.getAttribute('title') ?? null, prompt?.children[0]?.getAttribute('title') ?? null];
+    const wantTitles = ['What an answer served in fast mode costs. A subscription account pays it from usage credits, not from its window.', `What an attempt whose prompt is longer than ${long?.over.toLocaleString('en-US')} tokens costs. The prompt is its uncached input, its cache reads and its cache writes together.`];
+    results.push({ name: '/sessions API prices title the fast-mode row and the prompt-length row with what each prices', ok: JSON.stringify(titles) === JSON.stringify(wantTitles), missing: titles.map(String) });
   }
 
   // Tiers and peak band.
@@ -13696,8 +14954,9 @@ m.unmount();
 }
 
 
-// A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block
-// needs no read, so it keeps its placeholder URL and only the listener hint waits for the answer.
+// A failed settings read draws About's error state with Try again rather than a skeleton for ever. Without the answer
+// the client block reads its placeholder base URL with no port, and the scheme and the port arrive with the listener
+// hint once a read lands.
 {
   failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
   const failed = await mount('/settings');
@@ -13706,7 +14965,7 @@ m.unmount();
   const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
   const block = failed.container.querySelector('pre.snippet');
   results.push({
-    name: "/settings a failed read draws About's error state with Try again and keeps the client block's placeholder",
+    name: "/settings a failed read draws About's error state with Try again and the client block's placeholder with no port",
     ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the settings' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined && about()?.querySelector('.skeleton') === null && (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && failed.container.querySelector('.snippet__hint') === null,
     missing: [about()?.textContent?.slice(0, 160) ?? 'no About card', (block?.textContent ?? 'no block').split('\n')[0], failed.container.querySelector('.snippet__hint')?.textContent?.slice(0, 60) ?? 'no hint'],
   });
@@ -13715,8 +14974,8 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
-    missing: rows,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
 }
@@ -13801,7 +15060,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -13828,9 +15087,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1'), missing: titles });
   const block = m.container.querySelector('pre.snippet');
   const hint = block?.nextElementSibling;
+  const SNIPPET_HINT =
+    'Inference is served on 127.0.0.1:8080, the address the proxy listener binds, so the base URL carries its scheme and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and it.';
   results.push({
-    name: '/settings the client block keeps the placeholder and names the proxy listener beside it with why',
-    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === 'Inference is served on 127.0.0.1:8080, the address the proxy listener binds. Replace the placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy, a port mapping or another host name can stand between Claude Code and the listener.',
+    name: "/settings the client block reads the proxy listener's scheme and port on a placeholder host and names the bind beside it with why",
+    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === SNIPPET_HINT,
     missing: [block?.textContent?.split('\n')[0] ?? 'no block', hint?.outerHTML.slice(0, 160) ?? 'no hint'],
   });
 }
@@ -13847,7 +15108,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
     name: '/settings the main snippet is the seven recommended lines',
-    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
@@ -13899,7 +15160,7 @@ m.unmount();
   function Fixture({ expertOnly = false, held, hold = null, initialGroup = null, refused = false, start = 'one', status = 'Every group saves together.' }) {
     const [chosen, setChosen] = useState(start);
     // The page's reset, which React runs after the dialog's open effect.
-    useEffect(() => setChosen(initialGroup ?? start), []);
+    useEffect(() => setChosen(initialGroup ?? start), [initialGroup, start]);
     const b = h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined }));
     const groups = [
       { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },
@@ -14141,8 +15402,8 @@ m.unmount();
   const tabbedOut = agentType?.querySelector('.mselect__list') === null;
   const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
   results.push({
-    name: 'the Agent type filter opens onto its first option and the keys move, close and return focus',
-    ok: labels.length > 2 && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
+    name: 'the Agent type filter opens onto its Select all row and the keys move, close and return focus',
+    ok: labels.length > 2 && labels[0] === 'Select all' && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
     missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on the trigger ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
   });
 
@@ -14154,7 +15415,7 @@ m.unmount();
   press('ArrowDown');
   await page.settle(50);
   const first = models?.querySelector('.mselect__option');
-  const down = first != null && document.activeElement === first;
+  const down = first != null && first.textContent?.trim() === 'Select all' && document.activeElement === first;
   press('ArrowUp');
   await page.settle(50);
   const up = search != null && document.activeElement === search;
@@ -14163,7 +15424,7 @@ m.unmount();
   results.push({
     name: 'the Models filter opens onto its search field',
     ok: onSearch && down && up && models?.querySelector('.mselect__list') === null,
-    missing: [`on the search field ${onSearch}`, `ArrowDown to the first option ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
+    missing: [`on the search field ${onSearch}`, `ArrowDown to the Select all row ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
   });
 
   agentOpener?.click();
@@ -14234,6 +15495,128 @@ m.unmount();
     missing: [keyMenu ? `focus in the menu ${inMenu}` : 'no key menu in any pool dialog', `menu closed ${menuClosed}`, `on the trigger ${onOpener}`, `dialog kept ${dialogKept}`, `a second Escape closed it ${dialogClosed}`],
   });
   page.unmount();
+}
+
+{
+  // The Select all row of every multi-select, one case per picker on the pinned clock, late in the run like the
+  // keyboard checks before it, so the real time the clicks' reads take moves none of the story's relative times the
+  // earlier checks read. The checked marks read the address back, so a row that handed its options over one change at a
+  // time would leave fewer of them checked than the list holds, which the checked count catches. The address term reads
+  // that the page wrote the picker's own key with every value.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const filterOf = (page, label) =>
+    [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
+      const shown = d.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+      return shown === label || shown.startsWith(`${label} (`);
+    });
+  const read = (page, label, key) => {
+    const filter = filterOf(page, label);
+    const head = filter?.querySelector('.mselect__option--all');
+    const choices = [...(filter?.querySelectorAll(CHOICE) ?? [])];
+    return {
+      address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
+      checked: choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? ''),
+      choices: choices.map((o) => o.textContent?.trim() ?? ''),
+      first: head != null && filter?.querySelector('[role="option"]') === head,
+      head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
+      set: filter?.classList.contains('has-value') === true,
+      trigger: filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`,
+    };
+  };
+  const clickHead = async (page, label) => {
+    filterOf(page, label)?.querySelector('.mselect__option--all')?.click();
+    await page.settle(700);
+  };
+  const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+  const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
+
+  const PICKERS = [
+    ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
+    ['/requests', [['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
+    ['/routing-log', [['Kinds', 'kinds'], ['Keys', 'keys'], ['Pools', 'pools'], ['Accounts', 'accounts'], ['Models', 'models']]],
+  ];
+  for (const [view, pickers] of PICKERS) {
+    const page = await mount(view, { now: CLOCK_ORIGIN });
+    for (const [label, key] of pickers) {
+      // The Kinds filter's empty value is the route's default set: every kind but the two hidden ones.
+      const kinds = label === 'Kinds';
+      const name = kinds
+        ? `${view} Select all on Kinds checks every kind and a second click returns the default set`
+        : `${view} Select all on ${label} checks every option and a second click clears them`;
+      if (!filterOf(page, label)) {
+        controlMissing(name, label);
+        continue;
+      }
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(150);
+      const before = read(page, label, key);
+      await clickHead(page, label);
+      const all = read(page, label, key);
+      await clickHead(page, label);
+      const none = read(page, label, key);
+      const opened = kinds ? before.head?.checked === 'mixed' && before.head.selected === 'false' : before.head?.checked === null && before.head.selected === 'false' && before.checked.length === 0;
+      const cleared = kinds
+        ? none.trigger === 'Kinds (2 hidden)' && !none.set && none.address === null && none.checked.length === none.choices.length - 2 && sameSet(none.checked, before.checked)
+        : none.trigger === label && !none.set && none.address === null && none.checked.length === 0;
+      results.push({
+        name,
+        ok:
+          before.first &&
+          before.head?.text === 'Select all' &&
+          opened &&
+          all.choices.length > 0 &&
+          all.checked.length === all.choices.length &&
+          all.head?.selected === 'true' &&
+          all.head.checked === null &&
+          all.trigger === `${label} (${all.choices.length})` &&
+          all.address?.length === all.choices.length &&
+          cleared &&
+          none.head?.selected === 'false',
+        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `second click: ${brief(none)}`],
+      });
+      // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
+      if (label === 'Models') {
+        const queryName = `${view} Select all on Models under a query checks the options the search shows and leaves the hidden ones unchecked`;
+        const search = filterOf(page, label)?.querySelector('.mselect__search');
+        const type = async (text) => {
+          setter.call(search, text);
+          search.dispatchEvent(new window.Event('input', { bubbles: true }));
+          await page.settle(100);
+        };
+        if (!search) results.push({ name: queryName, ok: false, missing: ['no search field'] });
+        else {
+          await type('sonnet');
+          const shown = read(page, label, key);
+          await clickHead(page, label);
+          const under = read(page, label, key);
+          await type('');
+          const whole = read(page, label, key);
+          results.push({
+            name: queryName,
+            ok:
+              shown.choices.length > 0 &&
+              shown.choices.length < whole.choices.length &&
+              shown.choices.every((c) => c.includes('sonnet')) &&
+              shown.checked.length === 0 &&
+              under.checked.length === shown.choices.length &&
+              under.head?.selected === 'true' &&
+              sameSet(whole.checked, shown.choices) &&
+              whole.head?.checked === 'mixed' &&
+              whole.address !== null &&
+              sameSet(whole.address, shown.choices) &&
+              whole.trigger === `Models (${shown.choices.length})`,
+            missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`],
+          });
+          filterOf(page, label)?.querySelector('.mselect__clear')?.click();
+          await page.settle(700);
+        }
+      }
+      // Clearing leaves the list open, so the trigger closes it.
+      filterOf(page, label)?.querySelector('.mselect__trigger')?.click();
+      await page.settle(100);
+    }
+    page.unmount();
+  }
 }
 
 {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
@@ -21,7 +21,7 @@ export function scopeLabel(scope: string): string {
  * The rows an account (or a model group) is cooling under, with a clear button per row when `onClear` is given.
  * A model group's rows all share its scope, so `showAccount` names the account each row belongs to.
  */
-export function CoolingDown({ busy = false, now, onClear, rows, showAccount = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showAccount?: boolean; title: string }): JSX.Element {
+export function CoolingDown({ busy = false, now, onClear, rows, showAccount = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showAccount?: boolean; title: ReactNode }): JSX.Element {
   // Null until the operator toggles, so a block that was empty when it mounted still opens once a row arrives.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const open = toggled ?? rows.length > 0;

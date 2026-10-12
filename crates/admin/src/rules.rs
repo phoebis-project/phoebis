@@ -6,10 +6,13 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use phoebis_routing::pattern;
 use phoebis_store::{ModelRule, RulesMode};
+use utoipa::ToSchema;
 
 use crate::routes::failure;
 
-#[derive(serde::Deserialize)]
+/// One entry of `model_rules`: the pattern, checked as the routing page's model rules say, and `not` to deny the
+/// models it matches.
+#[derive(serde::Deserialize, ToSchema)]
 pub(crate) struct RuleInput {
     pub pattern: String,
     #[serde(default)]

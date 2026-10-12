@@ -14,9 +14,10 @@ use rust_embed::Embed;
 #[folder = "../../web/dist"]
 struct Assets;
 
-/// Recharts sets inline styles on the SVG it draws, so style-src keeps 'unsafe-inline'; no script is inline,
-/// because the theme bootstrap lives in `public/theme.js`. `connect-src 'self'` covers the console's own fetches.
-/// The app has no base tag, no form post, and no plugin, so those are closed.
+/// Recharts sets inline styles on the SVG it draws, and the API reference page injects styles of its own, so style-src
+/// keeps 'unsafe-inline'. No script is inline, because the theme bootstrap lives in `public/theme.js`.
+/// `connect-src 'self'` covers the console's own fetches. The app has no base tag, no form post, and no plugin, so
+/// those are closed.
 const CSP: &str = "base-uri 'none'; connect-src 'self'; default-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'";
 
 /// A hashed asset never changes under its name, so a year costs nothing.
@@ -25,6 +26,9 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// Everything else either names the hashes or talks about them, and a cache holding any of it would answer for
 /// a UI this binary no longer carries.
 const NO_STORE: &str = "no-store";
+
+/// The API reference page's directory: the page at it and at its index, a JSON 404 for anything else under it.
+pub const REFERENCE_PATH: &str = "/api-reference";
 
 /// The comment the placeholder page carries and a built bundle never does; the build script reads it too.
 const PLACEHOLDER_MARK: &str = "<!-- phoebis-ui placeholder -->";
@@ -67,6 +71,18 @@ async fn fallback(request: Request<Body>) -> Response {
         return finish(method_not_allowed(), NO_STORE);
     }
     let head = method == Method::HEAD;
+    // The reference page answers at its directory and its index, and nothing else under the directory lands on
+    // the console's shell: a typo there is a JSON 404, as a stale asset path is. The bare directory answers the
+    // page rather than redirecting, since the page's URLs are absolute and nothing resolves against its location.
+    if path == REFERENCE_PATH || path == "/api-reference/" || path == "/api-reference/index.html" {
+        return match lookup("api-reference/index.html") {
+            Some((bytes, mime)) => finish(file(bytes, &mime, head), NO_STORE),
+            None => finish(json_not_found(), NO_STORE),
+        };
+    }
+    if path.starts_with("/api-reference/") {
+        return finish(json_not_found(), NO_STORE);
+    }
     if let Some((bytes, mime)) = lookup(&path) {
         let cache = if path.starts_with("/assets/") {
             IMMUTABLE

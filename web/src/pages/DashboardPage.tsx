@@ -21,6 +21,20 @@ import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingR
  */
 const failedFirst = (read: Loaded<unknown>) => read.data === null && read.error !== null;
 
+/**
+ * The as-of line over the page's reads, each named as its card's error names it: the figures are as old as the oldest
+ * answer any card draws, and a read whose refresh failed after an answer is named with its error. A read that never
+ * answered is left to its card, which names the error already.
+ */
+function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: string; title: string } | null {
+  const answered = reads.flatMap(([, r]) => (r.fetchedAt === null ? [] : [r.fetchedAt]));
+  if (answered.length === 0) return null;
+  const oldest = answered.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a));
+  const failed = reads.find(([, r]) => r.fetchedAt !== null && r.error !== null);
+  const asOf = fmtRelative(oldest, now);
+  return { text: failed ? `Last refresh of the ${failed[0]} failed: ${failed[1].error}. Showing data as of ${asOf}` : `As of ${asOf}`, title: fmtAbsolute(oldest) };
+}
+
 function ReadFailed({ title, error, retry }: { error: string | null; retry: () => void; title: string }) {
   return <ErrorState title={title} body={error} action={<Button size="sm" onClick={retry}>Try again</Button>} />;
 }
@@ -43,6 +57,16 @@ export function DashboardPage() {
   ) : failedFirst(settings) ? (
     <ReadFailed title="Could not load the settings" error={settings.error} retry={settings.reload} />
   ) : null;
+  const asOf = asOfLine(
+    [
+      ['24-hour figures', overview],
+      ['accounts', accounts],
+      ['recent requests', requests],
+      ['sessions', sessions],
+      ['settings', settings],
+    ],
+    now,
+  );
   const retrySessions = () => {
     if (failedFirst(overview)) overview.reload();
     if (failedFirst(sessions)) sessions.reload();
@@ -67,9 +91,9 @@ export function DashboardPage() {
           />
         </div>
       )}
-      {overview.data !== null && (
-        <p className="muted dash__asof" title={fmtAbsolute(overview.fetchedAt)}>
-          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}. Showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
+      {asOf && (
+        <p className="muted dash__asof" title={asOf.title}>
+          {asOf.text}
         </p>
       )}
 

@@ -1,29 +1,22 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { ApiError, quietly, reportRecovery } from '@/api/http';
+import { iso } from '@/api/decode';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
+import { type Paging, useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
+import { addressWindow, type LogFilters, ROUTING_LOG_CODEC, ROUTING_LOG_RANGES } from '@/lib/address';
 import { clock } from '@/lib/clock';
+import { FOLLOW_OVERRUN } from '@/lib/follow';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, FOLLOW_OVERRUN, type LogFilters, type LogLink, ROUTING_LOG_CODEC, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, followPages, formatFact, identityOf, logHref, merged } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, compareRows, entityHref, eventTone, factsOf, formatFact, identityOf, logHref } from '@/lib/routingLog';
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
 const PAGE_SIZE = 25;
-const FOLLOW_MS = 5_000;
-
-const RANGES = [
-  { label: 'Last hour', value: '1h', ms: HOUR },
-  { label: 'Last 3 hours', value: '3h', ms: 3 * HOUR },
-  { label: 'Last 6 hours', value: '6h', ms: 6 * HOUR },
-  { label: 'Last 24 hours', value: '24h', ms: 24 * HOUR },
-];
 
 const DECISION_KINDS = Object.keys(DECISION_KIND_LABEL).sort() as DecisionKind[];
 const HIDDEN_EVENT = 'warm_prefix_expired';
@@ -38,16 +31,9 @@ const KIND_OPTIONS: Option[] = [
 ];
 const kindWords = (kind: string) => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
 
-const DEFAULTS: LogFilters = { accounts: [], from: '', keys: [], kinds: [], models: [], pools: [], request: '', session: '', to: '' };
+const DEFAULTS: LogFilters = { accounts: [], keys: [], kinds: [], models: [], pools: [], range: { from: '', preset: '1h', to: '' }, request: '', session: '' };
 
-const iso = (ms: number) => new Date(ms).toISOString();
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
-
-/** Where Follow stopped short of the rows the list held: the cursor past its last row and the end of the range it read. */
-interface Overrun {
-  cursor: string;
-  to: number;
-}
 
 const Dash = () => <span className="muted">-</span>;
 
@@ -69,7 +55,7 @@ export function RoutingLogPage() {
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.
   // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
-  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[]; to?: number }>({ for: address, stack: [] });
+  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
@@ -92,128 +78,52 @@ export function RoutingLogPage() {
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   const [customOpen, setCustomOpen] = useState(false);
   const [follow, setFollow] = useState(false);
-  const [followed, setFollowed] = useState<{ for: string; fresh: Set<string>; overrun: Overrun | null; rows: RoutingLogRow[] } | null>(null);
   const session = useCommittedText(filters.session, (next) => update({ session: next.trim() }));
   const request = useCommittedText(filters.request, (next) => update({ request: next.trim() }));
 
-  const range = useMemo(() => {
-    // A `to` the address carries past now is read up to now.
-    const to = filters.to ? Math.min(Date.parse(filters.to), clock.now()) : loadedAt;
-    return { from: filters.from ? Date.parse(filters.from) : to - HOUR, to };
-  }, [filters, loadedAt]);
+  // A preset ends where the list was loaded, and a custom span reads its own instants.
+  const range = useMemo(() => addressWindow(filters.range, ROUTING_LOG_RANGES, '1h', loadedAt), [filters.range, loadedAt]);
   const query = useMemo<RoutingLogQuery>(
     () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(pagedTo ?? range.to) }),
     [filters, range, cursor, pagedTo],
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const following = followed !== null && followed.for === address && cursor === undefined ? followed : null;
-  const rows = following?.rows ?? log.data?.rows ?? [];
-  const fresh = following?.fresh ?? new Set<string>();
-  const overrun = following?.overrun ?? null;
-  // Past an overrun, Next walks on from the last row Follow read, so the rows it left are the next page.
-  const nextCursor = overrun?.cursor ?? log.data?.nextCursor ?? null;
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
+    address,
+    compare: compareRows,
+    error: log.error,
+    identity: identityOf,
+    list: log.data,
+    on: follow && cursor === undefined,
+    paging,
+    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }),
+    setFollow,
+    setPaging,
+    stale: log.stale,
+  });
 
-  // The rows the poll merges into: those followed under this address, else the list's once it answers this query. While
-  // the list still answers an earlier filter, its rows belong to that filter, so there is nothing to merge into yet.
-  const addressRows = following?.rows ?? (log.stale ? null : (log.data?.rows ?? null));
-  // The poll outlives renders, so it reads the current address, query and rows through a ref.
-  const latest = useRef({ address, addressRows, overrun, query });
-  latest.current = { address, addressRows, overrun, query };
-  // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
-  // notice down, as `useAsync`'s refresh does.
-  const streak = useRef({ failing: false, paths: new Set<string>() });
-  useEffect(() => {
-    if (!follow || cursor !== undefined) return;
-    // An answer that lands once the poll has stopped would tint rows no later poll clears.
-    const armed = { alive: true };
-    const failures = streak.current;
-    // Each Follow run toasts its own streak once, so a run armed while the route still fails says so again.
-    failures.failing = false;
-    const id = clock.setInterval(() => {
-      const { address: polled, addressRows: start, query: q } = latest.current;
-      // Every page of one poll reads up to the same instant, so its cursors walk one fixed range.
-      const to = clock.now();
-      const page = (cursor: string | undefined) => {
-        const read = () => api.listRoutingLog({ ...q, cursor, to: iso(to) });
-        return failures.failing ? quietly(read) : read();
-      };
-      // Before the list answers there is no row to stop at, so the poll reads the newest page alone.
-      const read: Promise<{ overrun: string | null; rows: RoutingLogRow[] }> = start === null ? page(undefined).then((p) => ({ overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identityOf)));
-      read.then(
-        (polledPages) => {
-          if (!armed.alive) return;
-          for (const path of failures.paths) reportRecovery(path);
-          failures.paths.clear();
-          failures.failing = false;
-          // An answer for filters the reader has left since, or for an address the list has not answered yet, lands
-          // nowhere.
-          const shown = latest.current.addressRows;
-          if (latest.current.address !== polled || shown === null) return;
-          const known = new Set(shown.map(identityOf));
-          // A gap an earlier poll left stays until a reload, and Next walks on from the newest one, which reaches the
-          // older ones too.
-          const next = polledPages.overrun === null ? (latest.current.overrun ?? null) : { cursor: polledPages.overrun, to };
-          setFollowed({ for: polled, fresh: new Set(polledPages.rows.map(identityOf).filter((k) => !known.has(k))), overrun: next, rows: merged(shown, polledPages.rows) });
-        },
-        (err: unknown) => {
-          if (!armed.alive) return;
-          failures.failing = true;
-          if (err instanceof ApiError && err.path !== null) failures.paths.add(err.path);
-        },
-      );
-    }, FOLLOW_MS);
-    return () => {
-      armed.alive = false;
-      clock.clearInterval(id);
-    };
-  }, [follow, cursor]);
-
-  const preset = !filters.from && !filters.to ? '1h' : RANGES.find((r) => r.value !== '1h' && filters.from && filters.to && Date.parse(filters.to) - Date.parse(filters.from) === r.ms)?.value;
-  const rangeValue = customOpen || preset === undefined ? 'custom' : preset;
+  const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
+  // Custom starts from the window the list shows, so the choice holds.
   const chooseRange = (value: string) => {
     setCustomOpen(value === 'custom');
-    if (value === 'custom') update({ from: iso(range.from), to: iso(range.to) });
-    else if (value === '1h') update({ from: '', to: '' });
-    else {
-      const now = clock.now();
-      update({ from: iso(now - (RANGES.find((r) => r.value === value)?.ms ?? HOUR)), to: iso(now) });
-    }
+    update({ range: value === 'custom' ? { from: iso(range.from), preset: 'custom', to: iso(range.to) } : { from: '', preset: value, to: '' } });
   };
+  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
+  // preset.
   const setBound = (bound: 'from' | 'to', local: string) => {
     const ms = Date.parse(local);
     if (Number.isNaN(ms)) return;
-    update(bound === 'from' ? { from: iso(ms) } : { to: iso(Math.min(ms, clock.now())) });
+    const next = bound === 'from' ? { from: ms, to: range.to } : { from: range.from, to: Math.min(ms, clock.now()) };
+    if (next.from >= next.to) return;
+    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
+  // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
-    const now = clock.now();
     setPaging({ for: address, stack: [] });
     setFollowed(null);
-    setLoadedAt(now);
-    // A preset range keeps its span and ends now. A custom one is read again as it stands.
-    const span = RANGES.find((r) => r.value === rangeValue && r.value !== '1h');
-    if (span) update({ from: iso(now - span.ms), to: iso(now) });
+    setLoadedAt(clock.now());
     log.reload();
-  };
-  // The tint marks what the last poll brought, and no poll follows to take it away.
-  const stopFollowing = () => {
-    setFollow(false);
-    setFollowed((f) => f && { ...f, fresh: new Set() });
-  };
-  const goNext = () => {
-    if (!nextCursor) return;
-    // The rows under the reader would move, so an older page stops the poll.
-    stopFollowing();
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: overrun?.to ?? pagedTo });
-  };
-  const goPrevious = () => {
-    const copy = [...stack];
-    const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy, to: pagedTo });
-  };
-  const toggleFollow = (on: boolean) => {
-    if (on) setFollow(true);
-    else stopFollowing();
   };
   const clear = () => {
     setCustomOpen(false);
@@ -227,8 +137,8 @@ export function RoutingLogPage() {
     <div className="routing-log stack">
       <div className="filters">
         <Select value={rangeValue} onChange={(e) => chooseRange(e.target.value)} aria-label="Range">
-          {RANGES.map((r) => (
-            <option key={r.value} value={r.value}>
+          {ROUTING_LOG_RANGES.map((r) => (
+            <option key={r.name} value={r.name}>
               {r.label}
             </option>
           ))}
@@ -344,7 +254,7 @@ export function RoutingLogPage() {
                         <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} striped={i % 2 === 1} onToggle={() => toggle(id)} />
                         {open.has(id) && (
                           <tr className="routing-log__panel">
-                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} />}</td>
+                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} rows={rows} />}</td>
                           </tr>
                         )}
                       </Fragment>
@@ -353,8 +263,8 @@ export function RoutingLogPage() {
               {!log.loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={9}>
-                    {log.error ? (
-                      <ErrorState title="Could not load the routing log" body={log.error} action={<Button onClick={log.reload}>Try again</Button>} />
+                    {error ? (
+                      <ErrorState title="Could not load the routing log" body={error} action={<Button onClick={log.reload}>Try again</Button>} />
                     ) : (
                       <EmptyState title="No decisions or events in this range." body="Widen the range or clear a filter." />
                     )}

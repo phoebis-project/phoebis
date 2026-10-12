@@ -9,8 +9,9 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
+import { ANALYTICS_CODEC, REQUESTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -42,7 +43,7 @@ const PIN_HINT: Record<KeepaliveState, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
   idle: "Stopped and waiting for the user. Probed until the pool's idle window, capped at the recipe's break-even, runs out.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
-  released: 'The subagent finished. Its recipe is gone.',
+  released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
 };
 const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'neutral', not_retained: 'neutral', paused: 'warning', retained: 'good' };
@@ -92,10 +93,13 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
  * page's `now` is a sample up to five seconds old, and the request log measures its window from its own load.
  */
 const requestsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId' | 'lastRequestAt'>) => {
+  const defaults = REQUESTS_CODEC.fromParams(new URLSearchParams());
   const range = requestsRange(session.lastRequestAt, clock.now());
-  const keys = encodeURIComponent(`${session.keyId}@${session.keyGeneration}`);
-  return `/requests?search=${encodeURIComponent(trafficSession)}&keys=${keys}${range === null ? '' : `&range=${range}`}`;
+  return `/requests?${REQUESTS_CODEC.toParams({ ...defaults, keys: [`${session.keyId}@${session.keyGeneration}`], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, search: trafficSession })}`;
 };
+/** The analytics on the session the client sent under the row's key lifetime. */
+const analyticsHref = (trafficSession: string, session: Pick<Session, 'keyGeneration' | 'keyId'>) =>
+  `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.fromParams(new URLSearchParams()), key: `${session.keyId}@${session.keyGeneration}`, session: trafficSession })}`;
 
 /**
  * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it
@@ -289,7 +293,7 @@ export function SessionsPage() {
           label="Agents"
           value={
             o ? (
-              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap. ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.`}>
+              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}`}>
                 {`${fmtInt(Math.max(0, o.limits.agents.count - hidden))} of ${fmtInt(o.limits.agents.max)}`}
               </span>
             ) : null
@@ -649,7 +653,7 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
+              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(analyticsHref(trafficSession, session)) },
               { label: 'View in requests', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(requestsHref(trafficSession, session)) },
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
@@ -672,6 +676,9 @@ function SessionRows({
                 <span>Nothing is scheduled because {row.noRecipe}.</span>
               </p>
             )}
+            {!session.historical && !row.noRecipe && row.agents.length > 0 && shown.length === 0 && (
+              <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.</p>
+            )}
             {shown.length > 0 && (
               <div className="agents">
                 <div className="agents__row agents__row--head">
@@ -688,8 +695,8 @@ function SessionRows({
                 {shown.map((a) => (
                   <div className="agents__row" key={a.agentId}>
                     <span className="mono agents__id" title={a.agentId}>{a.agentId}</span>
-                    <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
-                      {undatedModel(a.model)}
+                    <span className="mono nowrap" title={modelTitle(a.model, shortModel(a.model))}>
+                      {shortModel(a.model)}
                     </span>
                     {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
@@ -735,9 +742,9 @@ function SessionRows({
 }
 
 /**
- * A forked session's marker: a link to its base's row where the base is listed, the base's id where it is not. The
- * link stops at the row, whose click and Enter would otherwise open it. The title describes the badge through the
- * card's host, so a reader that never hovers hears the relation.
+ * A forked session's marker: a link to its base's row where the base is listed, plain where it is not, with the base's
+ * whole id and the depth on the title. The link stops at the row, whose click and Enter would otherwise open it. The
+ * title describes the badge through the card's host, so a reader that never hovers hears the relation.
  */
 function ForkBadge({
   base,
@@ -760,7 +767,6 @@ function ForkBadge({
   rowAccountId: string | null;
 }) {
   const at = depth === null ? '' : ` at depth ${depth}`;
-  const short = shortId(from, SESSION_CHARS);
   // The relation is read off the two listed rows alone: a base this list does not hold, or a row without a live pin,
   // is never claimed to be on the same account or another.
   const relation = base !== null && baseAccount !== null && rowAccountId !== null ? (baseAccount.id === rowAccountId ? 'same account' : 'on another account') : null;
@@ -772,7 +778,8 @@ function ForkBadge({
         : `Branched from session ${from}${at} on ${baseAccount?.label}. Follow to its row`;
   const described = useDescription(title);
   const hosted = described && !described.sibling ? described.id : undefined;
-  const words = base === null ? `fork of ${short}` : relation === null ? (depth === null ? 'fork' : `fork at ${depth}`) : `fork of ${short}${depth === null ? '' : ` at ${depth}`}, ${relation}`;
+  // The badge sits under the session id, so it names the relation or the depth alone, and the title the base.
+  const words = relation !== null ? `fork, ${relation}` : depth === null ? 'fork' : `fork at ${depth}`;
   if (base === null)
     return (
       <span className="badge badge--accent srow__fork" title={title} aria-describedby={hosted}>

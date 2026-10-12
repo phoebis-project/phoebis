@@ -254,7 +254,9 @@ test("a new key's name is refused when its id is taken, by case or by punctuatio
   const taken = [{ field: 'Name', group: 'key', text: 'Another key already has the id laptop.' }];
   assert.deepEqual(named('Laptop'), taken, 'by case');
   assert.deepEqual(named('laptop!'), taken, 'by punctuation');
-  assert.deepEqual(named('研究'), [{ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' }], 'no ASCII letter or digit');
+  assert.deepEqual(named('研究'), [], 'letters outside ASCII are a name, which derives the id item');
+  assert.deepEqual(named('研究', true, new Set(['item'])), [{ field: 'Name', group: 'key', text: 'Another key already has the id item.' }], 'unless that id is taken');
+  assert.deepEqual(named('--'), [{ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' }], 'no letter or digit in any script');
   assert.deepEqual(named('Laptop 2'), [], 'laptop-2 is free');
   assert.deepEqual(named(''), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'an empty name draws its own sentence alone');
   assert.deepEqual(named('   '), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'a name of spaces is no name, and no id is checked for it');
@@ -345,11 +347,17 @@ test("a new pool's name is refused when its id is taken, by case or by punctuati
   const taken = [{ field: 'Name', group: 'identity', text: 'Another pool already has the id jobs.' }];
   assert.deepEqual(named('Jobs'), taken, 'by case');
   assert.deepEqual(named('jobs!'), taken, 'by punctuation');
-  assert.deepEqual(named('研究'), [{ field: 'Name', group: 'identity', text: 'The pool needs a name with a letter or a digit.' }], 'no ASCII letter or digit');
+  assert.deepEqual(named('研究'), [], 'letters outside ASCII are a name, which derives the id item');
+  assert.deepEqual(named('--'), [{ field: 'Name', group: 'identity', text: 'The pool needs a name with a letter or a digit.' }], 'no letter or digit in any script');
   assert.deepEqual(named('Jobs 2'), [], 'jobs-2 is free');
   assert.deepEqual(named(''), [{ field: 'Name', group: 'identity', text: 'the pool needs a name.' }], 'an empty name draws its own sentence alone');
   assert.deepEqual(named('Jobs', false), [], 'a rename keeps its id and is never held for it');
   assert.equal(d.slug('jobs!'), 'jobs', 'the id is the one the create call derives');
+});
+
+test('a name of letters in any script derives item and is not unnamed', () => {
+  assert.deepEqual(d.derivedId('研究'), { id: 'item', unnamed: false });
+  assert.deepEqual(d.derivedId('--'), { id: 'item', unnamed: true });
 });
 
 test('the Keepalive group refuses its three numbers in the order it draws them', () => {

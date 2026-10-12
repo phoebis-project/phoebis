@@ -1,7 +1,7 @@
 //! The request log: one row per client request with its attempt trail, the detail with its events, and the
 //! captured bodies.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -13,9 +13,11 @@ use phoebis_ledger::{
     AttemptRecord, Funding, LiveKeys, PlanTables, RequestFilter, RequestRecord, Tiers,
 };
 use phoebis_routing::PinUsage;
-use serde_json::{json, Value};
+use serde_json::Value;
+use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
+use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::routes::{failure, store_failure};
 use crate::tiers::oauth_tiers;
 use crate::AdminState;
@@ -51,77 +53,448 @@ impl ShareContext {
     }
 }
 
+/// One page of the request log.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestList {
+    pub requests: Vec<RequestSummary>,
+    /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
+    pub next_cursor: Option<String>,
+}
+
+/// One client request with its attempt trail. `request_truncated` and `response_truncated` say whether the captured
+/// body is shorter than what the relay saw. `agent_type`, `compaction` and `context_compacted` are the gateway hint
+/// headers as the client sent them, null when it sent none.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestSummary {
+    pub id: String,
+    pub at: i64,
+    pub finished_at: Option<i64>,
+    pub key_id: Option<String>,
+    /// The key's `created_at`, `0` for a request no key was read for.
+    pub key_generation: i64,
+    pub pool_id: Option<String>,
+    pub account_id: Option<String>,
+    /// The client's own.
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub parent_agent_id: Option<String>,
+    pub model: String,
+    pub canonical_model: String,
+    pub kind: String,
+    pub origin: String,
+    /// `sse` or `json`.
+    #[schema(example = "sse")]
+    pub transport: String,
+    /// The class the client named on `x-claude-code-request-class`, null when it sent none.
+    pub request_class: Option<String>,
+    /// `server` for a request that asked for a server-side auto mode check under an on setting and `stripped`
+    /// for one that carried the `safeguards` member under an off setting, which the dispatch drops, both as
+    /// admission read them whether or not the request reached an upstream. `body_shape` for one refused with
+    /// that error code before it reached an upstream, whatever it asked for. Null otherwise.
+    #[schema(example = "server")]
+    pub auto_mode: Option<String>,
+    /// A request that continued another conversation at depth 2 or deeper: that conversation's root.
+    /// Null otherwise and always null on an auxiliary request.
+    pub forked_from: Option<String>,
+    /// The matched depth of `forked_from`, null with it.
+    pub fork_depth: Option<u32>,
+    pub status: Option<u16>,
+    /// `canceled`, `exhausted`, `failed`, `incomplete`, `rejected`, `succeeded`.
+    #[schema(example = "canceled")]
+    pub outcome: String,
+    /// Under `incomplete` one of `stream_cut`, `stream_incomplete`, `stream_stalled`, `stream_undecodable`: the
+    /// body ended before its end. A cut, a stall or a body that did not decode on a non-200 answer sits under
+    /// `failed`.
+    #[schema(example = "stream_cut")]
+    pub error_code: Option<String>,
+    pub client_drift: Option<String>,
+    pub ttfb_ms: Option<i64>,
+    pub ttft_ms: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub request_bytes: Option<u64>,
+    pub response_bytes: Option<u64>,
+    pub kept_warm: bool,
+    pub captured_bodies: bool,
+    pub request_truncated: bool,
+    pub response_truncated: bool,
+    pub user_agent: Option<String>,
+    /// The class the router derived at admission: `claude-code/<entrypoint>` from a Claude Code user agent, else
+    /// `other`. Null on a row from before the column existed.
+    pub client: Option<String>,
+    pub agent_type: Option<String>,
+    pub compaction: Option<String>,
+    pub context_compacted: Option<String>,
+    /// The sum of `x-claude-code-prev-tool-durations` in milliseconds.
+    pub prev_tool_ms: Option<i64>,
+    /// The `cc_turn_origin` of the attribution line, first-party only.
+    pub turn_origin: Option<String>,
+    pub shape: RequestShape,
+    pub usage: RequestUsage,
+    pub cost_usd: f64,
+    /// Null for a request billed in dollars: an overage attempt, a fast answer, an API key account or no attempt.
+    /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
+    /// has one, each the serving attempt's share of that window under the account's current tier at the attempt's
+    /// finish, priced at read time, or null where the tier has no capacity or the model no weight on that window.
+    /// An empty object for an account the registry no longer holds, or holds without a tier.
+    pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
+    pub phases: RequestPhases,
+    pub attempts: Vec<Attempt>,
+    /// `{waited_on, cohort, held_ms}` for the holds the request waited through, with the wait in milliseconds,
+    /// whether or not an attempt followed. Null for a request never held.
+    #[schema(value_type = Option<Object>)]
+    pub held: Option<Value>,
+    /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,
+    /// null for a body that went without one and on a row from before the column existed.
+    #[schema(example = "client")]
+    pub diagnostics_source: Option<String>,
+}
+
+/// Each key as the request sent it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestShape {
+    pub context_edits: Vec<String>,
+    pub effort: Option<String>,
+    pub max_tokens: Option<u64>,
+    pub message_count: u32,
+    pub requested_service_tier: Option<String>,
+    pub requested_speed: Option<String>,
+    pub system_blocks: u32,
+    pub temperature: Option<f64>,
+    pub thinking_budget: Option<u64>,
+    pub thinking_type: Option<String>,
+    pub tool_count: u32,
+}
+
+/// The serving attempt's usage, zero where it has none.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestUsage {
+    pub cache_read: u64,
+    pub cache_write_1h: u64,
+    pub cache_write_5m: u64,
+    pub input: u64,
+    pub output: u64,
+    pub thinking: u64,
+    pub web_fetch: u64,
+    pub web_search: u64,
+}
+
+/// Each Unix milliseconds, null for an instant the ledger holds none of.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestPhases {
+    pub received_at: i64,
+    /// The first attempt's start.
+    pub selected_at: Option<i64>,
+    /// When the relay flushed the body to the serving attempt's upstream.
+    pub written_at: Option<i64>,
+    pub head_at: Option<i64>,
+    pub first_content_at: Option<i64>,
+    /// When the ledger read the answer's `message_stop`, never after `finished_at`.
+    pub stream_end_at: Option<i64>,
+    pub finished_at: Option<i64>,
+}
+
+/// One attempt of the trail.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Attempt {
+    pub index: u32,
+    pub account_id: String,
+    pub account_kind: String,
+    pub outcome: String,
+    pub upstream_status: Option<u16>,
+    pub upstream_request_id: Option<String>,
+    /// The `id` of the message the answer carried, null without one: the join to a Claude Code transcript's
+    /// assistant entry.
+    pub upstream_message_id: Option<String>,
+    pub started_at: i64,
+    pub duration_ms: Option<i64>,
+    pub ttfb_ms: Option<i64>,
+    pub ttft_ms: Option<i64>,
+    pub cache_miss_reason: Option<String>,
+    pub service_tier: Option<String>,
+    pub client_drift: Option<String>,
+    pub cooldown_set: Option<CooldownSet>,
+    /// The head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as the quota samples are, each
+    /// present only when the head carried it.
+    pub windows: Vec<AttemptWindow>,
+    pub overage_in_use: Option<bool>,
+    pub estimated_usd: Option<f64>,
+    pub pricing_version: Option<String>,
+    /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
+    /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
+    /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
+    /// choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`, and
+    /// `prefix_tokens` for a fresh placement with no pin of its own).
+    #[schema(value_type = Option<Object>)]
+    pub selection: Option<Value>,
+    pub response: AttemptResponse,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CooldownSet {
+    pub reason: String,
+    pub until: Option<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttemptWindow {
+    /// `five_hour`, `seven_day` or `seven_day_overage_included`.
+    #[schema(example = "five_hour")]
+    pub id: String,
+    pub utilization: Option<f64>,
+    pub resets_at: Option<i64>,
+}
+
+/// Each key as the answer said it. `served_model` only when it differs from the resolved model.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttemptResponse {
+    pub cleared_input_tokens: Option<u64>,
+    pub inference_geo: Option<String>,
+    pub refusal_category: Option<String>,
+    pub refusal_recommended_model: Option<String>,
+    pub served_model: Option<String>,
+    pub speed: Option<String>,
+    pub stop_reason: Option<String>,
+    pub stop_sequence: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestDetail {
+    /// The same shape as one row of `GET /admin/requests`.
+    pub request: RequestSummary,
+    pub events: Vec<Event>,
+}
+
+/// One event the request names, the last three keys the pool the event is about, the agent the pin is held for,
+/// and the request the event names, each null where the kind has none. Rows from before read null.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Event {
+    pub at: i64,
+    /// One of:
+    ///
+    /// - `account_state_changed`: an account moved to another state, with `from`, `to`, the `cause` (the
+    ///   registry's word for who moved it: `auth_failed`, `deleted`, `funding_refused`, `funding_retry`,
+    ///   `operator`, `paired` or `refresh_failed`) and the upstream's `detail` where the answer carried one. A
+    ///   move to `reauth_required` is one such row, its `to` reading `reauth_required`, and a deleted account's
+    ///   last row reads `to` and `cause` `deleted`.
+    /// - `budget_period_ended`: a member whose budget was reached entered its next period, with
+    ///   `previous_spent_usd`.
+    /// - `budget_reached`: a pool member's spend reached its daily or monthly budget, with the request that
+    ///   crossed it when the ledger's spend read followed one. A restart does not announce a crossing its period
+    ///   already holds.
+    /// - `catalog_changed`: an account's model listing differs from the one before, with the ids `added` and
+    ///   `removed` and the new `count`.
+    /// - `cooldown_cleared`: a cooldown left its account, with `cause` `admin`, `expired` or `recovered`.
+    /// - `cooldown_set`: an upstream rejection cooled an account or one of its models.
+    /// - `fast_credits_changed`: a credits reading changed whether fast mode can draw on the account's extra
+    ///   usage, or why it cannot.
+    /// - `ledger_gap`: a request whose record never reached the ledger, with the reason.
+    /// - `model_permitted`: the account that served a model another account had rejected for the same request.
+    /// - `model_rejected`: an account refused the model the request named.
+    /// - `overage_ended`: the account left overage, with `since`, when it entered.
+    /// - `overage_started`: the account entered overage.
+    /// - `pin_created`: a session's first placement on an account.
+    /// - `pin_expired`: a pin left its account, with the facts that released it.
+    /// - `pin_migrated`: a pin moved to another account, with the move's reason.
+    /// - `pin_released`: an operator released the session.
+    /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer, with
+    ///   `duration_ms`.
+    /// - `poll_backoff_started`: the usage or the profile endpoint (`endpoint`) rate-limited an account, starting
+    ///   the usage poll's backoff, with `next_attempt_at` and `last_clean_poll_at`, when the last clean answer
+    ///   before it was read.
+    /// - `refresh_failed`: an OAuth token refresh failed, with the `error` the refresh recorded and its `cause`:
+    ///   the token endpoint's error code (`invalid_grant`), else the status it answered (`503`), else the words
+    ///   before the colon of an error that carries its detail after one (`transport`), else the error's own words
+    ///   (`identity_mismatch`).
+    /// - `refresh_succeeded`: an OAuth token refresh committed, with `access_expires_at`, when the new access
+    ///   token expires (also `until`), and `refresh_expires_at`, the refresh token's expiry or null. All three
+    ///   read null when a later refresh, a re-pairing or a disconnect replaced the committed credential before the
+    ///   row was written.
+    /// - `refresh_uncertain`: an OAuth token refresh that may or may not have rotated the token, with its `error`
+    ///   and `cause` as on a failed one.
+    /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`.
+    /// - `router_started`: the router started, with what it loaded, `down_since`, the newest row the ledger held
+    ///   before it, and `holds_lost`, since no held request survives a restart. A clock reset or a wind-down the
+    ///   previous run announced before that row is not written again.
+    /// - `shedding_round`: a pool's shedding round ran on one of its member accounts: the window that fired it
+    ///   with its lead over pace, the elapsed share and the margin over the threshold, the pool's pins on that
+    ///   account in the round's order with their burns, and the pins it marked. The marks and the dwell are the
+    ///   pool's on that account, while a move's cool reading counts a round any pool ran on its destination.
+    /// - `warm_prefix_expired`: the cache-map entries the purge removed for one conversation root on one account,
+    ///   with the largest of them and the cause, `ttl` or `incarnation`.
+    /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
+    ///   `trial`.
+    /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
+    ///   read past it (`sample`), or by the clock (`clock`), once per reset.
+    /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head
+    ///   read it. A window first seen at 1.0, with no stored reading before it, reads as spent.
+    #[schema(example = "account_state_changed")]
+    pub kind: String,
+    pub account_id: Option<String>,
+    pub key_id: Option<String>,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub actor: Option<String>,
+    /// The kind's detail, decoded. A `pin_migrated` event's carries `agent_id`, `from_account`, `epoch`, and
+    /// `reason` (`cooldown`, `drain`, `fast_lane`, `mark`, `overage`, `return_to_plan`, `shed`, or `spent`), a
+    /// `pin_expired` event's `agent_id` and `reasons`, the facts the selection found against the released pin's
+    /// account (the documentation site's routing page describes them under Moves), and a `pin_released` event's
+    /// `agent_id`.
+    #[schema(value_type = Option<Object>)]
+    pub detail: Value,
+    pub pool_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+/// A side whose bytes parse as JSON answers as that value, and any other side, an SSE stream or a capture cut short
+/// among them, as a string. The four byte counts are the bytes each side stored and the bytes it ran to, and the
+/// difference is what was dropped. `request_truncated` and `response_truncated` are the request's own flags, as
+/// `GET /admin/requests` answers them, so a capture whose last chunks never reached the ledger reads truncated even
+/// where the two byte counts agree.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Bodies {
+    pub request_id: String,
+    /// JSON or text.
+    pub request: Value,
+    /// JSON or text, nullable.
+    pub response: Option<Value>,
+    pub request_bytes_stored: u64,
+    pub request_bytes_seen: u64,
+    pub response_bytes_stored: u64,
+    pub response_bytes_seen: u64,
+    pub request_truncated: bool,
+    pub response_truncated: bool,
+    pub expires_at: i64,
+}
+
 pub(crate) fn request_summary(
     r: &RequestRecord,
     attempts: &[AttemptRecord],
     shares: &ShareContext,
-) -> Value {
+) -> RequestSummary {
     let last = attempts.last();
-    json!({
-        "id": r.id, "at": r.received_at, "finished_at": r.finished_at, "key_id": r.key_id, "key_generation": r.key_generation, "pool_id": r.pool_id,
-        "account_id": last.map(|a| a.account_id.clone()), "session_id": r.session_id, "agent_id": r.agent_id, "parent_agent_id": r.parent_agent_id,
-        "model": r.model, "canonical_model": r.canonical_model, "kind": r.kind, "origin": r.origin, "transport": if r.stream { "sse" } else { "json" },
-        "request_class": r.request_class, "auto_mode": r.auto_mode,
-        "forked_from": r.forked_from, "fork_depth": r.fork_depth,
-        "status": r.status, "outcome": r.outcome, "error_code": r.error_code, "client_drift": r.client_drift, "ttfb_ms": r.ttfb_ms, "ttft_ms": r.ttfc_ms, "duration_ms": r.duration_ms,
-        "request_bytes": r.request_bytes, "response_bytes": r.response_bytes, "kept_warm": r.kept_warm, "captured_bodies": r.bodies_captured,
-        "request_truncated": r.request_truncated, "response_truncated": r.response_truncated,
-        "user_agent": r.user_agent,
-        "client": r.client, "agent_type": r.agent_type, "compaction": r.compaction, "context_compacted": r.context_compacted, "prev_tool_ms": r.prev_tool_ms, "turn_origin": r.turn_origin,
-        "shape": shape_json(r),
-        "usage": usage_json(last),
+    RequestSummary {
+        id: r.id.clone(),
+        at: r.received_at,
+        finished_at: r.finished_at,
+        key_id: r.key_id.clone(),
+        key_generation: r.key_generation,
+        pool_id: r.pool_id.clone(),
+        account_id: last.map(|a| a.account_id.clone()),
+        session_id: r.session_id.clone(),
+        agent_id: r.agent_id.clone(),
+        parent_agent_id: r.parent_agent_id.clone(),
+        model: r.model.clone(),
+        canonical_model: r.canonical_model.clone(),
+        kind: r.kind.clone(),
+        origin: r.origin.clone(),
+        transport: if r.stream { "sse" } else { "json" }.to_string(),
+        request_class: r.request_class.clone(),
+        auto_mode: r.auto_mode.clone(),
+        forked_from: r.forked_from.clone(),
+        fork_depth: r.fork_depth,
+        status: r.status,
+        outcome: r.outcome.clone(),
+        error_code: r.error_code.clone(),
+        client_drift: r.client_drift.clone(),
+        ttfb_ms: r.ttfb_ms,
+        ttft_ms: r.ttfc_ms,
+        duration_ms: r.duration_ms,
+        request_bytes: r.request_bytes,
+        response_bytes: r.response_bytes,
+        kept_warm: r.kept_warm,
+        captured_bodies: r.bodies_captured,
+        request_truncated: r.request_truncated,
+        response_truncated: r.response_truncated,
+        user_agent: r.user_agent.clone(),
+        client: r.client.clone(),
+        agent_type: r.agent_type.clone(),
+        compaction: r.compaction.clone(),
+        context_compacted: r.context_compacted.clone(),
+        prev_tool_ms: r.prev_tool_ms,
+        turn_origin: r.turn_origin.clone(),
+        shape: shape_json(r),
+        usage: usage_json(last),
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
-        "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
-        "cost_shares": cost_shares_json(r, attempts, shares),
-        "phases": phases_json(r, attempts),
-        "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
+        cost_usd: attempts
+            .iter()
+            .filter_map(|a| a.estimated_usd)
+            .fold(0.0, |a, b| a + b),
+        cost_shares: cost_shares_json(r, attempts, shares),
+        phases: phases_json(r, attempts),
+        attempts: attempts.iter().map(attempt_json).collect(),
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
-        "held": r.held.as_deref().and_then(|h| serde_json::from_str::<Value>(h).ok()),
-        "diagnostics_source": r.diagnostics_source,
-    })
+        held: r
+            .held
+            .as_deref()
+            .and_then(|h| serde_json::from_str::<Value>(h).ok()),
+        diagnostics_source: r.diagnostics_source.clone(),
+    }
 }
 
-/// Its own function, beside `usage_json` and `attempt_json`, for the same reason: nested inline the object
-/// would overflow the `json!` macro's expansion depth.
-fn shape_json(r: &RequestRecord) -> Value {
-    json!({
-        "context_edits": r.context_edits.split(',').filter(|e| !e.is_empty()).collect::<Vec<_>>(),
-        "effort": r.effort, "max_tokens": r.max_tokens, "message_count": r.message_count,
-        "requested_service_tier": r.requested_service_tier, "requested_speed": r.requested_speed,
-        "system_blocks": r.system_blocks, "temperature": r.temperature, "thinking_budget": r.thinking_budget,
-        "thinking_type": r.thinking_type, "tool_count": r.tool_count,
-    })
+fn shape_json(r: &RequestRecord) -> RequestShape {
+    RequestShape {
+        context_edits: r
+            .context_edits
+            .split(',')
+            .filter(|e| !e.is_empty())
+            .map(String::from)
+            .collect(),
+        effort: r.effort.clone(),
+        max_tokens: r.max_tokens,
+        message_count: r.message_count,
+        requested_service_tier: r.requested_service_tier.clone(),
+        requested_speed: r.requested_speed.clone(),
+        system_blocks: r.system_blocks,
+        temperature: r.temperature,
+        thinking_budget: r.thinking_budget,
+        thinking_type: r.thinking_type.clone(),
+        tool_count: r.tool_count,
+    }
 }
 
-/// Its own function, beside `shape_json` and `usage_json`, for the same reason. The write is the serving
-/// attempt's: an earlier attempt's write led nowhere the answer came from.
-fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> Value {
+/// The write is the serving attempt's: an earlier attempt's write led nowhere the answer came from.
+fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> RequestPhases {
     let last = attempts.last();
-    json!({
-        "received_at": r.received_at,
-        "selected_at": attempts.first().map(|a| a.started_at),
-        "written_at": last.and_then(|a| a.written_at),
-        "head_at": r.ttfb_ms.map(|ms| r.received_at + ms),
-        "first_content_at": r.ttfc_ms.map(|ms| r.received_at + ms),
-        "stream_end_at": r.stream_end_at,
-        "finished_at": r.finished_at,
-    })
+    RequestPhases {
+        received_at: r.received_at,
+        selected_at: attempts.first().map(|a| a.started_at),
+        written_at: last.and_then(|a| a.written_at),
+        head_at: r.ttfb_ms.map(|ms| r.received_at + ms),
+        first_content_at: r.ttfc_ms.map(|ms| r.received_at + ms),
+        stream_end_at: r.stream_end_at,
+        finished_at: r.finished_at,
+    }
 }
 
 /// Null for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
 /// Else the serving attempt's shares under the account's current tier at its completion, where the meter charges
 /// it (else the request's, else the attempt's start), `{}` for an account the tiers lack or hold without a tier,
 /// since the burn route prices no share without one.
-fn cost_shares_json(r: &RequestRecord, attempts: &[AttemptRecord], shares: &ShareContext) -> Value {
-    let Some(a) = attempts.last() else {
-        return Value::Null;
-    };
+fn cost_shares_json(
+    r: &RequestRecord,
+    attempts: &[AttemptRecord],
+    shares: &ShareContext,
+) -> Option<BTreeMap<String, Option<f64>>> {
+    let a = attempts.last()?;
     if funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) != Funding::Plan {
-        return Value::Null;
+        return None;
     }
     let Some(Some(tier)) = shares.tiers.get(&a.account_id) else {
-        return json!({});
+        return Some(BTreeMap::new());
     };
     let usage = PinUsage {
         input: a.input_tokens.unwrap_or(0),
@@ -131,37 +504,41 @@ fn cost_shares_json(r: &RequestRecord, attempts: &[AttemptRecord], shares: &Shar
         output: a.output_tokens.unwrap_or(0),
     };
     let at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
-    serde_json::to_value(price_shares(
-        &shares.tables,
-        tier,
-        &r.canonical_model,
-        usage,
-        at,
-    ))
-    .expect("window shares serialize")
+    // A sorted map keeps the order `price_shares` inserts the window ids in: `five_hour`, `seven_day`, then the
+    // model week named `seven_day_<family>`.
+    Some(
+        price_shares(&shares.tables, tier, &r.canonical_model, usage, at)
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
 }
 
-/// Its own function, beside `shape_json` and `attempt_json`, for the same reason.
-fn usage_json(last: Option<&AttemptRecord>) -> Value {
+fn usage_json(last: Option<&AttemptRecord>) -> RequestUsage {
     let tokens = |f: fn(&AttemptRecord) -> Option<u64>| last.and_then(f).unwrap_or(0);
-    json!({
-        "cache_read": tokens(|a| a.cache_read_tokens), "cache_write_1h": tokens(|a| a.cache_write_1h_tokens),
-        "cache_write_5m": tokens(|a| a.cache_write_5m_tokens), "input": tokens(|a| a.input_tokens),
-        "output": tokens(|a| a.output_tokens), "thinking": tokens(|a| a.thinking_tokens),
-        "web_fetch": tokens(|a| a.web_fetch_requests), "web_search": tokens(|a| a.web_search_requests),
-    })
+    RequestUsage {
+        cache_read: tokens(|a| a.cache_read_tokens),
+        cache_write_1h: tokens(|a| a.cache_write_1h_tokens),
+        cache_write_5m: tokens(|a| a.cache_write_5m_tokens),
+        input: tokens(|a| a.input_tokens),
+        output: tokens(|a| a.output_tokens),
+        thinking: tokens(|a| a.thinking_tokens),
+        web_fetch: tokens(|a| a.web_fetch_requests),
+        web_search: tokens(|a| a.web_search_requests),
+    }
 }
 
-/// One attempt of the trail. Its own function because the two objects together overflow the `json!` macro's
-/// expansion depth.
-fn attempt_json(a: &AttemptRecord) -> Value {
+fn attempt_json(a: &AttemptRecord) -> Attempt {
     let window = |id: &str, u: Option<f64>, reset: Option<i64>| {
-        (u.is_some() || reset.is_some())
-            .then(|| json!({ "id": id, "utilization": u, "resets_at": reset }))
+        (u.is_some() || reset.is_some()).then(|| AttemptWindow {
+            id: id.to_string(),
+            utilization: u,
+            resets_at: reset,
+        })
     };
     // The attempt's columns hold the head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as
     // the quota samples are.
-    let windows: Vec<Value> = [
+    let windows: Vec<AttemptWindow> = [
         window(
             "five_hour",
             a.ratelimit_5h_utilization,
@@ -181,22 +558,44 @@ fn attempt_json(a: &AttemptRecord) -> Value {
     .into_iter()
     .flatten()
     .collect();
-    json!({
-        "index": a.attempt, "account_id": a.account_id, "account_kind": a.account_kind, "outcome": a.outcome,
-        "upstream_status": a.upstream_status, "upstream_request_id": a.upstream_request_id,
-        "upstream_message_id": a.upstream_message_id, "started_at": a.started_at,
-        "duration_ms": a.finished_at.map(|f| f - a.started_at), "ttfb_ms": a.ttfb_ms, "ttft_ms": a.ttfc_ms,
-        "cache_miss_reason": a.cache_miss_reason, "service_tier": a.service_tier, "client_drift": a.client_drift,
-        "cooldown_set": a.cooldown_scope.as_ref().map(|scope| json!({ "reason": scope, "until": a.cooldown_until })),
-        "windows": windows,
-        "overage_in_use": a.overage_in_use, "estimated_usd": a.estimated_usd, "pricing_version": a.pricing_version,
-        "selection": a.selection.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "response": {
-            "cleared_input_tokens": a.cleared_input_tokens, "inference_geo": a.inference_geo,
-            "refusal_category": a.refusal_category, "refusal_recommended_model": a.refusal_recommended_model,
-            "served_model": a.served_model, "speed": a.speed, "stop_reason": a.stop_reason, "stop_sequence": a.stop_sequence,
+    Attempt {
+        index: a.attempt,
+        account_id: a.account_id.clone(),
+        account_kind: a.account_kind.clone(),
+        outcome: a.outcome.clone(),
+        upstream_status: a.upstream_status,
+        upstream_request_id: a.upstream_request_id.clone(),
+        upstream_message_id: a.upstream_message_id.clone(),
+        started_at: a.started_at,
+        duration_ms: a.finished_at.map(|f| f - a.started_at),
+        ttfb_ms: a.ttfb_ms,
+        ttft_ms: a.ttfc_ms,
+        cache_miss_reason: a.cache_miss_reason.clone(),
+        service_tier: a.service_tier.clone(),
+        client_drift: a.client_drift.clone(),
+        cooldown_set: a.cooldown_scope.as_ref().map(|scope| CooldownSet {
+            reason: scope.clone(),
+            until: a.cooldown_until,
+        }),
+        windows,
+        overage_in_use: a.overage_in_use,
+        estimated_usd: a.estimated_usd,
+        pricing_version: a.pricing_version.clone(),
+        selection: a
+            .selection
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        response: AttemptResponse {
+            cleared_input_tokens: a.cleared_input_tokens,
+            inference_geo: a.inference_geo.clone(),
+            refusal_category: a.refusal_category.clone(),
+            refusal_recommended_model: a.refusal_recommended_model.clone(),
+            served_model: a.served_model.clone(),
+            speed: a.speed.clone(),
+            stop_reason: a.stop_reason.clone(),
+            stop_sequence: a.stop_sequence.clone(),
         },
-    })
+    }
 }
 
 pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String> {
@@ -211,6 +610,75 @@ pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String>
         .unwrap_or_default()
 }
 
+/// `GET /admin/requests`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct RequestsQuery {
+    /// Unix milliseconds.
+    pub from: Option<i64>,
+    /// Unix milliseconds.
+    pub to: Option<i64>,
+    /// A comma list of numbers.
+    pub statuses: Option<String>,
+    /// Matches the request id, the session, the key, the model, the error code, and the attempts' account id,
+    /// upstream request id and upstream message id, literally: `_`, `%` and `\` are characters.
+    pub text: Option<String>,
+    /// A comma list. A value is read as the breakdown's: a bare id for the current key's rows,
+    /// `<id>@<generation>` for an earlier holder's, or `-` for requests no key was read for.
+    pub keys: Option<String>,
+    /// A comma list.
+    pub pools: Option<String>,
+    /// A comma list. A value matches the account of the serving attempt, the last one, or `-` for a request no
+    /// attempt served.
+    pub accounts: Option<String>,
+    /// A comma list.
+    pub models: Option<String>,
+    /// A comma list.
+    pub kinds: Option<String>,
+    /// A comma list.
+    pub outcomes: Option<String>,
+    /// A pattern, the grammar of the analytics' `user_agents`.
+    pub user_agent: Option<String>,
+    /// A pattern over the client class, the same grammar and bound.
+    pub client: Option<String>,
+    /// A comma list.
+    pub agent_types: Option<String>,
+    /// A comma list.
+    pub turn_origins: Option<String>,
+    /// A comma list of reasons, read off the serving attempt, any name the beta sent.
+    pub cache_miss_reasons: Option<String>,
+    /// A comma list of efforts as the rollups fold them: a level, `none`, `other`.
+    pub efforts: Option<String>,
+    /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
+    pub request_classes: Option<String>,
+    /// A comma list of `fast`, `standard`, read off the serving attempt, else `fast` for a request that asked for
+    /// it and `standard` otherwise.
+    pub speeds: Option<String>,
+    /// `true`/`1`: the requests that waited for a slot, one that answered without a dispatch included.
+    pub held: Option<bool>,
+    /// `true`/`1`.
+    pub include_probes: Option<bool>,
+    /// Default 50, clamped to 1 through 500.
+    pub limit: Option<u32>,
+    /// `<received_at>:<id>`.
+    pub cursor: Option<String>,
+}
+
+/// List the requests.
+#[utoipa::path(
+    get,
+    path = "/admin/requests",
+    operation_id = "requests_list",
+    tag = "Requests",
+    params(RequestsQuery),
+    responses(
+        (status = 200, description = "The page.", body = RequestList),
+        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+    ),
+)]
 pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
@@ -287,11 +755,31 @@ pub(crate) async fn list(
         .read(move |c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
         .await
     {
-        Ok((rows, next)) => Json(json!({ "requests": rows.iter().map(|(r, a)| request_summary(r, a, &shares)).collect::<Vec<_>>(), "next_cursor": next })).into_response(),
+        Ok((rows, next_cursor)) => Json(RequestList {
+            requests: rows
+                .iter()
+                .map(|(r, a)| request_summary(r, a, &shares))
+                .collect(),
+            next_cursor,
+        })
+        .into_response(),
         Err(e) => ledger_failure(e),
     }
 }
 
+/// Read a request with its events.
+#[utoipa::path(
+    get,
+    path = "/admin/requests/{id}",
+    operation_id = "request_show",
+    tag = "Requests",
+    params(("id" = String, Path, description = "The request's id")),
+    responses(
+        (status = 200, description = "The request with its events.", body = RequestDetail),
+        (status = 404, description = "`no such request`", body = ErrorBody, example = json!({"error": "no such request"})),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+    ),
+)]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let shares = match ShareContext::read(&state) {
         Ok(shares) => shares,
@@ -309,20 +797,36 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
         })
         .await;
     match found {
-        Ok(Some((r, a, events))) => Json(json!({ "request": request_summary(&r, &a, &shares), "events": events.iter().map(event_json).collect::<Vec<_>>() })).into_response(),
+        Ok(Some((r, a, events))) => Json(RequestDetail {
+            request: request_summary(&r, &a, &shares),
+            events: events.iter().map(event_json).collect(),
+        })
+        .into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no such request"),
         Err(e) => ledger_failure(e),
     }
 }
 
-pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
+pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Event {
     let mut detail = e
         .detail
         .as_deref()
         .and_then(|d| serde_json::from_str::<Value>(d).ok())
         .unwrap_or(Value::Null);
     decode_diff(&mut detail);
-    json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": detail, "pool_id": e.pool_id, "agent_id": e.agent_id, "request_id": e.request_id })
+    Event {
+        at: e.at,
+        kind: e.kind.clone(),
+        account_id: e.account_id.clone(),
+        key_id: e.key_id.clone(),
+        session_id: e.session_id.clone(),
+        model: e.model.clone(),
+        actor: e.actor.clone(),
+        detail,
+        pool_id: e.pool_id.clone(),
+        agent_id: e.agent_id.clone(),
+        request_id: e.request_id.clone(),
+    }
 }
 
 /// A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON string, which
@@ -337,6 +841,19 @@ pub(crate) fn decode_diff(detail: &mut Value) {
     }
 }
 
+/// Read the captured bodies.
+#[utoipa::path(
+    get,
+    path = "/admin/requests/{id}/bodies",
+    operation_id = "request_bodies",
+    tag = "Requests",
+    params(("id" = String, Path, description = "The request's id")),
+    responses(
+        (status = 200, description = "The request's captured bodies.", body = Bodies),
+        (status = 404, description = "`no captured bodies for this request`, once the capture has expired or was never made", body = ErrorBody, example = json!({"error": "no captured bodies for this request"})),
+        (status = 500, response = LedgerFailure),
+    ),
+)]
 pub(crate) async fn bodies(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -361,21 +878,30 @@ pub(crate) async fn bodies(
     };
     // The byte counts are read off the raw vectors before rendering: a re-encoded JSON string adds quotes and
     // escapes, and a JavaScript `.length` on it counts UTF-16 units, so neither measures what was cut.
-    Json(json!({
-        "request_id": b.request_id, "request": as_json_or_text(&b.request_body), "response": b.response_body.as_deref().map(as_json_or_text),
-        "request_bytes_stored": b.request_body.len(), "request_bytes_seen": b.request_len_seen,
-        "response_bytes_stored": b.response_body.as_ref().map_or(0, Vec::len), "response_bytes_seen": b.response_len_seen,
-        "request_truncated": request_cut || (b.request_body.len() as u64) < b.request_len_seen,
-        "response_truncated": response_cut || b.response_body.as_ref().is_some_and(|body| (body.len() as u64) < b.response_len_seen),
-        "expires_at": b.expires_at,
-    }))
+    Json(Bodies {
+        request_id: b.request_id,
+        request: as_json_or_text(&b.request_body),
+        response: b.response_body.as_deref().map(as_json_or_text),
+        request_bytes_stored: b.request_body.len() as u64,
+        request_bytes_seen: b.request_len_seen,
+        response_bytes_stored: b.response_body.as_ref().map_or(0, Vec::len) as u64,
+        response_bytes_seen: b.response_len_seen,
+        request_truncated: request_cut || (b.request_body.len() as u64) < b.request_len_seen,
+        response_truncated: response_cut
+            || b.response_body
+                .as_ref()
+                .is_some_and(|body| (body.len() as u64) < b.response_len_seen),
+        expires_at: b.expires_at,
+    })
     .into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::openapi::round_trip::{fixture, round_trips};
     use phoebis_ledger::{PlanTables, RequestRecord, SubscriptionCosts, Tiers};
+    use serde_json::json;
 
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
     const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
@@ -448,7 +974,9 @@ overrides: {}
     }
 
     fn cost_shares(model: &str, attempt: AttemptRecord, shares: &ShareContext) -> Value {
-        request_summary(&request_of(model), &[attempt], shares)["cost_shares"].clone()
+        serde_json::to_value(request_summary(&request_of(model), &[attempt], shares)).unwrap()
+            ["cost_shares"]
+            .clone()
     }
 
     #[test]
@@ -470,7 +998,8 @@ overrides: {}
             ..attempt_of("oauth", None, None)
         };
         assert_eq!(
-            request_summary(&request, &[attempt], &shares)["cost_shares"],
+            serde_json::to_value(request_summary(&request, &[attempt], &shares)).unwrap()
+                ["cost_shares"],
             cost_shares("claude-fable-5-1", attempt_of("oauth", None, None), &shares),
             "the attempt's finish prices the share, neither the request's finish nor the attempt's start"
         );
@@ -487,11 +1016,12 @@ overrides: {}
 
     #[test]
     fn a_request_with_no_priced_attempt_costs_an_unsigned_zero() {
-        let summary = request_summary(
+        let summary = serde_json::to_value(request_summary(
             &RequestRecord::default(),
             &[],
             &ShareContext::of(PlanTables::shipped(), Tiers::new()),
-        );
+        ))
+        .unwrap();
         assert_eq!(
             summary["cost_usd"].to_string(),
             "0.0",
@@ -526,7 +1056,9 @@ overrides: {}
             },
         ];
         let shares = ShareContext::of(PlanTables::shipped(), Tiers::new());
-        let summary = |attempts: &[AttemptRecord]| request_summary(&row, attempts, &shares);
+        let summary = |attempts: &[AttemptRecord]| {
+            serde_json::to_value(request_summary(&row, attempts, &shares)).unwrap()
+        };
         assert_eq!(
             summary(&attempts)["phases"],
             json!({
@@ -658,5 +1190,31 @@ overrides: {}
                 && narrow["seven_day_fable"].is_null(),
             "the 5-hour window prices and the two the tier does not size read null: {narrow}"
         );
+    }
+
+    #[test]
+    fn the_request_fixtures_round_trip_through_their_declared_types() {
+        round_trips::<RequestList>("requests");
+        round_trips::<RequestDetail>("request");
+        round_trips::<Bodies>("request_bodies");
+        // The three captures the route answers outside a JSON object, as the document test reads them back.
+        for (request, response) in [
+            (
+                json!({"model": "claude-sonnet-5", "messages": []}),
+                json!("event: message_stop\ndata: {}\n\n"),
+            ),
+            (json!("{\"model\":\"claude-son"), Value::Null),
+            (json!(42), json!("ok")),
+        ] {
+            let mut capture = fixture("request_bodies");
+            capture["request"] = request;
+            capture["response"] = response;
+            let typed: Bodies = serde_json::from_value(capture.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(&typed).unwrap(),
+                capture,
+                "a capture outside a JSON object round-trips"
+            );
+        }
     }
 }

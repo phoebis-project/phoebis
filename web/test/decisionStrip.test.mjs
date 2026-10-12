@@ -25,7 +25,7 @@ async function recordOf(id) {
   return record;
 }
 
-const modelOf = (record) => d.stationModel(record, undefined, NOW);
+const modelOf = (record) => d.stationModel(record, NOW);
 
 /**
  * The strip as one entry per station: its word, its badge and its state, a track station marked with a caret. A
@@ -569,7 +569,10 @@ const readRows = (plan) => rowsOf(plan).map((r) => [r.label, r.chips.map(chipTex
 const planOf = (record, anchor) => d.anchorPlan(anchor, modelOf(record), record, undefined, NOW);
 const stationPlan = (record, id) => planOf(record, { id, kind: 'station' });
 
-/** Every popover the strip opens over `record`: each station, each leaf and each drawn terminus, with what it stands for. */
+/**
+ * Every popover the strip opens over `record`: each station, each leaf and each drawn terminus, with what it stands
+ * for.
+ */
 function popoversOf(record) {
   const m = modelOf(record);
   const firedAt = record.walk.findIndex((s) => s.step.startsWith('move:') && s.verdict === 'fired');
@@ -642,7 +645,9 @@ test("every popover of the story's records takes the inventory's renderer and pl
 
 test("the pick's score column reads the Pace cell under the Pace header", async () => {
   let rows = 0;
-  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1']) {
+  // A tier mate scoring above the chosen member sits at its cap and drops before the pick, so the story's own picks
+  // rank one member each. A hold keeps the whole set, so its pick ranks the tier.
+  for (const id of ['req_ef099b34-453/1', 'req_868264bc-611/1', 'req_e8b7eb13-060/1']) {
     const record = await recordOf(id);
     const { table } = stationPlan(record, 'pick').block;
     const score = table.columns.find((c) => c.key === 'score');
@@ -686,7 +691,8 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.deepEqual(groupsOf(ran), expected(round));
   const marks = ran.block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'marks');
   assert.equal(marks.chips.length, round.outcome.shedMarks.length);
-  assert.deepEqual(marks.chips.map((c) => [c.label, new URLSearchParams(c.href.split('?')[1]).get('session')]), round.outcome.shedMarks.map((mk) => ['mark', mk.sessionId]));
+  // The Sessions page reads no session key, so a mark links the view and its title names the session.
+  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', '/sessions', mk.sessionId]));
 });
 
 test("the rung's entry rows read the matched entry and never the deeper refused one", async () => {

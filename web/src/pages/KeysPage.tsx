@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
@@ -9,11 +9,12 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
-import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { useAsync, useCommittedText, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -41,8 +42,30 @@ export function KeysPage() {
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
   const landed = useRef<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState<'all' | KeyStatus>('all');
+  const { filters } = useQueryFilters(KEYS_CODEC);
+  const status = filters.status as 'all' | KeyStatus;
+  // The dialog's one-shot `edit` and `group` wait in the address until the key list loads, so a filter written before
+  // then carries them through. Written at once, as the hook writes.
+  const update = (patch: Partial<KeysAddress>) => {
+    const params = KEYS_CODEC.toParams({ ...filters, ...patch });
+    const current = new URLSearchParams(location.search);
+    for (const name of ['edit', 'group']) {
+      const value = current.get(name);
+      if (value !== null) params.set(name, value);
+    }
+    const next = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { flushSync: true, replace: true });
+  };
+  const search = useCommittedText(filters.search, (next) => update({ search: next }));
+  // An effect's write: `update` flushes at once, which React cannot do inside an effect, so these replace the address
+  // the router's usual way.
+  const replaceFromEffect = useCallback(
+    (patch: Partial<KeysAddress>) => {
+      const next = KEYS_CODEC.toParams({ ...filters, ...patch }).toString();
+      navigate({ hash: location.hash, pathname: location.pathname, search: next ? `?${next}` : '' }, { replace: true });
+    },
+    [filters, location.hash, location.pathname, navigate],
+  );
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
@@ -71,43 +94,34 @@ export function KeysPage() {
       notify(`Key ${edit} not found`);
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once the key list lands, in the pass that takes it out of the address
     setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
   }, [keys.data, location, navigate, notify]);
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
-  // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
+  // The pool filter is the address: the select reads `?pools=<id>` and writes it back, so a reload keeps the filter and
   // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
   // match it during the read and after a failed one, and the select holds an option for the id: without one it would
   // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
   // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
   // own effect goes first. All pools is the empty string, which no pool id can be, since a pool may be named `all`.
-  const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
-  const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
-  const writePool = (id: string) => {
-    const params = new URLSearchParams(location.search);
-    if (id === '') params.delete('pool');
-    else params.set('pool', id);
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-  };
+  const poolIds = useMemo(() => filters.pools.filter((id) => pools.data === null || poolById.has(id)), [filters.pools, poolById, pools.data]);
+  const poolFilter = poolIds[0] ?? '';
   useEffect(() => {
-    if (poolParam === null || !pools.data || poolById.has(poolParam)) return;
-    const params = new URLSearchParams(location.search);
-    if (params.has('edit')) return;
-    params.delete('pool');
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-  }, [location, navigate, poolById, poolParam, pools.data]);
+    if (filters.pools.length === 0 || !pools.data || poolIds.length > 0) return;
+    if (new URLSearchParams(location.search).has('edit')) return;
+    replaceFromEffect({ pools: [] });
+  }, [filters.pools, location.search, poolIds, pools.data, replaceFromEffect]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
-        if (poolFilter !== '' && k.poolId !== poolFilter) return false;
+        if (poolIds.length > 0 && !poolIds.includes(k.poolId)) return false;
         if (status !== 'all' && k.status !== status) return false;
-        const q = query.trim().toLowerCase();
+        const q = filters.search.trim().toLowerCase();
         return !q || k.name.toLowerCase().includes(q) || k.prefix.includes(q) || k.poolId.includes(q);
       }),
-    [keys.data, poolFilter, query, status],
+    [keys.data, poolIds, filters.search, status],
   );
 
   // `/keys#<key id>` lands on the row once the keys have drawn it, whenever the list arrives after the mount, and once
@@ -123,14 +137,7 @@ export function KeysPage() {
     }
     if (!keys.data?.some((k) => k.id === id)) return;
     if (!rows.some((k) => k.id === id)) {
-      setQuery('');
-      setStatus('all');
-      if (poolParam !== null) {
-        const params = new URLSearchParams(location.search);
-        params.delete('pool');
-        const search = params.toString();
-        navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-      }
+      replaceFromEffect({ pools: [], search: '', status: 'all' });
       return;
     }
     const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
@@ -138,7 +145,7 @@ export function KeysPage() {
     landed.current = location.hash;
     scrollToElement(row);
     row.focus({ preventScroll: true });
-  }, [keys.data, location.hash, location.pathname, location.search, navigate, poolParam, rows]);
+  }, [keys.data, location.hash, replaceFromEffect, rows]);
 
   const totals = keys.data
     ? {
@@ -199,15 +206,15 @@ export function KeysPage() {
 
         <Card padded={false} className="card--table">
           <div className="table-toolbar">
-            <SearchInput placeholder="Search keys" value={query} onChange={(e) => setQuery(e.target.value)} />
-            <Select value={status} onChange={(e) => setStatus(e.target.value as 'all' | KeyStatus)} aria-label="Status">
+            <SearchInput placeholder="Search keys" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} />
+            <Select value={status} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
               <option value="all">All statuses</option>
               <option value="active">Active</option>
               <option value="disabled">Disabled</option>
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
             </Select>
-            <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
+            <Select value={poolFilter} onChange={(e) => update({ pools: e.target.value ? [e.target.value] : [] })} aria-label="Pool">
               <option value="">All pools</option>
               {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
               {poolList.map((p) => (
@@ -464,15 +471,19 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
   // The values the dialog opened with, which the discard question compares the fields against.
-  const opened = useRef(keyFormOf(null, ''));
+  const [opened, setOpened] = useState(() => keyFormOf(null, ''));
 
-  // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
-  // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
-  useEffect(() => {
-    if (!open) return;
+  // Once per opening, in the render that brings it: the address can open the dialog before the pool list lands, and a
+  // reset on its arrival would discard every edit made meanwhile and put back the group the dialog opened on, the
+  // focus left in a hidden one.
+  const [resetFor, setResetFor] = useState<{ existing: ApiKey | null; initialGroup: KeyGroup | null; initialPoolId: string | undefined } | null>(null);
+  const resetDue = open && (resetFor === null || resetFor.existing !== existing || resetFor.initialGroup !== initialGroup || resetFor.initialPoolId !== initialPoolId);
+  if (!open && resetFor !== null) setResetFor(null);
+  if (resetDue) {
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
-    opened.current = form;
+    setResetFor({ existing, initialGroup, initialPoolId });
+    setOpened(form);
     setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
@@ -489,22 +500,23 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setBusy(false);
     setError(null);
     setStale(null);
-  }, [open, existing, initialPoolId, initialGroup]);
-  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do. An updater,
-  // so it never replaces the pool the reset above queued in the same render. The fill is no edit of the operator's,
-  // so the opening values take it too where they hold no pool yet.
-  useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) {
-      setPoolId((current) => (current === '' ? pools[0].id : current));
-      if (opened.current.poolId === '') opened.current = { ...opened.current, poolId: pools[0].id };
-    }
-  }, [existing, open, poolId, pools]);
-
-  // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
-  useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
+  }
+  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do, after the
+  // render that resets. The fill is no edit of the operator's, so the opening values take it too where they hold no
+  // pool yet.
+  if (open && !resetDue && existing === null && poolId === '' && pools.length > 0) {
+    setPoolId(pools[0].id);
+    if (opened.poolId === '') setOpened({ ...opened, poolId: pools[0].id });
+  }
 
   const moving = existing !== null && poolId !== existing.poolId;
   const current = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+  // The server's words leave with the next edit to any field. A failed save changes none, so they stand until then.
+  const [edited, setEdited] = useState(current);
+  if ((Object.keys(current) as (keyof typeof current)[]).some((field) => current[field] !== edited[field])) {
+    setEdited(current);
+    setError(null);
+  }
 
   const submit = async () => {
     setBusy(true);
@@ -723,7 +735,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
-      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened.current))}
+      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened))}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}

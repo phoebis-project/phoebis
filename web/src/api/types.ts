@@ -322,6 +322,8 @@ export type SubagentPlacement = 'by_cohort' | 'by_strategy' | 'with_main';
 
 export interface PoolMember {
   accountId: string;
+  /** The pins under the pool's keys on this account, one per key, session, agent and model. */
+  activePins: number;
   /** Null is no budget over that period; a member may carry one, both, or neither. */
   budgetDailyUsd: number | null;
   budgetMonthlyUsd: number | null;
@@ -556,6 +558,8 @@ export interface Attempt {
   response: AttemptResponse;
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
+  /** The answer's `service_tier`, null on an answer that carried none. */
+  serviceTier: string | null;
   startedAt: string;
   /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
   upstreamMessageId: string | null;
@@ -825,7 +829,8 @@ export interface DecisionSummary {
   model: string | null;
   poolId: string | null;
   probe: boolean;
-  refusal: { kind: string; reason: string } | null;
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  refusal: { code: string; kind: string; reason: string } | null;
   requestId: string;
   rule: string | null;
   rung: Placement | null;
@@ -895,8 +900,11 @@ export interface RecordRequest {
   chain: { boundaries: number; staticBoundaries: number; staticHash: boolean };
   clientClass: string;
   flags: { contextCompacted: boolean; count: boolean; fast: boolean; marker: boolean; portable: boolean; probe: boolean };
-  /** The holds this request waited through before the decision, each with the wire attempt that waited. */
-  holds: { accountId: string; attempt: number; cohort: string | null; heldMs: number }[];
+  /**
+   * The holds this request waited through before the decision, each with the wire attempt that waited. `ranOut` is
+   * true on the hold whose bound the relay answered at.
+   */
+  holds: { accountId: string; attempt: number; cohort: string | null; heldMs: number; ranOut: boolean }[];
   keyGeneration: number;
   keyId: string;
   lane: { effort: string; speed: string; thinking: string };
@@ -1066,7 +1074,8 @@ export interface RecordOutcome {
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
-  refusal: { kind: string; reason: string } | null;
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  refusal: { code: string; kind: string; reason: string } | null;
   rule: string | null;
   rung: Placement | null;
   /** The pins the shedding round this decision ran marked, or null when no round ran. */
@@ -1513,7 +1522,8 @@ export interface Settings {
    * it, `effectiveDate` the instant it parses to, or null when it is not a date.
    */
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
-  listeners: { metrics: string; proxy: string };
+  /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
+  listeners: { metrics: string; proxy: string; proxyTls: boolean };
   retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };

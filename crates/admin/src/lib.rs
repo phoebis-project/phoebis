@@ -12,6 +12,7 @@ mod keepalive;
 mod keys;
 mod ledger;
 mod models;
+mod openapi;
 mod pools;
 mod pricing;
 mod readiness;

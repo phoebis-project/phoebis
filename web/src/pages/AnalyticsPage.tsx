@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { flushSync } from 'react-dom';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { windowId } from '@/api/decode';
+import { iso, windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -16,14 +17,15 @@ import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
-import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, unitOf, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
+import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
-import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
+import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
+import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -36,7 +38,6 @@ type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
-const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
 const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
@@ -47,6 +48,8 @@ const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Account', key: '
 // Account first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
 const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Account', keyId: 'Key', model: 'Model', poolId: 'Pool' };
+/** The address key each filter dimension travels under. */
+const DIM_KEY: Record<QueryDim, 'accounts' | 'keys' | 'models' | 'pools'> = { accountId: 'accounts', keyId: 'keys', model: 'models', poolId: 'pools' };
 // Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the account.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
@@ -137,6 +140,13 @@ interface Bucket extends AnalyticsGroup {
   tokens: SplitTokens;
 }
 
+/** The groups summed with the plain output split from the thinking, as the tiles and the charts read a total. */
+const totalsOf = (groups: AnalyticsGroup[]) => {
+  const summed = sumGroups(groups);
+  return { ...summed, tokens: withPlainOutput(summed.tokens) };
+};
+const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
+
 function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
   return function TipContent({ payload }: { payload?: readonly { payload?: unknown }[] }) {
     const p = payload?.[0]?.payload as T | undefined;
@@ -157,28 +167,33 @@ function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation
   const source = shared ?? own;
   const current = source.stale ? null : source.data;
   const [last, setLast] = useState<AnalyticsGroup[] | null>(null);
-  useEffect(() => {
-    if (current !== null) setLast(current);
-  }, [current]);
+  if (current !== null && current !== last) setLast(current);
   return current !== null ? source : { ...source, data: last };
 }
 
-const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));
+// Two lifetimes of one key id can share a label, so the older lists first.
+const optionsOf = (rows: AnalyticsGroup[] | null): Option[] =>
+  [...(rows ?? [])].sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0)).map((g) => ({ label: g.label, value: g.key }));
 
 export function AnalyticsPage() {
   const [now, setNow] = useState(() => clock.now());
   // Try again bumps it with the end, so every read keyed on the window runs again even while the clock stands still.
   const [generation, setGeneration] = useState(0);
-  const moveEnd = () => setNow(clock.now());
-  const [range, setRange] = useState<Range>('24h');
-  const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
-  const [groupBy, setGroupBy] = useState<GroupBy>('key');
-  const [userAgentPattern, setUserAgentPattern] = useState('');
-  const [classPattern, setClassPattern] = useState('');
-  const [clientGroups, setClientGroups] = useState('');
+  // Every filter lives in the address, so a link or a reload lands on the same view.
+  const { filters: a, update } = useQueryFilters(ANALYTICS_CODEC);
+  const range = a.range.preset as Range;
+  // The custom inputs edit a draft of the address's pair, kept while it does not end after it starts, which the
+  // address would read as the preset.
+  const pair = `${a.range.from} ${a.range.to}`;
+  const [draft, setDraft] = useState<{ for: string; from: string; to: string } | null>(null);
+  const custom = draft !== null && draft.for === pair ? draft : { from: toLocalInput(Date.parse(a.range.from)), to: toLocalInput(Date.parse(a.range.to)) };
+  const groupBy = a.by as GroupBy;
+  const userAgentPattern = a.agent;
+  const classPattern = a.class;
+  const clientGroups = a.groups;
   const [groupsCut, setGroupsCut] = useState(false);
-  const [includeProbes, setIncludeProbes] = useState(false);
-  const [burnGroup, setBurnGroup] = useState<BurnGroup>('account');
+  const includeProbes = a.probes;
+  const burnGroup = a.burn as BurnGroup;
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
   const location = useLocation();
@@ -193,97 +208,96 @@ export function AnalyticsPage() {
     navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
     scroller()?.scrollTo?.({ top: 0 });
   };
-  const [searchParams] = useSearchParams();
-  const sessionParam = searchParams.get('session');
-  // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too.
-  const sessionKey = sessionParam === null ? null : searchParams.get('key');
+  // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
+  // without one reads unscoped.
+  const sessionKey = a.session && a.key ? a.key : null;
   // The unit is a view control of the three cost-bearing sections, kept in the address beside the session so a link
   // or a reload lands on the position.
-  const unit = unitOf(searchParams);
+  const unit = a.unit as AnalyticsUnit;
   const funding = UNIT_FUNDING[unit];
-  const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
-  const [sessionText, setSessionText] = useState(sessionParam ?? '');
+  // Keyed on the values: every address change reads new lists, and a unit change must not re-issue the reads the
+  // filters key. A list value holds no comma, since the address splits on them.
+  const accountList = a.accounts.join(',');
+  const keyList = a.keys.join(',');
+  const modelList = a.models.join(',');
+  const poolList = a.pools.join(',');
+  const filters = useMemo<Record<Dim, string[]>>(() => {
+    const split = (joined: string) => (joined ? joined.split(',') : []);
+    return { accountId: split(accountList), keyId: split(keyList), model: split(modelList), poolId: split(poolList), sessionId: a.session ? [a.session] : [] };
+  }, [accountList, keyList, modelList, poolList, a.session]);
+  const [sessionText, setSessionText] = useState(a.session);
+  // The field follows the address, so a link or the bare Analytics entry replaces what it shows.
+  const [sessionFor, setSessionFor] = useState(a.session);
+  if (sessionFor !== a.session) {
+    setSessionFor(a.session);
+    setSessionText(a.session);
+  }
   const ink = useChartInk();
-  // A committed filter reads the window up to the instant it changed, as a range change does.
-  const commitClass = (next: string) => {
-    setClassPattern(next);
-    moveEnd();
-  };
-  const commitAgent = (next: string) => {
-    setUserAgentPattern(next);
-    moveEnd();
-  };
-  const commitGroups = (next: string) => {
-    setClientGroups(next);
-    moveEnd();
-  };
+  // A committed filter reads the window up to the instant it changed, as a range change does. The end and the address
+  // change in one render, so each read goes out once: the hook writes the address at once, and a pattern commits from
+  // a timer, where the end alone would otherwise render apart.
+  const commit = (patch: Partial<AnalyticsAddress>, at = clock.now()) =>
+    flushSync(() => {
+      setNow(at);
+      update(patch);
+    });
+  const commitClass = (next: string) => commit({ class: next });
+  const commitAgent = (next: string) => commit({ agent: next });
+  const commitGroups = (next: string) => commit({ groups: next });
+  // Custom opens on the three days up to now, so the choice holds.
   const changeRange = (next: Range) => {
     if (next === range) return;
-    setRange(next);
-    moveEnd();
+    const at = clock.now();
+    commit({ range: next === 'custom' ? { from: iso(at - 3 * 24 * HOUR), preset: 'custom', to: iso(at) } : { from: '', preset: next, to: '' } }, at);
   };
-  const changeCustom = (next: { from: string; to: string }) => {
-    setCustom(next);
-    moveEnd();
+  // An edit is the minute the operator typed. The other bound is the one an earlier edit left in the draft, else the
+  // address's instant, kept to the millisecond.
+  const changeBound = (bound: 'from' | 'to', local: string) => {
+    const at = Date.parse(local);
+    const kept = (side: 'from' | 'to') => (custom[side] === toLocalInput(Date.parse(a.range[side])) ? Date.parse(a.range[side]) : Date.parse(custom[side]));
+    const next = bound === 'from' ? { from: at, to: kept('to') } : { from: kept('from'), to: at };
+    if (Number.isNaN(next.from) || Number.isNaN(next.to) || next.to <= next.from) {
+      setDraft(bound === 'from' ? { ...custom, for: pair, from: local } : { ...custom, for: pair, to: local });
+      return;
+    }
+    setDraft(null);
+    commit({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
-  const changeGroupBy = (next: GroupBy) => {
-    setGroupBy(next);
-    moveEnd();
-  };
+  const changeGroupBy = (next: GroupBy) => commit({ by: next });
   const changeFilter = (dim: QueryDim, next: string[]) => {
-    setFilters({ ...filters, [dim]: next });
-    moveEnd();
+    const patch: Partial<AnalyticsAddress> = {};
+    patch[DIM_KEY[dim]] = next;
+    commit(patch);
   };
-  const changeProbes = (on: boolean) => {
-    setIncludeProbes(on);
-    moveEnd();
-  };
+  const changeProbes = (on: boolean) => commit({ probes: on });
   const changeBurnGroup = (next: BurnGroup) => {
     if (next === burnGroup) return;
-    setBurnGroup(next);
-    moveEnd();
+    commit({ burn: next });
   };
   // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
   const groupsText = useCommittedText(clientGroups, commitGroups);
 
-  // Arriving from a session row carries the session in the query; dropping the
-  // filter clears the parameter too so this does not put it straight back.
-  useEffect(() => {
-    if (sessionParam === null) return;
-    setFilters((f) => (f.sessionId.includes(sessionParam) ? f : { ...f, sessionId: [sessionParam] }));
-    setSessionText(sessionParam);
-  }, [sessionParam]);
-  /** The one writer for the session filter, so the field, the chip, and the query parameter cannot disagree. */
+  /**
+   * The one writer for the session filter, so the field, the chip and the address cannot disagree. A key lifetime
+   * belongs to the session it arrived with, so a new session drops it.
+   */
   const selectSession = (id: string) => {
-    if ((filters.sessionId[0] ?? '') !== id) moveEnd();
-    setFilters((f) => ((f.sessionId[0] ?? '') === id ? f : { ...f, sessionId: id ? [id] : [] }));
     setSessionText(id);
-    if (sessionParam === null || sessionParam === id) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('key');
-    next.delete('session');
-    const search = next.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    if (id === a.session) return;
+    commit({ key: '', session: id });
   };
   /** The one writer for the unit: the default leaves the address clean, and every other parameter stays. */
   const chooseUnit = (next: AnalyticsUnit) => {
     if (next === unit) return;
-    const params = new URLSearchParams(searchParams);
-    if (next === 'all') params.delete('unit');
-    else params.set('unit', next);
-    const search = params.toString();
-    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    update({ unit: next });
   };
 
+  // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const span = useMemo(() => {
-    if (range === 'custom') {
-      const from = Date.parse(custom.from);
-      const to = Date.parse(custom.to);
-      if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return { fromMs: now - 24 * HOUR, toMs: now, invalid: true };
-      return { fromMs: from, toMs: Math.min(to, now), invalid: false };
-    }
-    return { fromMs: now - RANGE_MS[range], toMs: now, invalid: false };
-  }, [range, custom, now]);
+    const { from, to } = addressWindow(a.range, ANALYTICS_RANGES, '24h', now);
+    return { fromMs: from, toMs: Math.min(to, now) };
+  }, [a.range, now]);
+  const draftInvalid = draft !== null && draft.for === pair;
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
   const sessionId = filters.sessionId[0] ?? null;
@@ -394,14 +408,7 @@ export function AnalyticsPage() {
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
-  const buckets = useMemo<Bucket[]>(
-    () =>
-      points.map((p) => {
-        const summed = sumGroups(p.groups);
-        return { at: Date.parse(p.at), ...summed, tokens: withPlainOutput(summed.tokens) };
-      }),
-    [points],
-  );
+  const buckets = useMemo(() => bucketsOf(points), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -412,10 +419,7 @@ export function AnalyticsPage() {
     [sessionId, bySpeed.stale, bySpeed.data, rows, rangeBucketMs, fromIso, toIso, foldOptions],
   );
   const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(rows, 'effort', foldOptions)), [sessionId, byEffort.stale, byEffort.data, rows, foldOptions]);
-  const totals = useMemo(() => {
-    const summed = sumGroups(groups);
-    return { ...summed, tokens: withPlainOutput(summed.tokens) };
-  }, [groups]);
+  const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
@@ -429,20 +433,8 @@ export function AnalyticsPage() {
     if (sessionId !== null) return funding === undefined ? groups : stale ? [] : foldGroups(rows, groupBy, { ...foldOptions, funding });
     return funded || warming ? (costBreakdown.stale ? [] : (costBreakdown.data ?? [])) : groups;
   }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
-  const costBuckets = useMemo<Bucket[]>(
-    () =>
-      costPoints === points
-        ? buckets
-        : costPoints.map((p) => {
-            const summed = sumGroups(p.groups);
-            return { at: Date.parse(p.at), ...summed, tokens: withPlainOutput(summed.tokens) };
-          }),
-    [costPoints, points, buckets],
-  );
-  const costTotals = useMemo(() => {
-    const summed = sumGroups(costGroups);
-    return { ...summed, tokens: withPlainOutput(summed.tokens) };
-  }, [costGroups]);
+  const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
+  const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
   // Shares of one account's windows add, so the share tiles and the cache cost card read the one account the filter
@@ -498,20 +490,14 @@ export function AnalyticsPage() {
           title={`Window ends ${fmtAbsolute(toIso)}`}
           value={range}
           onChange={changeRange}
-          options={[
-            { value: '1h', label: '1h' },
-            { value: '24h', label: '24h' },
-            { value: '7d', label: '7d' },
-            { value: '30d', label: '30d' },
-            { value: 'custom', label: 'Custom' },
-          ]}
+          options={[...ANALYTICS_RANGES.map((r) => ({ value: r.name, label: r.label })), { value: 'custom', label: 'Custom' }]}
         />
         {range === 'custom' && (
           <span className="filters__range">
-            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
+            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeBound('from', e.target.value)} aria-label="From" />
             <span className="muted">to</span>
-            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
-            {span.invalid && <span className="pairing__expired">End must be after start. Showing the last 24h.</span>}
+            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeBound('to', e.target.value)} aria-label="To" />
+            {draftInvalid && <span className="pairing__expired">End must be after start.</span>}
           </span>
         )}
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
@@ -1357,6 +1343,9 @@ function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number
   );
 }
 
+/** A raw reason name with a break opportunity after each underscore, so a header holding one wraps at its words. */
+const breakable = (name: string): ReactNode => name.split(/(?<=_)/).flatMap((part, i) => (i === 0 ? [part] : [<wbr key={i} />, part]));
+
 function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean }) {
   const order = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
@@ -1369,7 +1358,14 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { gr
       className="misses-table"
       loading={loading}
       groupLabel={groupLabel}
-      columns={[...order.map(missLabel), 'Expired between turns']}
+      columns={[
+        ...order.map((r) => (
+          <span key={r} title={missLabel(r)}>
+            {breakable(missShort(r))}
+          </span>
+        )),
+        'Expired between turns',
+      ]}
       rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1559,7 +1555,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
               lines.accounts.flatMap((a) => [
                 { color: groupSlot(a), label: `${a} (5-hour)`, value: shareOrDash(p[`${a}:5h`]) },
                 { color: groupSlot(a), label: `${a} (7-day)`, value: shareOrDash(p[`${a}:7d`]) },
-                { color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) },
+                ...(weekOf(a) ? [{ color: groupSlot(a), label: `${a} (${weekLabelOf(lines.weeks[a])})`, value: shareOrDash(p[`${a}:week`]) }] : []),
               ]),
             )}
           />
@@ -1687,8 +1683,6 @@ const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size,
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
-/** A partial bucket's bars draw at this share of their series' opacity. */
-const PARTIAL_TONE = 0.5;
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -1701,7 +1695,7 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * The burn route's three views of one grouping. A line's color follows its group within the answer rather than
+ * The burn route's two views of one grouping. A line's color follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
  * page-wide color.
  */
@@ -1737,7 +1731,6 @@ function BurnCharts({
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, 13) : l.label);
   const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
   const axis = timeAxis((answer?.bucketSeconds ?? 3_600) * 1_000, ink);
-  const label = BURN_GROUP_LABEL[groupBy].toLowerCase();
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
@@ -1753,7 +1746,6 @@ function BurnCharts({
   // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
   // the band's edges, so shading whole buckets would mark the wrong hours.
   const band = useMemo(() => (costs === null || !byAccount || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [byAccount, costs, rows]);
-  const partialCells = (opacity: number) => rows.map((r) => <Cell key={r.at} {...(r.partial ? { className: 'is-partial', fillOpacity: opacity * PARTIAL_TONE } : {})} />);
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
   const scaled = rows.filter((r) => r.setsScale);
@@ -1761,7 +1753,6 @@ function BurnCharts({
     const top = Math.max(0, ...values);
     return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
   };
-  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
   const spentValues = scaled.flatMap((r) => spent.map(({ i }) => r.usd[i]));
   const spentScale = scaleTo(spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
@@ -1769,38 +1760,8 @@ function BurnCharts({
   return (
     <div className="grid-2">
       <ChartCard
-        title="Tokens per minute"
-        subtitle={`Uncached input and cache reads per minute, stacked by ${label}. The fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
-        error={error}
-        loading={loading}
-        empty={empty}
-        legend={lines.map((l) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: fmtCompact(l.tokensPerMinute) }))}
-      >
-        <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-          <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} {...scaleTo(scaled.map((r) => sum(r.uncached) + sum(r.cached)))} />
-          <Tooltip
-            cursor={{ fill: ink.grid, opacity: 0.6 }}
-            content={timeTip<BurnRow>((r) => [
-              ...lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: `${fmtCompact(r.uncached[i])} uncached, ${fmtCompact(r.cached[i])} cached` })),
-              { label: 'total', value: fmtCompact(r.uncached.reduce((n, v) => n + v, 0) + r.cached.reduce((n, v) => n + v, 0)) },
-            ])}
-          />
-          {lines.flatMap((l, i) => [
-            <Bar key={`${i}-uncached`} dataKey={(r: BurnRow) => r.uncached[i]} stackId="a" fill={colorOf(l)} stroke={ink.surface} strokeWidth={1} maxBarSize={22} isAnimationActive={false}>
-              {partialCells(1)}
-            </Bar>,
-            <Bar key={`${i}-cached`} dataKey={(r: BurnRow) => r.cached[i]} stackId="a" fill={colorOf(l)} fillOpacity={0.45} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === lines.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false}>
-              {partialCells(0.45)}
-            </Bar>,
-          ])}
-        </BarChart>
-      </ChartCard>
-
-      <ChartCard
         title="Spend per minute"
-        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
+        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
         error={error}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
@@ -2114,14 +2075,18 @@ function AccountsSection({
   }, [pace, accounts]);
   const toggle = <Segmented value={chosen} options={windows.map((id) => ({ label: toggleLabel(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
   const legend = accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' as const }));
-  const pct = (v: number | null | undefined, signed = false) => (v === null || v === undefined ? '-' : `${signed && v > 0 ? '+' : ''}${v.toFixed(0)}%`);
   const scoreOf = (p: Record<string, number | null>, a: string) => {
     const score = p[`${a}:score`];
     return score === null || score === undefined ? '-' : score.toFixed(2);
   };
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}>
+      <ChartCard
+        title="Peak 5-hour utilization"
+        subtitle="Highest utilization seen in each bucket, per account"
+        loading={loading}
+        legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: accountColor(ink, slotOf(a)), label: a, shape: 'line' }))}
+      >
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />

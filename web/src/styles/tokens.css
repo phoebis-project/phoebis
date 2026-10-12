@@ -7,6 +7,9 @@
   --surface-3: #eff2f5;
   --hairline: #d8dee4;
   --hairline-strong: #d1d9e0;
+  /* The decision strip's idle paths, brackets and nodes: the secondary ink at a low alpha, which reads in the dark
+     theme where the hairline does not. */
+  --strip-idle: color-mix(in srgb, var(--ink-2) 40%, transparent);
   --ink: #1f2328;
   --ink-2: #59636e;
   --ink-3: #818b98;
@@ -84,6 +87,7 @@
   --surface-3: #212830;
   --hairline: #2f353d;
   --hairline-strong: #3d444d;
+  --strip-idle: color-mix(in srgb, var(--ink-2) 40%, transparent);
   --ink: #f0f6fc;
   --ink-2: #9198a1;
   --ink-3: #656c76;

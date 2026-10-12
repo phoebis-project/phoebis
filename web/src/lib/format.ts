@@ -1,5 +1,5 @@
 import type { Placement } from '@/api/types';
-import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
+import { type ByWindow, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 export type TimeFormat = '12h' | '24h';
 
@@ -51,10 +51,25 @@ export const undatedModel = (id: string) => id.replace(/-\d{8}$/, '');
  */
 export const shortModel = (id: string) => undatedModel(id).replace(/^claude-/, '');
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
+/**
+ * A figure already in percent to the whole point, a dash without one, and the sign of a lead where `signed` asks. The
+ * sign follows the rounded figure, since `toFixed` prints -0.4 as "-0" and a lead that rounds to zero is no lead.
+ */
+export const pct = (v: number | null | undefined, signed = false) => {
+  if (v === null || v === undefined) return '-';
+  const n = Math.round(v);
+  return `${signed && n > 0 ? '+' : ''}${n === 0 ? 0 : n}%`;
+};
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${WINDOW_LABEL[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable week' };
+/**
+ * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% Fable week"), for a cell too narrow for the
+ * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.
+ */
+export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);
 export const fmtMiB = (bytes: number) => {
