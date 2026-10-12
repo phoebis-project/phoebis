@@ -30,4 +30,5 @@ minute. The page keeps the secret in memory and never stores it, so it is gone w
 The 61 operations of the admin listener under `/admin/`, grouped by area in the page's sidebar, each with its
 parameters, its answer's shape with an example captured from the route, and its refusals with their status and message.
 Not in it: the proxy listener's routes, which [The client](client.md) describes, the keepalive companion's route, which
-[Keepalive](keepalive.md) describes, and the metrics listener, which [Statistics](statistics.md) describes.
+[The relay](relay.md#the-keepalive-protocol) describes, and the metrics listener, which [Statistics](statistics.md)
+describes.
