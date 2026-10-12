@@ -4814,8 +4814,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 5, so the round sheds
-  // nothing.
+  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round
+  // sheds nothing.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -7131,7 +7131,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   }
   // The Cost cell reads a row's native unit: dollars over the funding word for an answer an API key account served,
   // and the dollar equivalent over "equivalent" for a subscription request the cost model prices no share for (the
-  // story's Sonnet 5 turns, a model it has no weight for).
+  // story's Sonnet 4.6 turns, a model it has no weight for).
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
   const unpricedRow = requests.find((r) => costUnitOf(r).kind === 'unpriced');
@@ -11360,9 +11360,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
     const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
     const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
-    // nightly's morning ran Fable on the plan, so its row prices three windows. primary served the story's Sonnet 5
+    // nightly's morning ran Fable on the plan, so its row prices three windows. primary served the story's Sonnet 4.6
     // turns, which the cost model has no weight for, so its two shared windows read unpriced beside its Fable week.
-    // secondary serves Sonnet 5 alone and reads unpriced, and studio's one row ran a laptop-lane model with no Fable
+    // secondary serves Sonnet 4.6 alone and reads unpriced, and studio's one row ran a laptop-lane model with no Fable
     // week.
     const tableRead = {
       nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
@@ -11666,7 +11666,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
-    // `secondary` serves the story's Sonnet 5 traffic, which the cost model has no weight for, so its two windows
+    // `secondary` serves the story's Sonnet 4.6 traffic, which the cost model has no weight for, so its two windows
     // price nothing in the range while every other account's 5-hour and 7-day windows carry a figure.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
@@ -11693,16 +11693,16 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // unweighted model runs on `secondary`, and only the story's sessions that moved off it carry it to a priced
     // account.
     const gaps = [];
-    const sonnet5 = requests.filter((r) => r.model === 'claude-sonnet-5' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
+    const sonnet46 = requests.filter((r) => r.model === 'claude-sonnet-4-6' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
     let carried = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
-      const ranSonnet5 = (p) => sonnet5.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
+      const ranSonnet46 = (p) => sonnet46.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
       const unpriced = burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && (p.fiveHourShare === null || p.sevenDayShare === null));
-      carried += unpriced.filter(ranSonnet5).length;
-      gaps.push(...unpriced.filter((p) => !ranSonnet5(p)).map((p) => `${days}d ${p.group} ${p.at}`));
+      carried += unpriced.filter(ranSonnet46).length;
+      gaps.push(...unpriced.filter((p) => !ranSonnet46(p)).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour and 7-day shares unless Sonnet 5 ran on it', ok: gaps.length === 0 && carried > 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour and 7-day shares unless Sonnet 4.6 ran on it', ok: gaps.length === 0 && carried > 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);

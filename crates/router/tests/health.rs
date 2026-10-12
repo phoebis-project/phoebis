@@ -15,7 +15,7 @@ fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
     )
     .unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  refresh_concurrency: 2\n",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -168,6 +168,12 @@ fn a_listener_that_accepts_and_whose_budget_is_spent_before_the_first_read_fails
     let budget = Duration::from_micros(1);
     let connected = (0..10).any(|_| {
         let reason = phoebis_router::health::probe(addr, true, budget).unwrap_err();
+        // A preemption inside the connect spends the budget there, and std answers "connection timed out": a miss too.
+        // A handshake the kernel finished behind that timeout is drained, so the next attempt cannot count it.
+        if reason.contains("connection timed out") {
+            while listener.accept().is_ok() {}
+            return false;
+        }
         assert_eq!(
             reason,
             format!("proxy on {addr} sent no status line within {budget:?}")

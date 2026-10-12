@@ -830,7 +830,7 @@ CREATE TABLE parked_records (
     ),
     // Before 28 the head wrote `5h`, `7d` and `7d_oi` and the poll the endpoint's keys plus `fable`. A poll row
     // whose old-spelled partner holds the same account, bucket and window goes first, so the rename meets no
-    // primary key twice: the head's row wins as "header replaces" would have had it, and the `limits` reading
+    // primary key twice: the head's row wins as "head replaces" would have had it, and the `limits` reading
     // wins the Fable week.
     (
         28,

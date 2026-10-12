@@ -25,6 +25,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         burn: PinBurn::default(),
         burn_at: None,
         burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
         last_input_tokens: 0,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
@@ -844,6 +845,9 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
+// The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
+// `\n` ends the marker's comment.
+const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; -- rollback\n";
 // The reverse of the registry's version 51, so a store stamped back below it migrates again.
 const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
 
@@ -896,7 +900,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -922,7 +926,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 51);
+    assert_eq!(migrated.schema_version().unwrap(), 52);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {
@@ -930,6 +934,43 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
             ..before
         }],
         "the row from before the column reads no id and keeps every field it was written with"
+    );
+}
+
+#[test]
+fn a_pins_fast_burn_is_written_with_the_pin_replaced_by_its_next_write_and_read_back_at_the_load() {
+    let store = store_with(&["a"]);
+    let fast = PinRow {
+        burn_at: Some(7),
+        burn_fast: PinBurn {
+            cache_read: 0.5,
+            input: 1.5,
+            output: 2.5,
+            write_1h: 3.5,
+            write_5m: 4.5,
+        },
+        ..pin("k", "s", "claude-opus-5", "a")
+    };
+    store.upsert_pin(&fast).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![fast.clone()],
+        "every type of the fast copy reads back as written"
+    );
+    let renewed = PinRow {
+        last_used_at: 9,
+        burn_at: Some(9),
+        burn_fast: PinBurn {
+            input: 6.0,
+            ..PinBurn::default()
+        },
+        ..fast
+    };
+    store.upsert_pin(&renewed).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![renewed],
+        "a later write of the pin replaces its fast copy"
     );
 }
 

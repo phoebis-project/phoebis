@@ -93,7 +93,9 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Failed(detail.into()))
             .unwrap();
         // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        parts
+            .clock_cell
+            .fetch_add(2, std::sync::atomic::Ordering::SeqCst);
     }
     let run = parts
         .store
@@ -135,6 +137,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         .attention
         .observe(&complete("r-drift", Outcome::Rejected, Some("hash"), later));
     common::park_unreadable(&parts.db, "main", "business", later - 1_000);
+    let first_read = parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst);
     let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
     let items = body["items"].as_array().unwrap();
     assert_eq!(
@@ -186,7 +189,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             "subject": { "type": "account", "id": "business", "label": "Business" },
             "link": { "page": "accounts", "id": "business" },
             "pools": ["main"],
-            "since": common::NOW,
+            "since": first_read,
             "detail": { "account": "business", "label": "Business" },
         }),
         "the registry records no time for a state change, so the first read that saw it dates it"

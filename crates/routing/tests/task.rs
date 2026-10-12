@@ -156,6 +156,8 @@ fn request(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
+        held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -580,6 +582,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -762,6 +765,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     // The previous lifecycle's verdict, under a credential generation the reconnect has not reached again.
@@ -774,6 +778,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential + 2,
             cause: StateCause::FundingRefused,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     drop(park);
@@ -806,6 +811,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             credential_generation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         },
         Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
@@ -887,6 +893,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     // The verdict named the key the store has since replaced, so the writer fences it out.
@@ -903,6 +910,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     wait_for(WRITTEN, || {
@@ -1042,6 +1050,8 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         }
@@ -1175,6 +1185,8 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -2160,6 +2172,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             incarnation: 1,
             cause: StateCause::FundingRefused,
             detail: None,
+            dispatched_at: None,
         })
         .await;
     handle
@@ -2182,6 +2195,254 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
         "both generations read 1 again, and the verdict was still about the holder that is gone"
     );
     assert!(store.load_routing().unwrap().cooldowns.is_empty());
+}
+
+/// The relay's credit-balance mark on `account_id`'s first holder.
+fn funding_mark(account_id: &str) -> Report {
+    Report::AccountState {
+        account_id: account_id.into(),
+        state: AccountState::FundingRequired,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+        cause: StateCause::FundingRefused,
+        detail: None,
+        dispatched_at: None,
+    }
+}
+
+/// The seeded pool over the one API-key account `a`, keyed at credential generation 1 so the mark's fenced write
+/// lands.
+fn keyed_a() -> Arc<Store> {
+    let store = seeded(&["a"]);
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    store
+}
+
+/// Waits for the reload after the mark's write, so the snapshot a selection reads holds the mark.
+async fn snapshot_marked(handle: &RouterHandle, account_id: &str) {
+    wait_for(WRITTEN, || {
+        handle
+            .snapshot()
+            .account(account_id)
+            .filter(|a| a.state == AccountState::FundingRequired)
+            .map(|_| ())
+    })
+    .await;
+}
+
+fn placed_on(answer: &phoebis_routing::SelectAnswer) -> Option<&str> {
+    match &answer.result {
+        SelectResult::Selected(selection) => Some(selection.account.id.as_str()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_landed_funding_mark_stamps_its_retry_the_configured_interval_after_the_landing() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        seeded(&["a"]),
+        clock(&now),
+        RouterConfig {
+            funding_retry: Duration::from_secs(120),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000 + 120_000)]
+    );
+}
+
+#[tokio::test]
+async fn a_funding_retry_holds_its_one_slot_until_the_claiming_attempt_s_ticket_drops() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(
+            &handle
+                .select(request(&handle, None, 300_999))
+                .await
+                .unwrap()
+        ),
+        None,
+        "the retry is not due yet"
+    );
+    now.store(301_000, Ordering::SeqCst);
+    let first = handle
+        .select(request(&handle, None, 301_000))
+        .await
+        .unwrap();
+    assert_eq!(placed_on(&first), Some("a"), "the retry is due");
+    // Past the relay's body read bound (60 s) and its upstream head bound (600 s): the claim lasts as long as
+    // the attempt does, not as long as either bound.
+    let later = 301_000 + 11 * 60_000;
+    now.store(later, Ordering::SeqCst);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, later)).await.unwrap()),
+        None,
+        "the first attempt still holds the one slot, on a pool whose cap is above one"
+    );
+    drop(first);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, later)).await.unwrap()),
+        Some("a"),
+        "the first attempt ended, so the next request tries the account"
+    );
+}
+
+/// A refusal and an older retry's success that coalesce before the loop drains them: the refusal is the newer
+/// evidence, so the success clears nothing and the account waits out the retry interval from the refusal's mark.
+#[tokio::test]
+async fn a_funding_refusal_queued_beside_an_older_retry_s_success_keeps_the_account_held() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    now.store(301_000, Ordering::SeqCst);
+    // The retry went out when it was due and answered 200, and a request after it was refused again. The refusal's
+    // report reaches the queue first, the retry's success after it.
+    let parked = handle.park_loop().await;
+    handle.report(funding_mark("a")).await;
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::Ready,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+            cause: StateCause::FundingRetry,
+            detail: None,
+            dispatched_at: Some(301_000),
+        })
+        .await;
+    drop(parked);
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000 + 300_000)],
+        "the refusal's mark stands, stamped when the loop drained it"
+    );
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::FundingRequired
+    );
+}
+
+/// A reload that starts between a funding mark's stamp and the writer's commit reads the account `Ready`, as the
+/// registry still says. The mark's write is not acknowledged yet, so the retry stays, and the five-minute wait the
+/// commit leads to holds.
+#[tokio::test]
+async fn a_reload_between_a_funding_mark_s_stamp_and_its_commit_keeps_the_five_minute_wait() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)]
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.snapshot().account("a").map(|a| a.state),
+        Some(AccountState::Ready),
+        "the load read the registry before the mark's commit"
+    );
+    hold.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)],
+        "the retry outlived the load that predates the commit"
+    );
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the five-minute wait holds"
+    );
+}
+
+#[tokio::test]
+async fn after_a_restart_the_first_request_retries_a_marked_account_at_once_and_holds_the_second_off(
+) {
+    let store = seeded(&["a"]);
+    store
+        .set_state(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the store keeps no instant for the mark"
+    );
+    let first = handle.select(request(&handle, None, 1_000)).await.unwrap();
+    assert_eq!(placed_on(&first), Some("a"));
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000)],
+        "the claim stamps the request's instant"
+    );
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the second request finds the slot taken while the first lives"
+    );
+    drop(first);
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        Some("a")
+    );
+}
+
+#[tokio::test]
+async fn a_reload_reading_the_account_ready_or_under_a_new_holder_drops_its_funding_retry() {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(handle.funding_retries().await.unwrap().len(), 1);
+    now.store(2_000, Ordering::SeqCst);
+    // The operator's Clear: a store write and a reload, never a report.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(handle.funding_retries().await.unwrap().len(), 1);
+    now.store(3_000, Ordering::SeqCst);
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    store
+        .set_state(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the new holder's mark is its own, and its first request retries at once"
+    );
 }
 
 #[tokio::test]
@@ -3022,6 +3283,11 @@ async fn a_refusal_emits_a_decision_with_a_two_line_walk() {
         ),
         ("r-1", 1, 1)
     );
+    assert_eq!(
+        summary.refusal.as_ref().map(|r| (r.kind, r.code)),
+        Some(("key", "revoked")),
+        "the refusal's structured word rides beside its display reason"
+    );
 }
 
 /// A drifted client's refusal as the relay records it: the request's one decision.
@@ -3042,11 +3308,14 @@ fn drift_refusal() -> (RefusedRequest, RefusalFacts) {
             lane: Default::default(),
             flags: Default::default(),
             chain: Default::default(),
+            attempted: Vec::new(),
+            holds: Vec::new(),
             client: ClientClass::ClaudeCode,
             client_version: Some("2.1.274".into()),
         },
         RefusalFacts {
             kind: "client",
+            code: "drift",
             reason: "hash".into(),
         },
     )
@@ -3130,6 +3399,62 @@ async fn a_completed_answer_emits_the_cache_map_it_wrote() {
         }
         other => panic!("the cache map, not {other:?}"),
     }
+    let entries_of = |event: RouterEvent| match event {
+        RouterEvent::CacheMapWritten { entries, .. } => entries
+            .iter()
+            .map(|e| (e.tier, e.depth, e.prefix_tokens, e.ttl_ms))
+            .collect::<Vec<_>>(),
+        other => panic!("the cache map, not {other:?}"),
+    };
+    // b1 and b2 refresh in place and answer no row, so the one entry sits first in the list at depth 3.
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: Arc::from(["b1".to_string(), "b2".to_string(), "b3".to_string()]),
+            message_ttl_ms: Some(300_000),
+            cache_touched: true,
+            prefix_tokens: 1_500,
+            request_id: "r-8".into(),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [("message", 3, 1_500, 300_000)]
+    );
+    let with_static = |cache_touched: bool, request_id: &str| {
+        Report::Affinity(AffinityReport {
+            static_boundaries: Arc::from(["s1".to_string()]),
+            static_sizes: vec![800],
+            static_ttl_ms: Some(3_600_000),
+            cache_touched,
+            request_id: request_id.into(),
+            ..affinity_report(&handle, "a", 1_000)
+        })
+    };
+    handle.report(with_static(false, "r-9")).await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [],
+        "an answer that touched no cache records no static boundary"
+    );
+    handle.report(with_static(true, "r-10")).await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [("static", 1, 800, 3_600_000)]
+    );
+    handle
+        .report(Report::Affinity(AffinityReport {
+            incarnation: 0,
+            message_boundaries: Arc::from(["b4".to_string()]),
+            request_id: "r-11".into(),
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    assert_eq!(
+        entries_of(next_event(&mut events).await),
+        [],
+        "a report from a holder the account moved past writes no row"
+    );
 }
 
 #[tokio::test]
@@ -4404,6 +4729,70 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
 }
 
 #[tokio::test]
+async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_model_rejection() {
+    use phoebis_routing::{RouterEvent, MODEL_REJECTED_REASON};
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    for (scope, reason, window) in [
+        ("account", "rate_limit", FIVE_HOUR),
+        ("model:claude-fable-5-1", "rate_limit", SEVEN_DAY_FABLE),
+        (
+            "model:claude-opus-5",
+            MODEL_REJECTED_REASON,
+            "model_rejection",
+        ),
+    ] {
+        handle
+            .report(cooled("a", scope, 1_000 + 5 * HOUR, reason, window))
+            .await;
+    }
+    let scopes = || async {
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.scope)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        scopes().await,
+        ["account", "model:claude-fable-5-1", "model:claude-opus-5"]
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(credits_at(true, None, Some(20.0), 900)).await;
+    assert_eq!(
+        scopes().await.len(),
+        3,
+        "a reading taken before the rejections says nothing about them"
+    );
+    handle
+        .report(credits_at(true, None, Some(20.0), 3_000))
+        .await;
+    assert_eq!(
+        scopes().await,
+        ["model:claude-opus-5"],
+        "credits with room fund the request past a spent window and say nothing about a model the upstream refused"
+    );
+    let mut cleared = Vec::new();
+    while cleared.len() < 2 {
+        if let RouterEvent::CooldownCleared { scope, cause, .. } = next_event(&mut events).await {
+            cleared.push((scope, cause));
+        }
+    }
+    cleared.sort();
+    assert_eq!(
+        cleared,
+        [
+            ("account".to_string(), "recovered"),
+            ("model:claude-fable-5-1".to_string(), "recovered"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_restart_judges_fast_eligibility_on_the_credits_state_the_last_poll_read() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -5211,6 +5600,55 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
     assert!(
         !fast_burns.contains_key(&s2.key()),
         "and leaves no fast usage behind"
+    );
+}
+
+#[tokio::test]
+async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usage_as_saved() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (key, saved) = {
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let pin = selected_pin(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap(),
+        );
+        handle.report(speed_renewal(pin, 2_000, true, 600)).await;
+        // The renewal's `burn_at` reaches the store in the same row as its fast copy, so the wait keys on it.
+        wait_for(WRITTEN, || {
+            store
+                .load_routing()
+                .unwrap()
+                .pins
+                .into_iter()
+                .find(|p| p.burn_at == Some(2_000))
+        })
+        .await;
+        let (held, fast) = pin_and_fast_usage(&handle).await;
+        assert!(
+            (fast.input - 1.0).abs() < 1e-9,
+            "the 600 fast tokens over the default 600 s burn window: {fast:?}"
+        );
+        (held.key(), fast)
+    };
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle.fast_burns().await.unwrap().get(&key).copied(),
+        Some(saved),
+        "a restart reads the pin's fast usage as saved"
+    );
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| p.burn_fast)
+            .collect::<Vec<_>>(),
+        vec![saved],
+        "the stored row carries the fast usage the state held, never a fold behind it"
     );
 }
 
@@ -6349,6 +6787,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn: rates,
         burn_at: Some(AT),
         burn_banded: rates,
+        burn_fast: PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: AT - HOUR,
         cache_ttl_ms: 300_000,
@@ -7084,6 +7523,50 @@ async fn a_clock_reset_then_a_new_sample_names_one_row() {
 }
 
 #[tokio::test]
+async fn a_clock_reset_a_later_poll_names_to_the_millisecond_is_announced_once() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowReset {
+            reset_at: 2_000,
+            observed: "clock",
+            ..
+        }
+    ));
+    // The head named the reset in whole seconds and the poll names it to the millisecond, 400 ms later.
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_100, FIVE_HOUR, 0.1, Some(2_400)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // The ticks past the poll's reset walk a reading whose reset passed, which names the one announced already.
+    now.store(2_400, Ordering::SeqCst);
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
 async fn a_reading_with_no_reset_after_the_stored_reset_passed_announces_it_by_sample() {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
@@ -7367,6 +7850,7 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
         credential_generation: 1,
         cause: StateCause::AuthFailed,
         detail: Some("invalid x-api-key".into()),
+        dispatched_at: None,
     };
     handle.report(verdict()).await;
     match next_event(&mut events).await {

@@ -580,7 +580,7 @@ fn a_tagged_model_weight_key_is_refused_as_not_an_untagged_string() {
 fn a_dated_model_weight_key_is_refused() {
     assert_names(
         &refused("claude-opus-5-5: 2", "claude-opus-5-5-20260401: 2"),
-        "model_weight.claude-opus-5-5-20260401: a dated id; the file keys undated ids",
+        "model_weight.claude-opus-5-5-20260401: a dated id, where the file keys undated ids",
     );
 }
 
@@ -644,7 +644,7 @@ fn a_dated_override_key_is_refused() {
             "claude-haiku-4-5: {type_multiplier",
             "claude-haiku-4-5-20251001: {type_multiplier",
         ),
-        "overrides.claude-haiku-4-5-20251001: a dated id; the file keys undated ids",
+        "overrides.claude-haiku-4-5-20251001: a dated id, where the file keys undated ids",
     );
 }
 

@@ -353,6 +353,8 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// A select request on `s`'s key `k` for `model` from the main agent, portable or not, with the session the caller
+/// names.
 fn request(
     s: &RegistrySnapshot,
     session: Option<&str>,
@@ -406,6 +408,8 @@ fn select_request(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
+        held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
     }
@@ -1356,8 +1360,11 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
             ("c", true, AccountState::FundingRequired),
         ],
     );
+    // Marked with its retry ahead: with no entry the account would be tried at once, as after a restart.
+    let mut dead_state = RoutingState::from_load(RoutingLoad::default());
+    dead_state.funding_marked("c", 1, 1_000, 300_000);
     let (result, _) = select(
-        &mut RoutingState::from_load(RoutingLoad::default()),
+        &mut dead_state,
         &dead,
         &request(&dead, None, "claude-sonnet-5", true, &[], 1_000),
         &mut rng(),
@@ -1374,6 +1381,7 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
         ],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    st2.funding_marked("b", 1, 1_000, 300_000);
     st2.record_cooldown(cooled("c", "account", 7_000, "five_hour", "rate_limit"));
     let (result, _) = select(
         &mut st2,
@@ -1391,6 +1399,213 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
         ),
         "a mixed pool answers from the cooled account's deadline"
     );
+}
+
+/// The pool of the funding retry's cases: the API-key account `a` ahead of `b`, with `a` marked
+/// `funding_required` in the registry.
+fn funding_marked_pool() -> RegistrySnapshot {
+    snapshot_with(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            kinds: vec![("a", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        &[("a", true, AccountState::FundingRequired)],
+    )
+}
+
+fn picked_at(st: &mut RoutingState, s: &RegistrySnapshot, now: i64) -> String {
+    let (result, _) = select(
+        st,
+        s,
+        &request(s, None, "claude-sonnet-5", true, &[], now),
+        &mut rng(),
+    );
+    picked(&result).to_string()
+}
+
+#[test]
+fn a_funding_required_account_is_a_candidate_once_its_retry_is_due_and_not_before() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    assert_eq!(
+        picked_at(&mut st, &s, 1_000),
+        "b",
+        "the mark has just landed"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 300_999),
+        "b",
+        "a millisecond before the retry is due"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000),
+        "a",
+        "the retry is due, so the marked account is tried again"
+    );
+}
+
+#[test]
+fn a_claimed_funding_retry_keeps_a_second_selection_off_the_account_while_its_ticket_lives() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    assert_eq!(picked_at(&mut st, &s, 301_000), "a");
+    let ticket = st.in_flight().dispatched("a", 301_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 301_000);
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000 + HOUR / 2),
+        "b",
+        "the attempt that claimed the retry still runs, however long its head takes"
+    );
+    drop(ticket);
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000 + HOUR / 2),
+        "a",
+        "the claiming attempt ended, so the next request tries the account"
+    );
+}
+
+#[test]
+fn a_cleared_funding_retry_leaves_the_account_a_plain_candidate_while_its_claim_still_runs() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 1_000, 300_000);
+    let ticket = st.in_flight().dispatched("a", 301_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 301_000);
+    st.funding_cleared("a");
+    assert_eq!(
+        picked_at(&mut st, &s, 301_000),
+        "a",
+        "the retry answered 200, so the account serves before the reload reads it ready"
+    );
+    let ready = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    assert_eq!(picked_at(&mut st, &ready, 301_000), "a");
+    assert!(st.funding_retries().is_empty());
+    drop(ticket);
+}
+
+#[test]
+fn a_marked_account_with_no_retry_entry_is_tried_at_once_and_its_claim_holds_the_second_request_off(
+) {
+    // A restart reads the mark from the registry with no instant.
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked_at(&mut st, &s, 1_000),
+        "a",
+        "the first request after a restart retries at once"
+    );
+    let ticket = st.in_flight().dispatched("a", 1_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 1_000);
+    assert_eq!(
+        st.funding_retries(),
+        vec![("a".to_string(), 1_000)],
+        "the claim builds the entry at the request's instant"
+    );
+    assert_eq!(
+        picked_at(&mut st, &s, 2_000),
+        "b",
+        "the second request finds the slot taken while the first lives"
+    );
+    drop(ticket);
+    assert_eq!(picked_at(&mut st, &s, 2_000), "a");
+}
+
+#[test]
+fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read_the_row_before_the_mark_s_write(
+) {
+    let marked_under = |state: AccountState, incarnation: u64, revision: u64| {
+        let mut load = load_of(
+            Pool {
+                members: vec![("a", 0), ("b", 1)],
+                kinds: vec![("a", AccountKind::ApiKey)],
+                ..Pool::default()
+            },
+            &[("a", true, state)],
+        );
+        load.accounts[0].incarnation = incarnation;
+        load.accounts[0].revision = revision;
+        RegistrySnapshot::from_load(load, [0; 32], 3_000, 2)
+    };
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
+    assert_eq!(
+        st.funding_retries(),
+        vec![("a".to_string(), 302_000)],
+        "the writer has not acknowledged the mark, so the load may predate its write"
+    );
+    st.funding_written("a", 1, Some(5));
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 4));
+    assert_eq!(
+        st.funding_retries().len(),
+        1,
+        "a load that read the row below the mark's revision predates its write"
+    );
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 1, 5));
+    assert_eq!(st.funding_retries().len(), 1, "the mark still stands");
+    st.reconcile_funding_retries(&marked_under(AccountState::FundingRequired, 2, 5));
+    assert!(
+        st.funding_retries().is_empty(),
+        "the id names another holder, whose mark is its own"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, Some(5));
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 6));
+    assert!(
+        st.funding_retries().is_empty(),
+        "the operator cleared the mark"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, None);
+    st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
+    assert!(
+        st.funding_retries().is_empty(),
+        "a mark the fences refused never landed, so the snapshot decides"
+    );
+}
+
+#[test]
+fn the_release_reasons_name_a_funding_mark_only_while_the_selection_would_not_try_the_account() {
+    let s = funding_marked_pool();
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    assert_eq!(
+        picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
+        "a",
+        "the first request after a restart pins the marked account"
+    );
+    let pin = st.pin(&pin_key("s1")).cloned().unwrap();
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(2_000)),
+        vec!["released"],
+        "with no retry entry the account is tried at once"
+    );
+    st.funding_marked("a", 1, 2_000, 300_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(301_999)),
+        vec!["funding_required"],
+        "a millisecond before the retry is due"
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(302_000)),
+        vec!["released"],
+        "the retry is due and nothing holds it"
+    );
+    let ticket = st.in_flight().dispatched("a", 302_000);
+    st.claim_funding_retry("a", 1, ticket.id(), 302_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &req(302_000)),
+        vec!["funding_required"],
+        "another attempt holds the one slot"
+    );
+    drop(ticket);
 }
 
 /// `req` sent with `speed: "fast"`, on its model's fast lane.
@@ -2864,8 +3079,8 @@ fn a_fable_pin_moves_off_an_account_whose_five_hour_window_is_spent_though_its_f
 }
 
 #[test]
-fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extra_usage_is_enabled()
-{
+fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_unless_extra_usage_reads_blocked(
+) {
     for prefer_subscription in [false, true] {
         let s = snapshot(Pool {
             policy: OveragePolicy::Allow,
@@ -2935,11 +3150,78 @@ fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extr
             "five_hour",
             "rate_limit",
         ));
-        assert!(
-            matches!(fable(&mut unread, 3_000), SelectResult::Exhausted(_)),
-            "a credits state the poll has not read is not extra usage enabled, kind order {prefer_subscription}"
+        assert_eq!(
+            picked(&fable(&mut unread, 3_000)),
+            "a",
+            "a credits state the poll has not read is no refusal, kind order {prefer_subscription}"
         );
     }
+}
+
+/// A Fable request under `allow` on a pool of `a` alone, whose sample reads `spent`: with no credits reading the
+/// account goes on in overage, and a reading the poll took as blocked drops it.
+fn spent_under_allow(spent: UtilizationSample, window: &str) {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", spent);
+    let fable = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, None, "claude-fable-5-1", true, &[], now),
+            &mut rng(),
+        )
+        .0
+    };
+    let served = fable(&mut st, 2_000);
+    assert_eq!(
+        picked(&served),
+        "a",
+        "a spent {window} with no credits reading stays a candidate"
+    );
+    let SelectResult::Selected(selection) = &served else {
+        unreachable!("picked above")
+    };
+    assert_eq!(
+        selection.trace.tier.map(|tier| tier.2),
+        Some(1),
+        "the account with a spent {window} bills in overage"
+    );
+    st.record_credits("a", credits(false, Some("out_of_credits"), None, 3_000));
+    assert!(
+        matches!(fable(&mut st, 4_000), SelectResult::Exhausted(_)),
+        "a credits state the poll read as blocked drops the account with a spent {window}"
+    );
+}
+
+#[test]
+fn under_allow_a_spent_five_hour_window_keeps_its_account_on_overage_until_extra_usage_reads_blocked(
+) {
+    spent_under_allow(
+        with_fable(sample(1.0, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        "five-hour window",
+    );
+}
+
+#[test]
+fn under_allow_a_spent_seven_day_window_keeps_its_account_on_overage_until_extra_usage_reads_blocked(
+) {
+    spent_under_allow(
+        with_fable(sample(0.2, 1.0, 1_000), 0.5, Some(9 * HOUR)),
+        "seven-day window",
+    );
+}
+
+#[test]
+fn under_allow_a_spent_model_week_keeps_its_account_on_overage_until_extra_usage_reads_blocked() {
+    spent_under_allow(
+        with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        "model week",
+    );
 }
 
 #[test]
@@ -4437,8 +4719,8 @@ fn an_entry_another_key_wrote_places_the_request() {
 }
 
 /// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding and a
-/// dwell of 900 s set on each pool, so the cases that read 900 s do not rest on the default preset, each key
-/// `(id, pool)` and each member `(pool, account, priority)` as given.
+/// dwell of 900 s on each pool, each key `(id, pool)` and each member `(pool, account, priority)` as given. The dwell
+/// is set on each pool so the cases that read 900 s do not rest on the default preset.
 fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
     let account = |id: &str| AccountRow {
         id: id.into(),
@@ -4566,25 +4848,18 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
     hot_a_cool_b(&mut st, T);
     // Through a pin the round leaves: a request through a marked pin would move it in the same selection, spending
     // the mark read below.
+    let req = select_request(
+        &s,
+        "k1",
+        Some("s0"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        T,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &select_request(
-                    &s,
-                    "k1",
-                    Some("s0"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    T
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
     // Half of the 8.5 burning is 4.25, which k1's s1 and k2's s3 carry the marked burn past.
@@ -4603,25 +4878,18 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
 
     let inside = T + 450_000;
     hot_a_cool_b(&mut st, inside);
+    let req = select_request(
+        &s,
+        "k2",
+        Some("s2"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        inside,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &select_request(
-                    &s,
-                    "k2",
-                    Some("s2"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    inside
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &s, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert_eq!(
@@ -4656,25 +4924,18 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
         },
     ]);
     hot_a_cool_b(&mut st, T);
+    let req = select_request(
+        &before,
+        "k1",
+        Some("s0"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        T,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &before,
-                &select_request(
-                    &before,
-                    "k1",
-                    Some("s0"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    T
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &before, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
@@ -4692,25 +4953,18 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     );
     hot_a_cool_b(&mut st, moved);
     st.record_sample("c", sample(0.1, 0.1, moved));
+    let req = select_request(
+        &after,
+        "k2",
+        Some("s2"),
+        "claude-sonnet-5",
+        "main",
+        true,
+        &[],
+        moved,
+    );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &after,
-                &select_request(
-                    &after,
-                    "k2",
-                    Some("s2"),
-                    "claude-sonnet-5",
-                    "main",
-                    true,
-                    &[],
-                    moved
-                ),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &after, &req, &mut rng()).0),
         ("a".into(), None)
     );
     assert_eq!(st.last_shed("p2", "a"), Some(moved));
@@ -4771,7 +5025,8 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
         "a round ran on each account at T"
     );
 
-    st.purge(&s, T + 900_000);
+    // Inside the 900 s `shedding_pools` sets and past p1's 600 s, so p1's own dwell decides.
+    st.purge(&s, T + 700_000);
     assert_eq!(
         st.newest_shed("a"),
         None,
@@ -4789,6 +5044,88 @@ fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
         None,
         "b's stamp leaves with p2's dwell"
     );
+}
+
+#[test]
+fn the_shed_move_takes_exactly_the_siblings_its_cool_line_reads_cool() {
+    let s = shedding_pools(
+        &[("k", "p1")],
+        &[("p1", "a", 0), ("p1", "b", 1), ("p1", "c", 2)],
+    );
+    let cap = s.pool("p1").unwrap().failover.in_flight_cap;
+    // c reads hot on one reading at a time, or on none: the move's filter and the cool line read each the same way.
+    for (hot, destinations) in [
+        ("band", vec!["b"]),
+        ("dwell", vec!["b"]),
+        ("cap", vec!["b"]),
+        ("none", vec!["b", "c"]),
+    ] {
+        let mut st = RoutingState::from_load(RoutingLoad {
+            pins: vec![
+                burning("s1", "a", 4.0, false, T),
+                burning("s0", "a", 1.0, false, T),
+            ],
+            shed_rounds: if hot == "dwell" {
+                vec![ShedRoundRow {
+                    pool_id: "p1".into(),
+                    account_id: "c".into(),
+                    incarnation: 1,
+                    key_id: "k".into(),
+                    session_id: "s9".into(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                    epoch: 1,
+                    round_at: T - 60_000,
+                    marked: false,
+                }]
+            } else {
+                Vec::new()
+            },
+            ..RoutingLoad::default()
+        });
+        st.record_sample("a", sample(0.9, 0.3, T - 500));
+        st.record_sample("b", sample(0.1, 0.1, T - 500));
+        let c_lead = if hot == "band" { 0.8 } else { 0.1 };
+        st.record_sample("c", sample(c_lead, 0.1, T - 500));
+        let _held: Vec<_> = if hot == "cap" {
+            (0..cap)
+                .map(|_| st.in_flight().dispatched("c", T))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+        assert_eq!(
+            landed(d.result.clone()),
+            ("b".into(), Some(MigrateReason::Shed)),
+            "c hot by {hot}"
+        );
+        assert_eq!(
+            fact(line(&d.record, "move:shed"), "destinations"),
+            &FactValue::List(destinations.iter().map(|id| id.to_string()).collect()),
+            "c hot by {hot}"
+        );
+        let cool = line(&d.record, "cool");
+        assert_eq!(cool.verdict, "preferred", "c hot by {hot}");
+        // The cool line reads every sibling the filter admitted, so a hot one the filter let through shows here
+        // even though the preference drops it from the destinations.
+        assert_eq!(
+            cool.facts
+                .iter()
+                .filter(|f| f.key == "cool")
+                .filter_map(|f| f.account_id.as_deref())
+                .collect::<Vec<_>>(),
+            destinations,
+            "c hot by {hot}"
+        );
+        for id in &destinations {
+            assert_eq!(
+                fact_of(cool, "cool", id),
+                &FactValue::Bool(true),
+                "{id} with c hot by {hot}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5988,6 +6325,8 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
             cohort: Some("b".into()),
             held_ms: 0,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         },
     );
 }
@@ -6325,6 +6664,8 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
                 cohort: Some("a".into()),
                 held_ms: 1_000,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -6350,6 +6691,8 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             cohort: None,
             held_ms: 0,
             attempt: 1,
+            seq: 2,
+            ran_out: false,
         },
     );
 
@@ -6380,6 +6723,8 @@ fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_sum
         cohort: cohort.map(String::from),
         held_ms,
         attempt: 1,
+        seq: 1,
+        ran_out: false,
     };
     assert_eq!(
         cohort_hold(&[]),
@@ -7226,6 +7571,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         burn: PinBurn::default(),
         burn_at: None,
         burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
         last_input_tokens: 0,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
@@ -7804,6 +8150,8 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "b is the one priority would have chosen"
@@ -7850,6 +8198,8 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "the round starts at a"
@@ -7908,6 +8258,8 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
                 cohort: None,
                 held_ms: 0,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             },
         },
         "with both at their cap the request is held on the one the ceiling prefers"
@@ -9688,6 +10040,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         burn: PinBurn::default(),
         burn_at: Some(now),
         burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: now - 1_000,
         cache_ttl_ms: 300_000,
@@ -12217,6 +12570,7 @@ fn a_refusal_records_two_lines() {
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
     let revoked = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     let (record, summary) = DecisionRecord::refused(&RefusedRequest::from(&req), &s, &revoked);
@@ -12282,6 +12636,32 @@ fn a_refusal_records_two_lines() {
 }
 
 #[test]
+fn a_refusal_the_task_records_carries_the_request_s_attempted_accounts_and_holds() {
+    let s = snapshot(Pool::default());
+    let hold = HoldFacts {
+        account_id: "a".into(),
+        cohort: None,
+        held_ms: 1_500,
+        attempt: 1,
+        seq: 1,
+        ran_out: true,
+    };
+    let req = SelectRequest {
+        seq: 3,
+        holds: vec![hold.clone()],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &["a", "b"], T)
+    };
+    let revoked = RefusalFacts {
+        kind: "key",
+        code: "revoked",
+        reason: "the key was revoked".into(),
+    };
+    let (record, _) = DecisionRecord::refused(&RefusedRequest::from(&req), &s, &revoked);
+    assert_eq!(record.request.attempted, ["a", "b"]);
+    assert_eq!(record.request.holds, [hold]);
+}
+
+#[test]
 fn a_refusal_names_its_pin_not_looked_up() {
     let s = snapshot(Pool::default());
     let named = RefusedRequest::from(&request(&s, Some("s1"), "claude-sonnet-5", true, &[], T));
@@ -12291,6 +12671,7 @@ fn a_refusal_names_its_pin_not_looked_up() {
     };
     let revoked = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     for refused in [&named, &unnamed] {
@@ -12302,6 +12683,23 @@ fn a_refusal_names_its_pin_not_looked_up() {
             refused.session_id
         );
     }
+}
+
+#[test]
+fn a_selection_whose_pool_the_snapshot_lacks_names_its_pin_not_looked_up() {
+    let s = snapshot(Pool::default());
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let mut load = load_of(Pool::default(), &[]);
+    load.pools.clear();
+    let gone = RegistrySnapshot::from_load(load, [0; 32], 0, 1);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(&mut st, &gone, &req, &mut rng());
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        (d.record.pin.is_none(), d.record.pin_reason),
+        (true, Some("not_looked_up")),
+        "the engine returns before the pin lookup, whatever session the request named"
+    );
 }
 
 #[test]
@@ -12324,6 +12722,7 @@ fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
         &s,
         &RefusalFacts {
             kind: "key",
+            code: "revoked",
             reason: "the key was revoked".into(),
         },
     );
@@ -12380,7 +12779,8 @@ fn the_warmth_cause_and_the_window_source_serialize_as_the_words_they_spell() {
         WarmthCause::StaticRestart,
         WarmthCause::Foreign,
     ] {
-        // Exhaustive, so a variant added later fails to compile here until the list above names it.
+        // Exhaustive, so a variant added later fails to compile here until the match names it, while the array
+        // above would not.
         match cause {
             WarmthCause::Probe
             | WarmthCause::Count
@@ -12930,11 +13330,14 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
     seed_affinity(&st, vec![static_row(&s, "s1", "b", 900)]);
     let _a = st.in_flight().dispatched("a", 1_000);
     let req = SelectRequest {
+        seq: 2,
         holds: vec![HoldFacts {
             account_id: "b".into(),
             cohort: Some("b".into()),
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..static_req(&s, &["s1"])
     };
@@ -12992,11 +13395,14 @@ fn summary_facts(d: &Decided) -> Vec<(&'static str, FactValue, Option<&'static s
 fn a_session_pin_placement_after_a_hold_reads_the_wait_beside_the_in_flight_count() {
     let (s, mut st, _tickets) = session_pin_at_cap();
     let req = SelectRequest {
+        seq: 2,
         holds: vec![HoldFacts {
             account_id: "a".into(),
             cohort: None,
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -13037,11 +13443,14 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
     let (s, mut st, _tickets) = session_pin_at_cap();
     let later_attempt = SelectRequest {
         attempt: 2,
+        seq: 3,
         holds: vec![HoldFacts {
             account_id: "a".into(),
             cohort: None,
             held_ms: 2_000,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -13053,7 +13462,183 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
     assert_eq!(
         summary_facts(&d),
         vec![("in_flight", FactValue::Text("1/1".into()), Some("text"))],
-        "a failover's later attempt took its own placement, so the earlier attempt's wait is not its"
+        "a failover took a selection after the wait's, so the wait two selections back is not this placement's"
+    );
+}
+
+/// A request on members `a` and `b` that waited on `a` at its first selection, with `attempted` and the at-cap
+/// reading as the relay left them: a wait that ran out holds the request out.
+fn after_a_wait_on_a(
+    s: &RegistrySnapshot,
+    seq: u32,
+    ran_out: bool,
+    attempted: &[&str],
+) -> SelectRequest {
+    SelectRequest {
+        seq,
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 2_000,
+            attempt: 1,
+            seq: 1,
+            ran_out,
+        }],
+        held_out: ran_out,
+        ..request(s, None, "claude-sonnet-5", true, attempted, T)
+    }
+}
+
+#[test]
+fn a_placement_after_a_leg_that_failed_before_the_wire_reads_no_wait() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` led to the placement at `seq` 2, whose leg failed over before it reached the wire, so the
+    // attempt never moved and `seq` 3 places afresh.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 3, false, &["a"]),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("strategy", "priority"),
+        "the wait led to the selection before this one, so it does not explain this placement"
+    );
+    assert!(
+        summary_facts(&d).iter().all(|(key, _, _)| *key != "held"),
+        "{:?}",
+        summary_facts(&d)
+    );
+}
+
+#[test]
+fn the_placement_one_selection_past_its_hold_reads_the_wait() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, false, &[]),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "a");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "strategy_pick")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("held", FactValue::Int(2_000), Some("ms"))]
+    );
+}
+
+#[test]
+fn the_exhausted_row_after_a_hold_that_ran_out_reads_the_wait_retry_none_and_answer_429() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` ran out, so `a` is attempted, and `b`, at its cap, was passed over with no wait of its own.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, true, &["a", "b"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("exhaustion", "untimed")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ],
+        "no leg was dialed, so the client is answered as a pool at its cap"
+    );
+}
+
+#[test]
+fn the_exhausted_row_after_a_hold_that_freed_reads_the_wait_alone() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 2, false, &["a", "b"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+        ],
+        "a slot freed within the bound, so the row names no answer the wait caused"
+    );
+}
+
+#[test]
+fn a_hold_that_ran_out_selections_before_the_exhaustion_still_reads_on_its_row() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // `b` and `c` at their cap were passed over at `seq` 2 and 3, past the bound the wait on `a` ran out.
+    let d = decide(
+        &mut st,
+        &s,
+        &after_a_wait_on_a(&s, 4, true, &["a", "b", "c"]),
+        &mut rng(),
+    );
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ]
+    );
+}
+
+#[test]
+fn after_a_dialed_leg_the_exhausted_row_answers_the_untimed_503() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // The wait on `a` ran out, then `b` freed and its leg at `seq` 2 was dialed and failed over.
+    let req = SelectRequest {
+        dialed: true,
+        ..after_a_wait_on_a(&s, 3, true, &["a", "b"])
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("held", FactValue::Int(2_000), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(503), None),
+        ],
+        "a dialed leg makes the untimed exhaustion one only an operator clears"
     );
 }
 

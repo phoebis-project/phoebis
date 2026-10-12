@@ -52,10 +52,20 @@ pub async fn connect_tls(
     host: &str,
     addr: SocketAddr,
 ) -> Result<tokio_boring::SslStream<TcpStream>, TransportError> {
+    let started = std::time::Instant::now();
     let tcp = TcpStream::connect(addr).await?;
     tcp.set_nodelay(true)?;
+    let dialed = std::time::Instant::now();
     let cfg = connector.configure()?;
-    tokio_boring::connect(cfg, host, tcp)
+    let stream = tokio_boring::connect(cfg, host, tcp)
         .await
-        .map_err(|e| TransportError::Handshake(e.to_string()))
+        .map_err(|e| TransportError::Handshake(e.to_string()))?;
+    // The one line per new connection: the host and two durations, nothing of the request or the credential.
+    tracing::debug!(
+        host,
+        dial_ms = dialed.duration_since(started).as_millis() as u64,
+        handshake_ms = dialed.elapsed().as_millis() as u64,
+        "a new upstream connection"
+    );
+    Ok(stream)
 }

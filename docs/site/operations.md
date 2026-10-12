@@ -122,13 +122,56 @@ start.
 
 `init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
-The key seals OAuth credential bundles and API-key secrets. `Store::digest_key` also derives, from this same key,
-the digest every downstream key authenticates against: the secrets the admin API mints and hands to the clients.
+The key seals OAuth credential bundles, API-key secrets and the keepalive's retained recipe bodies. `Store::digest_key`
+also derives, from this same key, the digest every downstream key authenticates against: the secrets the admin API
+mints and hands to the clients.
 
-There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
-so recovering means discarding the registry's secrets while keeping everything else. Stop the service
-(`sudo systemctl stop phoebis`), take a [backup](#backup) (`phoebis backup --to <dir>`), and run this sequence against
-the registry as the `phoebis` user:
+Under a lost or replaced key no sealed row opens again and the canary refuses the start, so recovering means discarding
+what the old key sealed while keeping everything else. `phoebis recover-key` does that on a stopped registry. It is a
+recovery, not a configuration step, and the accounts, pools and keys it leaves stay the console's to edit. On the
+service layout, as root:
+
+1. Stop the service: `sudo systemctl stop phoebis`.
+2. Take a [backup](#backup): `phoebis backup --to <dir>`.
+3. Run `sudo phoebis recover-key --config /etc/phoebis/config.yaml --owner phoebis`. When the file
+   `storage.encryption_key_file` names is missing, it generates the key as `init` does, at `0600` and owned by the
+   `--owner` user, and prints the file's path. A key file already in place is read as the new key.
+4. Read its summary: how many OAuth credential bundles, API-key secrets and keepalive recipe bodies it discards, and how
+   many oauth accounts, api_key accounts and open refresh attempts it marks.
+5. Answer `yes`. Any other answer exits 2, and a declined run leaves no key it generated and discards nothing: the
+   registry stays as it was, and the run removes a key file it generated, with any directory it created for it, and
+   names the file in its last line. `--yes` skips the question for a script.
+
+It refuses with `the registry is locked, stop the service first` while a router holds the registry, with
+`the storage key matches the registry, nothing to recover` when the key file still opens the registry's canary (or,
+without one, any of its sealed rows), with one line naming how many sealed rows the key still opens when the canary
+alone does not open, since the canary is then the corrupt part and a backup restores it, and with one line when the
+registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal exits 1,
+and a failure after the run generated the key file removes the file as a declined run does. A run that stops before
+the discard leaves the registry at the schema version it found. Past them it runs the sequence
+under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
+prints the summary again and the steps that remain, and exits 0 once the accounts are marked. It prints counts and
+paths, never a key. Then start the service, and:
+
+- Re-enter every `api_key` secret in the console.
+- Pair every `oauth` account again in the console.
+- Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
+  stored against the old key stops matching a client's presented secret, and every existing downstream key starts
+  answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new secrets
+  to the clients.
+
+Under the container the key is the Compose secret `./storage.key`, which Compose refuses to start without, so the new
+key is written on the host first and the subcommand reads it rather than generating one. Take the backup with `docker
+compose exec phoebis phoebis backup --to /var/lib/phoebis/backups/<name>` before `docker compose stop`, since `exec`
+needs the running container, or with `docker compose run --rm phoebis backup --to /var/lib/phoebis/backups/<name>` once
+it is stopped. Where `./storage.key` is gone, write the new key with `(umask 077 && openssl rand -hex 32 > storage.key)`
+and hand it over with `sudo chown 65532:65532 storage.key && sudo chmod 0400 storage.key`. Then run `docker compose run
+--rm phoebis recover-key`, which takes the same answer or `--yes`.
+
+### What it runs
+
+The subcommand runs this sequence. Where the binary is not at hand, an operator runs it by hand against the registry
+as the `phoebis` user, after the same stop and backup:
 
 ```sh
 sudo -u phoebis sqlite3 -bail /var/lib/phoebis/router.sqlite <<'SQL'
@@ -136,32 +179,26 @@ BEGIN IMMEDIATE;
 DELETE FROM meta WHERE key = 'storage_key_canary';
 DELETE FROM credentials;
 DELETE FROM api_key_secrets;
+UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL;
 UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END,
-  lifecycle_generation = lifecycle_generation + 1, revision = revision + 1;
+  state_cause = 'operator', lifecycle_generation = lifecycle_generation + 1, revision = revision + 1,
+  updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
 UPDATE refresh_attempts SET resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000, outcome = 'failed',
   detail = 'disconnected' WHERE resolved_at IS NULL OR outcome = 'uncertain';
 COMMIT;
 SQL
 ```
 
-Under the container the image ships no `sqlite3`. The backup is `docker compose exec phoebis phoebis backup --to
-/var/lib/phoebis/backups/<name>` before `docker compose stop`, since `exec` needs the running container, or `docker
-compose run --rm phoebis backup --to /var/lib/phoebis/backups/<name>` once it is stopped; then the same sequence runs
-as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
-carries `sqlite3` and mounts that volume.
+Under the container the image ships no `sqlite3`, so the sequence runs as uid 65532, either from the host against
+`router.sqlite` on the `phoebis-data` volume or from a one-off container that carries `sqlite3` and mounts that volume.
 
-The sequence discards every secret the registry holds, and nothing else: the API-key secrets, the canary and the
-OAuth credential bundles go, and each account rests where the Accounts view's Disconnect leaves it, with its open
-refresh attempts settled. The accounts, downstream keys, pins, pools and session memory stay. `-bail` stops at the
-first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
-untouched. The next start under the new key finds nothing sealed and seals a new canary; then:
-
-- Re-enter every `api_key` secret.
-- Re-pair every `oauth` account.
-- Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
-  stored against the old key stops matching a client's presented secret, and every existing downstream key starts
-  answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new secrets
-  to the clients.
+The sequence discards every secret the registry holds, and nothing else: the API-key secrets, the canary, the OAuth
+credential bundles and the keepalive's recipe bodies go, and each account rests where the Accounts view's Disconnect
+leaves it, with the cause `operator` and its open refresh attempts settled. The accounts, downstream keys, keepalive
+sessions, pins, pools and session memory stay. `-bail` stops at the first statement that fails, and the transaction it
+leaves open rolls back, so the file is either wholly changed or untouched. The subcommand seals the new canary inside
+the same transaction, and after the sequence run by hand the next start under the new key finds nothing sealed and
+seals one. The steps that remain are the same either way.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.
@@ -176,8 +213,10 @@ environment, and prints one screen:
 phoebis 0.1.0, up 3d 4h, ready
   proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
   metrics http://127.0.0.1:9464
-  ledger: 2 parked
-  attention: pool_exhausted work since 12:03;
+  ledger:
+    2 parked
+  attention:
+    pool_exhausted work since 12:03
     refresh_failed alice@example.com since 11:40
 
 pools
@@ -204,11 +243,11 @@ binary's own version and `readiness unknown`, unless the proxy is down. The list
 file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate file the loader refuses when the operator
 reads it prints the loader's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running
-router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and names
-each one: records `queued` in the writer channel, `behind` while admission refuses, `degraded` after a failed batch,
-priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes
-and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention item as
-`<kind> <subject> since <HH:MM>`, or reads `none`.
+router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and lists
+each one on its own line under it: records `queued` in the writer channel, `behind` while admission refuses, `degraded`
+after a failed batch, priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state
+writer's `deferred` writes and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention
+item on its own line under it as `<kind> <subject> since <HH:MM>`, in the items' order, or reads `attention: none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
@@ -260,8 +299,14 @@ container's environment and so the admin secret.
 3. Read the [changelog](changelog.md) for a bootstrap key that changed.
 4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
-6. Restart the service: `sudo systemctl restart phoebis`. The service drains in-flight requests for up to 30 seconds;
-   the unit's `TimeoutStopSec=40` covers that drain.
+6. Restart the service: `sudo systemctl restart phoebis`. The stop runs under one budget of 35 seconds, which cuts its
+   phases in this order: the keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still
+   running, the catalog's retries, a credential refresh still in flight, the ledger's last writes, then the routing
+   state's. In-flight requests drain for up to 30 seconds inside the budget, which leaves the phases after them at least
+   five. Each phase takes what the ones before it left, and the session memory's last flush and the store's close run
+   whatever is left. The process then stops its runtime within what remains of the budget, so a ledger or routing write
+   the budget cut, which still runs on a blocking thread, ends with the process, and a warn line names that write. The
+   unit's `TimeoutStopSec=40` leaves five seconds past the budget.
 7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
    `version`, `storage_ok`, `ready`, `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`.
    `router.dropped_reports` counts the reports a closed queue refused at shutdown, zero on a running router; a loop
@@ -272,9 +317,9 @@ Under the container, the same sequence is: read the changelog, take the backup (
 backup --to /var/lib/phoebis/backups/<name>`), set `image:` in `compose.yaml` to the new version, validate the mounted
 configuration with the new image (`docker compose run --rm phoebis check-config`, which reads the service's environment
 file and mounts), then `docker compose up -d`. Compose replaces the container, stopping the old one with the 40-second
-grace period that covers the drain, and the new binary migrates both databases on the volume as it opens them. `docker
-compose ps` reads `healthy` once `phoebis health` has read the router as ready, and `GET /admin/system` confirms the
-version.
+grace period, five seconds past the same 35-second shutdown budget, and the new binary migrates both databases on the
+volume as it opens them. `docker compose ps` reads `healthy` once `phoebis health` has read the router as ready, and
+`GET /admin/system` confirms the version.
 
 A listener's pair is read at start and re-read on `phoebis tls reload`. Write the certificate and the key, then reload.
 `certbot` and `acme.sh` do so in their deploy hooks, here for the service unit's paths and its environment file:
@@ -401,20 +446,23 @@ release:
    that must reach `healthy` within 30 seconds, serve the built console (the page from the admin listener is not the
    placeholder and one of its assets is served), answer `phoebis status` inside the container with a first line ending
    in `ready`, take a `phoebis backup` onto the volume and stop within the grace period, and a second container under a
-   certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the images it builds a
-   static binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs
-   each on its own platform (`--version`, a static link check, `init` and `check-config` in a temporary directory) and
-   packs it with the license. Once every smoke passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis`
-   under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never for a prerelease), and
-   `sha-<short commit>`, and uploads the two archives with `SHA256SUMS` to the release.
+   certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the images it builds
+   the console and checks its bundle, and fails before the static binaries build when the build emits one chunk, the
+   entry passes 500 kB, or the first paint loads Recharts code. Then it builds a static binary for
+   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs each on its own
+   platform (`--version`, a static link check, `init` and `check-config` in a temporary directory) and packs it with the
+   license. The `cross` images install the build tools without tzdata's time zone prompt, so the build runs through
+   rather than waiting for an answer. Once every smoke passes it publishes one manifest list at
+   `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never
+   for a prerelease), and `sha-<short commit>`, and uploads the two archives with `SHA256SUMS` to the release.
 
-A failed smoke, of the image or of a binary, leaves untagged digests in the registry, no tag and no archive on the
-release; a failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds
-both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile, `Cross.toml` or the
-workflow, since a pull request builds the amd64 side alone, and before the first release. The package inherits the
-repository's visibility: while the repository is private, pulling needs a token with `read:packages`. The image name is
-derived from the repository that runs the workflow, so a renamed repository publishes under its new name without a
-workflow change.
+A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
+and no archive on the release. A failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the
+dry run: it builds both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile,
+`Cross.toml` or the workflow, since a pull request builds the amd64 side alone, and before the first release. The
+package inherits the repository's visibility: while the repository is private, pulling needs a token with
+`read:packages`. The image name is derived from the repository that runs the workflow, so a renamed repository publishes
+under its new name without a workflow change.
 
 ## License
 

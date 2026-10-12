@@ -266,7 +266,7 @@ mod tests {
         let held = held_from(chunks, Inspect::new(None), Duration::from_secs(1)).await;
         assert!(
             matches!(held.commit, Commit::MessageStart(_)),
-            "the first committing event wins; the later error is post-commit"
+            "the first committing event wins, and the later error is post-commit"
         );
         let crlf = plain(&[
             "event: ping\r\ndata: {}\r\n\r\nevent: message_start\r\n",

@@ -61,16 +61,19 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 51);
+    assert_eq!(store.schema_version().unwrap(), 52);
 }
 
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
-// line with the marker last; the trailing `\n` ends the marker's comment.
+// line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
+// The reverse of the registry's version 52: the five fast burn columns. One line with the marker last. The trailing
+// `\n` ends the marker's comment.
+const UNDO_V52: &str = "ALTER TABLE pins DROP COLUMN burn_fast_input; ALTER TABLE pins DROP COLUMN burn_fast_cache_read; ALTER TABLE pins DROP COLUMN burn_fast_write_5m; ALTER TABLE pins DROP COLUMN burn_fast_write_1h; ALTER TABLE pins DROP COLUMN burn_fast_output; -- rollback\n";
 // The reverse of `V51`: the affinity rows lose the answer id, which no version before it stored.
 const UNDO_V51: &str = "ALTER TABLE affinity DROP COLUMN message_id;";
 // The reverse of the registry's version 50: the keepalive's day budgets table as the versions before it left it. One
-// line with the marker last; the trailing `\n` ends the marker's comment.
+// line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V50: &str = "CREATE TABLE keepalive_budgets (day TEXT NOT NULL, scope TEXT NOT NULL, id TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, five_hour_share REAL NOT NULL DEFAULT 0, PRIMARY KEY (day, scope, id)); -- rollback\n";
 // The reverse of the registry's version 49: the keepalive engine's three tables.
 const UNDO_V49: &str =
@@ -92,7 +95,7 @@ ALTER TABLE affinity DROP COLUMN depth;
 ALTER TABLE accounts DROP COLUMN state_cause;
 "#;
 // The reverse of the registry's version 45, so a store stamped back below it can run it again. One line with the
-// marker last; the trailing `\n` ends the marker's comment.
+// marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V45: &str =
     "ALTER TABLE pools RENAME COLUMN shed_ahead_of_pace TO migrate_above_utilization; -- rollback\n";
 // The reverse of the registry's version 44, one statement per line; the request and response links it deleted are
@@ -127,7 +130,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     // `session:s1`, both valid ids, each with its own payload.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
+        "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
     ))
     .unwrap();
     conn.execute_batch(
@@ -140,7 +143,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &storage).expect("the migration completes and the store opens");
-    assert_eq!(store.schema_version().unwrap(), 51);
+    assert_eq!(store.schema_version().unwrap(), 52);
     let payload = |session: &str| {
         store
             .load(&MemoryKey::for_session("desktop", 1_000, session, "main"))

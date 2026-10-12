@@ -51,7 +51,7 @@ fn the_fixture_lists_every_step_the_router_records_with_its_verdicts() {
         .unwrap();
     assert_eq!(
         committed, captured,
-        "the committed fixture differs from WALK_STEPS; re-capture and update the console's station table"
+        "the committed fixture differs from WALK_STEPS. Re-capture it and update the console's station table"
     );
 }
 
@@ -92,11 +92,14 @@ fn the_steps_written_without_the_recorder_are_in_the_table() {
             boundaries: 0,
             static_hash: false,
         },
+        attempted: Vec::new(),
+        holds: Vec::new(),
         client: ClientClass::ClaudeCode,
         client_version: None,
     };
     let refusal = RefusalFacts {
         kind: "key",
+        code: "revoked",
         reason: "the key was revoked".into(),
     };
     let (record, _) = DecisionRecord::refused(&request, &snapshot, &refusal);

@@ -13,7 +13,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
+use phoebis_routing::{DecisionRecord, DecisionSummary, FactValue, RouterEvent};
 use phoebis_store::Failover;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
@@ -822,6 +822,183 @@ async fn a_request_that_dialled_before_its_hold_ran_out_answers_accounts_unavail
     up.shutdown().await;
 }
 
+/// What the router decided for one request: each decision's `seq` and kind, then the last decision's facts and the
+/// holds its request carried, each with its `seq` and whether it ran out.
+struct Decided {
+    kinds: Vec<(u32, &'static str)>,
+    facts: Vec<(&'static str, FactValue, Option<&'static str>)>,
+    holds: Vec<(String, u32, bool)>,
+}
+
+fn decided(events: &[RouterEvent], request_id: &str) -> Decided {
+    let decisions = decisions_of(events, request_id);
+    let (summary, record) = decisions.last().expect("the request's decisions");
+    Decided {
+        kinds: decisions
+            .iter()
+            .map(|(summary, record)| (record.request.seq, summary.kind))
+            .collect(),
+        facts: summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect(),
+        holds: record
+            .request
+            .holds
+            .iter()
+            .map(|hold| (hold.account_id.clone(), hold.seq, hold.ran_out))
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn a_hold_that_ran_out_reads_its_wait_and_the_client_s_status_on_the_exhausted_row() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1), oauth("c", C, 2)],
+        PoolSpec {
+            failover: account_cap(1, 2),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let mut open = Vec::new();
+    for session in ["s1", "s2", "s3"] {
+        open.push(
+            h.app
+                .clone()
+                .oneshot(request_for(KEY, MODEL, session))
+                .await
+                .unwrap(),
+        );
+    }
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s4"))
+        .await
+        .unwrap();
+    tokio::time::resume();
+    let id = outcome(&resp).request_id;
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::Decision { summary, record, .. } if record.request.request_id == id && summary.kind == "exhausted")
+    })
+    .await;
+    let Decided {
+        kinds,
+        facts,
+        holds,
+    } = decided(&seen, &id);
+    assert_eq!(
+        kinds,
+        [(1, "held"), (2, "held"), (3, "held"), (4, "exhausted")],
+        "the wait on a ran the bound out, so b and c were passed over before the pool exhausted"
+    );
+    assert_eq!(holds, [("a".to_string(), 1, true)]);
+    let held_ms = outcome(&resp).held.expect("the request's one wait").held_ms;
+    assert_eq!(
+        facts,
+        [
+            ("held", FactValue::Int(held_ms as i64), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            (
+                "answer",
+                FactValue::Int(i64::from(resp.status().as_u16())),
+                None
+            ),
+        ],
+        "the row reads the wait three selections back and the status the client got"
+    );
+    assert_eq!(resp.status().as_u16(), 429);
+    drop(open);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn after_a_dialed_leg_a_hold_that_ran_out_reads_the_client_s_503_on_the_exhausted_row() {
+    const KEYED: &str = "sk-ant-api03-PLACEHOLDER";
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", held_stream());
+    // A refused key marks its account and names no cooldown, so the exhaustion that follows is untimed.
+    up.add_credential_rule(
+        KEYED,
+        "/v1/messages",
+        Respond::Json {
+            status: 401,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#
+                .to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[oauth("b", B, 0), api_key("a", KEYED, 1)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "b");
+    let mut events = h.router.subscribe_events();
+    let app = h.app.clone();
+    let pending = tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s2")).await });
+    // a is dialed and refused before the request is held on b, so the clock stops only for the wait.
+    let mut seen = router_events_until(
+        &mut events,
+        |event| matches!(event, RouterEvent::Decision { summary, .. } if summary.kind == "held"),
+    )
+    .await;
+    tokio::time::pause();
+    let resp = pending.await.unwrap().unwrap();
+    tokio::time::resume();
+    seen.extend(std::iter::from_fn(|| events.try_recv().ok()));
+    let id = outcome(&resp).request_id;
+    let Decided {
+        kinds,
+        facts,
+        holds,
+    } = decided(&seen, &id);
+    assert_eq!(kinds, [(1, "placed"), (2, "held"), (3, "exhausted")]);
+    assert_eq!(holds, [("b".to_string(), 2, true)]);
+    let held_ms = outcome(&resp).held.expect("the request's one wait").held_ms;
+    assert_eq!(
+        facts,
+        [
+            ("held", FactValue::Int(held_ms as i64), Some("ms")),
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            (
+                "answer",
+                FactValue::Int(i64::from(resp.status().as_u16())),
+                None
+            ),
+        ],
+        "the row's answer is the status the client got, not the cap's 429"
+    );
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable"),
+        "a request that reached an account is no longer a pool merely at its cap"
+    );
+    drop(first);
+    up.release();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
     let up = FakeUpstream::start(messages(held_stream())).await;
@@ -897,6 +1074,7 @@ async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a
         .await
         .unwrap();
     assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    let mut events = h.router.subscribe_events();
     // Both placements wait on a. Ending the one stream wakes both in the same turn; a freed slot is read, not
     // reserved, so the placement whose selection runs second finds it taken by the first.
     let (two, three, ()) = tokio::join!(
@@ -946,6 +1124,24 @@ async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a
         posts(&up),
         2,
         "nothing was dialled for the placement passed over"
+    );
+    let id = outcome(passed_over).request_id;
+    let seen = router_events_until(&mut events, |event| match event {
+        RouterEvent::Decision {
+            summary, record, ..
+        } => record.request.request_id == id && summary.kind == "exhausted",
+        _ => false,
+    })
+    .await;
+    let Decided { kinds, facts, .. } = decided(&seen, &id);
+    assert_eq!(kinds, [(1, "held"), (2, "held"), (3, "exhausted")]);
+    assert_eq!(
+        facts,
+        [
+            ("retry", FactValue::Text("none".into()), Some("text")),
+            ("answer", FactValue::Int(429), None),
+        ],
+        "the row records the 429 the client got for the account passed over"
     );
     drop((first, two, three));
     up.release();

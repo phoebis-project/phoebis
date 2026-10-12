@@ -357,6 +357,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
                 "burn_window_seconds is at least 60",
             ));
         }
+        if seconds > 604_800 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "burn_window_seconds is at most 604800 (one week)",
+            ));
+        }
         row.shedding.burn_window_seconds = seconds;
     }
     if let Some(seconds) = input.source_dwell_seconds {
@@ -364,6 +370,12 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             return Err(failure(
                 StatusCode::BAD_REQUEST,
                 "source_dwell_seconds is at least 60",
+            ));
+        }
+        if seconds > 604_800 {
+            return Err(failure(
+                StatusCode::BAD_REQUEST,
+                "source_dwell_seconds is at most 604800 (one week)",
             ));
         }
         row.shedding.source_dwell_seconds = seconds;
@@ -710,6 +722,7 @@ fn member_json(
     spends: &[phoebis_routing::MemberSpend],
     eligible: &str,
     now: i64,
+    active_pins: usize,
 ) -> Value {
     let kind = accounts
         .iter()
@@ -725,6 +738,7 @@ fn member_json(
         "account_id": m.account_id, "priority": m.priority, "eligible": eligible, "kind": kind,
         "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
         "budget_until": phoebis_routing::budget_deadline(m, &rows, now), "spends": reports,
+        "active_pins": active_pins,
     })
 }
 
@@ -885,6 +899,10 @@ pub(crate) async fn pool_json_from(
     } else {
         "active"
     };
+    let keepalive_resolved = state
+        .keepalive
+        .resolve_pool_ceilings(row, &member_accounts)
+        .await;
     json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
         "strategy": row.strategy.as_str(),
@@ -902,12 +920,15 @@ pub(crate) async fn pool_json_from(
         "wind_down_minutes": row.failover.wind_down_minutes,
         "moves_per_hour": moves.iter().map(|(reason, count)| (reason.clone(), *count as f64)).collect::<std::collections::BTreeMap<_, _>>(),
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
-        "keepalive_resolved": state.keepalive.resolve_pool_ceilings(row, &member_accounts),
+        "keepalive_resolved": keepalive_resolved,
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "revision": stamp_token(row.incarnation, row.updated_at),
-        "members": members.iter().map(|m| member_json(m, accounts, spends, ineligible(m).unwrap_or("eligible"), now)).collect::<Vec<_>>(),
+        "members": members.iter().map(|m| {
+            let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id).count();
+            member_json(m, accounts, spends, ineligible(m).unwrap_or("eligible"), now, active_pins)
+        }).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,
         "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),

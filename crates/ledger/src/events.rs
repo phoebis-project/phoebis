@@ -399,7 +399,7 @@ pub fn catalog_changed(change: &CatalogChange) -> Record {
 
 /// An account's state as the mirror last observed it, through the registry or the routing loop's event, with the
 /// row's identity at that observation: an observation at or below it is older than what the mirror already wrote.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Observed {
     state: AccountState,
     incarnation: u64,
@@ -412,7 +412,6 @@ impl Observed {
     }
 }
 
-/// The transition row, and beside it the `reauth_required` row its readers keep reading, for a move into that state.
 fn record_transition(
     ledger: &Ledger,
     account_id: &str,
@@ -432,9 +431,6 @@ fn record_transition(
         ),
         ..Default::default()
     }));
-    if to == AccountState::ReauthRequired {
-        record_reauth(ledger, account_id, at);
-    }
 }
 
 /// The account's last row: the registry holds no row under the identity the mirror held.
@@ -495,15 +491,6 @@ fn refresh_detail(
     })
 }
 
-fn record_reauth(ledger: &Ledger, account_id: &str, at: i64) {
-    ledger.record(Record::Event(EventRecord {
-        at,
-        kind: "reauth_required".into(),
-        account_id: Some(account_id.to_string()),
-        ..Default::default()
-    }));
-}
-
 /// Whether the previous run announced this already: the first purge after a start walks every restored reading
 /// and pool member, so a clock reset that passed, or a wind-down that opened, before that run's last row was that
 /// run's to announce. A later purge announces what this run found, whenever its window opened, and a fresh file has
@@ -529,6 +516,50 @@ fn announced_before(event: &RouterEvent, down_since: Option<i64>) -> bool {
     }
 }
 
+/// The mirror's starting point: the newest registry change and resolved refresh attempt, and each account's
+/// state as the registry holds it. Read before the start's recovery, so a refresh the recovery settles and a
+/// state it lands are mirrored as changes rather than taken as history.
+#[derive(Clone, Debug)]
+pub struct MirrorBaseline {
+    last_change: u64,
+    /// The pair is the cursor: a batch that ends inside one millisecond resumes at the next id in it.
+    last_resolved: (i64, u64),
+    states: HashMap<String, Observed>,
+}
+
+impl MirrorBaseline {
+    /// Watermarks start at the newest row: history before the mirror existed is not replayed on every restart.
+    pub fn read(store: &Store) -> MirrorBaseline {
+        MirrorBaseline {
+            last_change: store
+                .newest_registry_change_id()
+                .ok()
+                .flatten()
+                .unwrap_or(0),
+            last_resolved: store
+                .newest_resolved_refresh_attempt()
+                .ok()
+                .flatten()
+                .unwrap_or((0, 0)),
+            states: store
+                .accounts()
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|a| {
+                            let observed = Observed {
+                                state: a.state,
+                                incarnation: a.incarnation,
+                                revision: a.revision,
+                            };
+                            (a.id, observed)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
 pub fn spawn_event_mirror(
     db: Arc<LedgerDb>,
     ledger: Ledger,
@@ -536,47 +567,27 @@ pub fn spawn_event_mirror(
     router: RouterHandle,
     clock: Clock,
     poll: Duration,
+    baseline: Option<MirrorBaseline>,
 ) -> tokio::task::JoinHandle<()> {
     // Subscribed and read here rather than inside the task: a spawned task does not run until the caller
     // yields, and everything the router broadcast or the store recorded in between would be lost or replayed.
     let mut events = router.subscribe_events();
-    // Watermarks start at the newest row: history before the mirror existed is not replayed on every restart.
-    let mut last_change = store
-        .newest_registry_change_id()
-        .ok()
-        .flatten()
-        .unwrap_or(0);
-    // The pair is the cursor: a batch that ends inside one millisecond resumes at the next id in it.
-    let mut last_resolved: (i64, u64) = store
-        .newest_resolved_refresh_attempt()
-        .ok()
-        .flatten()
-        .unwrap_or((0, 0));
+    let MirrorBaseline {
+        mut last_change,
+        mut last_resolved,
+        mut states,
+    } = baseline.unwrap_or_else(|| MirrorBaseline::read(&store));
     // A deleted holder's incarnation, so an event about it that arrives after the tick wrote its last row is dropped
     // rather than read as a holder the mirror never saw.
     let mut gone: HashMap<String, u64> = HashMap::new();
-    let mut states: HashMap<String, Observed> = store
-        .accounts()
-        .map(|rows| {
-            rows.into_iter()
-                .map(|a| {
-                    let observed = Observed {
-                        state: a.state,
-                        incarnation: a.incarnation,
-                        revision: a.revision,
-                    };
-                    (a.id, observed)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
     // Read before this run's writer lands anything, so it names the previous run's newest row.
     let down_since = match db.read_blocking(|conn| Ok(newest_row_at(conn)?)) {
         Ok(down_since) => down_since,
         Err(error) => {
             tracing::warn!(
                 %error,
-                "the ledger's newest row could not be read; a reset or a wind-down the previous run announced is written again"
+                "the ledger's newest row could not be read, so a reset or a wind-down the previous run announced \
+                 is written again"
             );
             None
         }
@@ -609,11 +620,15 @@ pub fn spawn_event_mirror(
                                 Some(held) => {
                                     record_deletion(&ledger, &account_id, held.state, at);
                                     if to == AccountState::ReauthRequired {
-                                        record_reauth(&ledger, &account_id, at);
+                                        record_transition(&ledger, &account_id, AccountState::Unpaired, AccountState::ReauthRequired, cause, detail.as_deref(), at);
                                     }
                                 }
-                                // A holder the mirror never saw: the registry's own row says it was created.
-                                None if to == AccountState::ReauthRequired => record_reauth(&ledger, &account_id, at),
+                                // A holder the mirror never saw: the registry's own row says it was created. One born
+                                // marked records its move from `unpaired`, as a row born paired does, so its history
+                                // opens the same way.
+                                None if to == AccountState::ReauthRequired => {
+                                    record_transition(&ledger, &account_id, AccountState::Unpaired, AccountState::ReauthRequired, cause, detail.as_deref(), at)
+                                }
                                 None => {}
                             }
                             states.insert(account_id, observed);
@@ -698,11 +713,14 @@ pub fn spawn_event_mirror(
                                 Some(held) => {
                                     record_deletion(&ledger, &account.id, held.state, now);
                                     if account.state == AccountState::ReauthRequired {
-                                        record_reauth(&ledger, &account.id, now);
+                                        record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::ReauthRequired, account.state_cause, None, now);
                                     }
                                 }
-                                // A holder the mirror never saw: the registry's own row says it was created.
-                                None if account.state == AccountState::ReauthRequired => record_reauth(&ledger, &account.id, now),
+                                // A holder the mirror never saw: the registry's own row says it was created. One born
+                                // marked records its move from `unpaired`, as the row born paired below does.
+                                None if account.state == AccountState::ReauthRequired => {
+                                    record_transition(&ledger, &account.id, AccountState::Unpaired, AccountState::ReauthRequired, account.state_cause, None, now)
+                                }
                                 // A row born paired skipped `unpaired`: the transition a pairing on an existing row records is
                                 // recorded for it too, so the account's history opens the same way.
                                 None if account.state == AccountState::Ready && account.state_cause == StateCause::Paired => {
@@ -1243,12 +1261,15 @@ mod tests {
                 lane: Default::default(),
                 flags: Default::default(),
                 chain: Default::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
                 client: ClientClass::ClaudeCode,
                 client_version: None,
             },
             &snapshot,
             &RefusalFacts {
                 kind: "client",
+                code: "drift",
                 reason: "hash".into(),
             },
         );

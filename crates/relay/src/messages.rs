@@ -60,7 +60,7 @@ use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
     relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
     MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
-    UPSTREAM_STALLED, UPSTREAM_UNREACHABLE,
+    UPSTREAM_STALLED, UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
@@ -76,9 +76,9 @@ use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, is_stalled, relay_body, AffinityFacts, Checkin, Drained, HeldText, OnError,
-    Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY, STREAM_CUT,
-    STREAM_STALLED,
+    drain_bounded, is_stalled, is_undecodable, relay_body, AffinityFacts, Checkin, Drained,
+    HeldText, OnError, Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
+    STREAM_CUT, STREAM_STALLED, STREAM_UNDECODABLE,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftGuard,
@@ -1746,6 +1746,8 @@ impl Relay {
                             && !admitted.auxiliary),
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
+                    dialed,
+                    held_out,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
                 })
@@ -1836,6 +1838,7 @@ impl Relay {
                     // Measured here, the one place that knows: the trace of the attempt that follows names the
                     // wait, and so does the completion when no attempt follows.
                     hold.held_ms = started.elapsed().as_millis() as u64;
+                    hold.ran_out = !freed;
                     holds.push(hold);
                     trace.waited(&holds);
                     held_for.push(account_id.clone());
@@ -1908,6 +1911,8 @@ impl Relay {
         at_cap: bool,
         auth_marked: bool,
     ) -> Response {
+        // Each builder takes its status from `exhaustion_status` for its arm, the status the routing log's exhausted
+        // row records as its `answer`.
         let (code, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
                 let failure = accounts_at_cap(admitted.retry_in_place.as_secs());
@@ -2011,7 +2016,7 @@ impl Relay {
                 admitted_pool = ?admitted.pool_id,
                 selected_pool = %selection.pool_id,
                 obstacle = POOL_MOVED,
-                "the key moved between pools after admission; the request is refused"
+                "the key moved between pools after admission, so the request is refused"
             );
             let mut outcome = self.outcome(
                 admitted.trace,
@@ -2052,7 +2057,10 @@ impl Relay {
         // at most once per request.
         let mut credential = match self.credential(account).await {
             Ok(credential) => credential,
-            Err(_) => return Leg::FailOver { auth_marked: false },
+            Err(NoCredential::Marked) => return Leg::FailOver { auth_marked: true },
+            Err(NoCredential::Stale | NoCredential::Unavailable) => {
+                return Leg::FailOver { auth_marked: false }
+            }
         };
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
@@ -2722,12 +2730,17 @@ impl Relay {
         };
 
         let (cooldown, mark, moves_pin) = match verdict {
-            // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (
-                None,
-                Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
-                false,
-            ),
+            // A rejected replay is conclusive: the refreshed token was refused too. The cache refuses that token's
+            // lineage at once, so no leg dials it again while the report below reaches the snapshot.
+            Verdict::Refresh if ctx.replayed => {
+                self.manager
+                    .refuse_rejected(ctx.account, ctx.credential_generation);
+                (
+                    None,
+                    Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
+                    false,
+                )
+            }
             Verdict::Refresh => {
                 // Nothing of the rejection goes back, so a body cut at the bound gives up its connection before
                 // the ladder's waits rather than hold the rest unread through them.
@@ -2752,7 +2765,7 @@ impl Relay {
                             let marked = matches!(
                                 error,
                                 AcquireError::Disconnected
-                                    | AcquireError::ReauthRequired
+                                    | AcquireError::ReauthRequired(..)
                                     | AcquireError::Unpaired
                             );
                             if marked || tries == 2 {
@@ -2762,9 +2775,11 @@ impl Relay {
                                 // row off `ready`, and until that reload the manager's cache refuses the marked
                                 // credential, so no leg dials the account in between. The word is the manager's,
                                 // so the re-report stores what its own write stored.
-                                let mark = matches!(error, AcquireError::ReauthRequired).then_some(
-                                    (AccountState::ReauthRequired, StateCause::RefreshFailed),
-                                );
+                                let mark = matches!(error, AcquireError::ReauthRequired(..))
+                                    .then_some((
+                                        AccountState::ReauthRequired,
+                                        StateCause::RefreshFailed,
+                                    ));
                                 break (None, mark, !marked);
                             }
                             // One wait on the same account, bounded by the manager's own rule: a short refusal
@@ -2819,6 +2834,27 @@ impl Relay {
                 mark.map(|(state, _)| state) != Some(AccountState::ReauthRequired),
             ),
             Verdict::Commit => {
+                // A message request's success on a `funding_required` account is the retry that clears its mark. A
+                // token count is admitted under the same rule, but a counting answer says nothing about the
+                // balance, and neither does an error event the held stream committed on.
+                if ctx.account.state == AccountState::FundingRequired
+                    && ctx.trace.kind != Kind::CountTokens
+                    && (200..300).contains(&head.status)
+                    && first_event.is_none()
+                {
+                    self.router
+                        .report(Report::AccountState {
+                            account_id: ctx.account.id.clone(),
+                            state: AccountState::Ready,
+                            incarnation: generations.0,
+                            lifecycle_generation: generations.1,
+                            credential_generation: generations.2,
+                            cause: StateCause::FundingRetry,
+                            detail: None,
+                            dispatched_at: Some(written_at),
+                        })
+                        .await;
+                }
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
                 // other accounts, and the next flush would overwrite the saved record with it. One lock while
@@ -3275,6 +3311,23 @@ impl Relay {
                 Ok(token) => Credential::from(token),
                 Err(error) => {
                     tracing::warn!(account = %account.id, %error, "no credential for the selected account");
+                    // The manager's store write starts no reload, so a mark this acquisition's refresh landed
+                    // reaches routing through the report the ladder sends for its own.
+                    if let Some(mark) = error.landed_mark() {
+                        self.router
+                            .report(Report::AccountState {
+                                account_id: mark.account_id.clone(),
+                                state: mark.state,
+                                incarnation: mark.incarnation,
+                                lifecycle_generation: mark.lifecycle_generation,
+                                credential_generation: mark.credential_generation,
+                                cause: mark.cause,
+                                detail: None,
+                                dispatched_at: None,
+                            })
+                            .await;
+                        return Err(NoCredential::Marked);
+                    }
                     return Err(NoCredential::Unavailable);
                 }
             },
@@ -3484,7 +3537,7 @@ impl Relay {
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
-            "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
+            "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
         );
         self.router.record_refusal(
             RefusedRequest {
@@ -3502,11 +3555,14 @@ impl Relay {
                 lane: LaneFacts::default(),
                 flags: RequestFlags::default(),
                 chain: ChainFacts::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
                 client: identity.class,
                 client_version: client_version.map(str::to_string),
             },
             RefusalFacts {
                 kind: "client",
+                code: "drift",
                 reason: kind.to_string(),
             },
         );
@@ -3546,8 +3602,9 @@ impl Relay {
     }
 
     /// The relay's own 502 for an upstream response it could not read after the head: `upstream_stalled` when the
-    /// upstream went silent past the idle bound, filed `stream_stalled`, and `upstream_cut` for any other failure (a
-    /// cut connection, a coding the relay cannot read, a payload that does not decode), filed `stream_cut`.
+    /// upstream went silent past the idle bound, filed `stream_stalled`, `upstream_undecodable` for a coding the
+    /// relay cannot read or a payload that does not decode, filed `stream_undecodable`, and `upstream_cut` for a cut
+    /// connection or a body past its bound, filed `stream_cut`.
     async fn unreadable(
         &self,
         trace: &Trace,
@@ -3556,6 +3613,8 @@ impl Relay {
     ) -> Response {
         let (failure, code) = if is_stalled(error) {
             (UPSTREAM_STALLED, STREAM_STALLED)
+        } else if is_undecodable(error) {
+            (UPSTREAM_UNDECODABLE, STREAM_UNDECODABLE)
         } else {
             (UPSTREAM_CUT, STREAM_CUT)
         };
@@ -4031,9 +4090,11 @@ struct Forward<'a, C> {
     trace: &'a Trace,
 }
 
-/// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
-/// is already in `attempted`, so both send the loop back to select without a wire submission.
+/// Why a selected account produced nothing to dispatch with. No answer reaches the caller: the account is
+/// already in `attempted`, so each sends the loop back to select without a wire submission.
 enum NoCredential {
+    /// The acquisition's refresh landed the account's `reauth_required` mark, which is already reported.
+    Marked,
     /// The account row moved between the selection and the acquisition.
     Stale,
     /// The manager or the store has no credential to hand out.
@@ -4331,6 +4392,7 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
             cause,
             detail,
+            dispatched_at: None,
         });
     }
     reports

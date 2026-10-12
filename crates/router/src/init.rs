@@ -58,13 +58,13 @@ const ADMIN: Side = Side {
     container: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8081),
 };
 
-/// The flags of `phoebis init`; a value no flag gives takes its default, or is asked for on a terminal.
+/// The flags of `phoebis init`. A value no flag gives takes its default, or is asked for on a terminal.
 #[derive(clap::Args, Debug)]
 pub struct InitArgs {
-    /// The admin listener's address; 127.0.0.1:8081 when absent.
+    /// The admin listener's address. 127.0.0.1:8081 when absent.
     #[arg(long, value_name = "ADDR")]
     pub admin_listen: Option<SocketAddr>,
-    /// The admin listener's certificate chain, PEM, leaf first; `check-config` and the start read it, `init` does not.
+    /// The admin listener's certificate chain, PEM, leaf first. `check-config` and the start read it, `init` does not.
     #[arg(long, value_name = "PATH", requires = "admin_key")]
     pub admin_cert: Option<PathBuf>,
     /// The admin listener's private key, PEM.
@@ -74,26 +74,26 @@ pub struct InitArgs {
     /// beside it, both listeners on every interface over plain HTTP.
     #[arg(long, conflicts_with_all = ["data_dir", "env_file", "key_file"])]
     pub container: bool,
-    /// The directory of both databases; `data` beside the bootstrap file when absent.
+    /// The directory of both databases. `data` beside the bootstrap file when absent.
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
     /// Writes the admin secret here, with `RUST_LOG=info`, rather than printing it.
     #[arg(long, value_name = "PATH")]
     pub env_file: Option<PathBuf>,
-    /// The storage key file; `storage.key` beside the bootstrap file when absent.
+    /// The storage key file. `storage.key` beside the bootstrap file when absent.
     #[arg(long, value_name = "PATH")]
     pub key_file: Option<PathBuf>,
-    /// Asks nothing, even on a terminal; a value a flag did not give takes its default, and a listener off loopback
+    /// Asks nothing, even on a terminal. A value a flag did not give takes its default, and a listener off loopback
     /// without a pair serves plain HTTP.
     #[arg(long)]
     pub non_interactive: bool,
-    /// The user that owns the key file and the data directory; needs root.
+    /// The user that owns the key file and the data directory. Naming one needs root.
     #[arg(long, value_name = "USER")]
     pub owner: Option<String>,
-    /// The proxy listener's address; 127.0.0.1:8317 when absent.
+    /// The proxy listener's address. 127.0.0.1:8317 when absent.
     #[arg(long, value_name = "ADDR")]
     pub proxy_listen: Option<SocketAddr>,
-    /// The proxy listener's certificate chain, PEM, leaf first; `check-config` and the start read it, `init` does not.
+    /// The proxy listener's certificate chain, PEM, leaf first. `check-config` and the start read it, `init` does not.
     #[arg(long, value_name = "PATH", requires = "proxy_key")]
     pub proxy_cert: Option<PathBuf>,
     /// The proxy listener's private key, PEM.
@@ -863,7 +863,8 @@ fn admin_secret() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn owner_ids(user: &str) -> Result<(u32, u32), InitError> {
+/// `--owner`'s uid and primary gid, refused off root, for `init` and `recover-key` alike.
+pub(crate) fn owner_ids(user: &str) -> Result<(u32, u32), InitError> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(InitError::OwnerNeedsRoot);
     }
@@ -1064,9 +1065,36 @@ mod tests {
             std::fs::write(&config, render(&plan)).unwrap();
             let loaded = crate::config::load_unresolved(&config)
                 .unwrap_or_else(|error| panic!("{name}: {error}\n{}", render(&plan)));
+            // Two absent pairs compare equal, so a shape that passes a pair proves it arrived on both sides first.
+            let (proxy_pair, admin_pair) = (
+                matches!(*name, "proxy-pair" | "container-pairs"),
+                matches!(*name, "off-loopback" | "container-pairs"),
+            );
             assert_eq!(loaded.proxy.listen, plan.proxy.listen, "{name}");
+            assert_eq!(
+                loaded.proxy.tls.is_some(),
+                plan.proxy.tls.is_some(),
+                "{name}"
+            );
+            if proxy_pair {
+                assert!(
+                    loaded.proxy.tls.is_some() && plan.proxy.tls.is_some(),
+                    "{name}"
+                );
+            }
             assert_eq!(loaded.proxy.tls, plan.proxy.tls, "{name}");
             assert_eq!(loaded.admin.listen, plan.admin.listen, "{name}");
+            assert_eq!(
+                loaded.admin.tls.is_some(),
+                plan.admin.tls.is_some(),
+                "{name}"
+            );
+            if admin_pair {
+                assert!(
+                    loaded.admin.tls.is_some() && plan.admin.tls.is_some(),
+                    "{name}"
+                );
+            }
             assert_eq!(loaded.admin.tls, plan.admin.tls, "{name}");
             assert_eq!(loaded.admin.secret_env, plan.secret_env, "{name}");
             assert_eq!(

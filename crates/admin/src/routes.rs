@@ -598,8 +598,7 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 /// `POST .../usage/refresh`: the one manual read of the endpoint, through the poll's own path, so the reading is
 /// recorded to the ledger and handed to the router as a scheduled read is, and the answer is that reading, its
 /// error set when the read failed or the account is backing off. The hold, the concurrency cap and the coalescing
-/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate
-/// limit, and the cache TTL adds no read of its own.
+/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
 async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
@@ -1324,6 +1323,8 @@ pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The router's retry instant per `funding_required` account.
+    pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
     pub held: BTreeMap<String, UtilizationSample>,
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
@@ -1366,6 +1367,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         extra,
+        funding_retries: state
+            .router
+            .funding_retries()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         held: state
             .router
             .samples()
@@ -1451,13 +1459,16 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
     // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
     let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
-        .then(|| {
-            state
-                .store
-                .subscription(&row.id)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
+        .then(|| match state.store.subscription(&row.id) {
+            Ok(subscription) => subscription.unwrap_or_default(),
+            Err(error) => {
+                tracing::warn!(
+                    account = %row.id,
+                    %error,
+                    "the account's tier could not be read, so the view answers as if no subscription were stored"
+                );
+                Default::default()
+            }
         })
         .map(|s| {
             json!({
@@ -1486,6 +1497,10 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         }
     }
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
+    // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
+    let funding_retry_at = (row.state == AccountState::FundingRequired)
+        .then(|| ctx.funding_retries.get(&row.id).copied())
+        .flatten();
     // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
     // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
@@ -1510,6 +1525,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "enabled": row.enabled,
         "cancelled": term.cancelled,
         "state": state_name(row.state),
+        "funding_retry_at": funding_retry_at,
         "identity": row.identity.as_ref().map(|identity| json!({
             "email": identity.email,
             "account_uuid": identity.account_uuid,

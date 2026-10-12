@@ -109,14 +109,10 @@
         }
       }
     },
-    "keepalive": {
-      "max_agents": 1024,
-      "max_retained_bytes": 268435456,
-      "max_sessions": 128
-    },
     "listeners": {
       "metrics": "127.0.0.1:9464",
-      "proxy": "test"
+      "proxy": "test",
+      "proxy_tls": false
     },
     "retention": {
       "body_capture_max_hours": 72
@@ -131,10 +127,10 @@
       "subscription_costs_path": null
     },
     "subscription_costs": {
-      "effective": "2026-10-08",
+      "effective": "2026-10-11",
       "source": "shipped",
       "content": {
-        "effective": "2026-10-08",
+        "effective": "2026-10-11",
         "unit": {
           "defined_by": {
             "band": "out_of_band",
@@ -178,6 +174,7 @@
           "claude-fable-5-1": 10.0,
           "claude-opus-5-5": 2.2,
           "claude-sonnet-5-5": 1.5,
+          "claude-sonnet-5": 1.5,
           "claude-haiku-5-5": 0.1,
           "claude-haiku-4-5": 1.0
         },
@@ -189,9 +186,6 @@
         },
         "overrides": {}
       }
-    },
-    "usage": {
-      "cache_ttl_seconds": 60
     }
   }
 }

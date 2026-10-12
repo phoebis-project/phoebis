@@ -1,6 +1,7 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! have it re-read its listeners' certificate pairs, or copy both databases into a backup.
+//! have it re-read its listeners' certificate pairs, copy both databases into a backup, or discard a stopped
+//! registry's secrets after a lost storage key.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient, ClientError};
 use phoebis_router::backup::{self, BackupArgs};
+use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls_reload::{self, TlsReloadArgs};
 use phoebis_router::{init, tls};
@@ -21,7 +23,7 @@ use phoebis_router::{init, tls};
     about = "Relays Claude Code traffic to Anthropic"
 )]
 struct Cli {
-    /// The bootstrap file; `PHOEBIS_CONFIG` names it when the flag is absent.
+    /// The bootstrap file. `PHOEBIS_CONFIG` names it when the flag is absent.
     #[arg(
         long,
         global = true,
@@ -48,6 +50,8 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
+    /// Discard the registry's secrets after a lost storage key and seal a new canary, on a stopped registry.
+    RecoverKey(RecoverKeyArgs),
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.
     Status(StatusArgs),
@@ -299,14 +303,16 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        Some(Command::RecoverKey(args)) => run_recover_key(&cli.config, &args),
         Some(Command::Status(args)) => run_status(&cli.config, &args),
         Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
-            tokio::runtime::Builder::new_multi_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
-                .build()?
-                .block_on(phoebis_router::app::run(config, async {
+                .build()?;
+            let deadline = phoebis_router::app::ShutdownDeadline::default();
+            let served = runtime.block_on(phoebis_router::app::run_until(config, async {
                     let ctrl_c = tokio::signal::ctrl_c();
                     let mut terminate =
                         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -336,7 +342,11 @@ fn main() -> anyhow::Result<()> {
                         }
                         _ = terminate.recv() => {}
                     }
-                }))
+                }, &deadline));
+            // A writer the budget cut still runs on a blocking thread, which a plain drop of the runtime would wait
+            // for without a bound.
+            runtime.shutdown_timeout(deadline.remaining_at(std::time::Instant::now()));
+            served
         }
     }
 }
@@ -369,6 +379,17 @@ fn run_backup(config_path: &Path, args: &BackupArgs) -> ! {
             std::process::exit(1)
         }
     }
+}
+
+/// `phoebis recover-key`. It never returns: it exits with the run's answer as `backup` does.
+fn run_recover_key(config_path: &Path, args: &RecoverKeyArgs) -> ! {
+    let code = recover_key::run(
+        config_path,
+        args,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout().lock(),
+    );
+    std::process::exit(code)
 }
 
 /// `phoebis status`. It never returns: the result is printed and the process exits while the runtime is still alive,

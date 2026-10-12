@@ -31,6 +31,21 @@ pub enum KeyRefusal {
     Unknown,
 }
 
+impl KeyRefusal {
+    /// The variant in snake case: the word a refused decision's `code` carries beside the display reason.
+    pub fn code(&self) -> &'static str {
+        match self {
+            KeyRefusal::Disabled => "disabled",
+            KeyRefusal::Expired => "expired",
+            KeyRefusal::PoolDisabled => "pool_disabled",
+            KeyRefusal::PoolMissing => "pool_missing",
+            KeyRefusal::Replaced => "replaced",
+            KeyRefusal::Revoked => "revoked",
+            KeyRefusal::Unknown => "unknown",
+        }
+    }
+}
+
 /// The registry as of one `load_registry`. Replaced whole on every write, never mutated, so a request sees one
 /// consistent registry from authentication to selection.
 pub struct RegistrySnapshot {

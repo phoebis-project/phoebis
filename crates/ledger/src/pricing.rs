@@ -234,7 +234,8 @@ impl PriceTable {
     /// Dollars per token at the fast cells, which a fast answer reads whatever its prompt, so a row with a `fast`
     /// block carries no long-context set here. A row without one reads its standard and long-context rates as
     /// `rate_table` carries them, the cells `price_at` selects for a fast answer on it, and the fallback is
-    /// `rate_table`'s, so a pin's fast usage on a model the table lacks prices as its row does.
+    /// `rate_table`'s, so a pin's fast usage on a model the table lacks prices at the same fallback as the pin's
+    /// dollar copy.
     pub fn fast_rate_table(&self) -> phoebis_routing::RateTable {
         let dollars = self.rate_table();
         let long_context = dollars
@@ -494,8 +495,8 @@ mod tests {
         assert!(
             message.starts_with("pricing table: ")
                 && message.contains("long_context")
-                && message.contains("missing field"),
-            "{message}"
+                && message.contains("missing field `output`"),
+            "the refusal names the cell the block leaves out: {message}"
         );
     }
 

@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(
             more_rows.len(),
             1,
-            "the two boundaries refresh in place; only b3 is new"
+            "the two boundaries refresh in place, and only b3 is new"
         );
     }
 
@@ -1021,17 +1021,17 @@ mod tests {
         assert_eq!(
             recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 600),
             (3_600_000, 300_000),
-            "the static prefix was read and keeps the hour; the tail was written for five minutes"
+            "the static prefix was read and keeps the hour, and the tail was written for five minutes"
         );
         assert_eq!(
             recorded_ttls(five, (five, five), (Some(0), Some(200)), 600),
             (300_000, 3_600_000),
-            "the static prefix was read and keeps five minutes; the tail was written for an hour"
+            "the static prefix was read and keeps five minutes, and the tail was written for an hour"
         );
         assert_eq!(
             recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 100),
             (3_600_000, 300_000),
-            "any read leaves the static tier at its marker's lifetime; the written tail takes the split's TTL"
+            "any read leaves the static tier at its marker's lifetime, and the written tail takes the split's TTL"
         );
     }
 

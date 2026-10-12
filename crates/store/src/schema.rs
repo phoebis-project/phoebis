@@ -81,11 +81,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (49, V49),
     (50, V50),
     (51, V51),
+    (52, V52),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 51;
+pub const SCHEMA_VERSION: u32 = 52;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -737,3 +738,12 @@ const V50: &str = "DROP TABLE keepalive_budgets;";
 // answer a request continues rather than the session's last one. Nullable: a static entry never carries one, nor
 // does a row from before the column.
 const V51: &str = "ALTER TABLE affinity ADD COLUMN message_id TEXT;";
+
+// A fast pin's burn beside its standard and banded copies, so a restart reads it as saved.
+const V52: &str = r#"
+ALTER TABLE pins ADD COLUMN burn_fast_input REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_fast_cache_read REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_fast_write_5m REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_fast_write_1h REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_fast_output REAL NOT NULL DEFAULT 0;
+"#;

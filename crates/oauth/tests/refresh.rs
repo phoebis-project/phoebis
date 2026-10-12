@@ -333,11 +333,11 @@ async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert_eq!(
         up.requests().len(),
@@ -368,7 +368,7 @@ async fn a_definitive_refresh_failure_and_the_quarantine_store_refresh_failed() 
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     let row = store.account("a").unwrap().unwrap();
     assert_eq!(
@@ -555,7 +555,7 @@ async fn a_second_lost_response_leaves_the_attempt_pending_and_a_restart_quarant
     assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     up.shutdown().await;
 }
@@ -683,7 +683,7 @@ async fn a_refreshed_bundle_with_a_foreign_account_uuid_is_rejected() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     assert_eq!(
         store
@@ -1155,7 +1155,7 @@ async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     up.release();
     assert!(matches!(
         refreshing.await.unwrap(),
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
 
     assert!(
@@ -1268,7 +1268,7 @@ async fn a_reauth_verdict_from_a_previous_incarnation_is_dropped() {
         .await
         .expect("the refresh finished")
         .unwrap();
-    assert!(matches!(outcome, Err(AcquireError::ReauthRequired)));
+    assert!(matches!(outcome, Err(AcquireError::ReauthRequired(..))));
 
     assert_eq!(
         store.account("a").unwrap().unwrap().state,
@@ -1345,7 +1345,7 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
     up.release();
     assert!(matches!(
         refreshing.await.unwrap(),
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
 
     assert!(
@@ -1643,7 +1643,7 @@ async fn a_refresh_traces_its_steps() {
         .unwrap();
     assert!(matches!(
         mgr.acquire("a").await,
-        Err(AcquireError::ReauthRequired)
+        Err(AcquireError::ReauthRequired(..))
     ));
     up.shutdown().await;
 
@@ -1681,4 +1681,43 @@ async fn a_refresh_traces_its_steps() {
         !text.contains("refresh_token="),
         "a refresh token reached the trace: {text}"
     );
+}
+
+/// A replay the upstream rejects after the operator paired the slot again refuses a credential the pairing already
+/// replaced: the cache keeps the replacement, and an acquisition that names no generation serves it.
+#[tokio::test]
+async fn a_replay_refused_after_a_re_pairing_leaves_the_replacement_serving() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    let bundle = |token: &str| NewBundle {
+        access_token: Secret::new(token),
+        refresh_token: Some(Secret::new("rt")),
+        issued_at: 1_000_000,
+        expires_at: 1_000_000 + 3_600_000,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    };
+    let replayed = store
+        .commit_credentials("a", 1, 1, None, None, &bundle("replayed"))
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    let token = mgr.acquire_for(&row, Some(replayed)).await.unwrap();
+    assert_eq!(token.secret.expose(), "replayed", "the replay's token");
+    // The operator pairs the slot again while the replay is upstream. No disconnect, so the lifecycle stays.
+    store
+        .commit_credentials("a", 1, 1, Some(replayed), None, &bundle("paired"))
+        .unwrap();
+    mgr.invalidate("a");
+    mgr.refuse_rejected(&row, replayed);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "paired",
+        "the usage poll's acquisition serves the replacement"
+    );
+    assert_eq!(
+        mgr.acquire_for(&row, None).await.unwrap().secret.expose(),
+        "paired",
+        "so does a leg still carrying the row it was admitted on"
+    );
+    up.shutdown().await;
 }

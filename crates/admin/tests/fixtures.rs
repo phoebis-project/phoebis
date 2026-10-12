@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{get, json, login, patch, post, wait_json};
-use fake_upstream::{stays_for, wait_for};
+use fake_upstream::stays_for;
 use phoebis_bus::{
     AccountSelected, Event, Kind, Origin, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts, Usage,
 };
 use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
-    RequestRecord, BATCH_RETRY_HOLD,
+    RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
@@ -85,10 +85,10 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
 /// engine's with its in-flight cap, and the model rule count's.
-/// The burn window and the source dwell have no ceiling at the route, so the form's open maximum on each has no
-/// answer to mirror and only their floors are probed. A probe that sends another field beside the probed one names
-/// it under `with`, so a replay sends the same body. An admitted probe is written back at once from the list read
-/// taken before the probes, so each probe meets the seeded pool, as the captures after these do.
+/// The burn window and the source dwell are probed at their floor and at their week's ceiling. A probe that sends
+/// another field beside the probed one names it under `with`, so a replay sends the same body. An admitted probe is
+/// written back at once from the list read taken before the probes, so each probe meets the seeded pool, as the
+/// captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -134,8 +134,8 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         }
     }
     for (field, values) in [
-        ("burn_window_seconds", &[60, 59][..]),
-        ("source_dwell_seconds", &[60, 59]),
+        ("burn_window_seconds", &[60, 59, 604_800, 604_801][..]),
+        ("source_dwell_seconds", &[60, 59, 604_800, 604_801]),
         ("retry_in_place_seconds", &[0, 300, 301]),
         ("overage_move_grace_minutes", &[0, 300, 301]),
         ("wind_down_minutes", &[0, 10_080, 10_081]),
@@ -351,7 +351,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .as_str()
         .expect("a created key answers its secret once")
         .to_string();
-    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    // The key's generation is the stamp the store gave it, read back rather than assumed.
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let planted = planted(access_token, refresh_token, &key_secret);
     let mut key_created = created.clone();
@@ -401,6 +401,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
         })
@@ -487,7 +489,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cohort: Some("direct".into()),
                 held_ms: 1_250,
                 attempt: 1,
+                seq: 1,
+                ran_out: false,
             }],
+            dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
         })
@@ -532,7 +538,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     window: "seven_day".into(),
                     utilization: Some(0.41),
                     reset_at: Some(now + 86_400_000),
-                    source: "header".into(),
+                    source: "head".into(),
                     observed_at: None,
                 },
                 QuotaSampleRecord {
@@ -583,6 +589,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             auto_mode: Some("server".into()),
             held: Some(placed_held),
             diagnostics_source: Some("router".into()),
+            // The serving attempt started 400 ms in, so the head and the first content follow its write.
+            ttfb_ms: Some(400 + 120),
+            ttfc_ms: Some(400 + 300),
             ..request(
                 key_generation,
                 "r-failover",
@@ -1144,7 +1153,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
     drop(selected);
     routing_stories(&parts, &cookie, key_generation).await;
     let hour_start = jiff::Timestamp::from_millisecond(hour_ago).unwrap();
-    let hour_end = jiff::Timestamp::from_millisecond(now).unwrap();
+    // The clock the start row stepped, so the page holds that row.
+    let hour_end = jiff::Timestamp::from_millisecond(
+        parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst),
+    )
+    .unwrap();
     let every_kind = phoebis_ledger::DECISION_KINDS
         .iter()
         .chain([&phoebis_ledger::PROBE_KIND])
@@ -1227,6 +1240,22 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "the static rung accepted a live entry: {}",
         chosen["prefix"]
     );
+    let started = log["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "router_started")
+        .expect("the hour holds the start row");
+    assert!(
+        started["detail"]["down_since"].as_i64().unwrap() < started["at"].as_i64().unwrap(),
+        "the start dates its gap from a row written before it: {started}"
+    );
+    let failover = json(get(app, "/admin/requests/r-failover", Some(&cookie)).await).await;
+    let phases = &failover["request"]["phases"];
+    assert!(
+        phases["written_at"].as_i64().unwrap() < phases["head_at"].as_i64().unwrap(),
+        "the serving attempt's write precedes the request's head: {phases}"
+    );
     for (name, route, body) in [
         ("decision", decision_route.to_string(), decision),
         ("routing_log", log_route, log),
@@ -1248,55 +1277,26 @@ async fn every_route_is_captured_and_holds_its_shape() {
 /// wide for the capped file, and the clock steps past the bound while the replay waits, then a hold at a time once the
 /// disk is freed, until the batch lands.
 async fn replay_held(parts: &common::Full, cookie: &str) -> Value {
-    let step = |by: Duration| {
-        parts
-            .clock_cell
-            .fetch_add(by.as_millis() as i64, std::sync::atomic::Ordering::SeqCst)
-    };
-    let retrying = || {
-        parts
-            .ledger
-            .stats()
-            .retrying
-            .load(std::sync::atomic::Ordering::SeqCst)
-    };
-    parts.db.fill_the_disk();
-    parts
-        .ledger
-        .record_request(Record::Request {
-            request: RequestRecord {
-                user_agent: Some("x".repeat(512 << 10)),
-                ..request(0, "held", common::NOW, "desktop", "s1", 200, "succeeded")
-            },
-            attempts: vec![],
-            bodies: None,
-        })
-        .await;
-    wait_for(Duration::from_secs(5), || (retrying() == 1).then_some(())).await;
+    common::hold_the_writer(
+        parts,
+        request(0, "held", common::NOW, "desktop", "s1", 200, "succeeded"),
+        vec![],
+    )
+    .await;
     let asked = tokio::spawn({
         let (app, cookie) = (parts.app.clone(), cookie.to_string());
         async move { post(&app, "/admin/ledger/parked/replay", "", Some(&cookie)).await }
     });
     stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
-    step(Duration::from_secs(31));
+    common::step_past_replay_bound(parts);
     let refused = tokio::time::timeout(Duration::from_secs(5), asked)
         .await
         .expect("the route answers once its bound passed")
         .unwrap();
     assert_eq!(refused.status(), 503);
     let body = json(refused).await;
-    parts.db.free_the_disk();
-    for _ in 0..10 {
-        step(BATCH_RETRY_HOLD);
-        let until = std::time::Instant::now() + Duration::from_secs(1);
-        while retrying() != 0 && std::time::Instant::now() < until {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        if retrying() == 0 {
-            return body;
-        }
-    }
-    panic!("the held batch never landed");
+    common::free_the_writer(parts).await;
+    body
 }
 
 /// A selection of the desktop key on `claude-sonnet-5` at the capture's instant, as the relay asks for its first
@@ -1346,6 +1346,8 @@ fn asked(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        dialed: false,
+        held_out: false,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
     }
@@ -1510,6 +1512,58 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         SelectResult::Held { hold, .. } => hold,
         other => panic!("the account at its cap holds the request, not {other:?}"),
     };
+
+    // Held, then exhausted: with both members at their cap no slot frees within the pool's 60-second bound, so the
+    // relay marks the wait run out, passes the other member over once the request's one bound has passed, and the
+    // selection after finds both attempted with no leg dialed, answered as a pool at its cap. Its id sorts below the
+    // held and exhausted stories', whose rows the console's decoder tests read first.
+    let direct_busy = parts.router.in_flight().dispatched("direct", now);
+    let capped = parts
+        .router
+        .select(asked(parts, key_generation, "r-capped", 1, None))
+        .await
+        .unwrap();
+    let wait = match capped.result {
+        SelectResult::Held { hold, .. } => phoebis_routing::HoldFacts {
+            held_ms: 60_000,
+            ran_out: true,
+            ..hold
+        },
+        other => panic!("a pool with every member at its cap holds the request, not {other:?}"),
+    };
+    let passed = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec![wait.account_id.clone()],
+            holds: vec![wait.clone()],
+            ..asked(parts, key_generation, "r-capped", 2, None)
+        })
+        .await
+        .unwrap();
+    let passed_over = match passed.result {
+        SelectResult::Held { account_id, .. } => account_id,
+        other => panic!("the other member at its cap holds the request too, not {other:?}"),
+    };
+    assert_ne!(
+        passed_over, wait.account_id,
+        "the second hold is on the other member"
+    );
+    let exhausted = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec![wait.account_id.clone(), passed_over],
+            holds: vec![wait],
+            held_out: true,
+            ..asked(parts, key_generation, "r-capped", 3, None)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        exhausted.result,
+        SelectResult::Exhausted(phoebis_routing::Exhaustion::Untimed),
+        "with both members attempted the run-out exhausts the pool untimed"
+    );
+    drop(direct_busy);
     drop(busy);
     let after_hold = parts
         .router
@@ -1685,17 +1739,6 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
 
     // The kinds no report or route of this harness writes, each as its writer builds it.
     let at = |minute: i64| hour_ago + minute * 60_000;
-    parts.ledger.record(Record::RouterStarted {
-        version: "0.0.0-fixture".into(),
-        counts: phoebis_routing::LoadCounts {
-            pins: 3,
-            windows: 2,
-            affinity_entries: 5,
-            shed_marks: 2,
-            shed_rounds_stale: 1,
-        },
-        at: at(1),
-    });
     let routed = [
         RouterEvent::SheddingRound {
             account_id: "business".into(),
@@ -1841,7 +1884,12 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             detail: Some(j!({ "request_id": "r-gap", "reason": "chunk_skipped" }).to_string()),
             ..written(12, "ledger_gap")
         },
-        written(13, "reauth_required"),
+        EventRecord {
+            detail: Some(
+                j!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null }).to_string(),
+            ),
+            ..written(13, "account_state_changed")
+        },
         EventRecord {
             detail: Some(
                 j!({ "until": now + 3_600_000, "access_expires_at": now + 3_600_000, "refresh_expires_at": null })
@@ -1876,4 +1924,19 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     ] {
         parts.ledger.record(Record::Event(event));
     }
+
+    // The start row lands last, a minute past the capture's instant on a clock stepped by the same minute, so the
+    // writer dates its `down_since` from the newest row seeded before it. A story added later lands above this seed.
+    common::step(parts, Duration::from_secs(60));
+    parts.ledger.record(Record::RouterStarted {
+        version: "0.0.0-fixture".into(),
+        counts: phoebis_routing::LoadCounts {
+            pins: 3,
+            windows: 2,
+            affinity_entries: 5,
+            shed_marks: 2,
+            shed_rounds_stale: 1,
+        },
+        at: now + 60_000,
+    });
 }

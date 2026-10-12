@@ -446,6 +446,8 @@ async fn select_main(r: &Rig) -> SelectResult {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane,
             fast: false,
         })
@@ -715,6 +717,8 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
         })
@@ -1218,6 +1222,8 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 marker: false,
                 parent_agent_id: None,
                 holds: Vec::new(),
+                dialed: false,
+                held_out: false,
                 lane: lane_key(&pin.model, "standard", "none", "-"),
                 fast: false,
             })
@@ -1544,9 +1550,19 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     r.advance(3_600_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.engine.stats().retained_bytes),
-        (Reason::IdleLimit, 0)
+        (
+            r.status("main").reason,
+            r.engine.stats().retained_bytes,
+            r.status("main").unanswered
+        ),
+        (Reason::IdleLimit, 0, 1),
+        "the ceiling keeps the probe pending"
     );
+    // The probe's entry ended long before the ceiling, so the next tick's lapse settles it, and the save that drops
+    // the probe, which the production flusher runs on its own, sends the settlement to the ledger.
+    r.advance(1_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
             r.db.read_blocking(|c| {
@@ -1566,6 +1582,90 @@ async fn the_retention_rules_reach_a_paused_recipe() {
             .get("idle_limit")
             .copied(),
         Some(1)
+    );
+}
+
+/// The idle limit ends the recipe and keeps what it paid for: the probe stays among the kept ones under the pending label
+/// `idle_limit` with its funding and its coverage, and the first tick at its entry's end settles it under that label.
+#[tokio::test]
+async fn the_idle_limit_ends_the_recipe_with_its_probe_kept_pending_until_the_entry_lapses() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one probe before the limit");
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.reason,
+            r.engine.stats().retained_bytes,
+            status.unanswered
+        ),
+        (Reason::IdleLimit, 0, 1),
+        "the recipe ended with its probe kept: {status:?}"
+    );
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let kept = &payload["kept"];
+    assert_eq!(
+        (
+            kept.as_array().map(Vec::len),
+            kept[0]["pending"].as_str(),
+            kept[0]["kind"].as_str(),
+            kept[0]["in_overage"].as_bool(),
+            kept[0]["covered"].as_bool(),
+            kept[0]["unit"].as_str(),
+            kept[0]["entry_expires"].as_i64(),
+        ),
+        (
+            Some(1),
+            Some("idle_limit"),
+            Some("api_key"),
+            Some(false),
+            Some(true),
+            Some("usd"),
+            Some(NOW + 570_000)
+        ),
+        "{kept}"
+    );
+    r.advance(29_999);
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "pending a millisecond before its entry ends"
+    );
+    r.advance(1);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
+    // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
+    r.engine.flush_persisted().await;
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        rows.iter()
+            .any(|row| row.wasted_probes == 1)
+            .then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.wasted_probes == 1)
+            .unwrap()
+            .wasted_probe_reasons,
+        std::collections::BTreeMap::from([("idle_limit".to_string(), 1)])
     );
 }
 
@@ -1716,4 +1816,131 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
         "the gate reads the cooldown under the name the router holds, so no probe is dispatched"
     );
     assert_eq!(r.status("main").canonical_model, DATED);
+}
+
+/// A tier read that keeps failing warns once per account and streak. An account deleted while its streak lasts leaves
+/// the streak at the next tick, so a later account under the same id starts its own streak with its own first line.
+#[tokio::test]
+async fn an_account_deleted_during_a_failing_tier_streak_leaves_it_and_a_later_account_warns_again()
+{
+    deleted_during_a_failing_tier_streak(false).await;
+}
+
+/// A tick with no recipe retained skips the router's view, so the streak has to leave at that tick's first read of
+/// the registry for a later account under the same id to warn again.
+#[tokio::test]
+async fn an_account_deleted_while_nothing_is_retained_leaves_its_tier_streak_too() {
+    deleted_during_a_failing_tier_streak(true).await;
+}
+
+/// With `session_ended` the rig's session ends before the deletion, so no recipe is retained at the deletion's tick.
+async fn deleted_during_a_failing_tier_streak(session_ended: bool) {
+    const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
+        on_disk: true,
+        pool: PoolSpec {
+            overage_policy: OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        ..RigSpec::default()
+    })
+    .await;
+    let registry =
+        rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
+    // The tier reads name the column, and so do the registry's reload and an account's insert, so the column is back
+    // while the account goes and comes again.
+    let unreadable = |held: bool| {
+        registry
+            .execute_batch(if held {
+                "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;"
+            } else {
+                "ALTER TABLE accounts RENAME COLUMN subscription_tier_held TO subscription_tier;"
+            })
+            .unwrap();
+    };
+    let warnings = || {
+        captured
+            .text()
+            .lines()
+            .filter(|line| line.contains("the account's tier could not be read"))
+            .count()
+    };
+    r.observe("main").await;
+    unreadable(true);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, warnings()),
+        (1, 1),
+        "the first failing read starts the streak:\n{}",
+        captured.text()
+    );
+
+    unreadable(false);
+    if session_ended {
+        // The lease lapsed during the wait, and only a start takes the session back for its end to land.
+        r.reregister();
+        r.event(session_end("session")).unwrap();
+        assert_eq!(r.status("main").reason, Reason::SessionEnded);
+    }
+    r.h.store.delete_account("o", "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.step().await;
+    r.h.store
+        .insert_account(&relay_common::test_account_row(&oauth(
+            "o",
+            OAUTH_SECRET,
+            0,
+        )))
+        .unwrap();
+    let incarnation = r.h.store.account("o").unwrap().unwrap().incarnation;
+    r.h.store
+        .commit_credentials(
+            "o",
+            incarnation,
+            1,
+            None,
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new(OAUTH_SECRET),
+                refresh_token: None,
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "o".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    unreadable(true);
+    if session_ended {
+        r.event(session_start("session")).unwrap();
+    }
+
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("o"));
+    assert_eq!(
+        warnings(),
+        2,
+        "the later account's first failing read warns:\n{}",
+        captured.text()
+    );
 }

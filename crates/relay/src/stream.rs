@@ -36,11 +36,12 @@ const CHANNEL_DEPTH: usize = 64;
 /// larger body is forwarded after the prefix when the verdict forwards it.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
-/// The three ways a body ends short, the request row's `error_code`: under `incomplete` on a 200, and a cut or a
-/// stall under `failed` on any other status.
+/// The four ways a body ends short, the request row's `error_code`: under `incomplete` on a 200, and a cut, a stall
+/// or a body that does not decode under `failed` on any other status.
 pub const STREAM_CUT: &str = "stream_cut";
 pub const STREAM_INCOMPLETE: &str = "stream_incomplete";
 pub const STREAM_STALLED: &str = "stream_stalled";
+pub const STREAM_UNDECODABLE: &str = "stream_undecodable";
 
 /// Per-chunk bound on what a decoder may hand back for one upstream chunk: an 8 KiB compressed chunk can
 /// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
@@ -702,8 +703,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         }
                     }
                     Err(error) => {
+                        let cut = Cut::of_decode(&error);
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(Cut::Transport);
+                        break 'body BodyEnd::Failed(cut);
                     }
                 }
             }
@@ -734,8 +736,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let piece = match decode_piece(decoder.as_mut(), chunk.clone()) {
                     Ok(piece) => piece,
                     Err(error) => {
+                        let cut = Cut::of_decode(&error);
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(Cut::Transport);
+                        break 'body BodyEnd::Failed(cut);
                     }
                 };
                 // Published before the piece goes out, so a late rate-limit error is acted on no later than the
@@ -765,8 +768,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         }
                     }
                     Err(error) => {
+                        let cut = Cut::of_decode(&error);
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(Cut::Transport);
+                        break 'body BodyEnd::Failed(cut);
                     }
                     Ok(_) => {}
                 }
@@ -826,6 +830,7 @@ enum BodyEnd {
 enum Cut {
     Stalled,
     Transport,
+    Undecodable,
 }
 
 impl Cut {
@@ -833,6 +838,17 @@ impl Cut {
         match self {
             Cut::Stalled => STREAM_STALLED,
             Cut::Transport => STREAM_CUT,
+            Cut::Undecodable => STREAM_UNDECODABLE,
+        }
+    }
+
+    /// A decoder's failure: undecodable when the decoder refused the payload, and a cut for the per-chunk bound, so
+    /// the streamed body files the two errors as `unreadable` files them on a buffered one.
+    fn of_decode(error: &TransportError) -> Cut {
+        if is_undecodable(error) {
+            Cut::Undecodable
+        } else {
+            Cut::Transport
         }
     }
 }
@@ -941,4 +957,9 @@ fn stalled() -> TransportError {
 /// Whether `error` is the idle bound's: the upstream went silent past it.
 pub(crate) fn is_stalled(error: &TransportError) -> bool {
     matches!(error, TransportError::Io(error) if error.get_ref().is_some_and(|inner| inner.is::<Stalled>()))
+}
+
+/// Whether `error` is a decoder's refusal: a coding the relay cannot read, or a payload that does not decode.
+pub(crate) fn is_undecodable(error: &TransportError) -> bool {
+    matches!(error, TransportError::Decode(_))
 }

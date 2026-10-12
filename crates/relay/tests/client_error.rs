@@ -97,6 +97,8 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            dialed: false,
+            held_out: false,
             lane,
             fast: false,
         })

@@ -7,6 +7,7 @@
     "enabled": true,
     "cancelled": false,
     "state": "ready",
+    "funding_retry_at": null,
     "identity": {
       "email": "test@example.invalid",
       "account_uuid": "00000000-0000-4000-8000-000000000001",

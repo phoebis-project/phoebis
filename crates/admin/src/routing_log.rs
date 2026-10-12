@@ -63,7 +63,8 @@ pub(crate) async fn list(
         (Ok(from), Ok(to)) => (from.unwrap_or(now - HOUR_MS), to.unwrap_or(now)),
         (Err(error), _) | (_, Err(error)) => return failure(StatusCode::BAD_REQUEST, &error),
     };
-    let kinds = q.contains_key("kinds").then(|| list_param(&q, "kinds"));
+    // An emptied list reads as an absent one, the default set, as the emptied fields below do.
+    let kinds = Some(list_param(&q, "kinds")).filter(|kinds| !kinds.is_empty());
     if let Some(unknown) = kinds.iter().flatten().find(|kind| {
         let kind = kind.as_str();
         kind != PROBE_KIND && !DECISION_KINDS.contains(&kind) && !EVENT_KINDS.contains(&kind)

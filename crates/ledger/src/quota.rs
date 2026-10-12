@@ -100,7 +100,7 @@ pub(crate) fn samples_from_unified(
                 window: window.into(),
                 utilization,
                 reset_at,
-                source: "header".into(),
+                source: "head".into(),
                 observed_at: Some(observed_at),
             });
         }
@@ -116,7 +116,7 @@ pub(crate) fn samples_from_unified(
         currency: None,
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
-        source: "header".into(),
+        source: "head".into(),
     });
     (quota, extra)
 }
@@ -419,22 +419,26 @@ impl QuotaPoll {
         })
     }
 
-    /// One account's reading through the service's hold, concurrency cap and coalescing, past its cache TTL: a
-    /// clean snapshot is recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
+    /// One account's reading through the service's hold, concurrency cap and coalescing: a clean snapshot is
+    /// recorded to the ledger and, when `router` is given, reported to it as `Report::Sample`
     /// and, when the snapshot carries the evidence, `Report::Overage` and `Report::Credits`, before this returns.
     /// The service's answer is returned as it came, so a caller that shows it shows what was recorded: a snapshot
     /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
     /// error is a read that never completed. The scheduler calls it with the router and keeps nothing of the
-    /// answer, and the startup step counts a clean snapshot as reported. The profile is `refresh_profile`'s.
+    /// answer, and the startup step counts a clean snapshot as reported. A reauth mark the read's acquisition landed
+    /// reaches the router as `Report::AccountState` when `router` is given. The profile is `refresh_profile`'s.
     pub async fn poll_account(
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
     ) -> Result<UsageSnapshot, UsageError> {
-        // The service's hold, concurrency cap and coalescing apply and its cache TTL does not; a snapshot with
-        // an error is a stale one, and a stale sample must not be written under a fresh bucket.
-        match usage.poll(&account.id).await {
+        let answer = usage.poll(&account.id).await;
+        if let Some(router) = router {
+            Self::report_landed_mark(usage, router, &account.id).await;
+        }
+        // A snapshot with an error is a stale one, and a stale sample must not be written under a fresh bucket.
+        match answer {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);
                 ledger.record(Record::Samples { quota, extra });
@@ -480,17 +484,20 @@ impl QuotaPoll {
         }
     }
 
-    /// The profile row's refresh; a failure is logged and nothing else. A stored tier the profile changes asks
-    /// the router to reload, since the snapshot's tier prices the router's own use of the account's windows.
+    /// The profile row's refresh. A failure is logged, and a reauth mark its acquisition landed reaches the router as
+    /// `poll_account` reports one. A stored tier the profile changes asks the router to reload, since the snapshot's
+    /// tier prices the router's own use of the account's windows.
     pub async fn refresh_profile(
         store: &Store,
         usage: &UsageService,
         router: &RouterHandle,
         account: &AccountRow,
     ) {
+        let answer = usage.profile(&account.id).await;
+        Self::report_landed_mark(usage, router, &account.id).await;
         // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
         // admin views show what it says.
-        match usage.profile(&account.id).await {
+        match answer {
             Ok(profile) => {
                 let before = store
                     .subscription(&account.id)
@@ -510,6 +517,26 @@ impl QuotaPoll {
             Err(error) => {
                 tracing::debug!(account = %account.id, %error, "the quota poll got no profile")
             }
+        }
+    }
+
+    /// Reports the reauth mark the service's last acquisition for the account landed, as the relay reports its own:
+    /// the manager's store write starts no reload, so without the report the routing would select the account until
+    /// the next one.
+    async fn report_landed_mark(usage: &UsageService, router: &RouterHandle, account_id: &str) {
+        if let Some(mark) = usage.take_landed_mark(account_id) {
+            router
+                .report(Report::AccountState {
+                    account_id: mark.account_id,
+                    state: mark.state,
+                    incarnation: mark.incarnation,
+                    lifecycle_generation: mark.lifecycle_generation,
+                    credential_generation: mark.credential_generation,
+                    cause: mark.cause,
+                    detail: None,
+                    dispatched_at: None,
+                })
+                .await;
         }
     }
 
@@ -620,14 +647,14 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             [
-                ("five_hour", Some(0.42), Some(2_000_000), 1_200, "header"),
-                ("seven_day", Some(0.13), None, 1_200, "header"),
+                ("five_hour", Some(0.42), Some(2_000_000), 1_200, "head"),
+                ("seven_day", Some(0.13), None, 1_200, "head"),
                 (
                     "seven_day_overage_included",
                     Some(0.91),
                     None,
                     1_200,
-                    "header"
+                    "head"
                 )
             ]
         );
@@ -641,7 +668,7 @@ mod tests {
                 extra.used_credits,
                 extra.source.as_str()
             ),
-            (true, Some(true), Some(0.5), Some(3_000_000), None, "header")
+            (true, Some(true), Some(0.5), Some(3_000_000), None, "head")
         );
         assert_eq!(samples_from_head("a", &[], 1), (vec![], None));
     }

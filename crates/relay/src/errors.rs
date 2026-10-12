@@ -4,7 +4,7 @@
 use axum::body::Body;
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
-use phoebis_routing::KeyRefusal;
+use phoebis_routing::{exhaustion_status, Exhaustion, KeyRefusal};
 
 use crate::auth::AuthError;
 use crate::{BodyMember, RelayError};
@@ -46,6 +46,15 @@ pub fn anthropic_error(
         .body(Body::from(body))
         // Every argument above is either a validated `StatusCode` or ASCII this function just built.
         .expect("a local error response is always well formed")
+}
+
+/// The status an exhaustion is answered with, the routing crate's, which the routing log's exhausted row records as
+/// its `answer`, so the row and the client cannot disagree.
+pub(crate) const fn exhaustion_status_code(exhaustion: &Exhaustion, at_cap: bool) -> StatusCode {
+    match StatusCode::from_u16(exhaustion_status(exhaustion, at_cap)) {
+        Ok(status) => status,
+        Err(_) => panic!("the exhaustion statuses are valid HTTP statuses"),
+    }
 }
 
 impl Failure {
@@ -122,7 +131,7 @@ const AT_CAP_RETRY_AFTER_MAX: u64 = 19;
 /// `Retry-After` the pool's `retry_in_place_seconds` clamped to 1 through 19.
 pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
     Failure {
-        status: StatusCode::TOO_MANY_REQUESTS,
+        status: exhaustion_status_code(&Exhaustion::Untimed, true),
         error_type: "rate_limit_error",
         code: ACCOUNTS_AT_CAP,
         message: "every account in this pool is at its in-flight cap",
@@ -261,14 +270,16 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
-            message: "the client's version suffix does not reproduce from the prompt and the user agent; re-pin the router to this client version",
+            message: "the client's version suffix does not reproduce from the prompt and the user agent. \
+                      Re-pin the router to this client version",
             retry_after: None,
         },
         RelayError::ClientDrift { .. } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
-            message: "the client's billing hash does not match the pinned profile; re-pin the router to this client version",
+            message: "the client's billing hash does not match the pinned profile. \
+                      Re-pin the router to this client version",
             retry_after: None,
         },
         RelayError::InvalidModel => Failure {
@@ -292,7 +303,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
             error_type: "invalid_request_error",
             code: "unsupported_content_encoding",
-            message: "the request body's content-encoding is not supported; send gzip or identity",
+            message: "the request body's content-encoding is not supported. Send gzip or identity",
             retry_after: None,
         },
     }
@@ -347,7 +358,7 @@ pub(crate) const MODEL_NOT_ALLOWED: Failure = Failure {
 };
 
 pub(crate) const MODEL_REJECTED: Failure = Failure {
-    status: StatusCode::NOT_FOUND,
+    status: exhaustion_status_code(&Exhaustion::ModelRejected, false),
     error_type: "not_found_error",
     code: "model_rejected",
     message: "every account in this pool rejected the model",
@@ -370,8 +381,7 @@ pub(crate) const ROUTER_UNAVAILABLE: Failure = Failure {
     retry_after: None,
 };
 
-/// The upstream sent a head and then its response could not be read: the connection was cut before the body
-/// ended, or the body's coding or payload could not be decoded.
+/// The upstream sent a head and then the connection was cut before the body ended, or the body ran past its bound.
 pub(crate) const UPSTREAM_CUT: Failure = Failure {
     status: StatusCode::BAD_GATEWAY,
     error_type: "api_error",
@@ -386,6 +396,16 @@ pub(crate) const UPSTREAM_STALLED: Failure = Failure {
     error_type: "api_error",
     code: "upstream_stalled",
     message: "the upstream stalled after its head",
+    retry_after: None,
+};
+
+/// The upstream sent a head and then an answer the relay could not decode: a content coding it cannot read, or a
+/// payload that does not decode. Nothing of it is forwarded.
+pub(crate) const UPSTREAM_UNDECODABLE: Failure = Failure {
+    status: StatusCode::BAD_GATEWAY,
+    error_type: "api_error",
+    code: "upstream_undecodable",
+    message: "the upstream response could not be decoded after its head",
     retry_after: None,
 };
 
@@ -451,5 +471,39 @@ mod tests {
             "body_shape",
             "the wire spelling"
         );
+    }
+
+    /// The routing log's exhausted row records the routing crate's status as its `answer`, so the builder the
+    /// relay answers an exhaustion with must carry that same status for the exhaustion's kind and at-cap reading.
+    #[test]
+    fn every_exhaustion_builder_answers_the_status_the_exhausted_row_records() {
+        for exhaustion in [
+            Exhaustion::FastCredits {
+                reason: "out_of_credits".into(),
+            },
+            Exhaustion::FastLane { deadline: 60_000 },
+            Exhaustion::ModelRejected,
+            Exhaustion::Pinned {
+                obstacle: "attempted",
+            },
+            Exhaustion::Timed {
+                deadline: 60_000,
+                window: "five_hour".into(),
+            },
+            Exhaustion::Untimed,
+        ] {
+            for at_cap in [false, true] {
+                let response = if exhaustion == Exhaustion::Untimed && at_cap {
+                    accounts_at_cap(60).response("r-1")
+                } else {
+                    crate::exhaustion::exhaustion_response(&exhaustion, 0, "r-1")
+                };
+                assert_eq!(
+                    response.status().as_u16(),
+                    exhaustion_status(&exhaustion, at_cap),
+                    "{exhaustion:?} at_cap {at_cap}"
+                );
+            }
+        }
     }
 }

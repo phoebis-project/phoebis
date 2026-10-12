@@ -344,7 +344,8 @@ fn render_html(answer: &UsageAnswer) -> String {
          .key{{color:#555;margin:0 0 1rem}}.sum{{margin:0 0 .5rem}}table{{border-collapse:collapse;width:100%}}\
          th,td{{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left}}.n{{text-align:right;font-variant-numeric:tabular-nums}}\
          @media (prefers-color-scheme:dark){{body{{color:#e6e6e6;background:#151515}}th,td{{border-color:#333}}.key{{color:#aaa}}}}</style></head>\
-         <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>; figures from the router's hourly rollups, probes left out; generated <time>{now}</time></p>\
+         <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>, \
+         figures from the router's hourly rollups with probes left out, generated <time>{now}</time></p>\
          {day}{week}</body></html>",
         label = escape_html(&answer.key.label),
         id = escape_html(&answer.key.id),

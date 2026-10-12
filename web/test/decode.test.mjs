@@ -646,7 +646,7 @@ test('a request carries its seven phases as ISO instants and null where the ledg
   assert.equal(ms(phases.writtenAt) - ms(failover.attempts[1].startedAt), 30, "the serving attempt's write");
   assert.deepEqual(
     [phases.headAt, phases.firstContentAt, phases.streamEndAt, phases.finishedAt].map((s) => ms(s) - ms(phases.receivedAt)),
-    [120, 300, 850, 900],
+    [520, 700, 850, 900],
     'the head, the first content, the stream end and the finish follow the receipt',
   );
   const bare = d.decodeRequest({ at: 5, phases: { received_at: 5 } }).phases;
@@ -1525,8 +1525,8 @@ test('settings decode the members the route answers and nothing more', () => {
   const s = d.decodeSettings(wire);
   assert.deepEqual(
     Object.keys(s).sort(),
-    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
-    'the bootstrap caps the route still answers read on the Sessions page, from the overview',
+    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts'],
+    'the decoder reads the members the route answers',
   );
   const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
   assert.deepEqual(
@@ -1540,7 +1540,6 @@ test('settings decode the members the route answers and nothing more', () => {
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
       subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'source', 'typeMultiplier', 'unit'],
-      usage: ['cacheTtlSeconds'],
     },
     'each member carries what the pages read and no other key',
   );
@@ -1548,7 +1547,6 @@ test('settings decode the members the route answers and nothing more', () => {
   assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
-  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
   const configured = d.decodeSettings({ ...wire, storage: { ...wire.storage, api_prices_path: './api_prices.yaml', subscription_costs_path: './subscription_costs.yaml' } }).storage;
   assert.deepEqual([configured.apiPricesPath, configured.subscriptionCostsPath], ['./api_prices.yaml', './subscription_costs.yaml']);
 });
@@ -1566,7 +1564,6 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
-  assert.deepEqual(without('usage'), { cacheTtlSeconds: 0 });
   const bare = { ...wire };
   delete bare.subscription_costs;
   assert.deepEqual(
@@ -1776,7 +1773,7 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
 test('a session decodes its burn unit, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
-  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
+  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5');
   const pinned = d.decodeSession(wire);
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');

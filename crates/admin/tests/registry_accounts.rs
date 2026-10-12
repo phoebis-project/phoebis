@@ -1,5 +1,9 @@
 mod common;
-use common::{backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests};
+use std::sync::Arc;
+
+use common::{
+    backing_off_parts, delete, get, json, login, patch, post, succeed_token_requests, Captured,
+};
 use fake_upstream::Respond;
 
 #[tokio::test]
@@ -131,8 +135,8 @@ async fn a_creation_whose_key_check_fails_at_the_endpoint_is_refused_and_leaves_
         404,
         "a refused creation leaves no row"
     );
-    // The fake reads the request and closes without a head, which is what a host that is down looks like
-    // to the check, and the rule stays scoped to this one credential.
+    // The fake reads the request and closes the connection without a head, and the rule stays scoped to this one
+    // credential.
     up.add_credential_rule(
         "sk-ant-api03-GONE",
         "/v1/models",
@@ -821,6 +825,71 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
     assert_eq!(
         json(get(&app, "/admin/accounts/direct", Some(&cookie)).await).await["state"],
         "ready"
+    );
+}
+
+#[tokio::test]
+async fn an_account_answers_its_funding_retry_while_marked_and_null_once_the_operator_clears_it() {
+    use phoebis_store::{AccountState, StateCause};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let retry_at = || {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let shown = json(get(&app, "/admin/accounts/direct", Some(&cookie)).await).await;
+            assert!(
+                shown.as_object().unwrap().contains_key("funding_retry_at"),
+                "the member is answered on every account: {shown}"
+            );
+            shown["funding_retry_at"].clone()
+        }
+    };
+    assert!(retry_at().await.is_null(), "a ready account has no retry");
+    let snapshot = parts.router.snapshot();
+    let row = snapshot.account("direct").unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::AccountState {
+            account_id: "direct".into(),
+            state: AccountState::FundingRequired,
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
+            credential_generation: snapshot.credential_generation("direct").unwrap_or(1),
+            cause: StateCause::FundingRefused,
+            detail: None,
+            dispatched_at: None,
+        })
+        .await;
+    fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
+        parts
+            .store
+            .account("direct")
+            .unwrap()
+            .filter(|row| row.state == AccountState::FundingRequired)
+    })
+    .await;
+    assert_eq!(retry_at().await, common::NOW + 300_000);
+    // The Clear's reload starts after the mark's stamp, so it reads the registry the Clear wrote.
+    common::step(&parts, std::time::Duration::from_secs(1));
+    assert_eq!(
+        post(
+            &parts.app,
+            "/admin/accounts/direct/clear-funding",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert!(
+        retry_at().await.is_null(),
+        "the operator's Clear drops the retry"
+    );
+    assert!(
+        parts.router.funding_retries().await.unwrap().is_empty(),
+        "the reload after the Clear dropped the entry, not the view alone"
     );
 }
 
@@ -1987,5 +2056,70 @@ async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_
         ),
         (replacement, "sk-ant-api03-NEXT".to_string()),
         "the edit read from the deleted account wrote nothing on its replacement"
+    );
+}
+
+/// A tier the store cannot read leaves the account view answering as it does for an account with none stored, and the
+/// log says why, naming the account and the error, on every read.
+#[tokio::test]
+async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz"}}"#,
+            &phoebis_store::SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+    // The tier read names the column, as the stored term's read does.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    // The harness drives the request through `oneshot` on this test's own task, so a thread-local subscriber sees
+    // every line the route writes.
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let viewed = get(&parts.app, "/admin/accounts/business", Some(&cookie)).await;
+    assert_eq!(viewed.status(), 200);
+    assert_eq!(
+        json(viewed).await["subscription"],
+        serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null, "derived_ends_at": null}),
+        "the view answers as for an account with no subscription stored"
+    );
+    let text = captured.text();
+    let warned: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.contains(
+                "the account's tier could not be read, so the view answers as if no subscription were stored",
+            )
+        })
+        .collect();
+    assert_eq!(warned.len(), 1, "{text}");
+    assert!(
+        warned[0].contains(" WARN ")
+            && warned[0].contains("account=business")
+            && warned[0].contains("no such column: subscription_tier"),
+        "{}",
+        warned[0]
     );
 }

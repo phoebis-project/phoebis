@@ -723,6 +723,181 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     );
 }
 
+/// A probe still in flight when the idle limit ends its recipe joins the probes the ceiling kept once it is answered:
+/// it settles nothing as it lands, waits in the kept list under the pending label `idle_limit` with the funding its
+/// answer carried and the entry it wrote, and settles under that label, at its cost, on the tick its entry ends.
+#[tokio::test]
+async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lapses() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    // 540 s past the last real request, over the 500 s limit, with the probe still in flight.
+    r.advance(270_000);
+    r.engine.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (Reason::IdleLimit, 0),
+        "the ceiling ended the recipe while its probe was in flight"
+    );
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let charged = ledger_probe_cost(&r).await;
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let kept = &payload["kept"];
+    // The probe started 270 s in and its answer kept the five-minute entry the real request proved.
+    assert_eq!(
+        (
+            kept.as_array().map(Vec::len),
+            kept[0]["pending"].as_str(),
+            kept[0]["kind"].as_str(),
+            kept[0]["in_overage"].as_bool(),
+            kept[0]["entry_expires"].as_i64(),
+            kept[0]["covered"].as_bool(),
+        ),
+        (
+            Some(1),
+            Some("idle_limit"),
+            Some("api_key"),
+            Some(false),
+            Some(NOW + 570_000),
+            Some(false)
+        ),
+        "the late answer waits as a pending probe: {kept}"
+    );
+    r.advance(NOW + 570_000 - 1 - r.now());
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "still pending a millisecond before its entry ends"
+    );
+    r.advance(1);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
+    // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
+    r.engine.flush_persisted().await;
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            phoebis_ledger::read_rollups(
+                c,
+                phoebis_ledger::hour_of(NOW) - 3_600,
+                i64::MAX,
+                &phoebis_ledger::RollupSelect::default(),
+            )
+        })
+        .unwrap();
+    let mut reasons = std::collections::BTreeMap::new();
+    let mut wasted_usd = 0.0;
+    for row in rows.iter().filter(|row| row.kind == "probe") {
+        wasted_usd += row.wasted_probe_usd;
+        for (reason, n) in &row.wasted_probe_reasons {
+            *reasons.entry(reason.clone()).or_insert(0) += n;
+        }
+    }
+    assert_eq!(
+        reasons,
+        std::collections::BTreeMap::from([("idle_limit".to_string(), 1)]),
+        "one settlement, at the lapse, under the ceiling's label"
+    );
+    assert!(
+        (wasted_usd - charged).abs() < 1e-12,
+        "at the cost its ledger row carries: {wasted_usd} against {charged}"
+    );
+}
+
+/// A release stops the recipe while its probe is in flight, and the mod starts the agent again before the probe
+/// answers. The late result still settles under the release, once, and leaves the revived agent's bookkeeping alone:
+/// the worker slot comes back, no probe is left unanswered, and the next request arms the record again.
+#[tokio::test]
+async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_release() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.state("main", "released");
+    let generation = r.agent("main").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("main".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .expect("a released agent starts again under the generation its release named");
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.in_flight, status.unanswered),
+        (false, 0),
+        "the late result gave the slot back and kept nothing: {status:?}"
+    );
+    r.observe("main").await;
+    assert!(
+        r.status("main").next_probe_at.is_some(),
+        "the next request arms the revived record"
+    );
+    let reasons = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let mut reasons = std::collections::BTreeMap::new();
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            for (reason, n) in &row.wasted_probe_reasons {
+                *reasons.entry(reason.clone()).or_insert(0) += n;
+            }
+        }
+        (!reasons.is_empty()).then_some(reasons)
+    })
+    .await;
+    assert_eq!(
+        reasons,
+        std::collections::BTreeMap::from([("released".to_string(), 1)]),
+        "the orphaned probe settles once, under the release that left it"
+    );
+}
+
 #[tokio::test]
 async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_flight_flag() {
     let mut r = rig(RigSpec::default()).await;
@@ -1074,7 +1249,7 @@ async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it()
 /// A probe that read nothing and rewrote the whole prefix covers from its own write, and the cold streak still
 /// counts it: a rewrite every probe is a prefix never kept warm, so two in a row pause the recipe at the limit.
 #[tokio::test]
-async fn an_uncovered_rewrite_still_counts_toward_the_cold_probe_limit() {
+async fn a_rewrite_still_counts_toward_the_cold_probe_limit() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         timing: KeepaliveTiming {

@@ -11,7 +11,7 @@ Group=phoebis
 WorkingDirectory=/var/lib/phoebis
 EnvironmentFile=/etc/phoebis/phoebis.env
 ExecStart=/usr/local/bin/phoebis --config /etc/phoebis/config.yaml
-# The router drains in-flight requests for up to 30 seconds after SIGTERM; the stop timeout leaves it that long.
+# The router's shutdown budget is 35 seconds after SIGTERM, and the stop timeout leaves five more.
 KillSignal=SIGTERM
 TimeoutStopSec=40
 Restart=on-failure

@@ -161,6 +161,7 @@ jobs:
         with:
           node-version-file: web/.nvmrc
       - run: cd web && npm ci --no-audit --no-fund && npm run build
+      - run: cd web && node scripts/check-build.mjs
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
       - run: cargo install cross --locked --version 0.2.5
       - run: cross build --release --locked --target ${{ matrix.target }} --package phoebis-router

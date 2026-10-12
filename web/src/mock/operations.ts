@@ -41,20 +41,20 @@ const sessionSpec: {
 }[] = [
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
-  // The laptop key allows Haiku 4.5 and Sonnet 5 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  // The laptop key allows Haiku 4.5 and Sonnet 4.6 only, so its subagents stay inside that list.
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
   // Five of its agents are written below, so it holds an agent in each lifecycle word, three of them released.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting' },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
-  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
+  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-6', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
@@ -455,10 +455,8 @@ export const SETTINGS_WIRE = {
   ...settingsFixture,
   about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
   access: { admin_configured: true },
-  keepalive: { max_agents: 1024, max_retained_bytes: 268_435_456, max_sessions: 128 },
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72 },
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
-  usage: { cache_ttl_seconds: 60 },
 };

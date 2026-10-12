@@ -920,7 +920,6 @@ export function decodeSettings(v: unknown): Settings {
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
-    usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }
 

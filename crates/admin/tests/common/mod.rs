@@ -7,7 +7,7 @@
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::Router;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
     router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
@@ -16,7 +16,8 @@ use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
+    spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
+    PriceTable, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
@@ -50,9 +51,6 @@ pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 pub const NOW: i64 = 1_000_000;
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
-
-/// The usage cache TTL every builder but `admin_parts_polled` runs with, the settings echo's figure.
-const USAGE_TTL: Duration = Duration::from_secs(60);
 
 /// The bound the relay harness gives discovery too, so a fake that never answers cannot hang the suite.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -114,18 +112,7 @@ pub async fn admin_parts_full() -> Full {
 /// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
 /// wires it: a case that needs the router's own `503 ledger_behind` names a reading it can flip.
 pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> Full {
-    full_from(
-        build_app(
-            None,
-            ACCOUNT_UUID,
-            false,
-            None,
-            USAGE_TTL,
-            Some(accounting),
-            None,
-        )
-        .await,
-    )
+    full_from(build_app(None, ACCOUNT_UUID, false, None, Some(accounting), None).await)
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
@@ -136,34 +123,12 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
 pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
-    full_from(
-        build_app(
-            None,
-            ACCOUNT_UUID,
-            false,
-            None,
-            USAGE_TTL,
-            None,
-            Some(prices),
-        )
-        .await,
-    )
+    full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices)).await)
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
 pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
-    full_from(
-        build_app(
-            None,
-            ACCOUNT_UUID,
-            false,
-            Some(store),
-            USAGE_TTL,
-            None,
-            Some(prices),
-        )
-        .await,
-    )
+    full_from(build_app(None, ACCOUNT_UUID, false, Some(store), None, Some(prices)).await)
 }
 
 fn full_from(parts: Parts) -> Full {
@@ -199,6 +164,61 @@ pub fn park_unreadable(db: &LedgerDb, pool: &str, account: &str, at: i64) {
     .unwrap();
 }
 
+/// Steps the harness clock, which the ledger's waits read.
+pub fn step(parts: &Full, by: Duration) {
+    parts
+        .clock_cell
+        .fetch_add(by.as_millis() as i64, Ordering::SeqCst);
+}
+
+/// The writer's retrying count.
+pub fn retrying(parts: &Full) -> u64 {
+    parts.ledger.stats().retrying.load(Ordering::SeqCst)
+}
+
+/// A step past the replay route's bound, so a replay asked for while the writer holds a batch is refused.
+pub fn step_past_replay_bound(parts: &Full) {
+    step(parts, Duration::from_secs(31));
+}
+
+/// Records `request` widened to a 512 KiB row on a filled disk, so the writer holds its batch under retry and takes
+/// no turn between batches until the disk is freed.
+pub async fn hold_the_writer(parts: &Full, request: RequestRecord, attempts: Vec<AttemptRecord>) {
+    parts.db.fill_the_disk();
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (retrying(parts) == 1).then_some(())
+    })
+    .await;
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands: the writer waits on an in-place
+/// retry or on its hold, and reads the clock every 250 ms, so each step gets a second to be seen.
+pub async fn free_the_writer(parts: &Full) {
+    parts.db.free_the_disk();
+    for _ in 0..10 {
+        step(parts, BATCH_RETRY_HOLD);
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < until {
+            if retrying(parts) == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    panic!("the held batch never landed");
+}
+
 /// The generation the store stamped for `key_id`. A companion session belongs to the key and the generation
 /// that registered it, so every engine call names the pair.
 pub fn generation(store: &Store, key_id: &str) -> i64 {
@@ -215,7 +235,7 @@ pub async fn admin_app_paired() -> (Router, FakeUpstream) {
     (parts.app, parts.up)
 }
 
-/// A paired slot with its usage service and the router behind it, the service's cache TTL the test's.
+/// A paired slot with its usage service and the router behind it.
 pub struct Polled {
     pub app: Router,
     pub clock_cell: Arc<AtomicI64>,
@@ -227,14 +247,13 @@ pub struct Polled {
 }
 
 /// No scheduler runs here, so the test reads the endpoint through `usage.poll` where a running router's
-/// schedule would, and a manual refresh reads it through the poll's path whatever TTL the test gives the cache.
-pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
+/// schedule would, and a manual refresh reads it through the poll's path.
+pub async fn admin_parts_polled() -> Polled {
     let parts = build_app(
         Some(fixture_identity()),
         ACCOUNT_UUID,
         false,
         None,
-        usage_ttl,
         None,
         None,
     )
@@ -660,7 +679,7 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None, None).await
+    build_app(identity, upstream_uuid, tls, store, None, None).await
 }
 
 async fn build_app(
@@ -668,14 +687,19 @@ async fn build_app(
     upstream_uuid: &str,
     tls: bool,
     store: Option<Arc<Store>>,
-    usage_ttl: Duration,
     accounting: Option<AccountingSource>,
     prices: Option<PriceTable>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let clock: Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
     let store =
         store.unwrap_or_else(|| Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()));
+    store.set_clock(clock.clone());
     let paired = identity.is_some();
     // A store handed in by the caller already carries its own accounts; seeding it again would collide.
     if store.accounts().unwrap().is_empty() {
@@ -756,11 +780,6 @@ async fn build_app(
         control_builder.build(),
         resolver.clone(),
     ));
-    let clock_cell = Arc::new(AtomicI64::new(NOW));
-    let clock: Clock = {
-        let c = clock_cell.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
-    };
     let manager = Arc::new(CredentialManager::new(
         store.clone(),
         control.clone(),
@@ -771,7 +790,6 @@ async fn build_app(
         manager.clone(),
         control.clone(),
         p,
-        usage_ttl,
         4,
         clock.clone(),
     ));
@@ -853,7 +871,12 @@ async fn build_app(
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),
-        timing: KeepaliveTiming::default(),
+        // No jitter, so a probe's due instant reads the same in every capture.
+        timing: KeepaliveTiming {
+            jitter_5m_ms: 0,
+            jitter_1h_ms: 0,
+            ..KeepaliveTiming::default()
+        },
     });
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
@@ -873,10 +896,10 @@ async fn build_app(
         metrics_listen: "127.0.0.1:9464".into(),
         profile: p.name.into(),
         proxy_listen: "test".into(),
+        proxy_tls: tls,
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
         subscription_costs_path: None,
-        usage_cache_ttl_seconds: 60,
     });
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
@@ -1054,4 +1077,33 @@ fn as_account(body: &[u8], uuid: &str) -> Vec<u8> {
         .unwrap()
         .replace(ACCOUNT_UUID, uuid)
         .into_bytes()
+}
+
+/// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
+#[derive(Clone, Default)]
+pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    pub fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
 }

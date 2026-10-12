@@ -568,6 +568,37 @@ async fn a_quota_probe_names_no_fork_and_leaves_no_content_entry_and_a_fork_need
 }
 
 #[tokio::test]
+async fn an_auxiliary_request_with_a_session_files_a_static_entry() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+    let probe = json!({"model": MODEL, "max_tokens": 1, "messages": [user("quota")]});
+    let probe_chains = phoebis_relay::Chains::read(&probe).unwrap();
+    let static_root = || {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        guard
+            .entry(MODEL, &probe_chains.static_boundaries[0])
+            .map(|entry| entry.root.clone())
+    };
+    let mut rooted = req(&probe);
+    set_header(&mut rooted, "x-claude-code-session-id", "s1");
+    set_header(&mut rooted, "x-claude-code-request-class", "auxiliary");
+    send(&h, rooted).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    assert_eq!(
+        static_root().as_deref(),
+        Some("s1"),
+        "with a root the static boundaries land, a cache of their own"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

@@ -4,7 +4,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
-use crate::{AccountState, StateCause, Store, StoreError, LOCK_POISONED};
+use crate::{AccountState, Clock, StateCause, Store, StoreError, LOCK_POISONED};
 
 /// The identity a pin is held under: one conversation of one agent under one key, per model.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -47,6 +47,9 @@ pub struct PinRow {
     /// The same tokens weighed by the peak band at each renewal: what the 5-hour meter charged, which the
     /// shedding order and a subscription account's figure read; the dollar figure reads `burn`.
     pub burn_banded: PinBurn,
+    /// The pin's fast usage as typed tokens per second over the same window, decayed from `burn_at` as `burn` is,
+    /// and zero for a pin never renewed fast.
+    pub burn_fast: PinBurn,
     pub last_input_tokens: u64,
     /// The last main, subagent or compaction turn, or a keepalive probe's renewal; `last_used_at` moves on every
     /// request, this does not.
@@ -301,6 +304,7 @@ impl Store {
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
                     shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
+                    burn_fast: burn_from(r, 29)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -338,7 +342,8 @@ impl Store {
     ) -> Result<T, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_routing_hold();
-        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { tx })))
+        let clock = self.clock.lock().expect(LOCK_POISONED).clone();
+        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { clock, tx })))
     }
 
     /// One routing commit under the lock, at `synchronous = NORMAL` while every other write of the connection runs
@@ -477,6 +482,7 @@ impl Store {
 
 /// The routing writes on one open transaction; each is the inner form of the public method of the same name.
 pub struct RoutingTx<'a> {
+    pub(crate) clock: Clock,
     pub(crate) tx: &'a Transaction<'a>,
 }
 
@@ -527,6 +533,7 @@ impl RoutingTx<'_> {
     ) -> Result<Option<(u64, AccountState)>, StoreError> {
         set_state_if_generations_on(
             self.tx,
+            (self.clock)(),
             id,
             state,
             cause,
@@ -573,7 +580,8 @@ fn in_transaction<T>(
 
 // `burn_from` reads each copy's five columns in this order, the plain copy first.
 const BURN_COLUMNS: &str = "burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
-     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m";
+     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
+     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m";
 
 fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
@@ -604,7 +612,7 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
             "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
@@ -616,7 +624,10 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
                burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
                burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
                burn_banded_input = excluded.burn_banded_input, burn_banded_output = excluded.burn_banded_output, \
-               burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m"
+               burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m, \
+               burn_fast_cache_read = excluded.burn_fast_cache_read, burn_fast_input = excluded.burn_fast_input, \
+               burn_fast_output = excluded.burn_fast_output, burn_fast_write_1h = excluded.burn_fast_write_1h, \
+               burn_fast_write_5m = excluded.burn_fast_write_5m"
         ),
         params![
             pin.key_id,
@@ -647,7 +658,12 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.burn_banded.input,
             pin.burn_banded.output,
             pin.burn_banded.write_1h,
-            pin.burn_banded.write_5m
+            pin.burn_banded.write_5m,
+            pin.burn_fast.cache_read,
+            pin.burn_fast.input,
+            pin.burn_fast.output,
+            pin.burn_fast.write_1h,
+            pin.burn_fast.write_5m
         ],
     )?;
     Ok(())

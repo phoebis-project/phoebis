@@ -639,7 +639,7 @@ impl SessionMemory {
                 tracing::warn!(
                     %e,
                     dropped,
-                    "the session memory could not be flushed; its changes wait for the next flush"
+                    "the session memory could not be flushed, so its changes wait for the next flush"
                 );
             }
             Err(e) => tracing::warn!(%e, "the session memory's flush did not finish"),

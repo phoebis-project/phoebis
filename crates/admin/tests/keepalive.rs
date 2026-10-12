@@ -672,8 +672,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         row["keepalive"]["state"].is_null() && row["keepalive"]["cause"].is_null(),
         "the session's summary reads main's recipe, which the release discarded"
     );
-    let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
-    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(128));
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(
         (

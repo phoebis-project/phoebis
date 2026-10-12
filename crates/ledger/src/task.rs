@@ -20,7 +20,7 @@ use crate::db::{
     begin_write, delete_parked_in, insert_decision_in, insert_event_in, insert_request_in,
     insert_samples_in, newest_row_at, update_cache_map_in,
 };
-use crate::events::spawn_event_mirror;
+use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
 use crate::query::{member_spends, period_bounds, BudgetedMember};
@@ -72,6 +72,9 @@ pub struct LedgerConfig {
     /// The binary's version for the `router_started` row `spawn` records ahead of everything it starts. `None`
     /// records none, as a test's ledger does.
     pub start_version: Option<String>,
+    /// The event mirror's starting point, read by the caller before the start's recovery writes the registry.
+    /// `None` reads it when the mirror spawns, as a test's ledger does.
+    pub mirror_baseline: Option<MirrorBaseline>,
 }
 
 impl Default for LedgerConfig {
@@ -83,6 +86,7 @@ impl Default for LedgerConfig {
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
             start_version: None,
+            mirror_baseline: None,
         }
     }
 }
@@ -256,7 +260,7 @@ impl Ledger {
 
     /// The start-up pass on demand, run by the writer task between two of its batches: every parked row once, in
     /// parking order, each in its own transaction with its row's deletion (`land_acknowledging`), then the spend
-    /// refresh the start runs after its own pass, so the routing table holds the landed money before this answers.
+    /// read the start runs after its own pass, so the routing table holds the landed money before this answers.
     /// The writer's turn is the serialization: no row is landed twice by two passes, or by a pass and a batch, at
     /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped or the count cannot be
     /// read.
@@ -319,7 +323,7 @@ pub fn spawn(
     router: RouterHandle,
     clock: Clock,
     metrics: Arc<Metrics>,
-    config: LedgerConfig,
+    mut config: LedgerConfig,
 ) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
     let (control, control_rx) = mpsc::channel::<Control>(1);
@@ -354,6 +358,7 @@ pub fn spawn(
         router.clone(),
         clock.clone(),
         config.event_poll,
+        config.mirror_baseline.take(),
     );
     ledger.tasks.lock().expect(TASKS_POISONED).push(mirror);
     let subscriber = bus.subscribe("ledger", Delivery::Durable);
@@ -586,11 +591,12 @@ async fn writer(
                 }
                 let replayed = match land_parked(&db, &pricing, &stats, &metrics, now).await {
                     Ok((landed, _)) => {
-                        // The refresh the start runs after its own pass: the landed money reaches the routing table
-                        // before the caller hears the counts, so a selection after a replay that crossed a budget is
-                        // refused.
+                        // The spend read the start runs after its own pass: the landed money reaches the routing
+                        // table before the caller hears the counts, so a selection after a replay that crossed a
+                        // budget is refused. The budget rows it crosses wait for the next batch or flush, as the
+                        // start's own do, so a replay on the writer's first turn lands none ahead of the start row.
                         member_revision = router.snapshot().revision;
-                        spend_due = spends.refresh(spend_due, &[]).await;
+                        spend_due = spends.read(spend_due, &[]).await;
                         let remaining = db.read(crate::query::parked_count).await;
                         remaining.map(|remaining| Replayed { landed, remaining })
                     }
@@ -644,7 +650,7 @@ async fn writer(
                 stats.retrying.store(1, Ordering::Relaxed);
                 if !stats.degraded.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
-                        "a ledger batch could not be written; budgeted members wait until it lands"
+                        "a ledger batch could not be written, so budgeted members wait until it lands"
                     );
                     router.report(Report::Accounting { degraded: true }).await;
                 }
@@ -889,7 +895,7 @@ async fn park(
         Err(park_error) => tracing::error!(
             request_id = %request.id,
             error = %park_error,
-            "a priced record could not be parked; it stays held"
+            "a priced record could not be parked, so it stays held"
         ),
     }
     parked
@@ -910,7 +916,7 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
     let lost = &rest.records[rest.from..];
     tracing::error!(
         records = lost.len(),
-        "the ledger stopped with records it could not write; they are lost"
+        "the ledger stopped with records it could not write, and they are lost"
     );
     for record in lost {
         drop_counted(ctx, record);
@@ -930,7 +936,7 @@ async fn land_parked(
     now: i64,
 ) -> Result<(u64, u64), LedgerError> {
     let rows = blocking(db, |db| db.parked_rows()).await.inspect_err(|error| {
-        tracing::warn!(%error, "the parked records could not be read; they wait for the next start or replay");
+        tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
     })?;
     if rows.is_empty() {
         return Ok((0, 0));
@@ -1043,14 +1049,14 @@ type SpendKey = (String, String, BudgetPeriod);
 /// The budget edges the writer announces, measured from one refresh to the next.
 #[derive(Default)]
 struct Budgets {
+    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
+    /// takes as this run's own.
+    announced: HashMap<SpendKey, i64>,
     /// The rows the last refresh read.
     last: HashMap<SpendKey, MemberSpend>,
     /// The members this run wrote `budget_reached` for in the period each is in: a period's end is announced only
     /// after its crossing was.
     reached: HashSet<SpendKey>,
-    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
-    /// takes as this run's own.
-    announced: HashMap<SpendKey, i64>,
 }
 
 impl Budgets {
@@ -1230,7 +1236,7 @@ impl Spends {
             Ok(announced) => self.budgets.announced = announced,
             Err(error) => tracing::warn!(
                 %error,
-                "the ledger's budget crossings could not be read; a member over its budget is announced again"
+                "the ledger's budget crossings could not be read, so a member over its budget is announced again"
             ),
         }
         self.read(None, &[]).await
@@ -1260,7 +1266,7 @@ impl Spends {
         }
         if spend.refreshed {
             if self.stats.degraded.swap(false, Ordering::Relaxed) {
-                tracing::info!("the ledger caught up; budgeted members are placed on again");
+                tracing::info!("the ledger caught up, so budgeted members are placed on again");
             }
             return spend.due;
         }
@@ -1371,7 +1377,7 @@ async fn refresh_member_spends(
             }
         }
         Err(error) => {
-            tracing::warn!(%error, "a member's spend could not be read; the last report stands");
+            tracing::warn!(%error, "a member's spend could not be read, so the last report stands");
             let due = match current {
                 Some(at) if at > now => current,
                 _ => Some(now + event_poll.as_millis() as i64),
@@ -1602,7 +1608,7 @@ async fn land_acknowledging(
                     %request_id,
                     seq,
                     attempt,
-                    "a cache map found no decision to land on; it is counted and dropped"
+                    "a cache map found no decision to land on, so it is counted and dropped"
                 );
             }
             for observation in observations {
@@ -1626,7 +1632,7 @@ async fn land_acknowledging(
             }
         }
         Err(error) => {
-            tracing::error!(%error, records = size, "the ledger writer panicked; the batch is lost");
+            tracing::error!(%error, records = size, "the ledger writer panicked, so the batch is lost");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             stats.dropped.fetch_add(size, Ordering::Relaxed);
             for table in &tables {

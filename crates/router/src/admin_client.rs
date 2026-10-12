@@ -29,13 +29,13 @@ pub struct Common {
     /// Print the route's answer verbatim on stdout and nothing on stderr but errors.
     #[arg(long)]
     pub json: bool,
-    /// The variable holding the admin secret; `admin.secret_env` by default.
+    /// The variable holding the admin secret. `admin.secret_env` by default.
     #[arg(long, value_name = "NAME")]
     pub secret_env: Option<String>,
     /// The whole call's deadline, connect and handshake included.
     #[arg(long, value_name = "SECONDS", default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: u64,
-    /// The admin listener's base URL; from the file by default. With `--secret-env` too, the file is not read.
+    /// The admin listener's base URL. The file gives it by default. With `--secret-env` too, the file is not read.
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
 }

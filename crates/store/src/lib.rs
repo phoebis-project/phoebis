@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::{Arc, Condvar};
-use std::sync::{LockResult, Mutex, MutexGuard};
+use std::sync::Condvar;
+use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 use std::time::Duration;
 
 use base64::Engine;
@@ -174,8 +174,8 @@ pub enum StoreError {
     #[error("pool {0} not found")]
     PoolNotFound(String),
     #[error(
-        "the registry's schema version {found} is newer than this build supports ({supported}); \
-         restore the backup taken before the upgrade"
+        "the registry's schema version {found} is newer than this build supports ({supported}), \
+         so restore the backup taken before the upgrade"
     )]
     SchemaTooNew { found: u32, supported: u32 },
     #[error(transparent)]
@@ -206,6 +206,17 @@ impl StoreError {
 pub struct PurgedHistory {
     pub attempts: u64,
     pub changes: u64,
+}
+
+/// What a key recovery discards, printed as counts before the operator confirms and after the transaction lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SealedCounts {
+    pub api_key_accounts: u64,
+    pub api_key_secrets: u64,
+    pub credentials: u64,
+    pub oauth_accounts: u64,
+    pub open_refresh_attempts: u64,
+    pub recipe_bodies: u64,
 }
 
 /// What `check-config` learns about a registry file without opening it as the router does.
@@ -286,7 +297,12 @@ impl Clone for StorageKey {
     }
 }
 
+/// The instant the store stamps a row with: the wall clock in production, and a test rig's own cell under
+/// `set_clock`, so a capture of the registry's answers reads the same twice.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
 pub struct Store {
+    clock: Mutex<Clock>,
     conn: CountedMutex<Connection>,
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
@@ -380,6 +396,7 @@ impl Store {
         prepare(&mut conn, true)?;
         check_or_seal_canary(&mut conn, key, db_path)?;
         Ok(Store {
+            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: Some(process_lock),
@@ -418,6 +435,7 @@ impl Store {
         prepare(&mut conn, false)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
         Ok(Store {
+            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: None,
@@ -448,6 +466,16 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_hold: Mutex::new(None),
         })
+    }
+
+    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it once, before it seeds the
+    /// registry, so two captures stamp the same instants.
+    pub fn set_clock(&self, clock: Clock) {
+        *self.clock.lock().expect(LOCK_POISONED) = clock;
+    }
+
+    pub(crate) fn now_ms(&self) -> i64 {
+        (self.clock.lock().expect(LOCK_POISONED))()
     }
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
@@ -885,6 +913,162 @@ impl HoldGate {
     }
 }
 
+/// The registry opened for a key recovery: the process lock taken (so a running router refuses the open with
+/// `Locked`), the schema checked but not migrated until the discard, and no canary proof, since the key is the one
+/// thing being replaced.
+pub struct RecoveryStore {
+    conn: Connection,
+    created_lock: Option<PathBuf>,
+    _lock: lock::ProcessLock,
+}
+
+/// How the configured key meets the registry a recovery opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyMatch {
+    /// The canary opens under the key, or the registry has no canary and a sealed row does.
+    Matches,
+    /// The canary does not open, but `readable_rows` sealed rows do: the canary is the corrupt part, and a backup
+    /// restores it.
+    CorruptCanary { readable_rows: u64 },
+    /// Neither the canary nor any sealed row opens under the key.
+    Differs,
+}
+
+impl Store {
+    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is
+    /// refused rather than created, since a recovery has nothing to discard in it and SQLite would create it at the
+    /// umask's mode.
+    pub fn open_for_recovery(db_path: &Path) -> Result<RecoveryStore, StoreError> {
+        let data_dir = permissions::data_dir_of(db_path);
+        let lock_file = lock::path(data_dir);
+        let lock_missing = matches!(
+            std::fs::symlink_metadata(&lock_file),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        let process_lock = lock::acquire(data_dir)?;
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        // The key check, the counts and the prompt read the file as it is: a run that stops before the discard leaves
+        // the registry at the version it found, which the build that wrote it still opens.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        check_schema(&conn)?;
+        Ok(RecoveryStore {
+            conn,
+            created_lock: lock_missing.then_some(lock_file),
+            _lock: process_lock,
+        })
+    }
+}
+
+impl RecoveryStore {
+    /// The lock file this open created, absent from a data directory no router has opened, such as a registry restored
+    /// onto a new host. A recovery run as root hands it to the service's user, whose next start opens it.
+    pub fn created_lock(&self) -> Option<&Path> {
+        self.created_lock.as_deref()
+    }
+
+    /// How `key` meets the registry. A canary that does not open proves nothing about the rows a discard would
+    /// erase, so every sealed row is tried before the answer licenses one, never a sample: a canary that fails while
+    /// rows open is corrupt. Without a canary the same scan proves the key, and a registry holding nothing sealed
+    /// differs, so its recovery discards nothing and seals its canary.
+    pub fn key_matches(&self, key: &StorageKey) -> Result<KeyMatch, StoreError> {
+        let canary = if has_table(&self.conn, "meta")? {
+            stored_canary(&self.conn)?
+        } else {
+            None
+        };
+        if canary
+            .as_deref()
+            .is_some_and(|value| canary_matches(key, value))
+        {
+            return Ok(KeyMatch::Matches);
+        }
+        Ok(match (canary, readable_sealed_rows(&self.conn, key)?) {
+            (_, 0) => KeyMatch::Differs,
+            (Some(_), readable_rows) => KeyMatch::CorruptCanary { readable_rows },
+            (None, _) => KeyMatch::Matches,
+        })
+    }
+
+    pub fn sealed_counts(&self) -> Result<SealedCounts, StoreError> {
+        sealed_counts_on(&self.conn)
+    }
+
+    /// One transaction: the canary, the credentials, the API-key secrets and the recipe bodies go, every oauth
+    /// account reads `disconnected` and every api_key account `unpaired` under `cause` with its lifecycle
+    /// generation and revision stepped, open and uncertain refresh attempts settle `failed` with the detail
+    /// `disconnected`, and a canary is sealed under `key`.
+    ///
+    /// The operations page prints these statements as the sequence an operator runs by hand, so the two change
+    /// together.
+    pub fn discard_sealed(
+        &mut self,
+        key: &StorageKey,
+        cause: StateCause,
+    ) -> Result<SealedCounts, StoreError> {
+        let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+        // The schema moves only once the recovery proceeds, so the statements below meet the columns they name.
+        prepare(&mut self.conn, true)?;
+        // No `Store` clock exists here: the wall clock stamps the rows, as it does every write outside a test rig.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counts = sealed_counts_on(&tx)?;
+        tx.execute("DELETE FROM meta WHERE key = 'storage_key_canary'", [])?;
+        tx.execute("DELETE FROM credentials", [])?;
+        tx.execute("DELETE FROM api_key_secrets", [])?;
+        tx.execute(
+            "UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END, \
+             state_cause = ?1, lifecycle_generation = lifecycle_generation + 1, revision = revision + 1, \
+             updated_at = ?2",
+            params![cause, now],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE refresh_attempts SET resolved_at = ?1, outcome = 'failed', detail = 'disconnected' \
+                 WHERE {PENDING_WHERE}"
+            ),
+            params![now],
+        )?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1)",
+            params![encode_canary(&nonce, &sealed)],
+        )?;
+        tx.commit()?;
+        Ok(counts)
+    }
+}
+
+/// A recovery counts before it migrates, so a table the registry does not have yet counts nothing.
+fn sealed_counts_on(conn: &Connection) -> Result<SealedCounts, StoreError> {
+    let count = |table: &str, filter: &str| -> Result<u64, StoreError> {
+        if !has_table(conn, table)? {
+            return Ok(0);
+        }
+        let n: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM {table}{filter}"),
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n.max(0) as u64)
+    };
+    Ok(SealedCounts {
+        api_key_accounts: count("accounts", " WHERE kind = 'api_key'")?,
+        api_key_secrets: count("api_key_secrets", "")?,
+        credentials: count("credentials", "")?,
+        oauth_accounts: count("accounts", " WHERE kind = 'oauth'")?,
+        open_refresh_attempts: count("refresh_attempts", &format!(" WHERE {PENDING_WHERE}"))?,
+        recipe_bodies: count("keepalive_agents", " WHERE body_sealed IS NOT NULL")?,
+    })
+}
+
 /// Proves the key against the registry before any sealed row is read, so a wrong key refuses the open
 /// instead of serving a registry it cannot read; a registry sealed before the canary existed is proved
 /// against its sealed rows, so a wrong key never seals a canary over a registry it does not match.
@@ -999,6 +1183,68 @@ fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> 
     Ok(rows)
 }
 
+/// How many sealed rows open under `key`, over every row of each kind: credential bundles, API-key secrets and
+/// recipe bodies. A recovery discards what this finds unreadable, so it reads the whole registry once rather than the
+/// start's sample. A table the registry does not have yet holds nothing sealed.
+fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, StoreError> {
+    type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
+    let kinds: [(&str, &str, RowOf); 3] = [
+        (
+            "credentials",
+            "SELECT account_id, generation, nonce, sealed FROM credentials",
+            |row| {
+                Ok(SealedRow {
+                    aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
+                    nonce: row.get(2)?,
+                    sealed: row.get(3)?,
+                })
+            },
+        ),
+        (
+            "api_key_secrets",
+            "SELECT account_id, nonce, sealed FROM api_key_secrets",
+            |row| {
+                Ok(SealedRow {
+                    aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
+                    nonce: row.get(1)?,
+                    sealed: row.get(2)?,
+                })
+            },
+        ),
+        (
+            "keepalive_agents",
+            "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
+             WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
+            |row| {
+                Ok(SealedRow {
+                    aad: keepalive::keepalive_aad(
+                        &row.get::<_, String>(0)?,
+                        row.get(1)?,
+                        &row.get::<_, String>(2)?,
+                        &row.get::<_, String>(3)?,
+                    ),
+                    nonce: row.get(4)?,
+                    sealed: row.get(5)?,
+                })
+            },
+        ),
+    ];
+    let mut readable = 0;
+    for (table, sql, row_of) in kinds {
+        if !has_table(conn, table)? {
+            continue;
+        }
+        let mut statement = conn.prepare(sql)?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            if row_of(row)?.opens_under(key) {
+                readable += 1;
+            }
+        }
+    }
+    Ok(readable)
+}
+
 fn has_table(conn: &Connection, name: &str) -> Result<bool, StoreError> {
     Ok(conn
         .query_row(
@@ -1033,21 +1279,7 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
     // version is even known.
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    let current = read_version(conn)?;
-    if current > schema::SCHEMA_VERSION {
-        return Err(StoreError::SchemaTooNew {
-            found: current,
-            supported: schema::SCHEMA_VERSION,
-        });
-    }
-    // The index behind the one-pool rule cannot be created over an overlap, and a failed migration would leave the
-    // operator a SQLite line; the registry is read first and the refusal names what to remove.
-    if current < schema::ONE_POOL_VERSION && has_table(conn, "pool_members")? {
-        let overlaps = overlapping_memberships(conn)?;
-        if !overlaps.is_empty() {
-            return Err(StoreError::AccountsInPools(overlaps));
-        }
-    }
+    let current = check_schema(conn)?;
     if on_disk {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
@@ -1072,6 +1304,26 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// The refusals `prepare` makes before it writes anything, answering the stored version.
+fn check_schema(conn: &Connection) -> Result<u32, StoreError> {
+    let current = read_version(conn)?;
+    if current > schema::SCHEMA_VERSION {
+        return Err(StoreError::SchemaTooNew {
+            found: current,
+            supported: schema::SCHEMA_VERSION,
+        });
+    }
+    // The index behind the one-pool rule cannot be created over an overlap, and a failed migration would leave the
+    // operator a SQLite line, so the registry is read first and the refusal names what to remove.
+    if current < schema::ONE_POOL_VERSION && has_table(conn, "pool_members")? {
+        let overlaps = overlapping_memberships(conn)?;
+        if !overlaps.is_empty() {
+            return Err(StoreError::AccountsInPools(overlaps));
+        }
+    }
+    Ok(current)
 }
 
 /// Every account `pool_members` names under more than one pool, in account order, its pools sorted.

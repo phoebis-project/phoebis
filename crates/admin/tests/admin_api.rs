@@ -989,7 +989,7 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
         ["five_hour", "seven_day"],
         "one row per window the endpoint reports: {rows:?}"
     );
-    assert!(rows.iter().all(|r| r.source != "header"), "{rows:?}");
+    assert!(rows.iter().all(|r| r.source != "head"), "{rows:?}");
     let sample = routed_sample(&h.router, "business", NOW).await;
     assert!(
         sample.reading("five_hour").is_some(),
@@ -1048,9 +1048,9 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
 async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_fetch() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    // The default TTL: a refresh reads the endpoint through the poll's path whatever the cache holds and answers the
-    // reading that read made, so the GET's own reads show beside it.
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    // A refresh reads the endpoint through the poll's path whatever the cache holds and answers the reading that read
+    // made, so the GET's own reads show beside it.
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     let refresh = "/admin/accounts/business/usage/refresh";
@@ -1190,10 +1190,10 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
 }
 
 #[tokio::test]
-async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_recorded() {
+async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading_it_recorded() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(1)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let asked = || {
         h.up.requests()
@@ -1202,8 +1202,7 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
             .count()
     };
     let bucket = phoebis_ledger::bucket_of(NOW);
-    // The endpoint records the read's request and holds its answer, so the clock can pass the TTL while the read
-    // is out.
+    // The endpoint records the read's request and holds its answer, so the clock moves on while the read is out.
     h.up.set_rule_after(
         0,
         "/api/oauth/usage",
@@ -1229,15 +1228,11 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
         );
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    // Past the TTL as measured from the send instant, which is what stamps the entry.
+    // Two seconds past the send instant, which is what stamps the reading.
     h.clock_cell.store(NOW + 2_000, Ordering::SeqCst);
     h.up.release();
     let refreshed = refreshing.await.unwrap();
-    assert_eq!(
-        asked(),
-        1,
-        "one endpoint request per refresh, whatever the TTL"
-    );
+    assert_eq!(asked(), 1, "one endpoint request per refresh");
     assert!(refreshed["error"].is_null(), "{refreshed}");
     assert_eq!(refreshed["fetched_at"], NOW);
     let windows = refreshed["windows"].as_array().unwrap();
@@ -1317,7 +1312,7 @@ async fn a_refresh_whose_read_outlives_the_cache_ttl_answers_the_one_reading_it_
 #[tokio::test]
 async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpaired_account() {
     use common::{delete, get, json, login};
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     let answer = |v: &serde_json::Value| {
@@ -1366,7 +1361,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
 #[tokio::test]
 async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an_api_key_account() {
     use common::{get, json, login, post, NOW};
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let created = post(
         &h.app,
@@ -1437,8 +1432,8 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
 async fn an_account_held_by_a_429_lists_its_hold_deadline() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;
-    // A zero TTL, so the refresh below reaches the endpoint and takes its 429.
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    // The refresh below reads the endpoint through the poll's path and takes its 429.
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let usage_of = |listed: &serde_json::Value| {
         listed["accounts"]
@@ -1509,7 +1504,7 @@ async fn an_account_held_by_a_429_lists_its_hold_deadline() {
 async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_the_hold_deadline() {
     use common::{get, json, login, NOW};
     use std::sync::atomic::Ordering;
-    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     h.up.set_rule_after(
         0,
@@ -1552,12 +1547,69 @@ async fn a_profile_429_before_any_reading_answers_no_usage_fetched_yet_beside_th
 }
 
 #[tokio::test]
+async fn an_account_re_created_inside_a_hold_answers_the_unread_reason_beside_the_deadline() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.usage.poll("business").await.unwrap();
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 10_000, Ordering::SeqCst);
+    let refused = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/usage/refresh",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(refused["poll"]["last_outcome"], "rate_limited", "{refused}");
+    // The id is deleted and inserted again behind the routes, so nothing clears the poll's hold on it, and the
+    // snapshot the earlier holder left is filtered out.
+    let earlier = h.store.account("business").unwrap().unwrap();
+    h.store.delete_account("business", "test").unwrap();
+    h.store
+        .insert_account(&phoebis_store::AccountRow {
+            lifecycle_generation: earlier.lifecycle_generation + 1,
+            ..earlier
+        })
+        .unwrap();
+    let held = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            &held["error"],
+            &held["held_until"],
+            &held["fetched_at"],
+            &held["identity_generation"],
+        ),
+        (
+            &serde_json::json!("the poll has not read this account yet"),
+            &serde_json::json!(NOW + 10_000 + 120_000),
+            &serde_json::Value::Null,
+            &serde_json::json!(0),
+        ),
+        "{held}"
+    );
+    assert_eq!(held["held_until"], held["poll"]["next_attempt_at"]);
+}
+
+#[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
         Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
     };
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     // What a restart loads from the persisted windows, before the poll has read the account.
@@ -1632,7 +1684,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         SEVEN_DAY_FABLE,
     };
     const HOUR: i64 = 3_600_000;
-    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     let read_at = NOW - 30 * HOUR;
     let reading = |utilization, reset| WindowReading {
@@ -2669,6 +2721,7 @@ fn burning_opus_pin(
         burn: input(plain),
         burn_at: Some(now - 5),
         burn_banded: input(banded),
+        burn_fast: phoebis_store::PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: now - 5,
         cache_ttl_ms: 300_000,
@@ -3072,13 +3125,13 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
 
 #[tokio::test]
 async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
-    // The pin burns Sonnet 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
+    // The pin burns Opus 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
     // in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
         vec![phoebis_store::PinRow {
-            model: "claude-sonnet-5".into(),
+            model: "claude-opus-5".into(),
             ..burning_opus_pin("s1", "business", generation, now, 100.0, 100.0)
         }]
     })
@@ -3163,6 +3216,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -3197,6 +3251,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -3342,6 +3397,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
                 input: 1.0,
                 ..phoebis_store::PinBurn::default()
             },
+            burn_fast: phoebis_store::PinBurn::default(),
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,

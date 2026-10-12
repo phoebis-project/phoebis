@@ -447,8 +447,8 @@ pub(crate) fn insert_samples_in(
     extra: Option<&ExtraUsageSampleRecord>,
 ) -> Result<(), LedgerError> {
     for q in quota {
-        // A header sample is the newest truth for its bucket; a poll only fills a bucket nothing else wrote.
-        let verb = if q.source == "header" {
+        // A head sample is the newest truth for its bucket, and a poll only fills a bucket nothing else wrote.
+        let verb = if q.source == "head" {
             "INSERT OR REPLACE"
         } else {
             "INSERT OR IGNORE"
@@ -461,7 +461,7 @@ pub(crate) fn insert_samples_in(
         )?;
     }
     if let Some(e) = extra {
-        let verb = if e.source == "header" {
+        let verb = if e.source == "head" {
             "INSERT OR REPLACE"
         } else {
             "INSERT OR IGNORE"

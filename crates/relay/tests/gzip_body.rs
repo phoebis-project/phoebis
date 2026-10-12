@@ -454,7 +454,7 @@ async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read(
         ),
         (
             Some("invalid_request_error"),
-            Some("the request body's content-encoding is not supported; send gzip or identity")
+            Some("the request body's content-encoding is not supported. Send gzip or identity")
         )
     );
     let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;

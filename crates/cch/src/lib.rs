@@ -1546,7 +1546,7 @@ mod tests {
                 br#"{"type":"ephemeral"}"#.as_slice(),
                 br#"{"type":"ephemeral","ttl":"1h"}"#.as_slice(),
             ],
-            "the marker inside the tool result is found ahead of the block's own; one two levels down is skipped"
+            "the marker inside the tool result is found ahead of the block's own, and one two levels down is skipped"
         );
     }
 

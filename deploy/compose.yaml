@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     secrets:
       - router-storage-key
-    # The router drains in-flight requests for up to 30 seconds after SIGTERM; the grace period leaves it that long.
+    # The router's shutdown budget is 35 seconds after SIGTERM, and the grace period leaves five more.
     stop_grace_period: 40s
     volumes:
       - ./config.yaml:/etc/phoebis/config.yaml:ro

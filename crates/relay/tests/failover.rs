@@ -407,13 +407,16 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
     for id in ["a", "b", "c", "d"] {
         h.router.clear_cooldown(id, "account").await.unwrap();
     }
-    for (id, state) in [
-        ("a", AccountState::ReauthRequired),
-        ("b", AccountState::FundingRequired),
-        ("c", AccountState::ReauthRequired),
-        ("d", AccountState::FundingRequired),
-    ] {
-        h.store.set_state(id, state, StateCause::Operator).unwrap();
+    for id in ["a", "c"] {
+        h.store
+            .set_state(id, AccountState::ReauthRequired, StateCause::Operator)
+            .unwrap();
+    }
+    // Marked through the relay's own report, so each funding mark carries a retry that is not due yet: a mark the
+    // routing state holds no instant for is tried at once, as after a restart.
+    for id in ["b", "d"] {
+        h.router.report(funding_mark(&h, id)).await;
+        stored_with(&h, id, AccountState::FundingRequired).await;
     }
     h.router.reload().await.unwrap();
     let resp = h
@@ -1213,6 +1216,427 @@ async fn a_credit_balance_refusal_stores_funding_refused() {
     up.shutdown().await;
 }
 
+/// The relay's credit-balance mark on `id`'s current holder, as a failover reports it.
+fn funding_mark(h: &Harness, id: &str) -> phoebis_routing::Report {
+    let snapshot = h.router.snapshot();
+    let account = snapshot.account(id).unwrap();
+    phoebis_routing::Report::AccountState {
+        account_id: id.into(),
+        state: AccountState::FundingRequired,
+        incarnation: account.incarnation,
+        lifecycle_generation: account.lifecycle_generation,
+        credential_generation: snapshot.credential_generation(id).unwrap_or(1),
+        cause: StateCause::FundingRefused,
+        detail: None,
+        dispatched_at: None,
+    }
+}
+
+/// Marks `id` `funding_required` in the registry alone, as a restart reads the mark: no retry instant.
+async fn marked_in_the_registry(h: &Harness, id: &str) {
+    h.store
+        .set_state(
+            id,
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+}
+
+/// The router's retry instant for `id` once it reads `at`.
+async fn retry_at_reads(h: &Harness, id: &str, at: i64) {
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .funding_retries()
+            .await
+            .unwrap()
+            .contains(&(id.to_string(), at))
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_funding_retry_that_answers_200_clears_the_mark_with_the_funding_retry_cause() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_in_the_registry(&h, "k1").await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1"),
+        "the marked account is tried again"
+    );
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::Ready).await,
+        StateCause::FundingRetry
+    );
+    assert!(h.router.funding_retries().await.unwrap().is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_credit_balance_refusal_marks_the_account_again_with_a_later_retry() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "b");
+    retry_at_reads(&h, "k1", NOW + 300_000).await;
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account("k1")
+            .filter(|a| a.state == AccountState::FundingRequired)
+            .map(|_| ())
+    })
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            outcome(&resp).account_id.as_str(),
+            credentials_seen(&up).len()
+        ),
+        ("b", 3),
+        "the retry is not due, so the second request goes to b alone"
+    );
+    h.clock
+        .store(NOW + 300_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s3"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "b");
+    assert_eq!(
+        credentials_seen(&up)
+            .iter()
+            .filter(|c| c.as_str() == "sk-ant-api03-KEY1")
+            .count(),
+        2,
+        "the due retry tried the account once more"
+    );
+    retry_at_reads(&h, "k1", NOW + 600_000).await;
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::FundingRequired).await,
+        StateCause::FundingRefused
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_funding_retry_whose_head_is_held_keeps_the_next_request_off_the_account_until_it_answers(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Gated(Box::new(json_200())),
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_in_the_registry(&h, "k1").await;
+    let app = h.app.clone();
+    let first = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        credentials_seen(&up)
+            .contains(&"sk-ant-api03-KEY1".to_string())
+            .then_some(())
+    })
+    .await;
+    // Past the relay's body read bound: the claim lasts as long as its attempt does.
+    h.clock
+        .fetch_add(61_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b"),
+        "the held retry still holds the one slot, on a pool whose cap is above one"
+    );
+    up.release();
+    let resp = first.await.unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1")
+    );
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::Ready).await,
+        StateCause::FundingRetry
+    );
+    up.shutdown().await;
+}
+
+/// The upstream's credit-balance refusal, as an `api_key` account reads it.
+fn credit_balance_refusal() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
+    }
+}
+
+/// Marks `id` through the relay's own report and steps the clock to the retry it stamps, so the next selection may
+/// place a request there and its entry shows whether a clearing landed.
+async fn marked_and_due(h: &Harness, id: &str) {
+    h.router.report(funding_mark(h, id)).await;
+    retry_at_reads(h, id, NOW + 300_000).await;
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account(id)
+            .filter(|a| a.state == AccountState::FundingRequired)
+            .map(|_| ())
+    })
+    .await;
+    h.clock
+        .store(NOW + 300_000, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The registry's state and cause for `id`.
+fn stored(h: &Harness, id: &str) -> Option<(AccountState, StateCause)> {
+    h.store
+        .account(id)
+        .unwrap()
+        .map(|row| (row.state, row.state_cause))
+}
+
+#[tokio::test]
+async fn a_token_count_answered_200_on_a_marked_account_leaves_the_mark_standing() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_and_due(&h, "k1").await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            phoebis_profile::fixtures::inference_head(
+                phoebis_profile::fixtures::FixtureKind::CountApiKey,
+            ),
+            phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::CountApiKey),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1"),
+        "the due retry admits the count"
+    );
+    // Asked after the answer, so a report the count sent has landed on the loop by now.
+    assert_eq!(
+        h.router.funding_retries().await.unwrap(),
+        vec![("k1".to_string(), NOW + 300_000)],
+        "a counting answer says nothing about the balance, so nothing clears the mark"
+    );
+    assert_eq!(
+        stored(&h, "k1"),
+        Some((AccountState::FundingRequired, StateCause::FundingRefused))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_held_stream_that_commits_on_an_error_event_leaves_the_mark_standing() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![fake_upstream::SseEvent {
+                event: "error".into(),
+                data: r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#
+                    .into(),
+            }],
+            delay_between: Duration::from_millis(1),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_and_due(&h, "k1").await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1"),
+        "the error event committed under the 200 head"
+    );
+    let _ = resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        h.router.funding_retries().await.unwrap(),
+        vec![("k1".to_string(), NOW + 300_000)],
+        "an error event is no success, whatever the head's status"
+    );
+    assert_eq!(
+        stored(&h, "k1"),
+        Some((AccountState::FundingRequired, StateCause::FundingRefused))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_success_from_a_retry_sent_before_the_newest_mark_leaves_that_mark_standing() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.push_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Gated(Box::new(json_200())),
+    );
+    up.push_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        credit_balance_refusal(),
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    marked_in_the_registry(&h, "k1").await;
+    let app = h.app.clone();
+    let retry = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        credentials_seen(&up)
+            .contains(&"sk-ant-api03-KEY1".to_string())
+            .then_some(())
+    })
+    .await;
+    // The operator clears funding while the retry's head is held, and the reload starts after the claim's stamp.
+    h.clock
+        .store(NOW + 1_000, std::sync::atomic::Ordering::SeqCst);
+    h.store
+        .set_state("k1", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert!(h.router.funding_retries().await.unwrap().is_empty());
+    h.clock
+        .store(NOW + 2_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the ready account was refused over its balance and the request failed over"
+    );
+    retry_at_reads(&h, "k1", NOW + 302_000).await;
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::FundingRequired).await,
+        StateCause::FundingRefused
+    );
+    up.release();
+    let resp = retry.await.unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "k1"),
+        "the older retry still answers its caller"
+    );
+    assert_eq!(
+        h.router.funding_retries().await.unwrap(),
+        vec![("k1".to_string(), NOW + 302_000)],
+        "the retry went out before the refusal behind the newest mark, so that mark stands"
+    );
+    assert_eq!(
+        stored(&h, "k1"),
+        Some((AccountState::FundingRequired, StateCause::FundingRefused))
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_refused_replay_stores_auth_failed_and_the_ladder_s_mark_refresh_failed() {
     // The replay on the freshly refreshed token is refused too: the relay's own mark.
@@ -1602,6 +2026,39 @@ fn paired(id: &'static str, secret: &'static str) -> TestAccount {
     }
 }
 
+/// The token endpoint's conclusive refusal of a refresh, which lands the reauth mark.
+fn invalid_grant() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+    }
+}
+
+/// Commits a bundle for `id` inside its refresh margin and drops the manager's cached one, as a pairing does, so the
+/// account's next acquisition goes to the token endpoint.
+fn due_for_refresh(h: &Harness, id: &str) {
+    let stored = h.store.credentials(id).unwrap().unwrap();
+    h.store
+        .commit_credentials(
+            id,
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-oat01-SHORT-refresh")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.manager.invalidate(id);
+}
+
 /// The request in the background, so the test can move the clock while the relay holds it.
 fn spawned(
     h: &Harness,
@@ -1948,7 +2405,7 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
     assert!(
         matches!(
             h.manager.acquire_for(&row_before, generation_before).await,
-            Err(AcquireError::ReauthRequired)
+            Err(AcquireError::ReauthRequired(..))
         ),
         "the pre-mark row is refused by the cache"
     );
@@ -1975,6 +2432,153 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
         credentials_seen(&up),
         [A, B, B],
         "nothing dials the marked account on its cached token"
+    );
+    assert_eq!(
+        token_posts(&up),
+        1,
+        "the marked account is not refreshed again"
+    );
+    up.shutdown().await;
+}
+
+/// A replay the upstream refuses too marks the account, and the credential cache refuses the replayed lineage from
+/// that answer on: a leg that still carries the pre-mark row is not handed the token the upstream just refused.
+#[tokio::test]
+async fn a_refused_replay_refuses_the_replayed_lineage_in_the_credential_cache() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: token_answer(),
+        },
+    ])
+    .await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[paired("a", A), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let before = h.router.snapshot();
+    let (row_before, generation_before) = (
+        before.account("a").unwrap().clone(),
+        before.credential_generation("a"),
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the request fails over to b");
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(token_posts(&up), 1, "one refresh, then the replay");
+    let replayed = h.store.credentials("a").unwrap().unwrap().generation;
+    assert!(generation_before.is_some_and(|before| replayed > before));
+    let seen = credentials_seen(&up);
+    assert_eq!(
+        (seen.len(), seen[0].as_str(), seen[2].as_str()),
+        (3, A, B),
+        "a's token, the replayed token, then b's"
+    );
+    let reads = h.store.debug_credential_reads();
+    for expected in [generation_before, Some(replayed)] {
+        assert!(
+            matches!(
+                h.manager.acquire_for(&row_before, expected).await,
+                Err(AcquireError::ReauthRequired(..))
+            ),
+            "the pre-mark row is refused at {expected:?}, the replayed token with it"
+        );
+    }
+    assert_eq!(
+        h.store.debug_credential_reads(),
+        reads,
+        "the refusal reads nothing from the store"
+    );
+    up.shutdown().await;
+}
+
+/// The relay's own refresh at dispatch lands the reauth mark as the ladder's does, and reports it as the ladder's is
+/// reported: routing reads the account `reauth_required` without a reload, and nothing dials it again.
+#[tokio::test]
+async fn a_dispatch_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: invalid_grant(),
+        },
+    ])
+    .await;
+    let h = two_accounts(&up).await;
+    due_for_refresh(&h, "a");
+    // The row and generation a leg selected before the mark carries into its acquisition.
+    let before = h.router.snapshot();
+    let (row_before, generation_before) = (
+        before.account("a").unwrap().clone(),
+        before.credential_generation("a"),
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b"),
+        "the request fails over to b"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the dispatch's refresh landed the mark"
+    );
+    // The manager's mark is a store write alone, which starts no registry reload, so only a report reaches the
+    // snapshot.
+    wait_for(Duration::from_secs(5), || {
+        (h.router.snapshot().account("a").unwrap().state == AccountState::ReauthRequired)
+            .then_some(())
+    })
+    .await;
+    let reads = h.store.debug_credential_reads();
+    assert!(
+        matches!(
+            h.manager.acquire_for(&row_before, generation_before).await,
+            Err(AcquireError::ReauthRequired(..))
+        ),
+        "the pre-mark row is refused by the cache"
+    );
+    assert_eq!(
+        h.store.debug_credential_reads(),
+        reads,
+        "the refusal reads nothing from the store"
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the marked account is not selected"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [B, B],
+        "nothing dials the marked account"
     );
     assert_eq!(
         token_posts(&up),
@@ -2360,6 +2964,45 @@ async fn a_probe_whose_refresh_answers_invalid_grant_names_the_mark() {
     up.shutdown().await;
 }
 
+/// A probe whose dispatch refresh lands its pinned account's reauth mark names the mark on its answer, as a probe whose
+/// leg's rejection marked the account does.
+#[tokio::test]
+async fn a_probe_whose_dispatch_refresh_answers_invalid_grant_names_the_mark() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: invalid_grant(),
+        },
+    ])
+    .await;
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "a");
+    resp.into_body().collect().await.unwrap();
+    due_for_refresh(&h, "a");
+    let probed = h
+        .relay
+        .probe(probe_of(&h), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(
+        probe_answer(&probed),
+        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        "the dispatch's own mark reaches the probe's answer"
+    );
+    assert_eq!(token_posts(&up), 1);
+    assert_eq!(credentials_seen(&up), [A], "the probe dials nothing");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_non_portable_probe_whose_leg_marks_its_account_names_the_mark() {
     let up = FakeUpstream::start(vec![]).await;
@@ -2607,7 +3250,7 @@ async fn a_fast_answers_renewal_folds_its_usage_into_the_fast_copy_and_leaves_bo
         .unwrap_or_default();
     assert!(
         fast.input > 0.0 && fast.output > 0.0,
-        "the answer's usage folds into the pin's fast copy, which the router holds beside the row: {fast:?}"
+        "the answer's usage folds into the pin's fast copy, saved on the row beside its plan copies: {fast:?}"
     );
     assert_eq!(
         (pin.burn, pin.burn_banded),
@@ -2615,8 +3258,8 @@ async fn a_fast_answers_renewal_folds_its_usage_into_the_fast_copy_and_leaves_bo
             phoebis_store::PinBurn::default(),
             phoebis_store::PinBurn::default()
         ),
-        "an answer reporting usage.speed fast prices at the fast cells and draws no plan window, so both of the \
-         row's copies fold nothing"
+        "an answer reporting usage.speed fast prices at the fast cells, and the row's separate fast copy is why it \
+         draws no plan window, so both of the row's plan copies fold nothing"
     );
     up.shutdown().await;
 }
@@ -2846,9 +3489,13 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
                 summary
                     .refusal
                     .as_ref()
-                    .map(|r| (r.kind, r.reason.as_str()))
+                    .map(|r| (r.kind, r.code, r.reason.as_str()))
             ),
-            ("refused", Some(("client", trigger)))
+            ("refused", Some(("client", "drift", trigger)))
+        );
+        assert!(
+            record.request.attempted.is_empty() && record.request.holds.is_empty(),
+            "{trigger}: the refusal precedes any selection, so it names nothing tried or waited on"
         );
         assert_eq!(
             summary

@@ -109,7 +109,7 @@ pub enum RelayError {
     NoModel,
     #[error("request body is not a JSON object")]
     NotAnObject,
-    #[error("the request body's content-encoding is not supported; send gzip or identity")]
+    #[error("the request body's content-encoding is not supported. Send gzip or identity")]
     UnsupportedEncoding,
 }
 

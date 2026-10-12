@@ -146,6 +146,65 @@ async fn a_failed_fetch_holds_its_error_for_the_error_hold_and_reads_again_after
     );
 }
 
+/// A catalog refresh whose token refresh the endpoint refuses for good lands the reauth mark, and its report reaches
+/// routing at once, as the relay's own mark does, rather than at the next registry reload.
+#[tokio::test]
+async fn a_catalog_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    // A bundle inside its refresh margin, with the manager's cached one dropped as a pairing drops it, so the
+    // refresh's acquisition goes to the token endpoint.
+    let stored = h.store.credentials("a").unwrap().unwrap();
+    h.store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(Secret::new("sk-ant-oat01-SHORT-refresh")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.manager.invalidate("a");
+    let a = h.store.account("a").unwrap().unwrap();
+    let refreshed = h.catalog.refresh(&a).await;
+    assert_eq!(
+        refreshed.error.as_deref(),
+        Some("the account has no credential")
+    );
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
+    );
+    // The manager's mark is a store write alone, which starts no registry reload, so only a report reaches the
+    // snapshot.
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account("a")
+            .filter(|row| row.state == AccountState::ReauthRequired)
+            .map(|_| ())
+    })
+    .await;
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_body_over_the_bound_fails_the_fetch_and_caches_no_rows() {
     let up = FakeUpstream::start(vec![]).await;

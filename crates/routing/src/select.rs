@@ -105,6 +105,14 @@ pub struct SelectRequest {
     /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
+    /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
+    /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
+    /// ran out, or one passed over at its cap, is attempted with nothing dialed.
+    pub dialed: bool,
+    /// Whether the relay passed an account over at its cap for this request: a hold whose bound ran out, an account
+    /// it already held for once, or one met past the request's one bound. The relay answers the untimed exhaustion
+    /// that follows from this reading, so the row records the same.
+    pub held_out: bool,
     /// The cache lane the request writes to, as the relay composed it; a pin or an entry of another lane is cold.
     pub lane: String,
     /// The body carried `speed: "fast"`: fast eligibility applies.
@@ -151,9 +159,13 @@ pub struct HoldFacts {
     pub cohort: Option<String>,
     /// How long the relay waited on this hold, whether a slot freed or the bound ran out.
     pub held_ms: u64,
-    /// The wire attempt that waited: the relay keeps every hold across a failover, and only the placement of this
-    /// attempt follows the wait.
+    /// The wire attempt that waited, kept for the record's readers.
     pub attempt: u32,
+    /// The decision that held, the request's `seq` when the selector answered the hold: the placement one `seq`
+    /// past it is the one the wait led to, and a leg that failed over after the wait took a selection of its own.
+    pub seq: u32,
+    /// Whether the wait's bound ran out with no slot freed, which the relay learns when the wait ends.
+    pub ran_out: bool,
 }
 
 /// The holds before this attempt, as the trace records them.
@@ -444,12 +456,37 @@ pub enum Exhaustion {
     },
 }
 
+/// The HTTP status the relay answers an exhaustion with, which the exhausted decision's `answer` fact records too.
+/// `at_cap` is a request held at the cap, its wait run out or an account passed over, with no leg dialed: its untimed
+/// exhaustion is a pool at its in-flight cap, which frees on its own (429), rather than one only an operator can
+/// clear (503). A `const fn`, so the relay's constant failures take their status from it.
+pub const fn exhaustion_status(exhaustion: &Exhaustion, at_cap: bool) -> u16 {
+    match exhaustion {
+        Exhaustion::Untimed if at_cap => 429,
+        Exhaustion::ModelRejected => 404,
+        Exhaustion::Untimed | Exhaustion::Pinned { .. } => 503,
+        Exhaustion::Timed { .. } | Exhaustion::FastLane { .. } | Exhaustion::FastCredits { .. } => {
+            429
+        }
+    }
+}
+
 /// Why the current registry refuses a request admitted under an older one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// The registry no longer holds the key the request was admitted on, or holds another key under its id.
     Key(KeyRefusal),
     Resolve(ResolveError),
+}
+
+impl Refusal {
+    /// The structured word a refused decision records beside the display reason.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Refusal::Key(refusal) => refusal.code(),
+            Refusal::Resolve(refusal) => refusal.code(),
+        }
+    }
 }
 
 // Boxing the selection would put an allocation on the path every request takes, to shrink a value that is
@@ -646,7 +683,10 @@ pub fn release_reasons(
             if !account.enabled {
                 reasons.push("paused");
             }
-            if let Some(name) = state_name(account.state) {
+            // A funding mark whose retry the selection would admit stands against nothing, as `obstacle` reads it.
+            let retry_admitted = account.state == AccountState::FundingRequired
+                && state.funding_retry_admits(&pin.account_id, request.now);
+            if let Some(name) = state_name(account.state).filter(|_| !retry_admitted) {
                 reasons.push(name);
             }
         }
@@ -727,13 +767,13 @@ pub struct Decided {
     pub record: DecisionRecord,
     pub summary: DecisionSummary,
     /// The round this decision ran, for the task's `SheddingRound` event, or `None` when none ran.
-    pub shed_round: Option<ShedRound>,
+    pub shed_round: Option<ShedRoundRecord>,
 }
 
 /// A shedding round a decision ran: the pin it ran on and that pin's account, which the round's event names, beside
 /// what the round read.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ShedRound {
+pub struct ShedRoundRecord {
     pub account_id: String,
     pub pin: PinKeyFacts,
     pub facts: ShedRoundFacts,
@@ -769,7 +809,7 @@ fn round_write(
     pool: &PoolRow,
     current: &PinRow,
     at: i64,
-    round: &ShedRound,
+    round: &ShedRoundRecord,
 ) -> StateWrite {
     let pins = round
         .facts
@@ -832,7 +872,7 @@ struct Recorder {
     destinations: Vec<String>,
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
-    shed_round: Option<ShedRound>,
+    shed_round: Option<ShedRoundRecord>,
     pick: Option<Pick>,
     renewal: Option<Renewal>,
 }
@@ -841,7 +881,7 @@ struct Recorder {
 /// `warmth_of` named, and its epoch before the write.
 struct Renewal {
     cold: bool,
-    cause: Option<&'static str>,
+    cause: &'static str,
     epoch: u64,
 }
 
@@ -889,6 +929,7 @@ fn run(
         .key(&request.key_id)
         .and_then(|k| snapshot.pool(&k.pool_id))
     else {
+        rec.pin_reason = Some("not_looked_up");
         rec.step("eligible", "none", Vec::new());
         return (SelectResult::Exhausted(Exhaustion::Untimed), writes);
     };
@@ -951,17 +992,18 @@ fn run(
 
     // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
-    let (verdict, cause) = pin.as_ref().map_or((Warmth::Untouched, None), |current| {
-        let (verdict, cause) = warmth_of(
+    // Judged for a live pin alone, so the arms below that hold the pin hold its warmth too.
+    let warmth = pin.as_ref().map(|current| {
+        warmth_of(
             current,
             request,
             &state.affinity().read().expect("affinity lock poisoned"),
-        );
-        (verdict, Some(cause))
+        )
     });
+    let verdict = warmth.map_or(Warmth::Untouched, |(verdict, _)| verdict);
     match rec.pin.as_mut() {
         Some(facts) => {
-            if let Some(cause) = cause {
+            if let Some((verdict, cause)) = warmth {
                 facts.warmth = Some(verdict.as_str());
                 facts.warmth_cause = Some(cause.as_str());
             }
@@ -1090,7 +1132,7 @@ fn run(
     }
 
     // Step 3: a non-portable request is bound to its pin.
-    if let (false, Some(current)) = (request.portable, pin.as_ref()) {
+    if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
         if in_set(&eligible, &current.account_id) {
             rec.step("bound", "renewed", vec![account_fact(&current.account_id)]);
             return (
@@ -1100,7 +1142,7 @@ fn run(
                     pool,
                     current,
                     request,
-                    (verdict, cause),
+                    warmth,
                     &mut writes,
                     rec,
                 )),
@@ -1194,7 +1236,7 @@ fn run(
     }
 
     // Step 5: a live pin whose account is eligible is renewed; stickiness wins over priority.
-    if let Some(current) = pin.as_ref() {
+    if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
         if in_set(&eligible, &current.account_id) {
             return (
                 SelectResult::Selected(renew(
@@ -1203,7 +1245,7 @@ fn run(
                     pool,
                     current,
                     request,
-                    (verdict, cause),
+                    warmth,
                     &mut writes,
                     rec,
                 )),
@@ -1246,13 +1288,13 @@ fn run(
                     },
                 ));
             }
-            // Extra usage funds every model, so under `allow` a spent week goes on in overage while the poll reads
-            // the account's extra usage as enabled; a state the poll has not read is no such reading.
+            // Extra usage funds every model, so under `allow` a spent window goes on in overage unless the poll read
+            // the account's extra usage as blocked. A state the poll has not read is no refusal.
             let funded = pool.overage_policy == OveragePolicy::Allow
                 && snapshot
                     .account(&c.account_id)
                     .and_then(|a| state.credits_of(&c.account_id, a.incarnation))
-                    .is_some_and(|credits| credits.blocked().is_none());
+                    .is_none_or(|credits| credits.blocked().is_none());
             if funded {
                 spent_model.push(c.account_id.clone());
                 left.push(c);
@@ -1451,19 +1493,23 @@ fn run(
                     window,
                     rec,
                 );
-                // The wait is the relay's to measure, once it has waited.
+                // The wait and whether its bound ran out are the relay's to read, once it has waited.
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
                         cohort: Some(c.account_id.clone()),
                         held_ms: 0,
                         attempt: request.attempt,
+                        seq: request.seq,
+                        ran_out: false,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
                         cohort: None,
                         held_ms: 0,
                         attempt: request.attempt,
+                        seq: request.seq,
+                        ran_out: false,
                     },
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
@@ -1587,6 +1633,7 @@ fn fresh_pin(
         burn: PinBurn::default(),
         burn_at: None,
         burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
         last_input_tokens: 0,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
@@ -1698,7 +1745,8 @@ pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, at: i64) -> f64 {
 /// how far each shared plan window runs ahead of its pace, an api_key account with room in its worst standing bucket
 /// (under 1.0, whatever the margin). No threshold configured, or no reading, counts as cool. The reading `move_of`'s
 /// `cool` predicate takes for a migration destination and rung 4's `blocked` takes for a placement, so the arithmetic
-/// lives once.
+/// lives once. It builds no fact, so a caller that only filters pays for no record. `band_facts` answers it beside
+/// the facts the record states.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1706,13 +1754,31 @@ fn under_band(
     account_id: &str,
     now: i64,
 ) -> bool {
-    band_facts(state, snapshot, pool, account_id, now).1
+    let Some(threshold) = pool.shed_ahead_of_pace else {
+        return true;
+    };
+    match snapshot.account(account_id).map(|a| a.kind) {
+        // A bucket refills within its minute and a reading can be a minute old, so a line under 1.0 says little
+        // about the next minute. A destination that hits its limit costs one short wait in place, not a failover.
+        Some(AccountKind::ApiKey) => state
+            .sample(account_id)
+            .and_then(|s| s.worst_bucket(now))
+            .is_none_or(|r| r.utilization < 1.0),
+        _ => {
+            let band = threshold - MIGRATE_BAND;
+            [FIVE_HOUR, SEVEN_DAY]
+                .into_iter()
+                .filter_map(|window| ahead(state, account_id, window, now))
+                .all(|(lead, _)| lead < band)
+        }
+    }
 }
 
-/// `under_band`'s readings as the record's facts beside its answer: the leads over pace of the two shared windows
-/// with their elapsed shares and the larger lead's margin over the band for a subscription account, or the worst
-/// bucket for an api_key one, and the line they are held under as `band`: the threshold less `MIGRATE_BAND` on a
-/// subscription account, a full bucket (1.0) on an api_key one. No threshold reads as under with no fact.
+/// The readings `under_band` judges, as the record's facts, with its answer beside them: the leads over pace of the
+/// two shared windows with their elapsed shares and the larger lead's margin over the band for a subscription
+/// account, or the worst bucket for an api_key one, and the line they are held under as `band`: the threshold less
+/// `MIGRATE_BAND` on a subscription account, a full bucket (1.0) on an api_key one. No threshold reads as under with
+/// no fact.
 fn band_facts(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1720,29 +1786,27 @@ fn band_facts(
     account_id: &str,
     now: i64,
 ) -> (Vec<Fact>, bool) {
+    let under = under_band(state, snapshot, pool, account_id, now);
     let Some(threshold) = pool.shed_ahead_of_pace else {
-        return (Vec::new(), true);
+        return (Vec::new(), under);
     };
     let mut facts = Vec::with_capacity(6);
-    let (band, under) = match snapshot.account(account_id).map(|a| a.kind) {
-        // A bucket refills within its minute and a reading can be a minute old, so a line under 1.0 says little
-        // about the next minute; a destination that hits its limit costs one short wait in place, not a failover.
+    let band = match snapshot.account(account_id).map(|a| a.kind) {
         Some(AccountKind::ApiKey) => {
-            let worst = state.sample(account_id).and_then(|s| s.worst_bucket(now));
-            if let Some(reading) = worst {
+            if let Some(reading) = state.sample(account_id).and_then(|s| s.worst_bucket(now)) {
                 facts.push(Fact::number("worst_bucket", reading.utilization).unit("percent"));
             }
-            (1.0, worst.is_none_or(|r| r.utilization < 1.0))
+            1.0
         }
         _ => {
             let band = threshold - MIGRATE_BAND;
-            let leads = lead_facts(
+            lead_facts(
                 &mut facts,
                 ahead(state, account_id, FIVE_HOUR, now),
                 ahead(state, account_id, SEVEN_DAY, now),
                 band,
             );
-            (band, leads.iter().flatten().all(|lead| *lead < band))
+            band
         }
     };
     facts.push(Fact::number("band", band).unit("percent"));
@@ -1839,7 +1903,14 @@ fn move_of<'a>(
             .collect();
         (facts, cool)
     };
-    let cool = |state: &RoutingState, c: &Candidate| -> bool { cool_facts(state, c).1 };
+    // `cool_facts`' answer without its facts, for the shed rule's filter, which keeps none of them.
+    let cool = |state: &RoutingState, c: &Candidate| -> bool {
+        under_band(state, snapshot, pool, &c.account_id, now)
+            && state
+                .newest_shed(&c.account_id)
+                .is_none_or(|at| now - at >= dwell_ms)
+            && state.in_flight().account(&c.account_id) < cap
+    };
     let destinations = |state: &RoutingState,
                         keep: &dyn Fn(&Candidate) -> bool|
      -> (Vec<&'a Candidate>, Option<WalkStep>) {
@@ -2054,7 +2125,7 @@ fn move_of<'a>(
             "marks",
             marks.iter().map(pin_key_text).collect(),
         ));
-        rec.shed_round = Some(ShedRound {
+        rec.shed_round = Some(ShedRoundRecord {
             account_id: current.account_id.clone(),
             pin: pin_key_facts(&current.key()),
             facts: round,
@@ -2324,7 +2395,16 @@ fn obstacle(
     let Some(account) = snapshot.account(&candidate.account_id) else {
         return Some(Obstacle::Operator);
     };
-    if !account.enabled || account.state != AccountState::Ready {
+    if !account.enabled {
+        return Some(Obstacle::Operator);
+    }
+    // A funding mark is tried again on its own clock, one request at a time, since an API-key balance has no signal
+    // the poll could read.
+    if account.state == AccountState::FundingRequired {
+        if !state.funding_retry_admits(&candidate.account_id, now) {
+            return Some(Obstacle::Operator);
+        }
+    } else if account.state != AccountState::Ready {
         return Some(Obstacle::Operator);
     }
     if snapshot
@@ -2410,7 +2490,7 @@ fn renew(
     pool: &PoolRow,
     current: &PinRow,
     request: &SelectRequest,
-    (verdict, cause): (Warmth, Option<WarmthCause>),
+    (verdict, cause): (Warmth, WarmthCause),
     writes: &mut Vec<StateWrite>,
     rec: &mut Recorder,
 ) -> Selection {
@@ -2438,7 +2518,7 @@ fn renew(
     );
     rec.renewal = Some(Renewal {
         cold: !warm_on(current, verdict, now),
-        cause: cause.map(WarmthCause::as_str),
+        cause: cause.as_str(),
         epoch: current.epoch,
     });
     rec.step(
@@ -2968,8 +3048,8 @@ fn pace_of(
 /// `allow` still demotes an overage oauth account behind a plan-quota one. `overage_policy` governs eligibility
 /// everywhere and orders the tier itself only when the kind order is off, through the overage bit. The kind order
 /// puts the group ahead of the priority. Within a group, `prefer_plan` still orders an overage account behind a
-/// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with its model week
-/// spent (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
+/// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with a spent window
+/// (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
 /// whatever the priorities: it joins the overage group under the kind order and leads the key otherwise. The third
 /// element is the overage bit under either order, which the selection trace reads.
 fn tier_of(
@@ -3001,7 +3081,7 @@ fn tier_of(
 }
 
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
-/// `spent_model` names the candidates step 6 kept on extra usage with the request's model week spent. The pick's
+/// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's
 /// line names the tier, every tier member's score under Pace, the ties and the round-robin turn, and the tier's
 /// members take their rank, the chosen one first.
 #[allow(clippy::too_many_arguments)]
@@ -3546,7 +3626,7 @@ fn finish(
     snapshot: &RegistrySnapshot,
     pool: Option<&PoolRow>,
     result: &SelectResult,
-) -> (DecisionRecord, DecisionSummary, Option<ShedRound>) {
+) -> (DecisionRecord, DecisionSummary, Option<ShedRoundRecord>) {
     let Recorder {
         walk,
         mut candidates,
@@ -3624,6 +3704,7 @@ fn finish(
             outcome.kind = "refused";
             outcome.refusal = Some(RefusalFacts {
                 kind: "key",
+                code: refusal.code(),
                 reason: match refusal {
                     Refusal::Key(refusal) => refusal.to_string(),
                     Refusal::Resolve(refusal) => refusal.to_string(),
@@ -3664,6 +3745,10 @@ fn finish(
         renewal: renewal.as_ref(),
         hold_place,
         pick: pick.as_ref(),
+        exhaustion: match result {
+            SelectResult::Exhausted(exhaustion) => Some(exhaustion),
+            _ => None,
+        },
     };
     let (by, fact) = read.by_and_fact();
     let (score, runner_up) = read.scores();
@@ -3719,6 +3804,7 @@ struct Readings<'r> {
     renewal: Option<&'r Renewal>,
     hold_place: Option<&'static str>,
     pick: Option<&'r Pick>,
+    exhaustion: Option<&'r Exhaustion>,
 }
 
 fn summary_fact(key: &'static str, value: FactValue, unit: &'static str) -> SummaryFact {
@@ -3775,11 +3861,7 @@ impl Readings<'_> {
                     } else {
                         "strategy_pick"
                     };
-                    let held = i64::try_from(hold.held_ms).unwrap_or(i64::MAX);
-                    (
-                        by("hold", place),
-                        vec![summary_fact("held", FactValue::Int(held), "ms")],
-                    )
+                    (by("hold", place), vec![held_fact(hold)])
                 }
                 None => {
                     let by = match &outcome.rung {
@@ -3801,6 +3883,12 @@ impl Readings<'_> {
                 let Some(exhaustion) = &outcome.exhaustion else {
                     return (by("exhaustion", ""), Vec::new());
                 };
+                let run_out = self.run_out_hold();
+                let mut facts: Vec<SummaryFact> = run_out
+                    .or_else(|| self.attempt_hold())
+                    .map(held_fact)
+                    .into_iter()
+                    .collect();
                 let fact = match (&exhaustion.reason, exhaustion.deadline) {
                     (Some(reason), _) => {
                         summary_fact("cause", FactValue::Text(reason.clone()), "text")
@@ -3810,7 +3898,16 @@ impl Readings<'_> {
                     }
                     (None, None) => summary_fact("retry", FactValue::Text("none".into()), "text"),
                 };
-                (by("exhaustion", exhaustion.kind), vec![fact])
+                facts.push(fact);
+                // A request held at the cap was answered at the cap unless a leg was dialed. The relay's own reading
+                // decides, since a freed slot another request took leaves no hold that ran out.
+                if let Some(answered) = self.exhaustion.filter(|_| self.request.held_out) {
+                    facts.push(answer_fact(exhaustion_status(
+                        answered,
+                        !self.request.dialed,
+                    )));
+                }
+                (by("exhaustion", exhaustion.kind), facts)
             }
             _ => {
                 let kind = outcome.refusal.as_ref().map_or("", |r| r.kind);
@@ -3826,18 +3923,18 @@ impl Readings<'_> {
             return Vec::new();
         };
         let cause = || {
-            renewal
-                .cause
-                .map(|cause| vec![summary_fact("cause", FactValue::Text(cause.into()), "text")])
+            vec![summary_fact(
+                "cause",
+                FactValue::Text(renewal.cause.into()),
+                "text",
+            )]
         };
         if self.request.probe {
             let epoch = i64::try_from(renewal.epoch).unwrap_or(i64::MAX);
             return vec![summary_fact("epoch", FactValue::Int(epoch), "count")];
         }
         if renewal.cold {
-            if let Some(fact) = cause() {
-                return fact;
-            }
+            return cause();
         }
         let threshold = self.pool.and_then(|p| p.shed_ahead_of_pace);
         let member = self
@@ -3865,8 +3962,7 @@ impl Readings<'_> {
         self.pin
             .and_then(|p| p.idle_ms)
             .map(|idle| vec![summary_fact("idle", FactValue::Int(idle), "ms")])
-            .or_else(cause)
-            .unwrap_or_default()
+            .unwrap_or_else(cause)
     }
 
     /// Where a placement landed and why there: the rung's matched prefix, or the pick's contest.
@@ -3954,13 +4050,20 @@ impl Readings<'_> {
             .unwrap_or_default()
     }
 
-    /// The hold this attempt waited through, if the request's last hold is this attempt's. A failover's later
-    /// attempt took its own placement and reads `None`. Both arms that name a wait read it here.
+    /// The hold this selection follows: the request's last hold, when it held at the selection just before this
+    /// one. A leg that failed over after the wait, on the wire or before it, took a selection of its own and reads
+    /// `None`, whether or not the wire attempt moved. Every arm that names a wait reads it here.
     fn attempt_hold(&self) -> Option<&HoldFacts> {
         self.request
             .holds
             .last()
-            .filter(|hold| hold.attempt == self.request.attempt)
+            .filter(|hold| hold.seq.checked_add(1) == Some(self.request.seq))
+    }
+
+    /// The request's last hold whose bound ran out, wherever it sits: a pool of several members at their cap passes
+    /// the rest over with no wait of their own, so the exhaustion it led to can follow several selections later.
+    fn run_out_hold(&self) -> Option<&HoldFacts> {
+        self.request.holds.iter().rev().find(|hold| hold.ran_out)
     }
 
     /// A placement on the session's pin: `in_flight` as a hold's, then `held` with the wait when `attempt_hold`
@@ -3968,8 +4071,7 @@ impl Readings<'_> {
     fn session_pin_fact(&self) -> Vec<SummaryFact> {
         let mut fact = self.in_flight_fact();
         if let Some(hold) = self.attempt_hold() {
-            let held = i64::try_from(hold.held_ms).unwrap_or(i64::MAX);
-            fact.push(summary_fact("held", FactValue::Int(held), "ms"));
+            fact.push(held_fact(hold));
         }
         fact
     }
@@ -3995,6 +4097,25 @@ impl Readings<'_> {
             .max_by(|a, b| a.score.total_cmp(&b.score))
             .cloned();
         (score, runner_up)
+    }
+}
+
+/// The `held` summary fact of the wait `hold` records, in milliseconds. Every arm that names a wait builds it here.
+fn held_fact(hold: &HoldFacts) -> SummaryFact {
+    summary_fact(
+        "held",
+        FactValue::Int(i64::try_from(hold.held_ms).unwrap_or(i64::MAX)),
+        "ms",
+    )
+}
+
+/// The `answer` summary fact: the HTTP status the client was answered with, a bare number with no unit.
+fn answer_fact(status: u16) -> SummaryFact {
+    SummaryFact {
+        key: "answer",
+        value: FactValue::Int(i64::from(status)),
+        unit: None,
+        entity: None,
     }
 }
 

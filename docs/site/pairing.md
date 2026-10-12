@@ -10,8 +10,8 @@ afterwards.
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
 account, shown as "API key" in the console, holds an Anthropic API key toward `api.anthropic.com`.
 Creating an `api_key` account verifies the key against its host at once: a rejected key answers
-`400 credential rejected by the upstream`, and a models endpoint that fails, is unreachable or answers a malformed body
-answers `502 the key check failed: ...` with the reason after the colon. Neither creates the account.
+`400 credential rejected by the upstream`, and when the models endpoint fails, is unreachable or answers a malformed
+body, the router answers `502 the key check failed: ...` with the reason after the colon. Neither creates the account.
 
 ## Through the console
 
@@ -118,7 +118,7 @@ every example above, and sends no `Origin`.
 | State | What puts an account there | What moves it on |
 | --- | --- | --- |
 | `disconnected` | Disconnect, on an `oauth` account | Pair or Re-pair |
-| `funding_required` | The upstream named an `api_key` account's credit balance | Clear funding, back to `ready` |
+| `funding_required` | The upstream named an `api_key` account's credit balance | A retry that succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or Clear funding, back to `ready` |
 | `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | Reauth, funding, or Disconnect |
 | `reauth_required` | A definitive credential failure; see note below | Re-pair, or a new `api_key` secret |
 | `unpaired` | Created ahead of pairing, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
@@ -139,7 +139,7 @@ The Accounts view offers these actions, each calling its own route:
 | --- | --- |
 | Catalog | Opens the account's live model list, as of the last fetch, with a refresh. |
 | Clear cooldown | Clears one scope of the cooling-down block: the whole account, its fast lane, or one model. |
-| Clear funding | Clears a `funding_required` account back to `ready`. |
+| Clear funding | Clears a `funding_required` account back to `ready` at once, ahead of the router's own retry after five minutes, or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter. |
 | Delete account | Removes the account from every pool and deletes it; request history stays in the ledger. |
 | Disconnect | Removes the credential; request history stays in the ledger. |
 | Pair or Re-pair | Opens the pairing dialog described above. |

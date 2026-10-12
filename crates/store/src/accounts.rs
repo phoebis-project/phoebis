@@ -88,6 +88,8 @@ pub enum StateCause {
     Deleted,
     /// The upstream named an `api_key` account's credit balance.
     FundingRefused,
+    /// The router's own retry of a `funding_required` account, whose answer came back a success.
+    FundingRetry,
     /// The admin routes, and whatever reaches them.
     Operator,
     /// A pairing's confirm.
@@ -104,6 +106,7 @@ impl StateCause {
             StateCause::AuthFailed => "auth_failed",
             StateCause::Deleted => "deleted",
             StateCause::FundingRefused => "funding_refused",
+            StateCause::FundingRetry => "funding_retry",
             StateCause::Operator => "operator",
             StateCause::Paired => "paired",
             StateCause::RefreshFailed => "refresh_failed",
@@ -118,6 +121,7 @@ impl FromSql for StateCause {
             "auth_failed" => Ok(StateCause::AuthFailed),
             "deleted" => Ok(StateCause::Deleted),
             "funding_refused" => Ok(StateCause::FundingRefused),
+            "funding_retry" => Ok(StateCause::FundingRetry),
             "operator" => Ok(StateCause::Operator),
             "paired" => Ok(StateCause::Paired),
             "refresh_failed" => Ok(StateCause::RefreshFailed),
@@ -281,7 +285,7 @@ impl Store {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         tx.execute(
             "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
@@ -328,7 +332,7 @@ impl Store {
         tx.execute(
             "UPDATE accounts SET kind = ?2, label = ?3, revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1",
-            params![id, kind, label, jiff::Timestamp::now().as_millisecond()],
+            params![id, kind, label, self.now_ms()],
         )?;
         tx.commit()?;
         Ok(())
@@ -338,7 +342,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
             "UPDATE accounts SET enabled = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, enabled, jiff::Timestamp::now().as_millisecond()],
+            params![id, enabled, self.now_ms()],
         )?;
         Ok(())
     }
@@ -367,7 +371,7 @@ impl Store {
             params![
                 id,
                 serde_json::to_string(identity)?,
-                jiff::Timestamp::now().as_millisecond()
+                self.now_ms()
             ],
         );
         match written {
@@ -391,7 +395,7 @@ impl Store {
         conn.execute(
             "UPDATE accounts SET state = ?2, state_cause = ?4, revision = revision + 1, updated_at = ?3 \
              WHERE id = ?1",
-            params![id, state, jiff::Timestamp::now().as_millisecond(), cause],
+            params![id, state, self.now_ms(), cause],
         )?;
         Ok(())
     }
@@ -418,6 +422,7 @@ impl Store {
         self.routing_commit(|conn| {
             set_state_if_generations_on(
                 conn,
+                self.now_ms(),
                 id,
                 state,
                 cause,
@@ -434,7 +439,7 @@ impl Store {
     pub fn bump_lifecycle(&self, id: &str, cause: StateCause) -> Result<u64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         let updated = tx.execute(
             "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
              state_cause = ?4, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
@@ -472,7 +477,7 @@ impl Store {
     pub fn delete_account(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
+        let now = self.now_ms();
         let incarnation: Option<i64> = tx
             .query_row(
                 "SELECT incarnation FROM accounts WHERE id = ?1",
@@ -533,7 +538,7 @@ impl Store {
                 subscription.tier,
                 subscription.since,
                 subscription.trial_ends_at,
-                jiff::Timestamp::now().as_millisecond(),
+                self.now_ms(),
             ],
         )? == 0
         {
@@ -589,12 +594,7 @@ impl Store {
             "UPDATE accounts SET cancelled = ?2, \
              subscription_ends_at = CASE WHEN ?2 THEN ?3 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 WHERE id = ?1",
-            params![
-                id,
-                cancelled,
-                ends_at,
-                jiff::Timestamp::now().as_millisecond(),
-            ],
+            params![id, cancelled, ends_at, self.now_ms()],
         )? == 0
         {
             return Err(StoreError::AccountNotFound(id.to_string()));
@@ -659,8 +659,10 @@ pub(crate) fn next_incarnation_in(
 /// The state before the write is read on the same connection first: every caller holds the connection's lock or
 /// its transaction across both statements, so no other write lands between them, and the routing loop tells a
 /// transition from a repeated verdict by it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn set_state_if_generations_on(
     conn: &rusqlite::Connection,
+    now: i64,
     id: &str,
     state: AccountState,
     cause: StateCause,
@@ -688,7 +690,7 @@ pub(crate) fn set_state_if_generations_on(
             params![
                 id,
                 state,
-                jiff::Timestamp::now().as_millisecond(),
+                now,
                 lifecycle_generation as i64,
                 credential_generation as i64,
                 incarnation as i64,
@@ -701,10 +703,14 @@ pub(crate) fn set_state_if_generations_on(
 }
 
 /// The revision bump for a write that changes a dispatch input without touching the account row itself.
-pub(crate) fn bump_revision(conn: &rusqlite::Connection, id: &str) -> Result<(), StoreError> {
+pub(crate) fn bump_revision(
+    conn: &rusqlite::Connection,
+    now: i64,
+    id: &str,
+) -> Result<(), StoreError> {
     conn.execute(
         "UPDATE accounts SET revision = revision + 1, updated_at = ?2 WHERE id = ?1",
-        params![id, jiff::Timestamp::now().as_millisecond()],
+        params![id, now],
     )?;
     Ok(())
 }

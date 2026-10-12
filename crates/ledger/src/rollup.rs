@@ -446,15 +446,15 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
         }),
     );
-    d.requests = 1;
     // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
-    if request.kind == "probe"
+    let held = request.kind == "probe"
         && request.status == Some(503)
-        && request.error_code.as_deref() == Some("ledger_behind")
-    {
+        && request.error_code.as_deref() == Some("ledger_behind");
+    if held {
         d.probes_held = 1;
     } else {
+        d.requests = 1;
         match request.outcome.as_str() {
             "succeeded" => d.succeeded = 1,
             "failed" if request.status == Some(429) => d.rate_limited = 1,
@@ -475,12 +475,15 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
     let read = last.and_then(|a| a.cache_read_tokens).unwrap_or(0);
     let wrote = last.and_then(|a| a.cache_write_5m_tokens).unwrap_or(0)
         + last.and_then(|a| a.cache_write_1h_tokens).unwrap_or(0);
-    if read > 0 {
-        d.cache_hits = 1
-    } else if wrote > 0 {
-        d.cache_misses = 1
-    } else {
-        d.uncached_requests = 1
+    // A held probe reached no cache and no account, so it counts under no request figure and no timing below.
+    if !held {
+        if read > 0 {
+            d.cache_hits = 1
+        } else if wrote > 0 {
+            d.cache_misses = 1
+        } else {
+            d.uncached_requests = 1
+        }
     }
     if let Some(a) = last {
         d.input_tokens = a.input_tokens.unwrap_or(0);
@@ -510,27 +513,32 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
     d.cache_read_usd = costs.cache_read_usd;
     d.cache_write_usd = costs.cache_write_usd;
     d.output_usd = costs.output_usd;
-    if let Some(t) = request.ttfb_ms {
-        d.ttfb_hist.record(t as f64);
-    }
-    if let Some(t) = request.ttfc_ms {
-        d.ttfc_hist.record(t as f64);
-    }
-    if let Some(t) = request.duration_ms {
-        d.duration_hist.record(t as f64);
-    }
-    if let (Some(out), Some(duration), Some(ttfc)) = (
-        last.and_then(|a| a.output_tokens),
-        request.duration_ms,
-        request.ttfc_ms,
-    ) {
-        let span_s = (duration - ttfc) as f64 / 1_000.0;
-        if span_s > 0.0 {
-            d.output_tps_hist.record(out as f64 / span_s);
+    if !held {
+        if let Some(t) = request.ttfb_ms {
+            d.ttfb_hist.record(t as f64);
+        }
+        if let Some(t) = request.ttfc_ms {
+            d.ttfc_hist.record(t as f64);
+        }
+        if let Some(t) = request.duration_ms {
+            d.duration_hist.record(t as f64);
+        }
+        if let (Some(out), Some(duration), Some(ttfc)) = (
+            last.and_then(|a| a.output_tokens),
+            request.duration_ms,
+            request.ttfc_ms,
+        ) {
+            let span_s = (duration - ttfc) as f64 / 1_000.0;
+            if span_s > 0.0 {
+                d.output_tps_hist.record(out as f64 / span_s);
+            }
         }
     }
-    if let Some(code) = &request.error_code {
-        *d.errors.entry(code.clone()).or_default() += 1;
+    // A held probe asked no account, so its code names no failure the rate should count.
+    if !held {
+        if let Some(code) = &request.error_code {
+            *d.errors.entry(code.clone()).or_default() += 1;
+        }
     }
     d
 }
@@ -593,9 +601,10 @@ pub fn fold_request(
         let old = delta_of(old_request, old_attempts);
         if let Some(mut row) = read_rollup(tx, &old)? {
             row.subtract(&old);
-            // Every delta sets `requests` to 1, so zero here means the key holds no request any more: a
-            // replace that moved keys, not one that landed back on its own row. Leaving a row of zeros would
-            // surface as a phantom group in every reader that lists keys rather than summing values.
+            // Every delta sets `requests` to 1 but a held probe's, which leaves it at 0 and sets `probes_held`, one
+            // of the counters `keepalive_empty` reads. A row at zero on both holds no request any more: a replace
+            // that moved keys, not one that landed back on its own row. Leaving a row of zeros would surface as a
+            // phantom group in every reader that lists keys rather than summing values.
             //
             // A request without a user agent shares the reserved row with its key's keepalive deltas, which
             // no request row backs; the row goes only when nothing of either is left in it.
@@ -1835,6 +1844,34 @@ mod tests {
         );
     }
 
+    /// A probe the router held with `503 ledger_behind` asked no account, so it counts under its held column alone:
+    /// no cache figure, `uncached_requests` included, and no timing sample, whatever times its row carries.
+    #[test]
+    fn a_held_probe_counts_under_no_request_figure_and_no_timing() {
+        let held = RequestRecord {
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            error_code: Some("ledger_behind".into()),
+            attempts: 0,
+            ..request("rejected", Some(503), Some("k"))
+        };
+        let d = delta_of(&held, &[]);
+        assert_eq!(
+            (
+                (d.probes_held, d.requests),
+                (d.cache_hits, d.cache_misses, d.uncached_requests),
+                (
+                    d.ttfb_hist.count(),
+                    d.ttfc_hist.count(),
+                    d.duration_hist.count(),
+                    d.output_tps_hist.count()
+                ),
+            ),
+            ((1, 0), (0, 0, 0), (0, 0, 0, 0)),
+            "the held probe files under its held column alone, with no cache figure and no timing sample"
+        );
+    }
+
     /// The fixed filters narrow the read in SQL: with a pool and an account named, the planner seeks the member
     /// index on both rather than walking every row of the range.
     #[test]
@@ -2291,7 +2328,7 @@ mod tests {
         assert_eq!(
             (rows[0].requests, rows[0].output_tokens),
             (2, 70),
-            "still two requests; the output is 20 + 50"
+            "still two requests, and the output is 20 + 50"
         );
         assert_eq!(
             (
@@ -2590,7 +2627,8 @@ mod tests {
         expected.funding = PLAN_FUNDING.into();
         assert_eq!(
             rows[0], expected,
-            "every old value is where it was; effort is none, and the three sums, the incomplete count and the held count are zero"
+            "every old value is where it was, effort is none, and the three sums, the incomplete count and the \
+             held count are zero"
         );
     }
 }

@@ -216,12 +216,7 @@ async fn a_model_resolved_between_a_probe_and_the_next_request_keeps_the_warm_cr
     // Past the first request's five-minute TTL and inside the probe's entry, which runs to 570 s.
     r.advance(60_000);
     let second = r.observe("main").await;
-    r.ledger.clone().shutdown().await.unwrap();
-    let rows =
-        r.db.read_blocking(|c| {
-            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-        })
-        .unwrap();
+    let rows = final_rollups(&r).await;
     assert_eq!(
         (
             inference_rows(&rows).kept_warm_requests,
@@ -420,7 +415,16 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     assert_eq!(r.status("main").probes, 3);
     r.advance(270_000);
     r.step().await;
-    assert_eq!(r.status("main").reason, Reason::IdleLimit);
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 3),
+        "the ceiling keeps the three probes pending"
+    );
+    // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
+    // that drops the probes, which the production flusher runs on its own.
+    r.advance(30_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
     let probe = probe_rows(&rows);
     assert!(
@@ -1125,8 +1129,8 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
 }
 
 /// An api_key account's keepalive rows file beside its requests, under `billed`: the credit of a request its probe kept
-/// warm, the settlement of the probes nobody came back for when the idle window closed, and the skip of a due probe
-/// the entry's lapse withheld, each filed by the kind the registry held when the row was written.
+/// warm, the settlement of the probes nobody came back for after the idle window closed, and the skip of a due probe
+/// the entry's lapse withheld, each filed by the kind the probe or the request ran under.
 #[tokio::test]
 async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed() {
     let body = priced_body();
@@ -1151,7 +1155,8 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         billed,
         "the kept-warm credit: {rows:?}"
     );
-    // Three probes nobody comes back for, settled when the idle window closes before the fourth.
+    // Three probes nobody comes back for, pending when the idle window closes before the fourth and settled at the
+    // last one's lapse.
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
             max_idle_seconds: 1_000,
@@ -1167,7 +1172,16 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         r.advance(270_000);
         r.step().await;
     }
-    assert_eq!(r.status("main").reason, Reason::IdleLimit);
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 3),
+        "the ceiling keeps the three probes pending"
+    );
+    // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
+    // that drops the probes, which the production flusher runs on its own.
+    r.advance(30_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 3).await;
     assert_eq!(
         fundings(&rows, |row| row.wasted_probes > 0),
@@ -1186,6 +1200,61 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         fundings(&rows, |row| row.probes_skipped > 0),
         billed,
         "the skip: {rows:?}"
+    );
+}
+
+/// A due probe a gate withholds files one skip row under the keys its recipe held when the hold placed it, the key and
+/// its generation, the pool, the account, the model and the speed, and counts once under the pool and the state the
+/// hold leaves.
+#[tokio::test]
+async fn a_withheld_probe_files_its_skip_row_under_the_keys_its_recipe_held() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe_with("main", &priced_body()).await;
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.enabled = false;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    let generation = r.generation("desktop");
+    let rows = final_rollups(&r).await;
+    let skipped: Vec<_> = rows
+        .iter()
+        .filter(|row| row.probes_skipped > 0)
+        .map(|row| {
+            (
+                row.key_id.as_str(),
+                row.key_generation,
+                row.pool_id.as_str(),
+                row.account_id.as_str(),
+                row.canonical_model.as_str(),
+                row.speed.as_str(),
+                row.funding.as_str(),
+                row.probes_skipped,
+            )
+        })
+        .collect();
+    assert_eq!(
+        skipped,
+        [("desktop", generation, "main", "a", PRICED, "standard", "billed", 1)]
+    );
+    let counted: Vec<String> = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+        .lines()
+        .filter(|line| line.starts_with("phoebis_keepalive_skipped_total{"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        counted,
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#]
     );
 }
 
@@ -1351,6 +1420,117 @@ async fn a_probe_placed_in_overage_whose_answer_reports_the_plan_files_both_rows
     );
 }
 
+/// Each wasted probe files under the funding its own answer took, as its cost row does: one probe on the plan and one in
+/// overage, both wasted at one cost, write one settlement row per funding, and each funding's waste reads against its
+/// own probe dollars at a ratio of one.
+#[tokio::test]
+async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_at_a_ratio_of_one()
+{
+    let mut r = rig(plan_funded_spec()).await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    // The first probe's answer reports the plan paying and the second's overage in use, each reading the prefix back.
+    for head_flag in ["false", "true"] {
+        let Respond::Json {
+            body: read_back, ..
+        } = probe_answer(2_000, 0)
+        else {
+            unreachable!("the standing probe answer is a JSON body")
+        };
+        r.up.push_credential_rule(
+            OAUTH_SECRET,
+            "/v1/messages",
+            Respond::Json {
+                status: 200,
+                headers: vec![(
+                    "anthropic-ratelimit-unified-overage-in-use".into(),
+                    head_flag.into(),
+                )],
+                body: read_back,
+            },
+        );
+        r.advance_attended(270_000);
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2),
+        "two probes nobody answered"
+    );
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = final_rollups(&r).await;
+    let mut by_funding: BTreeMap<String, (u64, f64, f64)> = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.kind == "probe") {
+        let sum = by_funding.entry(row.funding.clone()).or_default();
+        sum.0 += row.wasted_probes;
+        sum.1 += row.wasted_probe_usd;
+        sum.2 += row.probe_cost_usd;
+    }
+    let mut settled: Vec<(String, u64)> = rows
+        .iter()
+        .filter(|row| row.wasted_probes > 0)
+        .map(|row| (row.funding.clone(), row.wasted_probes))
+        .collect();
+    settled.sort();
+    assert_eq!(
+        settled,
+        [("overage".to_string(), 1), ("plan".to_string(), 1)],
+        "one settlement row per funding: {rows:?}"
+    );
+    for (funding, (_, wasted, cost)) in by_funding.iter().filter(|(_, sum)| sum.0 > 0) {
+        assert!(
+            *cost > 0.0 && (wasted / cost - 1.0).abs() < 1e-9,
+            "{funding}: the waste reads against its own probe dollars at a ratio of one, {wasted} of {cost}"
+        );
+    }
+}
+
+/// A settlement files under the kind the probe was served under, whatever the registry holds by then: an api_key
+/// account's probe, settled after the account left the registry, still files its waste under `billed`.
+#[tokio::test]
+async fn a_settlement_after_its_account_is_deleted_files_under_the_kind_the_probe_ran_under() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let body = priced_body();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "one probe nobody answered");
+    r.h.store.delete_account("a", "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = final_rollups(&r).await;
+    let settled: Vec<(&str, &str, u64)> = rows
+        .iter()
+        .filter(|row| row.wasted_probes > 0)
+        .map(|row| {
+            (
+                row.account_id.as_str(),
+                row.funding.as_str(),
+                row.wasted_probes,
+            )
+        })
+        .collect();
+    assert_eq!(
+        settled,
+        [("a", "billed", 1)],
+        "the waste files under the api_key kind its probe ran under: {rows:?}"
+    );
+}
+
 /// The account check refuses a credit on its own. A probe warms the recipe's entry on `a`, and the next request on
 /// the same model and speed arrives past the TTL since the last real request, while that entry is still there, and is
 /// served on `b`: what it read there ordinary traffic cached, not the probe, so nothing is credited and the probe
@@ -1444,6 +1624,192 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_expired
             && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
         "{probe:?}"
     );
+}
+
+/// The rig of the pending-probe cases: an api_key account under a 500-second idle window, a request at 0 s whose
+/// five-minute entry the probe at 270 s reads back and keeps to 570 s, and the tick at 540 s, past the window, that ends
+/// the recipe. The session went silent after its lease, so the window counts from the request.
+async fn ended_by_the_idle_limit() -> Rig {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one covering probe");
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (Reason::IdleLimit, 0),
+        "the window ended the recipe"
+    );
+    r
+}
+
+/// A probe the idle limit wrote off stays pending until its entry lapses or a turn reads it. A turn inside the entry
+/// on the probe's lineage reads the coverage the kept probe carries and earns the credit with nothing settled, the
+/// lapse with no turn settles it under `idle_limit`, and a turn past the entry settles it `expired`.
+#[tokio::test]
+async fn a_probe_past_the_idle_limit_is_credited_inside_its_entry_and_settles_at_its_lapse_or_as_expired(
+) {
+    let r = ended_by_the_idle_limit().await;
+    r.advance(20_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the warm return after the ceiling, inside the probe's entry, is credited"
+    );
+
+    let mut r = ended_by_the_idle_limit().await;
+    r.advance(29_999);
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "pending a millisecond before its entry ends"
+    );
+    r.advance(1);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (0, BTreeMap::from([("idle_limit".to_string(), 1)])),
+        "the entry lapsed with no turn"
+    );
+
+    // No tick between the entry's end at 570 s and the turn at 600 s.
+    let r = ended_by_the_idle_limit().await;
+    r.advance(60_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (0, BTreeMap::from([("expired".to_string(), 1)])),
+        "the turn arrived past the probe's entry"
+    );
+}
+
+/// A turn that arrives while a pending probe's entry lives takes the probe off the lapse until its completion decides
+/// it: ticks past the entry's end while the turn streams settle nothing, and the completion earns the credit.
+#[tokio::test]
+async fn a_turn_streaming_across_a_pending_probes_entry_end_keeps_it_off_the_lapse_and_earns_the_credit(
+) {
+    let mut r = ended_by_the_idle_limit().await;
+    r.advance(20_000);
+    open_request(&r, "second", 2_000, 0);
+    // Past the probe's entry at 570 s, then past the turn's own at 860 s, with the turn still open.
+    for _ in 0..2 {
+        r.advance(160_000);
+        r.step().await;
+    }
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "the probe waits for the turn's completion"
+    );
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the credit lands and nothing settles under the idle limit"
+    );
+}
+
+/// A session whose only recipe the idle limit ended holds its pending probe alone, with nothing retained for a tick to
+/// ask the router about: the first tick at the entry's end still settles it under `idle_limit` with no router view
+/// asked, and the settlement reaches the ledger with the save after it.
+#[tokio::test]
+async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without_asking_the_router()
+{
+    let r = ended_by_the_idle_limit().await;
+    assert_eq!(
+        (r.engine.stats().retained_bytes, r.status("main").unanswered),
+        (0, 1),
+        "nothing retained, the probe pending"
+    );
+    let views = r.engine.router_views();
+    r.advance(30_000);
+    r.engine.step().await;
+    assert_eq!(
+        (r.engine.router_views(), r.status("main").unanswered),
+        (views, 0),
+        "the tick settled the probe and asked the router nothing"
+    );
+    r.engine.flush_persisted().await;
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
+    assert_eq!(
+        probe_rows(&rows).wasted_probe_reasons,
+        BTreeMap::from([("idle_limit".to_string(), 1)])
+    );
+}
+
+/// A turn that ends with no answer from the upstream decides nothing about the pending probe it found: one cancelled
+/// before its head and one a bus gap ended both hand the probe back to the lapse, which settles it under `idle_limit`
+/// at its entry's end.
+#[tokio::test]
+async fn a_turn_ended_before_its_head_or_by_a_bus_gap_leaves_the_pending_probe_to_its_lapse() {
+    for gap in [false, true] {
+        let mut r = ended_by_the_idle_limit().await;
+        r.advance(10_000);
+        r.engine.observe(r.observed("second", "main", BODY));
+        r.engine.observe(r.selected("second", "a"));
+        if gap {
+            r.engine.bus_gap(1, 0);
+        } else {
+            r.engine
+                .observe(r.complete("second", phoebis_bus::Outcome::Canceled, None));
+        }
+        r.advance(19_999);
+        r.step().await;
+        assert_eq!(
+            r.status("main").unanswered,
+            1,
+            "pending a millisecond before its entry ends (bus gap: {gap})"
+        );
+        r.advance(1);
+        r.step().await;
+        assert_eq!(
+            r.status("main").unanswered,
+            0,
+            "the lapse settled the probe (bus gap: {gap})"
+        );
+        r.engine.flush_persisted().await;
+        let rows = final_rollups(&r).await;
+        assert_eq!(
+            (
+                inference_rows(&rows).kept_warm_requests,
+                probe_rows(&rows).wasted_probe_reasons
+            ),
+            (0, BTreeMap::from([("idle_limit".to_string(), 1)])),
+            "the entry lapsed after a turn that read nothing (bus gap: {gap})"
+        );
+    }
 }
 
 /// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.
@@ -2205,6 +2571,14 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    assert_eq!(
+        payload["unanswered"][0]["unit"].as_str(),
+        Some("window_share"),
+        "the probe settled in a share of the window: {}",
+        payload["unanswered"]
+    );
     r.advance(60_000);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &body).await;
@@ -2243,10 +2617,5 @@ async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_p
     // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
     // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.
     let over = 2_000.0 * 0.5 / 1_000_000.0;
-    let standard = 2_000.0 * 0.1 / 1_000_000.0;
     assert!((cost - over).abs() < 1e-12, "{cost}");
-    assert!(
-        (cost - standard).abs() > 1e-12,
-        "a lookup that ignores the prompt prices the standard cells: {cost}"
-    );
 }

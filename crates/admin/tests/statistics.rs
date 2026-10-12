@@ -957,6 +957,8 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
             cohort: None,
             held_ms: 1_250,
             attempt: 1,
+            seq: 1,
+            ran_out: false,
         },
     ]))
     .unwrap();
@@ -1508,7 +1510,7 @@ async fn the_request_log_reads_a_key_selector_by_lifetime() {
         Some(&cookie),
     )
     .await;
-    // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
+    // The key's generation is the stamp the store gave it, read back rather than assumed.
     let live = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let earlier = live - 60_000;
     for (id, generation) in [("r-live", live), ("r-earlier", earlier)] {
@@ -1616,7 +1618,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
-                    source: "header".into(),
+                    source: "head".into(),
                     observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {

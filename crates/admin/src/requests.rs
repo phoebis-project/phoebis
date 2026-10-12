@@ -13,11 +13,11 @@ use phoebis_ledger::{
     AttemptRecord, Funding, LiveKeys, PlanTables, RequestFilter, RequestRecord, Tiers,
 };
 use phoebis_routing::PinUsage;
-use phoebis_store::AccountKind;
 use serde_json::{json, Value};
 
 use crate::analytics::ledger_failure;
 use crate::routes::{failure, store_failure};
+use crate::tiers::oauth_tiers;
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -38,15 +38,7 @@ impl ShareContext {
     #[allow(clippy::result_large_err)]
     pub(crate) fn read(state: &AdminState) -> Result<ShareContext, Response> {
         let accounts = state.store.accounts().map_err(store_failure)?;
-        let mut tiers = Tiers::new();
-        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-            let tier = state
-                .store
-                .subscription(&account.id)
-                .map_err(store_failure)?
-                .and_then(|s| s.tier);
-            tiers.insert(account.id.clone(), tier);
-        }
+        let tiers = oauth_tiers(&state.store, &accounts).map_err(store_failure)?;
         Ok(ShareContext::of(state.tables.clone(), tiers))
     }
 
@@ -388,6 +380,9 @@ mod tests {
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
     const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
 
+    /// The same Monday at 18:00 UTC, 11:00 in Los Angeles, where `SHARE_COSTS`'s peak band ends.
+    const WEEKDAY_PEAK_END: i64 = WEEKDAY_OFF_PEAK - 2 * 3_600_000;
+
     /// A cost model in round numbers: one Fable input token weighs 10 units, `test_tier` holds 100 units on the
     /// 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week is half
     /// the 7-day window.
@@ -454,6 +449,31 @@ overrides: {}
 
     fn cost_shares(model: &str, attempt: AttemptRecord, shares: &ShareContext) -> Value {
         request_summary(&request_of(model), &[attempt], shares)["cost_shares"].clone()
+    }
+
+    #[test]
+    fn an_attempt_started_inside_the_peak_band_and_finished_outside_it_prices_off_band() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        let (inside, outside) = (WEEKDAY_PEAK_END - 60_000, WEEKDAY_PEAK_END + 60_000);
+        assert!(
+            shares.tables.band_factor("five_hour", inside) > 1.0
+                && shares.tables.band_factor("five_hour", outside) == 1.0,
+            "the two instants sit either side of the band's end"
+        );
+        let request = RequestRecord {
+            finished_at: Some(inside),
+            ..request_of("claude-fable-5-1")
+        };
+        let attempt = AttemptRecord {
+            started_at: inside,
+            finished_at: Some(outside),
+            ..attempt_of("oauth", None, None)
+        };
+        assert_eq!(
+            request_summary(&request, &[attempt], &shares)["cost_shares"],
+            cost_shares("claude-fable-5-1", attempt_of("oauth", None, None), &shares),
+            "the attempt's finish prices the share, neither the request's finish nor the attempt's start"
+        );
     }
 
     fn keys(shares: &Value) -> Vec<&str> {

@@ -70,6 +70,18 @@ impl Clone for AccessToken {
     }
 }
 
+/// A `reauth_required` mark an acquisition landed, for the caller to report: the state, its cause and the three
+/// generations the fenced write carried, as the relay reports its own mark.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LandedMark {
+    pub account_id: String,
+    pub state: AccountState,
+    pub cause: StateCause,
+    pub incarnation: u64,
+    pub lifecycle_generation: u64,
+    pub credential_generation: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AcquireError {
     #[error("account is disconnected")]
@@ -78,8 +90,10 @@ pub enum AcquireError {
     NotRefreshed,
     #[error("account is quarantined after a refresh of unknown outcome")]
     Quarantined,
+    /// Carries the mark when this acquisition's refresh landed it. The store holds the mark from then on, but the
+    /// routing snapshot only learns of it from a report, so the caller that got the mark sends it.
     #[error("account has to be paired again")]
-    ReauthRequired,
+    ReauthRequired(Option<LandedMark>),
     #[error("account has no credentials")]
     Unpaired,
     /// The manager is draining for shutdown, so no refresh starts.
@@ -91,6 +105,16 @@ pub enum AcquireError {
     Store(#[from] StoreError),
 }
 
+impl AcquireError {
+    /// The mark this acquisition landed, for the caller to report.
+    pub fn landed_mark(&self) -> Option<&LandedMark> {
+        match self {
+            AcquireError::ReauthRequired(mark) => mark.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 /// The refresh outcome shared by every caller joined to one refresh. Separate from `AcquireError` because
 /// `Shared` requires a cloneable output and `StoreError` wraps io, SQLite, and serde errors that cannot be
 /// cloned; `store_failure` renders those into a message instead.
@@ -98,7 +122,7 @@ pub enum AcquireError {
 enum RefreshFailure {
     Disconnected,
     Quarantined,
-    ReauthRequired,
+    ReauthRequired(Option<LandedMark>),
     Unavailable(String),
     Unpaired,
 }
@@ -108,7 +132,7 @@ impl From<RefreshFailure> for AcquireError {
         match failure {
             RefreshFailure::Disconnected => AcquireError::Disconnected,
             RefreshFailure::Quarantined => AcquireError::Quarantined,
-            RefreshFailure::ReauthRequired => AcquireError::ReauthRequired,
+            RefreshFailure::ReauthRequired(mark) => AcquireError::ReauthRequired(mark),
             RefreshFailure::Unavailable(detail) => AcquireError::Unavailable(detail),
             RefreshFailure::Unpaired => AcquireError::Unpaired,
         }
@@ -298,7 +322,7 @@ impl CredentialManager {
     ) -> Result<AccessToken, AcquireError> {
         match account.state {
             AccountState::Disconnected => return Err(AcquireError::Disconnected),
-            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired),
+            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired(None)),
             AccountState::Unpaired => return Err(AcquireError::Unpaired),
             _ => {}
         }
@@ -366,6 +390,30 @@ impl CredentialManager {
         let slot = bundles.entry(account_id.to_string()).or_default();
         slot.outrun();
         slot.refused = None;
+    }
+
+    /// Refuses the lineage of a token the upstream rejected on a replay, as a landed mark refuses its own: the token
+    /// is the one a refresh just committed, valid to its expiry, so a leg that still carries the pre-mark row would be
+    /// handed it again from the cache or the store until the relay's report reaches the snapshot. A credential
+    /// committed past `credential_generation`, by a pairing, ends the refusal, and one committed while the replay was
+    /// upstream supersedes it: the slot's newer bundle or refusal stays as it is.
+    pub fn refuse_rejected(&self, account: &AccountRow, credential_generation: u64) {
+        // Read before the store, so an invalidation that lands after the read supersedes the refusal as well.
+        let epoch = self.inner.epoch(&account.id);
+        let superseded = self
+            .inner
+            .store
+            .credential_metadata(&account.id)
+            .is_ok_and(|stored| {
+                stored.is_some_and(|stored| {
+                    stored.lifecycle_generation != account.lifecycle_generation
+                        || stored.generation > credential_generation
+                })
+            });
+        if !superseded {
+            self.inner
+                .refuse(account, credential_generation, Some(epoch));
+        }
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -500,6 +548,11 @@ impl CredentialManager {
     /// and its log line, as an unjoined refresh does. The flag is set under the `inflight` lock before the set is
     /// taken, so a caller that asks afterwards joins a refresh in the set or is refused with `ShuttingDown`.
     pub async fn drain(&self) {
+        self.drain_within(REFRESH_TIMEOUT).await;
+    }
+
+    /// `drain` bounded by the shorter of `within` and `REFRESH_TIMEOUT`, for a shutdown whose budget has less left.
+    pub async fn drain_within(&self, within: Duration) {
         let mut running: FuturesUnordered<RefreshFuture> = {
             let inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
             self.inner.closing.store(true, Ordering::SeqCst);
@@ -508,14 +561,14 @@ impl CredentialManager {
         if running.is_empty() {
             return;
         }
-        let joined = tokio::time::timeout(REFRESH_TIMEOUT, async {
+        let joined = tokio::time::timeout(within.min(REFRESH_TIMEOUT), async {
             while running.next().await.is_some() {}
         })
         .await;
         if joined.is_err() {
             tracing::warn!(
                 unjoined = running.len(),
-                "credential refreshes still running at shutdown; the next start quarantines their accounts"
+                "credential refreshes still running at shutdown, so the next start quarantines their accounts"
             );
         }
     }
@@ -590,7 +643,7 @@ impl Inner {
             let (epoch, found) = self.lookup(account, expected);
             match found {
                 Lookup::Hit(bundle) => return Ok(bundle),
-                Lookup::Refused => return Err(AcquireError::ReauthRequired),
+                Lookup::Refused => return Err(AcquireError::ReauthRequired(None)),
                 Lookup::Miss => {}
             }
             let stored = match read {
@@ -614,7 +667,7 @@ impl Inner {
             if retried {
                 return match self.lookup(account, expected).1 {
                     Lookup::Hit(bundle) => Ok(bundle),
-                    Lookup::Refused => Err(AcquireError::ReauthRequired),
+                    Lookup::Refused => Err(AcquireError::ReauthRequired(None)),
                     Lookup::Miss => Err(AcquireError::Unavailable(
                         "the credential changed while it was read".into(),
                     )),
@@ -708,7 +761,7 @@ impl Inner {
         }
         match self.lookup(account, None).1 {
             Lookup::Hit(current) => Ok(access_token(account, &current)),
-            Lookup::Refused => Err(RefreshFailure::ReauthRequired),
+            Lookup::Refused => Err(RefreshFailure::ReauthRequired(None)),
             Lookup::Miss => Err(RefreshFailure::Unavailable(
                 "the credential changed while it was refreshed".into(),
             )),
@@ -725,7 +778,7 @@ impl Inner {
         })?;
         match account.state {
             AccountState::Disconnected => return Err(AcquireError::Disconnected),
-            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired),
+            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired(None)),
             AccountState::Unpaired => return Err(AcquireError::Unpaired),
             _ => {}
         }
@@ -769,7 +822,7 @@ impl Inner {
             .ok_or(RefreshFailure::Unpaired)?;
         match account.state {
             AccountState::Disconnected => return Err(RefreshFailure::Disconnected),
-            AccountState::ReauthRequired => return Err(RefreshFailure::ReauthRequired),
+            AccountState::ReauthRequired => return Err(RefreshFailure::ReauthRequired(None)),
             _ => {}
         }
         let bundle = self
@@ -816,8 +869,8 @@ impl Inner {
                 account.incarnation,
                 AttemptOutcome::Failed("no refresh token".into()),
             );
-            self.mark_reauth(&account, bundle.generation);
-            return Err(RefreshFailure::ReauthRequired);
+            let mark = self.mark_reauth(&account, bundle.generation);
+            return Err(RefreshFailure::ReauthRequired(mark));
         };
         let scopes = if bundle.scopes.is_empty() {
             self.profile.control.refresh_fallback_scopes
@@ -872,8 +925,8 @@ impl Inner {
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
                 self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
-                self.mark_reauth(&account, bundle.generation);
-                return Err(RefreshFailure::ReauthRequired);
+                let mark = self.mark_reauth(&account, bundle.generation);
+                return Err(RefreshFailure::ReauthRequired(mark));
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
             // still the live one and the only thing to do is wait. A 5xx is the one status where that is not
@@ -923,8 +976,8 @@ impl Inner {
                     account.incarnation,
                     AttemptOutcome::Failed("identity mismatch".into()),
                 );
-                self.mark_reauth(&account, bundle.generation);
-                return Err(RefreshFailure::ReauthRequired);
+                let mark = self.mark_reauth(&account, bundle.generation);
+                return Err(RefreshFailure::ReauthRequired(mark));
             }
         }
 
@@ -1073,8 +1126,9 @@ impl Inner {
     ///
     /// A mark that lands takes the cached bundle with it and refuses the lineage: the store knows the state, but the
     /// rows the legs carry read `ready` until the next reload, and a miss that read the store would find the bundle
-    /// the mark is about and serve it to its expiry.
-    fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) {
+    /// the mark is about and serve it to its expiry. The landed mark is answered for the caller to report, since the
+    /// store write alone starts no reload.
+    fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) -> Option<LandedMark> {
         let landed = self
             .store
             .set_state_if_generations(
@@ -1087,10 +1141,28 @@ impl Inner {
             )
             .is_ok_and(|landed| landed.is_some());
         if !landed {
-            return;
+            return None;
         }
+        self.refuse(account, credential_generation, None);
+        Some(LandedMark {
+            account_id: account.id.clone(),
+            state: AccountState::ReauthRequired,
+            cause: StateCause::RefreshFailed,
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+            credential_generation,
+        })
+    }
+
+    /// Drops the account's cached bundle and refuses its lineage at `credential_generation`, so a miss on it answers
+    /// the refusal rather than reading the refused bundle back from the store. With `since`, the epoch a caller read
+    /// before its own store read, an invalidation that moved the epoch meanwhile leaves the slot as it is.
+    fn refuse(&self, account: &AccountRow, credential_generation: u64, since: Option<u64>) {
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
         let slot = bundles.entry(account.id.clone()).or_default();
+        if since.is_some_and(|epoch| epoch != slot.epoch) {
+            return;
+        }
         slot.outrun();
         slot.refused = Some(Lineage {
             incarnation: account.incarnation,
@@ -1142,7 +1214,7 @@ fn account_uuid(account: &AccountRow) -> String {
 /// address for the host, a refused connection, a rejected handshake, a partially written request, and a
 /// timeout that fired before the body went out. `Boring` is a local TLS configuration fault and
 /// `Handshake` can only arise while the connection is being set up, so both join it. What is left,
-/// `Io`, `Response`, and `TooLarge`, can all happen after the request reached the upstream intact, which
+/// `Decode`, `Io`, `Response`, and `TooLarge`, can all happen after the request reached the upstream intact, which
 /// makes the response, not the request, the part that went missing.
 fn transport_before_write(error: &TransportError) -> bool {
     matches!(
@@ -1290,6 +1362,38 @@ mod tests {
             store,
             up,
         )
+    }
+
+    /// A refresh that never answers, in the set a drain awaits.
+    fn stalled_refresh(manager: &CredentialManager) {
+        let stalled: RefreshFuture = futures::future::pending().boxed().shared();
+        manager
+            .inner
+            .inflight
+            .lock()
+            .unwrap()
+            .insert("a".into(), stalled);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_within_a_bound_shorter_than_the_refresh_timeout_releases_a_stalled_refresh_at_the_bound(
+    ) {
+        let (manager, _store, up) = manager_at(1_000_000).await;
+        stalled_refresh(&manager);
+        let start = tokio::time::Instant::now();
+        manager.drain_within(Duration::from_secs(4)).await;
+        assert_eq!(start.elapsed(), Duration::from_secs(4));
+        up.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_within_a_bound_past_the_refresh_timeout_is_cut_to_it() {
+        let (manager, _store, up) = manager_at(1_000_000).await;
+        stalled_refresh(&manager);
+        let start = tokio::time::Instant::now();
+        manager.drain_within(Duration::from_secs(300)).await;
+        assert_eq!(start.elapsed(), REFRESH_TIMEOUT);
+        up.shutdown().await;
     }
 
     fn bundle_at(access_token: &str, issued_at: i64, expires_at: i64) -> NewBundle {

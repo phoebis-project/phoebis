@@ -1,0 +1,324 @@
+//! `phoebis recover-key`: the recovery after a lost storage key, on a stopped registry. It takes the registry's lock,
+//! reads the key file the configuration names or generates it as `init` does, refuses a key that still opens the
+//! registry, prints what it discards and asks, then discards every row sealed under the old key and seals a new
+//! canary in one transaction. It prints counts and paths, never a key.
+
+use std::io::{BufRead, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+
+use phoebis_store::{
+    permissions, KeyMatch, RecoveryStore, SealedCounts, StateCause, StorageKey, Store, StoreError,
+};
+
+use crate::{config, init};
+
+#[derive(clap::Args, Debug)]
+pub struct RecoverKeyArgs {
+    /// The user that receives the key file, its directories and the registry's lock file when this run creates
+    /// them, which needs root.
+    #[arg(long, value_name = "USER")]
+    pub owner: Option<String>,
+    /// Skip the confirmation, for a script.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+/// The steps the recovery leaves to the operator, in the order the console takes them.
+const FOLLOW_UPS: [&str; 3] = [
+    "re-enter the API-key secrets in the console",
+    "pair the OAuth accounts again in the console",
+    "rotate every downstream key",
+];
+
+/// Exit 0 once the accounts are marked, 1 on a refusal or a failure, 2 when the operator answered anything but
+/// `yes`. The lines it prints: the lock refusal "the registry is locked, stop the service first", the matching
+/// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
+/// the generated key file's path, the discard summary (one line per count), the prompt, and the three follow-up
+/// steps. A run that exits 1 or 2 after it generated the key file removes the file again, with the directories it
+/// created for it, and says so.
+pub fn run(
+    config_path: &Path,
+    args: &RecoverKeyArgs,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> i32 {
+    let code = match recover(config_path, args, input, out) {
+        Ok(code) => code,
+        Err(line) => {
+            let _ = writeln!(out, "{line}");
+            1
+        }
+    };
+    let _ = out.flush();
+    code
+}
+
+/// The run, answering its exit code, or the lines a refusal or a failure before the transaction prints.
+fn recover(
+    config_path: &Path,
+    args: &RecoverKeyArgs,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<i32, String> {
+    let config = config::load_unresolved(config_path).map_err(|error| error.to_string())?;
+    let registry = &config.storage.path;
+    let present = registry
+        .try_exists()
+        .map_err(|error| format!("reading {}: {error}", registry.display()))?;
+    if !present {
+        return Err(format!(
+            "no registry at {}, nothing to recover",
+            registry.display()
+        ));
+    }
+    // Ahead of the lock and the key file: a run that could not hand a generated key to the service user would leave
+    // a key the service cannot read.
+    let owner = args
+        .owner
+        .as_deref()
+        .map(init::owner_ids)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    // The lock comes before the key file, so a refusal on a running router leaves no generated key behind.
+    let mut store = match Store::open_for_recovery(registry) {
+        Ok(store) => store,
+        Err(StoreError::Locked) => {
+            return Err("the registry is locked, stop the service first".to_string())
+        }
+        Err(error) => {
+            return Err(format!(
+                "opening the registry at {}: {error}",
+                registry.display()
+            ))
+        }
+    };
+    // The service's next start opens the lock file, so one a root run created goes to the service's user.
+    if let (Some(owner), Some(lock)) = (owner, store.created_lock()) {
+        hand_over(lock, owner)?;
+    }
+    let key_file = &config.storage.encryption_key_file;
+    let reading = |error: &dyn std::fmt::Display| {
+        format!(
+            "reading storage.encryption_key_file {}: {error}",
+            key_file.display()
+        )
+    };
+    let (key, generated) = match std::fs::symlink_metadata(key_file) {
+        Ok(_) => (
+            StorageKey::from_file(key_file).map_err(|error| reading(&error))?,
+            None,
+        ),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            let (key, dirs) = generate(key_file, owner)?;
+            (key, Some(dirs))
+        }
+        Err(error) => return Err(reading(&error)),
+    };
+    let outcome = match generated {
+        Some(_) => say(
+            out,
+            &format!(
+                "wrote a new storage key to {} (mode 0600)",
+                key_file.display()
+            ),
+        )
+        .and_then(|()| discard(&mut store, registry, &key, key_file, args, input, out)),
+        None => discard(&mut store, registry, &key, key_file, args, input, out),
+    };
+    let Some(dirs) = generated else {
+        return outcome;
+    };
+    if matches!(outcome, Ok(0)) {
+        return outcome;
+    }
+    // Removed while the lock is held, so no other run reads a key this one leaves unused. A start after a declined or
+    // failed run then reports the missing key file it found rather than a key the registry refuses.
+    let removed = remove_generated(key_file, &dirs);
+    match outcome {
+        Ok(code) => {
+            let _ = say(out, &removed);
+            Ok(code)
+        }
+        Err(line) => Err(format!("{line}\n{removed}")),
+    }
+}
+
+/// The run past the key file: the refusal of a key that opens the registry, the summary, the prompt, and the
+/// transaction.
+fn discard(
+    store: &mut RecoveryStore,
+    registry: &Path,
+    key: &StorageKey,
+    key_file: &Path,
+    args: &RecoverKeyArgs,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<i32, String> {
+    let registry_error =
+        |error: StoreError| format!("reading the registry at {}: {error}", registry.display());
+    match store.key_matches(key).map_err(registry_error)? {
+        KeyMatch::Matches => {
+            return Err("the storage key matches the registry, nothing to recover".to_string())
+        }
+        // The key is the right one and the discard would erase what it still opens.
+        KeyMatch::CorruptCanary { readable_rows } => {
+            let rows = if readable_rows == 1 { "row" } else { "rows" };
+            return Err(format!(
+                "the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing was \
+                 discarded: restore the canary from a backup"
+            ));
+        }
+        KeyMatch::Differs => {}
+    }
+    let counts = store.sealed_counts().map_err(registry_error)?;
+    say(
+        out,
+        &summary(
+            "the recovery discards what the old key sealed:",
+            "and marks the accounts:",
+            &counts,
+        ),
+    )?;
+    if !args.yes {
+        write!(out, "type yes to discard them: ")
+            .and_then(|()| out.flush())
+            .map_err(|error| format!("writing the prompt: {error}"))?;
+        let mut answer = String::new();
+        input
+            .read_line(&mut answer)
+            .map_err(|error| format!("reading the answer: {error}"))?;
+        if answer.trim_end_matches(['\n', '\r']) != "yes" {
+            // An answer cut off by the end of the input leaves the cursor on the prompt's line.
+            let opener = if answer.ends_with('\n') { "" } else { "\n" };
+            say(out, &format!("{opener}the registry was not changed"))?;
+            return Ok(2);
+        }
+    }
+    let landed = store
+        .discard_sealed(key, StateCause::Operator)
+        .map_err(|error| {
+            format!(
+                "the recovery did not land, so the registry at {} is unchanged: {error}",
+                registry.display()
+            )
+        })?;
+    // The transaction has landed, and a reader that went away does not undo it.
+    let _ = say(
+        out,
+        &summary(
+            "discarded what the old key sealed:",
+            "and marked the accounts:",
+            &landed,
+        ),
+    );
+    let _ = say(
+        out,
+        &format!(
+            "sealed a new canary under the key at {}",
+            key_file.display()
+        ),
+    );
+    let _ = say(out, "start the service, then:");
+    for step in FOLLOW_UPS {
+        let _ = say(out, &format!("  {step}"));
+    }
+    Ok(0)
+}
+
+/// Writes a new key as `init` does: 64 hex characters and a newline, in a file created at `0600` in one open, under
+/// the directories missing on the way to it created at `0700`, all handed to `owner`. Answers the key and the
+/// directories it created, from the top down, the run's own to remove again. A step that fails removes what it
+/// created, so a rerun starts from the same state.
+fn generate(path: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Vec<PathBuf>), String> {
+    let mut dirs: Vec<PathBuf> = permissions::data_dir_of(path)
+        .ancestors()
+        .take_while(|dir| {
+            !dir.as_os_str().is_empty()
+                && matches!(
+                    std::fs::symlink_metadata(dir),
+                    Err(error) if error.kind() == ErrorKind::NotFound
+                )
+        })
+        .map(Path::to_path_buf)
+        .collect();
+    dirs.reverse();
+    let mut file = match permissions::create_private_file(path, 0o600) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = remove_dirs(&dirs);
+            return Err(format!("creating {}: {error}", path.display()));
+        }
+    };
+    let key = StorageKey::generate();
+    let written = file
+        .write_all(key.to_hex().as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("writing {}: {error}", path.display()))
+        .and_then(|()| match owner {
+            // Through the descriptor `create_new` opened and then `lchown`, as `init` hands its own over, so a link
+            // swapped in as a path's last component cannot carry the change of owner to another file.
+            Some((uid, gid)) => std::os::unix::fs::fchown(&file, Some(uid), Some(gid))
+                .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
+                .and_then(|()| dirs.iter().try_for_each(|dir| hand_over(dir, (uid, gid)))),
+            None => Ok(()),
+        });
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(path);
+        let _ = remove_dirs(&dirs);
+        return Err(error);
+    }
+    Ok((key, dirs))
+}
+
+fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))
+        .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
+}
+
+/// Removes the key file `generate` wrote and the directories it created, and answers the one line saying so.
+fn remove_generated(path: &Path, dirs: &[PathBuf]) -> String {
+    if let Err(error) = std::fs::remove_file(path) {
+        return format!(
+            "the storage key this run wrote to {} was not removed: {error}",
+            path.display()
+        );
+    }
+    if let Err((dir, error)) = remove_dirs(dirs) {
+        return format!(
+            "removed the storage key this run wrote to {}, but not the directory {}: {error}",
+            path.display(),
+            dir.display()
+        );
+    }
+    format!(
+        "removed the storage key this run wrote to {}",
+        path.display()
+    )
+}
+
+/// The deepest first, so each one is empty by the time it goes.
+fn remove_dirs(dirs: &[PathBuf]) -> Result<(), (&Path, std::io::Error)> {
+    dirs.iter()
+        .rev()
+        .try_for_each(|dir| std::fs::remove_dir(dir).map_err(|error| (dir.as_path(), error)))
+}
+
+/// The counts in the order the transaction runs: what goes, then how the accounts are left.
+fn summary(discards: &str, marks: &str, counts: &SealedCounts) -> String {
+    format!(
+        "{discards}\n  OAuth credential bundles: {}\n  API-key secrets: {}\n  keepalive recipe bodies: {}\n\
+         {marks}\n  oauth accounts disconnected: {}\n  api_key accounts unpaired: {}\n  \
+         open refresh attempts failed: {}",
+        counts.credentials,
+        counts.api_key_secrets,
+        counts.recipe_bodies,
+        counts.oauth_accounts,
+        counts.api_key_accounts,
+        counts.open_refresh_attempts,
+    )
+}
+
+fn say(out: &mut dyn Write, text: &str) -> Result<(), String> {
+    writeln!(out, "{text}").map_err(|error| format!("writing the summary: {error}"))
+}

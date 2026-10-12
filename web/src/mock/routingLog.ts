@@ -1013,14 +1013,14 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
 
 /**
  * The 11:00 round's four pins on secondary in its order: the cold ones by burn, the warm ones, the last unmarked. Each
- * holds Sonnet 5, the one model secondary serves. A burn is a share of the 5-hour window a second, as the engine reads
+ * holds Sonnet 4.6, the one model secondary serves. A burn is a share of the 5-hour window a second, as the engine reads
  * a pin's: the first pin's is 7.1% an hour.
  */
 const ROUND_PINS: ShedRound['pins'] = [
-  { agentId: 'c21e', burn: 0.071 / 3_600, cold: true, lastInputTokens: 64_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('76ddb35b') },
-  { agentId: 'main', burn: 0.034 / 3_600, cold: true, lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5') },
-  { agentId: 'e90b', burn: 0.142 / 3_600, cold: false, lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('c64358b5') },
-  { agentId: 'e90b', burn: 0.052 / 3_600, cold: false, lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-5', note: 'current', sessionId: sessionId('407dd39b') },
+  { agentId: 'c21e', burn: 0.071 / 3_600, cold: true, lastInputTokens: 64_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b') },
+  { agentId: 'main', burn: 0.034 / 3_600, cold: true, lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('0d588de5') },
+  { agentId: 'e90b', burn: 0.142 / 3_600, cold: false, lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('c64358b5') },
+  { agentId: 'e90b', burn: 0.052 / 3_600, cold: false, lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-6', note: 'current', sessionId: sessionId('407dd39b') },
 ];
 
 /**
@@ -1334,7 +1334,7 @@ function buildEvents(): RoutingEvent[] {
       },
       keyId: 'desktop',
       kind: 'shedding_round',
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-4-6',
       poolId: 'all',
       requestId: 'req_1eaa9bc1-a18',
       sessionId: sessionId('407dd39b'),

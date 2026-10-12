@@ -292,7 +292,7 @@ pub struct MemberSpend {
 }
 
 /// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; otherwise 1 for
-/// a candidate kept on extra usage with its model week spent (0 for every other), priority, and the overage bit.
+/// a candidate kept on extra usage with a spent window (0 for every other), priority, and the overage bit.
 pub type Tier = (u8, u32, u8);
 
 /// One usage report's token counts, the shape the relay reads off `Usage`.
@@ -659,6 +659,16 @@ impl InFlight {
             .unwrap_or(0) as u32
     }
 
+    /// Whether the ticket `id` still counts on `account_id`: false once its guard dropped or the hour's reclaim
+    /// took it.
+    pub fn holds(&self, account_id: &str, id: u64) -> bool {
+        self.0
+            .table()
+            .accounts
+            .get(account_id)
+            .is_some_and(|slots| slots.contains_key(&id))
+    }
+
     pub fn key(&self, key_id: &str) -> u32 {
         self.0
             .table()
@@ -740,6 +750,13 @@ pub struct AccountTicket {
     id: u64,
 }
 
+impl AccountTicket {
+    /// The ticket's id in the in-flight table, which a funding retry's claim names.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 impl Drop for AccountTicket {
     fn drop(&mut self) {
         let released = {
@@ -817,6 +834,25 @@ fn rounds_of(load: &RoutingLoad) -> (HashMap<(String, String), ShedRound>, HashM
     (rounds, newest)
 }
 
+/// A `funding_required` account's retry: the instant one request may try it again, the incarnation the mark landed
+/// on, and the account ticket of the attempt that holds the one slot. Memory only: a restart reads the mark with no
+/// entry, and the first request after it retries at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FundingRetry {
+    pub retry_at: i64,
+    pub incarnation: u64,
+    /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
+    /// table, so a slow upstream head never frees it early.
+    pub claimed_by: Option<u64>,
+    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A retry's success
+    /// that went out before it says nothing of the balance the mark found.
+    pub stamped_at: i64,
+    /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
+    /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
+    /// claim, which writes nothing, read 0.
+    pub mark_revision: Option<u64>,
+}
+
 pub struct RoutingState {
     /// The ledger's standing from its last `Report::Accounting`: while it is degraded a budgeted member's spend rows
     /// may lack a batch the writer still holds. Memory only, so a restart starts clear until the ledger's first
@@ -830,13 +866,9 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
-    /// Each pin's fast usage as typed tokens per second over the burn window, folded and decayed beside
-    /// `PinRow::burn` from the same `burn_at`. Kept apart so a reader prices this copy through the fast table
-    /// (`BurnRates::fast`, a row's fast cells whatever the prompt where the row has them) and `burn` at the set the
-    /// pin's last prompt selects, and a prompt that crosses the threshold on such a row reprices the ordinary usage
-    /// alone. Memory only, since the pin's row has no column for it, so a restart reads a pin's fast usage as none
-    /// until its next fast renewal.
-    fast_burn: HashMap<PinKey, PinBurn>,
+    /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
+    /// so a restart starts with none.
+    funding_retries: HashMap<String, FundingRetry>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -920,7 +952,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
-            fast_burn: HashMap::new(),
+            funding_retries: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             newest_shed,
@@ -1011,42 +1043,38 @@ impl RoutingState {
             Some(replaced) => {
                 self.spend_mark(&replaced);
                 self.renewed.remove(&key);
-                self.fast_burn.remove(&key);
             }
             None => {
                 self.renewed.remove(&key);
-                self.fast_burn.remove(&key);
             }
         }
     }
 
     /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
-    /// zero for a pin never renewed fast since the router started.
+    /// zero for a pin never renewed fast.
     pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
-        let key = PinKey {
-            model: self.canonical(&key.model).to_string(),
-            ..key.clone()
-        };
-        self.fast_burn.get(&key).copied().unwrap_or_default()
+        self.pin(key).map(|p| p.burn_fast).unwrap_or_default()
     }
 
-    /// Set by the task at each renewal with usage, and by a test that prices a round over fast usage. A copy of
-    /// zeros (a pin whose every renewal was standard) holds no entry, so the map stays as small as the fast pins.
+    /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
+    /// folds its fast usage into the row the task both puts here and writes, so the stored row never lags the state.
     pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
         let key = PinKey {
             model: self.canonical(&key.model).to_string(),
             ..key.clone()
         };
-        if burn == PinBurn::default() {
-            self.fast_burn.remove(&key);
-        } else if self.pins.contains_key(&key) {
-            self.fast_burn.insert(key, burn);
+        if let Some(pin) = self.pins.get_mut(&key) {
+            pin.burn_fast = burn;
         }
     }
 
     /// Every pin with fast usage, by key, for a reader outside the loop that prices the pins beside their rows.
     pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
-        self.fast_burn.clone()
+        self.pins
+            .iter()
+            .filter(|(_, p)| p.burn_fast != PinBurn::default())
+            .map(|(key, p)| (key.clone(), p.burn_fast))
+            .collect()
     }
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
@@ -1083,7 +1111,6 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
-        self.fast_burn.remove(key);
         self.spend_mark(&pin);
         Some(pin)
     }
@@ -1276,6 +1303,115 @@ impl RoutingState {
     pub fn cooldowns(&self) -> Vec<CooldownRow> {
         let mut v: Vec<_> = self.cooldowns.values().cloned().collect();
         v.sort_by(|a, b| (&a.account_id, &a.scope).cmp(&(&b.account_id, &b.scope)));
+        v
+    }
+
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, and frees the slot: the
+    /// attempt that held it ended in this mark.
+    pub fn funding_marked(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        now: i64,
+        interval_ms: i64,
+    ) {
+        self.funding_retries.insert(
+            account_id.to_string(),
+            FundingRetry {
+                retry_at: now.saturating_add(interval_ms),
+                incarnation,
+                claimed_by: None,
+                stamped_at: now,
+                mark_revision: None,
+            },
+        );
+    }
+
+    /// The writer finished the mark's write for `account_id` under `incarnation`: landed at `revision`, or refused by
+    /// its fences.
+    pub fn funding_written(&mut self, account_id: &str, incarnation: u64, revision: Option<u64>) {
+        if let Some(retry) = self
+            .funding_retries
+            .get_mut(account_id)
+            .filter(|retry| retry.incarnation == incarnation && retry.mark_revision.is_none())
+        {
+            retry.mark_revision = Some(revision.unwrap_or(0));
+        }
+    }
+
+    pub fn funding_cleared(&mut self, account_id: &str) {
+        self.funding_retries.remove(account_id);
+    }
+
+    /// Whether the account's entry was stamped after `at`, the instant an attempt went out.
+    pub fn funding_stamped_after(&self, account_id: &str, at: i64) -> bool {
+        self.funding_retries
+            .get(account_id)
+            .is_some_and(|retry| retry.stamped_at > at)
+    }
+
+    /// Whether a `funding_required` account may take a request at `now`: at once with no entry, as after a restart,
+    /// else once its retry is due and no live attempt holds the slot.
+    pub fn funding_retry_admits(&self, account_id: &str, now: i64) -> bool {
+        let Some(retry) = self.funding_retries.get(account_id) else {
+            return true;
+        };
+        now >= retry.retry_at
+            && retry
+                .claimed_by
+                .is_none_or(|id| !self.in_flight.holds(account_id, id))
+    }
+
+    /// Hands the slot to the attempt the account ticket `ticket` counts. An account with no entry for
+    /// `incarnation`, as after a restart, gets one due at `now`, so the next request finds the slot taken.
+    pub fn claim_funding_retry(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        ticket: u64,
+        now: i64,
+    ) {
+        match self.funding_retries.get_mut(account_id) {
+            Some(retry) if retry.incarnation == incarnation => retry.claimed_by = Some(ticket),
+            _ => {
+                self.funding_retries.insert(
+                    account_id.to_string(),
+                    FundingRetry {
+                        retry_at: now,
+                        incarnation,
+                        claimed_by: Some(ticket),
+                        stamped_at: now,
+                        mark_revision: Some(0),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Keeps an entry only while `snapshot` reads its account `FundingRequired` under the entry's incarnation, so a
+    /// Clear, a re-pairing or a deletion that reached the registry drops it. Under the same incarnation an entry whose
+    /// mark the writer has not acknowledged, or one the snapshot reads at a row revision below the mark's, stays
+    /// whatever the snapshot reads, since that load read the registry before the mark's write landed.
+    pub fn reconcile_funding_retries(&mut self, snapshot: &RegistrySnapshot) {
+        self.funding_retries.retain(|account_id, retry| {
+            snapshot.account(account_id).is_some_and(|account| {
+                account.incarnation == retry.incarnation
+                    && (account.state == AccountState::FundingRequired
+                        || retry
+                            .mark_revision
+                            .is_none_or(|written| account.revision < written))
+            })
+        });
+    }
+
+    /// Each entry's `(account_id, retry_at)`, sorted by account, for the account view.
+    pub fn funding_retries(&self) -> Vec<(String, i64)> {
+        let mut v: Vec<_> = self
+            .funding_retries
+            .iter()
+            .map(|(id, retry)| (id.clone(), retry.retry_at))
+            .collect();
+        v.sort();
         v
     }
 
@@ -1624,9 +1760,8 @@ impl RoutingState {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
-                let fast = self.fast_burn.get(&p.key()).copied().unwrap_or_default();
                 let burn = rates
-                    .price_pin(unit, p, &fast)
+                    .price_pin(unit, p, &p.burn_fast)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -1758,7 +1893,6 @@ impl RoutingState {
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
-            let fast_burn = self.fast_burn.get(&spelled).copied();
             self.take_pin(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
@@ -1782,14 +1916,6 @@ impl RoutingState {
                     self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
-                }
-                match fast_burn {
-                    Some(burn) => {
-                        self.fast_burn.insert(dated_key, burn);
-                    }
-                    None => {
-                        self.fast_burn.remove(&dated_key);
-                    }
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -2085,6 +2211,7 @@ mod tests {
                 input: burn,
                 ..PinBurn::default()
             },
+            burn_fast: PinBurn::default(),
             last_input_tokens: 0,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
@@ -2272,7 +2399,7 @@ mod tests {
         assert_eq!(
             sessions(&shed_marks(&mixed, 0.5 * 7.0)),
             ["cold-3", "warm-4"],
-            "the target is half the priced burn; the unpriced pins are skipped, not marked"
+            "the target is half the priced burn, and the unpriced pins are skipped rather than marked"
         );
         assert_eq!(
             sessions(&shed_marks(
@@ -2765,7 +2892,7 @@ mod tests {
         state.charge("a", 6_000, &[(FIVE_HOUR, 0.125), (SEVEN_DAY, 0.0)]);
         assert!(
             (utilization(&state, FIVE_HOUR, 7_000) - 0.125).abs() < CLOSE,
-            "a request completed since the reset counts; the one before it does not"
+            "a request completed since the reset counts, and the one before it does not"
         );
     }
 

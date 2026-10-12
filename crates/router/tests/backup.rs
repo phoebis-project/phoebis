@@ -459,7 +459,7 @@ fn a_wide_empty_destination_and_a_missing_key_file_warn_and_the_backup_proceeds(
     let stderr = String::from_utf8_lossy(&run.stderr);
     for line in [
         format!(
-            "warning: {} is readable by group or other (mode 0755); expected 0700",
+            "warning: {} is readable by group or other (mode 0755) where 0700 is expected",
             target.display()
         ),
         format!(

@@ -791,6 +791,14 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
         body.contains(&jiff::Timestamp::from_millisecond(now).unwrap().to_string()),
         "a page saved to a file says when it was generated: {body}"
     );
+    let generated = jiff::Timestamp::from_millisecond(now).unwrap().to_string();
+    assert!(
+        body.contains(&format!(
+            "<p class=\"key\">key <code>desktop</code>, pool <code>main</code>, figures from the router's hourly \
+             rollups with probes left out, generated <time>{generated}</time></p>"
+        )),
+        "the key line joins its phrases with commas: {body}"
+    );
 
     let (status, headers, _) =
         get_with_accept(&app, KEY, Some("application/json, text/html")).await;

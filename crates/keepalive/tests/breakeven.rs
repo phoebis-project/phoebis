@@ -205,7 +205,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     };
     let timing = KeepaliveTiming::default();
     let both = |funding: Funding, model: &str| {
-        let factors = factors_for(&pricing, &tables, funding, model, false);
+        let factors = factors_for(&pricing, &tables, funding, model, false, 0);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
@@ -222,7 +222,14 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
         "a dated id reads its undated row"
     );
     assert_eq!(
-        factors_for(&pricing, &tables, Funding::ApiKey, "claude-opus-5-5", false),
+        factors_for(
+            &pricing,
+            &tables,
+            Funding::ApiKey,
+            "claude-opus-5-5",
+            false,
+            0
+        ),
         BreakEvenFactors {
             read: 0.2 / 1_000_000.0,
             write_5m: 5.0 / 1_000_000.0,
@@ -254,14 +261,14 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     );
 }
 
-/// On the shipped tables `claude-sonnet-5` has a dollar row and no plan weight. A token costs the model's weight times
+/// On the shipped tables `claude-opus-5` has a dollar row and no plan weight. A token costs the model's weight times
 /// the type's multiplier, so the weight cancels from read over write and a plan recipe on it breaks even where every
 /// plan recipe does.
 #[test]
 fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight() {
     let timing = KeepaliveTiming::default();
     let both = |pricing: &PriceTable, tables: &PlanTables, model: &str| {
-        let factors = factors_for(pricing, tables, Funding::Plan, model, false);
+        let factors = factors_for(pricing, tables, Funding::Plan, model, false, 0);
         (
             break_even_ms(factors, FIVE_MINUTES_MS, &timing),
             break_even_ms(factors, ONE_HOUR_MS, &timing),
@@ -269,13 +276,13 @@ fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight
     };
     let (prices, plan) = (PriceTable::shipped(), PlanTables::shipped());
     assert_eq!(
-        both(&prices, &plan, "claude-sonnet-5"),
+        both(&prices, &plan, "claude-opus-5"),
         (Some(11_760_000), Some(158_760_000)),
         "44.1 h on the hour, not the 17.1 h of its dollar row"
     );
     assert_eq!(
-        both(&prices, &plan, "claude-sonnet-5"),
-        both(&prices, &plan, "claude-sonnet-5-5"),
+        both(&prices, &plan, "claude-opus-5"),
+        both(&prices, &plan, "claude-opus-5-5"),
         "the same figure as the weighted model beside it"
     );
     let costs = COSTS.replace(
@@ -319,7 +326,7 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
     let timing = KeepaliveTiming::default();
     let at = |model: &str, ttl_ms: i64| {
         break_even_ms(
-            factors_for(&pricing, &tables, Funding::ApiKey, model, false),
+            factors_for(&pricing, &tables, Funding::ApiKey, model, false, 0),
             ttl_ms,
             &timing,
         )
@@ -382,8 +389,12 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let between = |min: f64, max: f64| Range { min, max };
     let one = |value: f64| between(value, value);
     let rewritten = r#"{"enabled":true}"#;
-    let figures = |pool: &PoolRow, accounts: &[phoebis_store::AccountRow]| {
-        let resolved = rig.engine.resolve_pool_ceilings(pool, accounts).unwrap();
+    let figures = async |pool: &PoolRow, accounts: &[phoebis_store::AccountRow]| {
+        let resolved = rig
+            .engine
+            .resolve_pool_ceilings(pool, accounts)
+            .await
+            .unwrap();
         (
             (
                 resolved.break_even_seconds,
@@ -398,7 +409,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, share) = figures(
         &pool(rewritten, only(&["claude-opus-5-5"])),
         std::slice::from_ref(&plan),
-    );
+    )
+    .await;
     assert_eq!(
         seconds,
         (one(158_760.0), one(3_600.0), one(158_760.0), one(158_760.0)),
@@ -412,7 +424,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, share) = figures(
         &pool(rewritten, only(&["claude-opus-5-5", "claude-sonnet-5-5"])),
         &[plan.clone(), dollars.clone()],
-    );
+    )
+    .await;
     assert_eq!(
         seconds,
         (
@@ -432,14 +445,15 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool("{}", only(&["claude-opus-5-5"])),
         std::slice::from_ref(&dollars),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         between(5_760.0, 126_360.0),
         "a policy that leaves the markers as sent brings both TTLs"
     );
 
-    let (seconds, _) = figures(&pool(rewritten, Vec::new()), std::slice::from_ref(&dollars));
+    let (seconds, _) = figures(&pool(rewritten, Vec::new()), std::slice::from_ref(&dollars)).await;
     assert_eq!(
         seconds.0,
         between(2_760.0, 11_760.0),
@@ -451,7 +465,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool(dated_override, Vec::new()),
         std::slice::from_ref(&plan),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         between(11_760.0, 158_760.0),
@@ -460,7 +475,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool(rewritten, only(&["claude-opus-5-5-20261001"])),
         std::slice::from_ref(&dollars),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         one(5_760.0),
@@ -470,7 +486,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool(rewritten, only(&["Claude-Opus-5-5-20261001"])),
         std::slice::from_ref(&dollars),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         one(5_760.0),
@@ -479,7 +496,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool(rewritten, only(&["claude-opus-5-5", "claude-opus-5-5[1m]"])),
         std::slice::from_ref(&dollars),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         one(5_760.0),
@@ -489,7 +507,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let (seconds, _) = figures(
         &pool(rewritten, only(&["claude-unlisted-9"])),
         std::slice::from_ref(&dollars),
-    );
+    )
+    .await;
     assert_eq!(
         seconds.0,
         one(2_760.0),
@@ -503,7 +522,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
         let (seconds, _) = figures(
             &pool(rewritten, only(&["gpt-*"])),
             std::slice::from_ref(account),
-        );
+        )
+        .await;
         assert_eq!(
             seconds.0,
             one(expected),
@@ -513,7 +533,8 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
 
     assert_eq!(
         rig.engine
-            .resolve_pool_ceilings(&pool(rewritten, Vec::new()), &[]),
+            .resolve_pool_ceilings(&pool(rewritten, Vec::new()), &[])
+            .await,
         None,
         "a pool with no member resolves nothing"
     );
@@ -544,7 +565,7 @@ fn a_fast_recipe_reads_the_fast_cells_and_a_model_without_them_its_standard_ones
     let timing = KeepaliveTiming::default();
     let at = |model: &str, fast: bool| {
         break_even_ms(
-            factors_for(&pricing, &tables, Funding::ApiKey, model, fast),
+            factors_for(&pricing, &tables, Funding::ApiKey, model, fast, 0),
             FIVE_MINUTES_MS,
             &timing,
         )
@@ -566,5 +587,129 @@ fn a_fast_recipe_reads_the_fast_cells_and_a_model_without_them_its_standard_ones
         ),
         (Some(2_760_000), Some(1_260_000)),
         "a model priced nowhere takes the tightest row of the table its speed reads"
+    );
+}
+
+/// Sonnet 4.5's row, keyed undated, is the tightest at five minutes, so whether it stays in a pool's range shows in the
+/// range's low end: 960 s against Sonnet 5.5's 2,760 s and Fable's 11,760 s.
+const UNDATED_PRICES: &str = r#"
+effective: 2026-01-01
+models:
+  claude-fable-5-1: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 0.25, output: 50}
+  claude-sonnet-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
+  claude-sonnet-5-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}
+"#;
+
+/// A request on an undated spelling the catalog lists dated runs under the dated id, which is what the pool's rules
+/// judge, so a deny entry naming the dated id drops the undated price row once the router maps the spelling to it.
+/// Without that reading the row is judged under its own id and stays.
+#[tokio::test]
+async fn a_deny_naming_the_dated_id_drops_the_undated_row_the_router_maps_to_it() {
+    let rig = common::rig(common::RigSpec {
+        pricing: PriceTable::from_yaml(UNDATED_PRICES, "test").unwrap(),
+        timing: KeepaliveTiming::default(),
+        ..common::RigSpec::default()
+    })
+    .await;
+    let dollars = test_account_row(&common::api_key("a", common::A, 0));
+    let pool = PoolRow {
+        cache_ttl_json: r#"{"enabled":true}"#.into(),
+        keepalive_json: r#"{"enabled":true}"#.into(),
+        model_rules: vec![ModelRule {
+            pattern: "claude-sonnet-4-5-20250929".into(),
+            not: true,
+        }],
+        ..PoolRow::for_tests("p")
+    };
+    let break_even = async || {
+        rig.engine
+            .resolve_pool_ceilings(&pool, std::slice::from_ref(&dollars))
+            .await
+            .unwrap()
+            .break_even_seconds
+    };
+    assert_eq!(
+        break_even().await,
+        Range {
+            min: 960.0,
+            max: 11_760.0
+        },
+        "with no catalog reading the undated row is judged under its own id"
+    );
+    let listing = common::relay_common::catalog_rules().remove(0);
+    rig.h
+        .catalog_up
+        .push_credential_rule(common::A, &listing.path_prefix, listing.respond);
+    let a = rig.h.store.account("a").unwrap().unwrap();
+    rig.h.catalog.refresh(&a).await;
+    assert_eq!(
+        rig.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some("claude-sonnet-4-5-20250929")
+    );
+    assert_eq!(
+        break_even().await,
+        Range {
+            min: 2_760.0,
+            max: 11_760.0
+        },
+        "the deny on the dated id drops the row the router maps to it"
+    );
+}
+
+/// One row priced by prompt length whose set over the threshold reads dearer against its writes: a read of 0.1
+/// against a 1.25 write up to 1,000 prompt tokens, and 0.5 against 2.5 over them.
+const LONG_CONTEXT_PRICES: &str = r#"
+effective: 2026-01-01
+models:
+  claude-haiku-5-5:
+    input: 1
+    cache_write_5m: 1.25
+    cache_write_1h: 2
+    cache_read: 0.1
+    output: 5
+    long_context: {over: 1000, input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 10}
+"#;
+
+#[test]
+fn a_prompt_over_the_threshold_breaks_even_at_the_long_context_cells() {
+    let pricing = PriceTable::from_yaml(LONG_CONTEXT_PRICES, "test").unwrap();
+    let tables = PlanTables {
+        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        path: None,
+        source: "test".to_string(),
+    };
+    let timing = KeepaliveTiming::default();
+    let at = |model: &str, fast: bool, prompt_tokens: u64| {
+        break_even_ms(
+            factors_for(
+                &pricing,
+                &tables,
+                Funding::ApiKey,
+                model,
+                fast,
+                prompt_tokens,
+            ),
+            FIVE_MINUTES_MS,
+            &timing,
+        )
+    };
+    assert_eq!(
+        (
+            at("claude-haiku-5-5", false, 0),
+            at("claude-haiku-5-5", false, 1_000),
+            at("claude-haiku-5-5", false, 1_001)
+        ),
+        (Some(2_760_000), Some(2_760_000), Some(960_000)),
+        "46 minutes up to the threshold, 16 past it"
+    );
+    assert_eq!(
+        at("claude-haiku-5-5-20261001", false, 1_001),
+        Some(960_000),
+        "a dated id reads its undated row's set"
+    );
+    assert_eq!(
+        at("claude-haiku-5-5", true, 1_001),
+        Some(960_000),
+        "a model without fast cells prices a fast recipe at the set its prompt selects, as the price table does"
     );
 }

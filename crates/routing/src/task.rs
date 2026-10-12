@@ -248,9 +248,14 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
-    /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
-    /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
-    /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
+    /// The wait before a `funding_required` account is tried again: the shorter of five minutes and the model
+    /// rejection interval, which the router computes from its configuration.
+    pub funding_retry: Duration,
+    /// Whether the loop skips the purge tick until `RouterHandle::release_purge`, so the first purge runs at the
+    /// first tick after the release: the tick that came due meanwhile, at once. The interval's first tick fires at
+    /// once, before the spawner can subscribe to the broadcast, and the first purge after a start announces the
+    /// downtime's clock resets and wind-downs. The router's start holds it until the ledger subscribed and holds the
+    /// start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
     /// The dollar table and the subscription cost model's 5-hour share table a reader prices each pin's row
@@ -266,6 +271,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             band: BandWeight::default(),
+            funding_retry: Duration::from_secs(300),
             hold_first_purge: false,
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
@@ -299,8 +305,8 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage the routing state holds beside its
-    /// row. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
+    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage as the row's `burn_fast` holds
+    /// it. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
     /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
     /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
     /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
@@ -374,6 +380,9 @@ pub enum Report {
         cause: StateCause,
         /// The upstream error's message where the verdict read one.
         detail: Option<String>,
+        /// When the attempt went out, on a funding retry's success alone. An attempt sent before the account's newest
+        /// funding mark says nothing about the balance that mark's refusal found, so its success clears nothing.
+        dispatched_at: Option<i64>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -598,19 +607,32 @@ impl Report {
                 sample.observed_at >= held.observed_at
             }
             // A reconnect restarts the credential generation at 1 under a new lifecycle, so the lifecycle is read
-            // first; under one lifecycle a stale credential's verdict never replaces a current one's.
+            // first, and under one lifecycle a stale credential's verdict never replaces a current one's. A refusal
+            // held under the same generations is stamped when the loop drains it, after any retry already queued
+            // beside it went out, so that retry's success clears nothing and never replaces it.
             (
                 Report::AccountState {
+                    state,
                     lifecycle_generation,
                     credential_generation,
+                    dispatched_at,
                     ..
                 },
                 Report::AccountState {
+                    state: held_state,
                     lifecycle_generation: held_lifecycle,
                     credential_generation: held_credential,
                     ..
                 },
-            ) => (lifecycle_generation, credential_generation) >= (held_lifecycle, held_credential),
+            ) => {
+                let generations = (lifecycle_generation, credential_generation);
+                let held_generations = (held_lifecycle, held_credential);
+                let stale_retry = generations == held_generations
+                    && *held_state == AccountState::FundingRequired
+                    && *state != AccountState::FundingRequired
+                    && dispatched_at.is_some();
+                !stale_retry && generations >= held_generations
+            }
             (Report::Credits { state, .. }, Report::Credits { state: held, .. }) => {
                 state.observed_at >= held.observed_at
             }
@@ -671,6 +693,9 @@ enum Command {
     FastBurns {
         reply: oneshot::Sender<HashMap<PinKey, PinBurn>>,
     },
+    FundingRetries {
+        reply: oneshot::Sender<Vec<(String, i64)>>,
+    },
     MemberSpends {
         reply: oneshot::Sender<Vec<MemberSpend>>,
     },
@@ -724,6 +749,10 @@ enum Command {
     },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
+    FundingWritten {
+        rows: Vec<FundingWritten>,
     },
     /// The account-state rows a writer wake moved, sent ahead of the reload the move asks for.
     StateMoved {
@@ -1137,6 +1166,11 @@ impl RouterHandle {
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
     }
+    /// Each `funding_required` account's retry instant as `(account_id, retry_at)`, sorted by account. A marked
+    /// account has none after a restart until its first retry claims it.
+    pub async fn funding_retries(&self) -> Result<Vec<(String, i64)>, RouterGone> {
+        self.ask(|reply| Command::FundingRetries { reply }).await
+    }
     /// Every budgeted member's spend as the ledger last reported it, from the state's table alone: the
     /// analytics route reads this rather than querying the ledger a second time.
     pub async fn member_spends(&self) -> Result<Vec<MemberSpend>, RouterGone> {
@@ -1328,12 +1362,13 @@ struct Task {
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
-    /// The first purge waits while set. `Command::ReleasePurge` clears it.
+    /// Whether a registry load runs. At most one does.
+    loading: bool,
+    /// While set the loop skips the purge tick, so no purge runs. `Command::ReleasePurge` clears it, and the first
+    /// purge runs at the first tick after it.
     purge_held: bool,
     /// Whether a purge ran since the start: the first one announces the restored state again.
     purged: bool,
-    /// Whether a registry load runs; at most one does.
-    loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
     #[cfg(any(test, feature = "debug-hooks"))]
     parked: Option<Vec<(Report, u64)>>,
@@ -1439,13 +1474,23 @@ pub fn spawn(
             // reload once the write is on disk rather than before. The rows whose state it moved go first, so their
             // events leave ahead of the snapshot that shows them.
             let marks = writer.wake(batch).await;
-            if marks.landed {
+            if marks.landed || !marks.funding.is_empty() {
                 if let Some(tx) = writer_tx.upgrade() {
-                    if !marks.moved.is_empty() {
-                        let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                    // Ahead of the reload, so the swap it leads to finds each funding retry's write acknowledged.
+                    if !marks.funding.is_empty() {
+                        let _ = tx
+                            .send(Command::FundingWritten {
+                                rows: marks.funding,
+                            })
+                            .await;
                     }
-                    let (reply, _rx) = oneshot::channel();
-                    let _ = tx.send(Command::Reload { reply }).await;
+                    if marks.landed {
+                        if !marks.moved.is_empty() {
+                            let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                        }
+                        let (reply, _rx) = oneshot::channel();
+                        let _ = tx.send(Command::Reload { reply }).await;
+                    }
                 }
             }
         }
@@ -1573,39 +1618,62 @@ struct MovedState {
     detail: Option<String>,
 }
 
+/// A funding mark's write as the writer finished it, for the retry the loop stamped: the row's revision after it,
+/// `None` when the fences refused it.
+struct FundingWritten {
+    account_id: String,
+    incarnation: u64,
+    revision: Option<u64>,
+}
+
 /// What a wake's account-state writes did: whether any passed its fences, which the snapshot is rebuilt from even
-/// when the state was already the one written, and the rows whose state moved, which alone are transitions.
+/// when the state was already the one written, the rows whose state moved, which alone are transitions, and the
+/// funding marks it finished, landed or refused.
 #[derive(Default)]
 struct Marks {
     landed: bool,
     moved: Vec<MovedState>,
+    funding: Vec<FundingWritten>,
 }
 
 impl Marks {
     fn absorb(&mut self, other: Marks) {
         self.landed |= other.landed;
         self.moved.extend(other.moved);
+        self.funding.extend(other.funding);
     }
 
     /// One state write's marks from the store's answer: the row's revision after it and the state before it, `None`
     /// when the fences refused it.
     fn of(write: &StateWrite, answer: Option<(u64, AccountState)>) -> Marks {
-        let (
-            StateWrite::AccountState {
-                account_id,
-                state,
-                incarnation,
-                cause,
-                detail,
-                ..
-            },
-            Some((revision, before)),
-        ) = (write, answer)
+        let StateWrite::AccountState {
+            account_id,
+            state,
+            incarnation,
+            cause,
+            detail,
+            ..
+        } = write
         else {
             return Marks::default();
         };
+        let funding = (*state == AccountState::FundingRequired)
+            .then(|| FundingWritten {
+                account_id: account_id.clone(),
+                incarnation: *incarnation,
+                revision: answer.map(|(revision, _)| revision),
+            })
+            .into_iter()
+            .collect();
+        let Some((revision, before)) = answer else {
+            return Marks {
+                funding,
+                ..Marks::default()
+            };
+        };
         Marks {
             landed: true,
+            funding,
             moved: (before != *state)
                 .then(|| MovedState {
                     account_id: account_id.clone(),
@@ -1678,7 +1746,7 @@ impl Writer {
                             skipped,
                             left,
                             "a database-wide failure left {left} of {size} retried routing state writes \
-                             unapplied, after {skipped} refused; they are dropped"
+                             unapplied, after {skipped} refused, so they are dropped"
                         );
                     } else {
                         tracing::error!(
@@ -1688,7 +1756,7 @@ impl Writer {
                             skipped,
                             left,
                             "a database-wide failure left {left} of {size} routing state writes unapplied, \
-                             after {skipped} refused; they are tried once more at the next wake"
+                             after {skipped} refused, so they are tried once more at the next wake"
                         );
                         self.remainder = Some(remainder);
                     }
@@ -2064,6 +2132,7 @@ impl Task {
             snapshot,
             &RefusalFacts {
                 kind: "key",
+                code: refusal.code(),
                 reason,
             },
         );
@@ -2099,7 +2168,7 @@ impl Task {
                 tracing::warn!(
                     rows = lost.len() - rekeys,
                     rekeys,
-                    "the routing state writer has stopped; the writes held in memory are lost"
+                    "the routing state writer has stopped, so the writes held in memory are lost"
                 );
             }
             // Cleared whatever the send did: the loop is leaving, and nothing is held for it any more.
@@ -2316,14 +2385,26 @@ impl Task {
                     // reads already holds this one: a ticket taken at the dial, awaits later, would let every
                     // selection answered in between read the same count and land over the cap. A token count
                     // takes none: it is bound to no cap.
-                    SelectResult::Selected(selection) => (
-                        self.token(&selection.account.id).child_token(),
-                        (!request.count).then(|| {
+                    SelectResult::Selected(selection) => {
+                        let ticket = (!request.count).then(|| {
                             self.state
                                 .in_flight()
                                 .dispatched(&selection.account.id, request.now)
-                        }),
-                    ),
+                        });
+                        // The placed attempt's ticket is the funding retry's claim, so the one slot frees when that
+                        // attempt ends, however long its head takes.
+                        if let (Some(ticket), AccountState::FundingRequired) =
+                            (&ticket, selection.account.state)
+                        {
+                            self.state.claim_funding_retry(
+                                &selection.account.id,
+                                selection.account.incarnation,
+                                ticket.id(),
+                                request.now,
+                            );
+                        }
+                        (self.token(&selection.account.id).child_token(), ticket)
+                    }
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
                     | SelectResult::Refused(_) => (CancellationToken::new(), None),
@@ -2338,6 +2419,12 @@ impl Task {
             Command::RecordRefusal { request, refusal } => self.record_refusal(&request, &refusal),
             // The top of this turn drained the map already.
             Command::Coalesced => {}
+            Command::FundingWritten { rows } => {
+                for row in rows {
+                    self.state
+                        .funding_written(&row.account_id, row.incarnation, row.revision);
+                }
+            }
             Command::StateMoved { rows } => self.state_moved(rows),
             #[cfg(any(test, feature = "debug-hooks"))]
             Command::HoldReports { reply } => {
@@ -2460,6 +2547,9 @@ impl Task {
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
+            }
+            Command::FundingRetries { reply } => {
+                let _ = reply.send(self.state.funding_retries());
             }
             Command::AccountingDegraded { reply } => {
                 let _ = reply.send(self.state.accounting_degraded());
@@ -2717,15 +2807,26 @@ impl Task {
                     return;
                 }
                 // Credits with room lift a refusal only when read after it: an earlier reading says nothing about
-                // the state that refused the request. They lift the credits row alone, since the fast lane's rate
-                // limit beside it is a bucket the reading does not measure.
+                // the state that refused the request. Extra usage funds a request past a spent plan window, so the
+                // reading lifts the credits row and the spent-window rows: an account rate limit naming a plan
+                // window, and a model's rate limit, which on an OAuth account (the only kind the poll reads) is its
+                // week's. The fast lane's rate limit and a model rejection stay, since the reading measures neither.
                 let now = (self.clock)();
-                let refused = self
+                let mut lifted: Vec<String> = self
                     .state
                     .cooldowns_of(&account_id, now)
-                    .any(|row| row.scope == "fast_credits" && observed_at > row.set_at);
-                if refused {
-                    self.release_cooldown(account_id, "fast_credits".to_string(), "recovered");
+                    .filter(|row| observed_at > row.set_at)
+                    .filter(|row| {
+                        row.scope == "fast_credits"
+                            || (row.reason == "rate_limit"
+                                && (row.scope.starts_with("model:")
+                                    || (row.scope == "account" && is_plan_window(&row.window))))
+                    })
+                    .map(|row| row.scope.clone())
+                    .collect();
+                lifted.sort();
+                for scope in lifted {
+                    self.release_cooldown(account_id.clone(), scope, "recovered");
                 }
             }
             Report::Overage {
@@ -2889,7 +2990,6 @@ impl Task {
                             ..current
                         };
                         renewed.cache_ttl_ms = cache_ttl_ms;
-                        let mut fast_burn = None;
                         if origin == "keepalive" {
                             // A probe's selection judged nothing, since it replays another request's facts; the
                             // renewal is the refresh it wrote. Its usage is the keepalive's cost, never the
@@ -2920,22 +3020,19 @@ impl Task {
                                     write_5m: fold(copy.write_5m, usage.write_5m),
                                 }
                             };
-                            // A fast answer is usage credits: its tokens land in the fast copy the state holds
-                            // beside the row, priced later through the fast table (`BurnRates::fast`), while the
-                            // row's two copies only decay. A standard answer folds into the row's copies, the
-                            // banded one weighed by the band, and the fast copy only decays.
+                            // A fast answer is usage credits: its tokens land in the row's fast copy, priced later
+                            // through the fast table (`BurnRates::fast`), while the row's two other copies only
+                            // decay. A standard answer folds into the plain and banded copies, the banded one
+                            // weighed by the band, and the fast copy only decays.
                             let (plain, fast_weight) = if fast { (0.0, 1.0) } else { (1.0, 0.0) };
                             renewed.burn = folded(renewed.burn, plain);
                             renewed.burn_banded =
                                 folded(renewed.burn_banded, if fast { 0.0 } else { band });
-                            fast_burn = Some(folded(self.state.fast_burn(&key), fast_weight));
+                            renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens = prompt;
                         }
                         self.state.put_pin(renewed.clone());
-                        if let Some(fast_burn) = fast_burn {
-                            self.state.set_fast_burn(&key, fast_burn);
-                        }
                         self.state.mark_renewed(&key);
                         self.write(vec![StateWrite::UpsertPin(renewed)]);
                     }
@@ -3047,7 +3144,39 @@ impl Task {
                 credential_generation,
                 cause,
                 detail,
+                dispatched_at,
             } => {
+                if state != AccountState::FundingRequired
+                    && dispatched_at
+                        .is_some_and(|at| self.state.funding_stamped_after(&account_id, at))
+                {
+                    tracing::debug!(
+                        account = %account_id,
+                        "a funding retry's success predates the account's newest mark and clears nothing"
+                    );
+                    return;
+                }
+                // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
+                // id no longer has moves no retry, as its write moves no state.
+                if !self.superseded(
+                    &account_id,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                ) {
+                    if state == AccountState::FundingRequired {
+                        let interval = i64::try_from(self.config.funding_retry.as_millis())
+                            .unwrap_or(i64::MAX);
+                        self.state.funding_marked(
+                            &account_id,
+                            incarnation,
+                            (self.clock)(),
+                            interval,
+                        );
+                    } else {
+                        self.state.funding_cleared(&account_id);
+                    }
+                }
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
                 // first and the reload follows once it has landed. The write is fenced by the incarnation and
                 // both generations: a verdict about a credential that was replaced, a slot that was
@@ -3160,11 +3289,14 @@ impl Task {
             {
                 Ok(Ok(loaded)) => Ok(loaded),
                 Ok(Err(error)) => {
-                    tracing::error!(%error, "the registry could not be reloaded; the previous snapshot stays in force");
+                    tracing::error!(
+                        %error,
+                        "the registry could not be reloaded, so the previous snapshot stays in force"
+                    );
                     Err(error.to_string())
                 }
                 Err(error) => {
-                    tracing::error!(%error, "the registry load panicked; the previous snapshot stays in force");
+                    tracing::error!(%error, "the registry load panicked, so the previous snapshot stays in force");
                     Err(error.to_string())
                 }
             };
@@ -3208,6 +3340,8 @@ impl Task {
                 self.state.forget_sample(&account.id);
             }
         }
+        // The operator's Clear reaches the router as a store write and a reload, never as a report.
+        self.state.reconcile_funding_retries(&next);
         *self.snapshot.write().expect("snapshot lock poisoned") = next;
         // Pins of a deleted key or pool, everything held against an account the registry no longer has, and
         // a cooldown past its deadline go now rather than at the next tick. An account that left its pool is
@@ -3556,7 +3690,7 @@ impl Task {
                 if !self.writer_status.degraded.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         depth = WRITER_DEPTH,
-                        "the routing state writer is behind; writes wait in memory, one per row"
+                        "the routing state writer is behind, so writes wait in memory, one per row"
                     );
                 }
             }
@@ -3578,7 +3712,7 @@ impl Task {
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 self.writer_status.degraded.store(false, Ordering::Relaxed);
                 tracing::info!(
-                    "the routing state writer caught up; the writes held in memory are queued"
+                    "the routing state writer caught up, so the writes held in memory are queued"
                 );
             }
             Err(mpsc::error::TrySendError::Full(())) => {}
@@ -3589,7 +3723,7 @@ impl Task {
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
                 tracing::warn!(
                     lost,
-                    "the routing state writer has stopped; the writes held in memory are lost"
+                    "the routing state writer has stopped, so the writes held in memory are lost"
                 );
             }
         }

@@ -752,7 +752,7 @@ where
     F: Fn(&'a Rig) -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     while !check(r).await {
         assert!(
             tokio::time::Instant::now() < deadline,

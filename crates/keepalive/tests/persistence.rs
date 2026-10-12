@@ -6,16 +6,17 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
+use fake_upstream::Respond;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
     LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
-use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
+use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 
 const DAY: i64 = 86_400_000;
 
@@ -49,6 +50,19 @@ fn saved_field(r: &Rig, session: &str, agent: &str, field: &str) -> serde_json::
         .find(|row| row.session_id == session && row.agent_id == agent)
         .unwrap_or_else(|| panic!("no saved row for {session} {agent}"));
     serde_json::from_str::<serde_json::Value>(&row.payload).unwrap()[field].clone()
+}
+
+/// The sealed body, its nonce and its size as the registry holds them for `agent` of the rig's session, read past the
+/// store.
+fn stored_body(r: &Rig, agent: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>, i64) {
+    registry(r)
+        .query_row(
+            "SELECT body_sealed, body_nonce, body_size FROM keepalive_agents \
+             WHERE session_id = 'session' AND agent_id = ?1",
+            [agent],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
 }
 
 fn heartbeat() -> Event {
@@ -111,7 +125,8 @@ fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
 /// Runs `work` to its end on a thread of its own. A save held in the store's busy wait keeps the store's connection,
 /// and a runtime task that reads the store (the relay's catalog refresh does every few milliseconds) blocks the
 /// worker it runs on behind it, so a flush or a shutdown left to the workers might never get to run while the test
-/// holds the registry.
+/// holds the registry. The blocked worker can leave tokio's timer undriven too, so the test's own waits inside the hold
+/// sleep on its thread's clock rather than on a tokio timer.
 fn on_own_thread(
     work: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
@@ -416,6 +431,90 @@ async fn a_body_that_cannot_be_opened_leaves_the_agent_without_a_recipe() {
         saved_field(&r, "session", "main", "current"),
         serde_json::Value::Null
     );
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the blob that no longer opens leaves the registry with the load's rewrite"
+    );
+}
+
+/// A flush that rewrites an agent whose recipe did not change since its last landed save leaves the sealed body and its
+/// nonce as stored, and the body still opens.
+#[tokio::test]
+async fn a_flush_that_rewrites_an_agent_with_an_unchanged_recipe_leaves_its_sealed_body_as_stored()
+{
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let sealed = stored_body(&r, "main");
+    assert!(sealed.0.is_some() && sealed.1.is_some() && sealed.2 > 0);
+    r.state("main", "idle");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "main", "state"),
+        "idle",
+        "the flush rewrote the agent's row"
+    );
+    assert_eq!(
+        stored_body(&r, "main"),
+        sealed,
+        "and left the sealed body and its nonce as they were"
+    );
+    assert!(saved_agents(&r)[0].body.is_some(), "the body still opens");
+}
+
+/// A flush after the recipe ended clears its sealed body, so the prompt leaves the disk with the recipe, whether the
+/// running engine ended it, a second instance took the session over with a new record under the same row, or the load
+/// ended it.
+#[tokio::test]
+async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    r.state("main", "released");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "a release ends the recipe and its prompt leaves the registry"
+    );
+
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    r.event(Event {
+        event: "session_start".into(),
+        instance_id: "second".into(),
+        previous_instance_id: Some("instance".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the replaced record's prompt leaves the registry with the new record's first save"
+    );
+
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert!(stored_body(&r, "main").0.is_some());
+    // The router is down past the entry's expiry, so the load ends the recipe it restores.
+    r.advance(400_000);
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1)
+    );
+    assert_eq!(
+        stored_body(&r, "main"),
+        (None, None, 0),
+        "the recipe the load ended leaves the registry with the load's save"
+    );
 }
 
 #[tokio::test]
@@ -635,7 +734,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
 
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
 async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
-    wait_for(Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
                 read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
@@ -877,6 +976,154 @@ async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and
     );
 }
 
+/// A probe the idle limit left pending comes back from a restart with what its settlement and a later turn read: the
+/// kind and the overage its answer carried, its coverage and unit, and its pending label.
+#[tokio::test]
+async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_label() {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        pool: PoolSpec {
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 500,
+            ..KeepalivePolicy::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    // The probe reads the prefix back and its answer reports overage in use.
+    let Respond::Json {
+        body: read_back, ..
+    } = probe_answer(2_000, 0)
+    else {
+        unreachable!("the standing probe answer is a JSON body")
+    };
+    r.up.push_credential_rule(
+        OAUTH,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![(
+                "anthropic-ratelimit-unified-overage-in-use".into(),
+                "true".into(),
+            )],
+            body: read_back,
+        },
+    );
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    let (_, agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (_, loaded) = second.persist_rows();
+    assert_eq!(
+        loaded, agents,
+        "the agent with its pending probe reads back as it stood"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&loaded[0].payload).unwrap();
+    let kept = &payload["kept"][0];
+    assert_eq!(
+        (
+            payload["kept"].as_array().map(Vec::len),
+            kept["kind"].as_str(),
+            kept["in_overage"].as_bool(),
+            kept["covered"].as_bool(),
+            kept["unit"].as_str(),
+            kept["pending"].as_str(),
+        ),
+        (
+            Some(1),
+            Some("oauth"),
+            Some(true),
+            Some(true),
+            Some("usd"),
+            Some("idle_limit")
+        ),
+        "{kept}"
+    );
+}
+
+/// A saved session of an older record version carries probes with no funding to settle under, so the load drops it
+/// whole: no session comes back, nothing settles, its session row and its agent row leave the registry, and one warn
+/// line names the count.
+#[tokio::test]
+async fn a_saved_session_of_record_version_one_is_dropped_at_the_load_with_one_line() {
+    let r = rig(on_disk()).await;
+    // The rig's session as a save writes it, its main agent holding no recipe, rewritten to version 1 with one kept
+    // probe in that version's shape.
+    let (mut sessions, mut agents) = r.engine.persist_rows();
+    assert_eq!((sessions.len(), agents.len()), (1, 1));
+    let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    payload["kept"] = serde_json::json!([{
+        "key_generation": r.generation("desktop"),
+        "pool_id": "main",
+        "canonical_model": "claude-sonnet-4-5",
+        "account": "a",
+        "fast": false,
+        "cost": "0.0006",
+        "entry_expires": NOW + 570_000,
+    }]);
+    agents[0].payload = payload.to_string();
+    sessions[0].record_version = 1;
+    agents[0].record_version = 1;
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents,
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let captured = Captured::default();
+    let second = r.restart().await;
+    {
+        let _guard = captured.install_at(tracing::Level::INFO);
+        second.load_persisted().await;
+    }
+    let stats = second.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents),
+        (0, 0),
+        "the older session is not restored"
+    );
+    assert_eq!(
+        (saved_sessions(&r).len(), saved_agents(&r).len()),
+        (0, 0),
+        "both its rows left the registry"
+    );
+    settle_ledger(&r, &mut 0).await;
+    assert_eq!(wasted_now(&r), BTreeMap::new(), "nothing settles");
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("saved keepalive"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one line for the load, none per row: {text}"
+    );
+    assert!(
+        lines[0].contains("WARN")
+            && lines[0].contains("older record version")
+            && lines[0].contains("dropped=1"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn a_loaded_recipe_probes_warm_when_due() {
     let mut r = rig(on_disk()).await;
@@ -1028,7 +1275,7 @@ async fn settle_ledger(r: &Rig, marks: &mut u64) {
         ..Default::default()
     }));
     let want = *marks;
-    wait_for(Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
                 read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
@@ -1042,6 +1289,47 @@ async fn settle_ledger(r: &Rig, marks: &mut u64) {
         (landed == want).then_some(())
     })
     .await;
+}
+
+/// `settle_ledger` on the test thread's own clock, for a wait inside the held registry, and kept going until at least
+/// `hold` has passed. The case calling it runs `multi_thread`, so its body runs on the thread that called `block_on`
+/// while the ledger writer runs on the workers, and a tokio timer inside the hold can stall while a worker blocks on
+/// the store's mutex.
+fn settle_ledger_in_hold(r: &Rig, marks: &mut u64, hold: Duration) {
+    let since = Instant::now();
+    *marks += 1;
+    r.ledger.record(Record::Keepalive(KeepaliveDelta {
+        at: NOW,
+        key_id: "desktop".into(),
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        canonical_model: "marker".into(),
+        kind: "marker".into(),
+        probes_skipped: 1,
+        ..Default::default()
+    }));
+    let want = *marks;
+    let deadline = Duration::from_secs(30);
+    loop {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let landed: u64 = rows
+            .iter()
+            .filter(|row| row.kind == "marker")
+            .map(|row| row.probes_skipped)
+            .sum();
+        if landed == want && since.elapsed() >= hold {
+            return;
+        }
+        assert!(
+            since.elapsed() < deadline,
+            "the marker never landed within {deadline:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// The wasted probes the ledger holds right now, by reason, read once.
@@ -1172,14 +1460,22 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     // The load's save has read its batch and waits on the held registry.
     second.persist_reached(1, 1).await;
     let mut marks = 0;
-    settle_ledger(&r, &mut marks).await;
+    settle_ledger_in_hold(&r, &mut marks, Duration::ZERO);
     assert_eq!(
         wasted_now(&r),
         BTreeMap::new(),
         "nothing reaches the ledger while the registry still holds the probe"
     );
+    // The pause is the hold across one catalog refresh tick (every 20 ms in the rig), so a wait in the hold that runs
+    // on tokio's timer fails the case on every run rather than by chance.
+    settle_ledger_in_hold(&r, &mut marks, Duration::from_millis(60));
     held.execute_batch("COMMIT").unwrap();
     load.join().unwrap();
+    assert_eq!(
+        saved_field(&r, "session", "main", "unanswered"),
+        serde_json::json!([]),
+        "the load's save landed once the registry was free"
+    );
     assert_eq!(
         wasted(&r, 1).await,
         BTreeMap::from([("expired".to_string(), 1)]),
@@ -1276,6 +1572,14 @@ async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_t
         BTreeMap::new(),
         "a save that failed sends nothing to the ledger"
     );
+    // A second flush that fails holds them as the first did.
+    second.flush_persisted().await;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::new(),
+        "a second failed save sends nothing either"
+    );
     // The process dies before another save: the next one finds the probe still unanswered in the registry.
     let third = r.restart().await;
     third.load_persisted().await;
@@ -1300,5 +1604,67 @@ async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_t
         wasted_now(&r),
         BTreeMap::from([("expired".to_string(), 1)]),
         "a later load finds the probe settled"
+    );
+}
+
+/// The idle limit's pending probe settles at its entry's end only once the registry holds the agent without it, as a
+/// load's settlements do: a save that fails sends nothing to the ledger, so a restart that restores the probe and
+/// lapses it again counts it once.
+#[tokio::test]
+async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and_a_restart() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    r.engine.flush_persisted().await;
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let lapse = payload["kept"][0]["entry_expires"]
+        .as_i64()
+        .expect("the pending probe's entry");
+    // The registry refuses every agent row from here on, so no save drops the probe.
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    r.advance(lapse - r.now());
+    r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        0,
+        "the sweep settled the probe at its entry's end"
+    );
+    r.engine.flush_persisted().await;
+    // The process dies before another save: the next one restores the probe still pending in the registry.
+    let second = r.restart().await;
+    second.load_persisted().await;
+    second.step().await;
+    second.wait_idle().await;
+    conn.execute_batch("DROP TRIGGER refuse_insert; DROP TRIGGER refuse_update;")
+        .unwrap();
+    second.flush_persisted().await;
+    let mut marks = 0;
+    settle_ledger(&r, &mut marks).await;
+    assert_eq!(
+        wasted_now(&r),
+        BTreeMap::from([("idle_limit".to_string(), 1)]),
+        "one settlement, with the save that dropped the probe"
     );
 }

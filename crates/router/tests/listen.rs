@@ -48,6 +48,37 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
     );
 }
 
+/// The timeout bounds the whole head, so a byte that starts one buys a stalled peer no more time than silence would.
+#[tokio::test]
+async fn a_plain_peer_that_sends_one_byte_and_stalls_is_closed_at_the_header_read_timeout() {
+    let limits = phoebis_router::listen::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
+        header_read_timeout: Duration::from_millis(300),
+        max_connections: 8,
+    };
+    let (addr, _stop) = listening(limits, None).await;
+    let connected = std::time::Instant::now();
+    let mut stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stalled.write_all(b"G").await.unwrap();
+    let mut answer = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(3), stalled.read_to_end(&mut answer)).await;
+    assert!(
+        matches!(read, Ok(Ok(_)) | Ok(Err(_))),
+        "the listener closed the stalled connection: {read:?}"
+    );
+    // The byte itself is no reason to close: the head stays open until the timeout runs out.
+    assert!(
+        connected.elapsed() >= Duration::from_millis(200),
+        "{:?}",
+        connected.elapsed()
+    );
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(
+        answer.is_empty() || answer.starts_with("HTTP/1.1 408"),
+        "nothing but a timeout answer: {answer}"
+    );
+}
+
 /// The handshake runs under the header read timeout, so a peer that opens a socket and sends no ClientHello is
 /// held to it like a peer that sends no head; with one slot, the handshake behind it proves the slot came back.
 #[tokio::test]

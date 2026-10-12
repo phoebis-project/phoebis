@@ -276,7 +276,19 @@ const COUNTED_PRICES: &str = "\
 effective: 2026-02-01
 models:
   claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
-  claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5, long_context: {over: 1000, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25}}
+  claude-haiku-4-5:
+    input: 1
+    cache_write_5m: 1.25
+    cache_write_1h: 2
+    cache_read: 0.1
+    output: 5
+    long_context:
+      over: 1000
+      input: 5
+      cache_write_5m: 6.25
+      cache_write_1h: 10
+      cache_read: 0.5
+      output: 25
 ";
 
 const COUNTED_COSTS: &str = "\
@@ -502,8 +514,9 @@ fn a_cost_model_with_a_capacity_at_zero_fails_check_config_naming_the_key() {
 }
 
 /// Each removed key with the block it sat in and its lines.
-const REMOVED_KEYS: [(&str, &str); 3] = [
+const REMOVED_KEYS: [(&str, &str); 4] = [
     ("routing", "  catalog_cache_seconds: 60\n"), // removed name
+    ("usage", "  cache_ttl_seconds: 60\n"),       // removed name
     (
         "admin",
         include_str!("fixtures/removed-keys/admin-origin.yaml"),
@@ -1067,7 +1080,7 @@ fn a_key_file_readable_by_others_warns() {
     assert!(
         String::from_utf8_lossy(&out.stdout).lines().any(|line| line
             == format!(
-                "warning: {} is readable by group or other (mode 0644); expected 0600",
+                "warning: {} is readable by group or other (mode 0644) where 0600 is expected",
                 key.display()
             )),
         "{}",

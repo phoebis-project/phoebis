@@ -33,27 +33,27 @@ A `ledger_gap` event names one of these reasons:
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
 status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 answer whose body ended before its end,
-`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under `incomplete`, and
-`stream_cut` or `stream_stalled` under `failed` for a forwarded answer of another status whose body was cut or went
-silent); the time to first byte and to first token; the duration; the bytes sent and received; whether the response was
-served kept warm; whether its body was captured; and the client's user agent and class (`claude-code/<entrypoint>`
-or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and
-the summed tool durations of the turn before), the turn origin off its attribution line, its auto-mode standing (as
-admission read it, a server-side check asked for under an on setting or the `safeguards` member carried under an off
-setting, which the dispatch drops; or a refusal for the body's shape before any upstream saw it), and the request's
-shape: the effort, the thinking mode and budget, the output limit, the tool, system-block, and message counts, the
-context edits, the temperature, and the requested speed and service tier.
-A session that
-branched from another conversation carries that conversation's root and the matched depth as well. The session it names
-is the client's own,
-and the Sessions view groups a row by it. The request row
-records who put the cache diagnostics member on the body the upstream compared: the client, the router, or none. The
-attempt row names the account and its kind; the upstream status, request id and message id; the outcome; the cooldown
-the attempt set; the stop reason, the model the answer names when it differs from the one the router resolved, the
-speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model;
-the five token counts, with the thinking share of the output and the web search and fetch calls the answer made; the
-cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across
-input, cache read, cache write, and output; and the pricing version the estimate used.
+`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete`, `stream_stalled` or `stream_undecodable`
+under `incomplete`, and `stream_cut`, `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of
+another status whose body was cut, went silent or did not decode); the time to first byte and to first token; the
+duration; the bytes sent and received; whether the response was served kept warm; whether its body was captured; and the
+client's user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the
+agent type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn
+origin off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
+setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
+shape before any upstream saw it), and the request's shape: the effort, the thinking mode and budget, the output limit,
+the tool, system-block, and message counts, the context edits, the temperature, and the requested speed and service
+tier.
+A session that branched from another conversation carries that conversation's root and
+the matched depth as well. The session it names is the client's own,
+and the Sessions view groups a row by it.
+The request row records who put the cache diagnostics member on the body the upstream compared:
+the client, the router, or none. The attempt row names the account and its kind; the upstream status, request id and
+message id; the outcome; the cooldown the attempt set; the stop reason, the model the answer names when it differs from
+the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's
+category and recommended model; the five token counts, with the thinking share of the output and the web search and
+fetch calls the answer made; the cache miss reason the diagnostics beta reports; the unified rate-limit window readings;
+overage; the cost split across input, cache read, cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -169,11 +169,13 @@ the band, derived from the weight over the capacity:
 | `claude-fable-5-1` | 10 | 6.67% | 1.11% |
 | `claude-opus-5-5` | 2.2 | 1.47% | 0.244% |
 | `claude-sonnet-5-5` | 1.5 | 1.00% | 0.167% |
+| `claude-sonnet-5` | 1.5 | 1.00% | 0.167% |
 | `claude-haiku-5-5` | 0.1 | 0.0667% | 0.0111% |
 | `claude-haiku-4-5` | 1 | 0.667% | 0.111% |
 
-The models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`)
-have no row and price no share.
+`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The models the
+plan meter has not measured and the file leaves out (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no row
+and price no share.
 
 Every model shares one multiplier per token type: input 1, output 5, a cache write 1.25 whatever its TTL, and a cache
 read 0.025. Thinking tokens count as output. A model that breaks a shared constant takes an `overrides` row, which may
@@ -391,47 +393,47 @@ transport, status, attempts, TTFB, tokens, and cost (window shares for a request
 its window's short word, as `0.12% Fable week` over `0.42% 5h`, with the full labels on hover, and dollars for an
 overage, fast mode or API key request). A table that does not show the client column, the one that
 fills the room the others leave, takes its content width. A request whose 200 answer ended short reads `incomplete` with
-the code that says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the
-stream closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The model
-column reads the family and version, with the whole id on hover. The client column shows the class the router derived
-from the user agent (`claude-code/<entrypoint>` or `other`), whole where the window has the room and cut
-with an ellipsis where it has not, whole on hover, and the agent type beneath it on a subagent's turn.
-One row
-is one client request however many attempts it took: a request of one attempt shows nothing under Attempts, and a
-failover reads "2 attempts" with the trail of account and status on hover, "secondary 429, primary 200" when a 429 on
-the first account failed over to a 200 on the second. A request that did not succeed names how it ended beside its
-status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request that waited for a slot while every
-account was at its cap carries a held marker after its attempt count with the time it waited. The search matches the
-request id, the session, the key, the model, the error code, and an attempt's account, upstream request id or upstream
-message id, literally: `_` and `%` are characters, not wildcards. Filters narrow the table: the account filter keeps the
-requests whose serving attempt ran on a chosen account, so a request that failed over lists under the account that
-answered it, as the Analytics view counts it, the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`;
-`*` for any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full),
-the client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
-values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
-the answer reported, else by whether the request asked for `fast`, the status filter offers the codes the router and
-Anthropic answer and any other code the page holds, the outcome filter picks how the request ended (`canceled`,
-`exhausted`, `failed`, `incomplete`, `rejected`, or `succeeded`), the held toggle keeps the requests that waited for a
-slot, the cache miss reason filter picks the reason the serving attempt reported, the known reasons in their reading
-order and then any other name the rows or the address carry, the effort filter picks a level as the hourly rollups fold
-it (`low` to `max`, `none` for a request that asked for none, `other` for a level outside the five), and the request
-class filter picks a class as the rollups fold it (`unattributed` for a request that sent none, `other` for a value
-outside the identifier charset or past 64 bytes). Each multi-select opens with a Select all row that checks the options
-the search shows, and clears them when all are checked. The search and the two pattern fields apply 400 milliseconds
-after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the
-page's address, so a reload or a shared link keeps them: a preset range by its name, a custom range as `from` and `to`.
-The range control offers Custom range with two instant inputs, which Refresh reads again and a preset or Reset drops. A
-filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's
-detail, which shows the outcome beneath the status, the user agent,
-the model as the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing
-(asked for a server-side check under an on setting; carried the safeguards member under an off setting, which the
-dispatch drops; refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn. The drawer's Request section names the
-upstream's request id for each attempt and, on the answer that served, the message id a Claude Code transcript's
-assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a per-turn control
-entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
-still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
-it, so paging does not shift as new ones arrive; Refresh brings it up to now.
+the code that says how: `stream_cut` for a connection cut mid-body or a body past its bound, `stream_incomplete` when
+the stream closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound,
+`stream_undecodable` when the router could not decode the body. The model column reads the family and version, with the
+whole id on hover. The client column shows the class the router derived from the user agent (`claude-code/<entrypoint>`
+or `other`), whole where the window has the room and cut with an ellipsis where it has not, whole on
+hover, and the agent type beneath it on a subagent's turn.
+One row is one client request however many attempts it took: a request of one
+attempt shows nothing under Attempts, and a failover reads "2 attempts" with the trail of account and status on hover,
+"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
+that waited for a slot while every account was at its cap carries a held marker after its attempt count with the time it
+waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
+upstream request id or upstream message id, literally: `_` and `%` are characters, not wildcards. Filters narrow the
+table: the account filter keeps the requests whose serving attempt ran on a chosen account, so a request that failed
+over lists under the account that answered it, as the Analytics view counts it, the user agent filter takes a pattern
+(`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and a value
+with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), the agent type
+and turn origin filters pick from the values the client's hint headers and attribution line carry, the speed filter
+picks `fast` or `standard` by the speed the answer reported, else by whether the request asked for `fast`, the status
+filter offers the codes the router and Anthropic answer and any other code the page holds, the outcome filter picks how
+the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`, or `succeeded`), the held toggle keeps
+the requests that waited for a slot, the cache miss reason filter picks the reason the serving attempt reported, the
+known reasons in their reading order and then any other name the rows or the address carry, the effort filter picks a
+level as the hourly rollups fold it (`low` to `max`, `none` for a request that asked for none, `other` for a level
+outside the five), and the request class filter picks a class as the rollups fold it (`unattributed` for a request that
+sent none, `other` for a value outside the identifier charset or past 64 bytes). Each multi-select opens with a Select
+all row that checks the options the search shows, and clears them when all are checked. The search and the two pattern
+fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range
+and the page size live in the page's address, so a reload or a shared link keeps them: a preset range by its name, a
+custom range as `from` and `to`. The range control offers Custom range with two instant inputs, which Refresh reads
+again and a preset or Reset drops. A filter whose list did not load is disabled and says why. Selecting a row opens a
+drawer with the request's detail, which shows the outcome beneath the status,
+the user agent, the model as the client spelled it and, when it differs, the canonical id the router recorded,
+its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under an off
+setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent type,
+the compaction and context-compacted markers, the turn origin, and the tool time before the turn. The drawer's Request
+section names the upstream's request id for each attempt and, on the answer that served, the message id a Claude Code
+transcript's assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a
+per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
+with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
+moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now.
 
 Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes the newest page and
 each page after it until a page brings no row the table lacks, so it takes every row that arrived since the read before,
@@ -482,9 +484,15 @@ what decided the row in one chip: the rule that fired (`spent rule`), the rung t
 strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited (`cohort`, `session
 pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no
 rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one
-labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a
-time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
-column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+labeled value, two stacked, or the three the exhausted row after a run-out carries (`held`, the wait and `answer`): a
+muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's own time already
+gives. Every account, key, pool, model, session and request a row names is a link, and a column with nothing to say
+shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+
+After a held request's bound runs out, the log reads one held row per member at its cap, each with its `in flight`
+count, then the exhausted row with `held`, `retry none` and `answer`, the wait and the status the client got: `answer
+429` for a pool at its cap. A request whose freed slot another request took passes the account over, and its exhausted
+row reads `retry none` and `answer 429`.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
@@ -511,33 +519,33 @@ reads on from there.
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.
 
-Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it,
-and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
-probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
-the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
-secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
-the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
-router decided" draws the walk as a strip, a line of stations in the engine's order (the pin, every member's
-eligibility, the five partitions, the three rungs, the pick and a hold or an exhaustion, or on a pinned request the five
-move rules and the renewal, a probe or a bound where the record puts it) with its verdict on each, brackets over the
-partitions, the rungs and the moves, the path the decision took in the accent and every branch it did not take as a
-short stub ("match" on a rung, "fires" on a rule, "released" on the renewal). A branch it took runs on a track above the
-line, and a move's continuation (the cool reading, the cap filter, the partitions, the rungs and the pick) rides that
-track to the Chosen terminus. The candidates fan out under the pick in the walk's order with the chosen one tinted and
-"and N more" past eight. The three ways out stand at the line's end as termini (Chosen, Held for a slot, Refused) with
-the one the decision reached filled in its tone, and a pinned request's strip draws Chosen alone, or beside it the way
-out its outcome names. A step the record does not carry is drawn dashed before the decisive station and reads "not run"
-after it. A refusal's walk is two stations, the admission refused and the rest of the walk not run, with the reason on
-the verdict line and in the outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a
-popover, which replaces any other popover open on the page: a table of the members for the eligibility, the cool
-reading, the cap filter and the pick (whose scores read as the candidate table's Pace column does), a grouped list for
-the pin (lookup, age, warmth) and the shed (windows, round, destinations), a rung's entry (the boundary's hash as its
-first eight characters with the whole hash on hover, its depth, prefix, write, TTL with the warm-until time and the gate
-that refused it), a hold's place, account, slot and bound, a candidate's plan, tier, requests in flight, Pace and
-windows, the outcome's rows on the terminus the decision reached, and, for a rule that a fired rule cut short, the names
-of the rules that did not run. Every list row is a label with its chips, and a step that did not run says so. Tab walks
-the stations, the candidates and the termini in the record's order, Enter or Space opens the focused one's popover and
-moves into it, and Escape closes it and returns.
+Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it, and
+another page or another filter starts with every row shut. A decision row loads its record and draws its card, a probe
+decision's included. A card opened on a request that is still running reads its record again when Follow brings the
+answer. The verdict line names the decision with its accounts and its pool as links ("Moved secondary to primary",
+"Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or the rung, the pin's warmth
+and the cache verdict once the attempt reports usage (`cache pending` before). "How the router decided" draws the walk
+as a strip, a line of stations in the engine's order (the pin, every member's eligibility, the five partitions, the
+three rungs, the pick and a hold or an exhaustion, or on a pinned request the five move rules and the renewal, a probe
+or a bound where the record puts it) with its verdict on each, brackets over the partitions, the rungs and the moves,
+the path the decision took in the accent and every branch it did not take as a short stub ("match" on a rung, "fires" on
+a rule, "released" on the renewal). A branch it took runs on a track above the line, and a move's continuation (the cool
+reading, the cap filter, the partitions, the rungs and the pick) rides that track to the Chosen terminus. The candidates
+fan out under the pick in the walk's order with the chosen one tinted and "and N more" past eight. The three ways out
+stand at the line's end as termini (Chosen, Held for a slot, Refused) with the one the decision reached filled in its
+tone, and a pinned request's strip draws Chosen alone, or beside it the way out its outcome names. A step the record
+does not carry is drawn dashed before the decisive station and reads "not run" after it. A refusal's walk is two
+stations, the admission refused and the rest of the walk not run, with the reason on the verdict line and in the
+outcome. A click or a hover on a station, a candidate or a terminus opens its facts in a popover, which replaces any
+other popover open on the page: a table of the members for the eligibility, the cool reading, the cap filter and the
+pick (whose scores read as the candidate table's Pace column does), a grouped list for the pin (lookup, age, warmth) and
+the shed (windows, round, destinations), a rung's entry (the boundary's hash as its first eight characters with the
+whole hash on hover, its depth, prefix, write, TTL with the warm-until time and the gate that refused it), a hold's
+place, account, slot and bound, a candidate's plan, tier, requests in flight, Pace and windows, the outcome's rows on
+the terminus the decision reached, and, for a rule that a fired rule cut short, the names of the rules that did not run.
+Every list row is a label with its chips, and a step that did not run says so. Tab walks the stations, the candidates
+and the termini in the record's order, Enter or Space opens the focused one's popover and moves into it, and Escape
+closes it and returns.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
@@ -737,7 +745,7 @@ at the first read.
 | `writer_degraded` | the routing state writer | the backlog drains |
 | `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
 | `reauth_required` | the account | the account is paired again, or an API-key account gets a new secret |
-| `funding_required` | the API-key account | the operator clears funding |
+| `funding_required` | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
@@ -776,7 +784,10 @@ loader's line and when the pair still served was loaded.
 the first read of this process that saw the state. The detail names the account and its label.
 
 **`funding_required`** holds while the account's state is `funding_required`, set when the upstream refuses a request
-over the account's credit balance; it is read from the registry and dated and detailed as `reauth_required` is.
+over the account's credit balance. It clears when the operator clears funding or when the router's retry succeeds after
+five minutes, or the model rejection interval when that is shorter ([cooldowns and
+failover](routing.md#cooldowns-and-failover)). It is read from the registry and dated and detailed as `reauth_required`
+is.
 
 **`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a

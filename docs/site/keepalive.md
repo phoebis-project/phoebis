@@ -119,10 +119,11 @@ Every report is one `POST /v0/keepalive/events` on the proxy listener, a JSON bo
 for model traffic. A session is scoped to the key that reports it, and to the generation that key was created under: an
 id deleted and created again reads and drives none of the previous holder's sessions. Each acknowledgment names the
 session, the instance, the sequence and the lease's end, and an agent event's also names the agent and its
-`request_generation`. A registration's acknowledgment carries every agent the router holds for the session, so the mod
-reconciles from that answer after a lapse or a router restart. A report the route refuses is answered
-`{"code": "<code>"}` rather than with an Anthropic-shaped error body, and a key it refuses is answered as `/v1/messages`
-answers it. The mod's README describes
+`request_generation`. A session acknowledgment, the answer to a `session_start`, a `heartbeat` or a `session_end`, names
+main's `request_generation`, as an agent event's names its agent's. A registration's acknowledgment carries every agent
+the router holds for the session, so the mod reconciles from that answer after a lapse or a router restart. A report the
+route refuses is answered `{"code": "<code>"}` rather than with an Anthropic-shaped error body, and a key it refuses is
+answered as `/v1/messages` answers it. The mod's README describes
 [the protocol](https://github.com/daystrom-labs/phoebis-keepalive/blob/main/README.md#the-protocol): the six events,
 their fields, the acknowledgment and the codes.
 
@@ -175,9 +176,10 @@ The break-even of a recipe is the pause length at which its chain of probes cost
 funding. A plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs
 the model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight, and
 a model the cost model leaves unweighted breaks even where a weighted one does. A dollar-funded recipe reads its model's
-row of the price table, and a model the price table does not price reads its tightest row. The cadence is the TTL's: 15
-probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded recipe
-breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
+row of the price table, and a model the price table does not price reads its tightest row. On a row priced by prompt
+length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The cadence is the
+TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded
+recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
 
 A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
 number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range
@@ -191,9 +193,13 @@ pool's combinations. An OAuth member brings the cost model's factors and an API-
 cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent brings both
 TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules' entries
 without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules
-that allow none of them leave a model priced nowhere. A deny entry naming a dated id leaves the model's undated price
-row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no request on the
-pool reaches. A pool with no member answers `null`.
+that allow none of them leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is
+judged under that id, as a request on the model is, so a deny entry naming the dated id drops the row. On a router
+without a catalog reading the row is judged under its own id, and a deny entry naming a dated id leaves the model's
+undated price row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no
+request on the pool reaches. A pool with no member answers `null`. A fast recipe is dollar-funded at the fast cells
+whatever funds the account, and `keepalive_resolved` describes standard speed, so a fast recipe's break-even reads the
+fast cells and not the figures the pool dialog shows.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before
 a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probes in a row pause the recipe until a real
@@ -211,8 +217,9 @@ the main conversation, because the user can type while a background command, a s
 its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window never
 runs past the recipe's break-even. A wakeup is a real request, so a cron that fires or a command that exits restarts the
 window. A silent session, one whose lease lapsed, is probed under the window from its last real request for every agent,
-and the park rules do not apply to it. A session restored at a router restart reads silent but keeps its park rules for
-one lease length after the load or until its registration arrives, and the silent rule applies after that.
+and the park rules do not apply to it. A session saved attended reads silent after a router restart but keeps its park
+rules until its registration arrives or one lease length passes, and the silent rule follows only when the lease length
+passes first.
 
 **Parked on a background command or a subagent.** The main conversation or a subagent reported `parked` with kind
 `background` is probed until the return, at most `max_parked_seconds` after the park began. A real request or a state
@@ -232,8 +239,10 @@ certain. A subagent's park follows the two park rules on its own, and the idle w
 is busy, parked or released. A busy agent that stays silent past the lead is probed with no ceiling of its own: a long
 foreground tool call on a five-minute entry stays covered, and the lease and the idle window bound a client that died.
 
-At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`, and its
-unanswered probes count as wasted under that reason. The next real request re-arms it.
+At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`. At the idle
+limit its unanswered probes stay pending until a real request reads them, which credits them inside their entry, or
+until their entry lapses, which counts them as wasted under `idle_limit`. Under `parked_limit` and `horizon` they count
+as wasted under that reason at once. The next real request re-arms the recipe.
 
 ### The return rate by idle age
 
@@ -327,7 +336,8 @@ under `horizon` or on a disabled pool leaves the same way, and one reopened or e
 probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
 cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
 sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
-stopped under `idle_limit` does, and shows on the wasted counter. A lapse also shows in that log line.
+stopped under `idle_limit` does, and shows on the wasted counter at once, while the probes of one stopped under
+`idle_limit` reach it as their entries lapse with no real request. A lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
@@ -345,9 +355,9 @@ one, and counts no failure toward the failure limit, so a ledger that stays behi
 expiry and the ceilings still bound the re-sends: once the entry expires, the recipe ends under `expired`, as under any
 other hold, and a ceiling that runs out first ends it under its own reason.
 
-A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered or is held
-under `horizon`, when it lapses or is evicted, or when the next request after the probe reads nothing from the entry it
-kept:
+A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle
+limit, once the probe's entry lapses before a real request reads it) or is held under `horizon`, when the recipe lapses
+or is evicted, or when the next request after the probe reads nothing from the entry it kept:
 
 | Reason | What settles it |
 | --- | --- |
@@ -355,7 +365,7 @@ kept:
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
 | `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
-| `idle_limit` | The idle window ran out before a real request answered the probe. |
+| `idle_limit` | The idle window ran out and the probe's entry lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
@@ -372,9 +382,11 @@ requests and tokens a probe kept off a cache miss on any model the request named
 probes cost, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe
 that landed on a different account than the recipe's. `wasted_probes` and `wasted_probe_usd` are the probes settled
 wasted by one of the reasons above and what they cost, and `wasted_probe_reasons` counts those wasted probes by the
-reason. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
-cooldown already held the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its
-ledger caught up and sent again, outside the failed probes since no account answered it.
+reason. Each wasted probe files under the funding its own cost row took, from the kind of the account that served it and
+whether its answer reported overage in use, so the wasted part of a probe share reads the plan-funded probes' waste
+against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for
+example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `held`, `migrated`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
@@ -542,10 +554,11 @@ memory.
 At start the engine reads that state back before its first tick. Every session returns silent, its lease at zero and its
 sequence and its agents' generations kept. The mod's next heartbeat answers `instance_ended`, the mod registers the same
 instance again, and the session is re-adopted with its recipes, so its next probe lands warm. A session saved attended
-keeps its park rules for one lease length after the load or until its registration arrives, then the silent-session rule
-applies. A recipe whose entry expired while the router was down ends with `expired_at_restart`, and a session the mod
-had ended is dropped. The probes such a recipe left unanswered settle as wasted only after the registry has dropped them
-from the agent: a save that fails sends nothing, and a crash between that save and the ledger's write leaves them
-uncounted rather than counted twice. A prompt that no longer opens under the storage key is dropped too, and its agent
-keeps everything else. The bootstrap file's `keepalive` limits in force at the start bound what comes back: when they
-are lower than before, the newest sessions, agents and recipes are restored and the rest are evicted.
+keeps its park rules until its registration arrives or one lease length after the load passes, and the silent-session
+rule follows only when the lease length passes first. A recipe whose entry expired while the router was down ends with
+`expired_at_restart`, and a session the mod had ended is dropped. The probes such a recipe left unanswered settle as
+wasted only after the registry has dropped them from the agent: a save that fails sends nothing, and a crash between
+that save and the ledger's write leaves them uncounted rather than counted twice. A prompt that no longer opens under
+the storage key is dropped too, and its agent keeps everything else. The bootstrap file's `keepalive` limits in force at
+the start bound what comes back: when they are lower than before, the newest sessions, agents and recipes are restored
+and the rest are evicted.

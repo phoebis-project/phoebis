@@ -4716,20 +4716,24 @@ fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_r
         "{}",
         spend(&table)
     );
-    // A table in force that doubles Sonnet 5.5's input moves the plain group and leaves the one priced by prompt
-    // length.
-    let doubled = PriceTable::from_yaml(
-        &phoebis_ledger::test_tables::API_PRICES.replacen(
+    // A table in force that doubles Sonnet 5.5's input and Haiku 5.5's standard and long-context input moves the
+    // plain group and leaves the one priced by prompt length at its booked dollars.
+    let mut text = phoebis_ledger::test_tables::API_PRICES.to_string();
+    for (cell, doubled) in [
+        (
             "claude-sonnet-5-5: {input: 3,",
             "claude-sonnet-5-5: {input: 6,",
-            1,
         ),
-        "test",
-    )
-    .unwrap();
+        ("    input: 1\n", "    input: 2\n"),
+        ("{over: 1000, input: 5,", "{over: 1000, input: 10,"),
+    ] {
+        assert_eq!(text.matches(cell).count(), 1, "{cell}");
+        text = text.replacen(cell, doubled, 1);
+    }
+    let doubled = PriceTable::from_yaml(&text, "test").unwrap();
     assert!(
         (spend(&doubled) - (7.0 + 6.0)).abs() < 1e-9,
-        "{}",
+        "the booked 7 stays beside the plain group's doubled 6: {}",
         spend(&doubled)
     );
 }

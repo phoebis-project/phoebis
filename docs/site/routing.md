@@ -67,8 +67,8 @@ Every field, in the order the request body takes them:
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
 | `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20%. See Moves. |
 | `shed_share` | `0.5` | 0 to 1 |
-| `burn_window_seconds` | `600` | at least 60 |
-| `source_dwell_seconds` | `900` | at least 60 |
+| `burn_window_seconds` | `600` | 60 to 604800 |
+| `source_dwell_seconds` | `900` | 60 to 604800 |
 | `migrate_when_spent` | `true` | `true` or `false` |
 | `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
 | `retry_in_place_seconds` | `60` | 0 to 300; see Retry in place |
@@ -314,8 +314,8 @@ wrote, and of the static boundaries only when the response read nothing from the
 static tier the response read from and a tier it only read keep their marker's lifetime, and a request with markers at
 both TTLs keeps each marker's.
 
-The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
-`reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
+The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
+`funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
 judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose fast
 lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an API-key account serves
 it whenever it can serve at all.
@@ -328,18 +328,18 @@ than its recipe's due time, the cache TTL less the lead (see [Keepalive](keepali
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
-the poll reads the account's extra usage as enabled, in which case it stays and orders behind every plan-funded account;
-an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below; with every
-account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are preferences that
-fall back to the wider set rather than stranding the request: `select_below_utilization` drops every account at or above
-that threshold in 5-hour utilization, and an account winding down toward its subscription end (see **Subscription end**,
-below) is skipped for a fresh placement too.
+the poll has not read the account's extra usage as blocked, in which case it stays and orders behind every plan-funded
+account. An account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below;
+with every account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are
+preferences that fall back to the wider set rather than stranding the request: `select_below_utilization` drops every
+account at or above that threshold in 5-hour utilization, and an account winding down toward its subscription end (see
+**Subscription end**, below) is skipped for a fresh placement too.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key; within a group, or across the whole set with the flag off, tiers order by
 priority ascending, then, under `prefer_plan`, an account not in overage before one in overage. An account kept under
-`allow` with the model's week spent joins the overage group with the flag on, and with it off sorts behind every account
-that is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
+`allow` with a spent window joins the overage group with the flag on, and with it off sorts behind every account that
+is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
 sample as a window map: a subscription account scores by remaining allowance in its own window (the model's own window
 when it has one, else the shared 7-day window) over the hours to the earlier of that window's reset and the account's
 derived end; an api_key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
@@ -484,10 +484,10 @@ the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in three copies: one plain and one weighed by the peak band at
-each renewal for its standard answers, and a third for its fast answers, held in memory and priced at the fast cells
-where the model has them, which a restart reads as none until the pin's next fast renewal. Nothing is priced until it
-is read: the round prices the banded copy as a share of the account's 5-hour window while a subscription account runs
-on its plan, and the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
+each renewal for its standard answers, and a third for its fast answers, priced at the fast cells where the model has
+them. The registry keeps all three on the pin's row, so a restart reads each as saved. Nothing is priced until it is
+read: the round prices the banded copy as a share of the account's 5-hour window while a subscription account runs on
+its plan, and the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
 ([pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
 overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
 share on both. A keepalive probe's usage never counts. A burn the model cannot price, for a model it has no weight for
@@ -501,13 +501,13 @@ without a move records `pin_expired` with `reasons`, every fact the selection fo
 pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose
 `fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast`
 row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the
-account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released`
-when the selection found nothing else against the account, as with a move whose destination emptied. A pin whose
-creating request was answered 400, 403, or 404, or was bound to its account and ended at an authentication failure that
-marked nothing, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records
-the single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
-Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin
-the same way.
+account's state when it cannot serve (`disconnected`, `funding_required` until its retry is admitted, `reauth_required`,
+`unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
+emptied. A pin whose creating request was answered 400, 403, or 404, or was bound to its account and ended at an
+authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the session
+renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request is
+placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -542,8 +542,18 @@ model without a week of its own.
 | 429 naming `enforced_spend_limit_reached` | Account-wide until the first of next month, reason `spend_cap` | Yes |
 | 429 with a valid Retry-After | Model-scoped until Retry-After | Yes |
 | 429 without a valid Retry-After | Account-wide for the fallback duration | Yes |
-| 400 `invalid_request_error`, credit balance | Marked `funding_required` until cleared | Yes |
+| 400 `invalid_request_error`, credit balance | Marked `funding_required` until a retry succeeds or the operator clears it | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's Retry-After | Yes |
+
+A `funding_required` account is tried again on its own clock, since an API-key balance has no signal the router can
+read. The retry is due five minutes after the mark lands, or after `routing.model_rejection_seconds` when that is
+shorter, and the account then takes one request at a time: the attempt the selection placed on it holds the slot until
+that attempt ends, however long its head takes. A 2xx answer to a message request clears the mark, and its
+`account_state_changed` row reads the cause `funding_retry`. A held stream that committed on an error event clears no
+mark, whatever its head's status. Another credit-balance refusal marks the account again with a new retry instant, and a
+success from an attempt sent before that mark leaves it standing. A token count may reach the account under the same
+rule, but it holds no slot and clears nothing. The router keeps the retry instant in memory, so after a restart the
+first request tries a marked account at once. Clear funding makes the account eligible at once.
 
 **fast mode** (either kind, read ahead of the two tables above)
 
@@ -578,6 +588,7 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head at all | None | No; 502 `upstream_unreachable`, client retries |
 | Transport failure after the head, before any byte reached the client | None | No; 502 `upstream_cut` |
+| A coding or a payload the router cannot decode, before any byte reached the client | None | No (502 `upstream_undecodable`) |
 | Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
@@ -586,15 +597,20 @@ The router classifies a rejection whose body runs past 64 KiB from its first 64 
 body the verdict forwards reaches the client whole, the prefix first.
 
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
-client: `upstream_stalled` when a rejection body went silent past the idle bound, and `upstream_cut` for any other
-answer it cannot read, a connection cut while a rejection body or a held stream was being read, or a content coding or a
-payload it cannot decode. The request reads `failed` with `stream_stalled` or `stream_cut`. `upstream_unreachable` names
-a request that got no head at all.
+client: `upstream_stalled` when a rejection body went silent past the idle bound, `upstream_undecodable` when the answer
+names a content coding the router cannot read or carries a payload that does not decode, and `upstream_cut` for a
+connection cut while a rejection body or a held stream was being read, or a body past its bound. The request reads
+`failed` with `stream_stalled`, `stream_undecodable` or `stream_cut`. `upstream_unreachable` names a request that got no
+head at all.
 
-An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
-mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
-upstream went silent past the idle bound. A forwarded answer with any other status stays `failed`, and its error code
-reads `stream_cut` or `stream_stalled` when its body was cut or went silent.
+An `incomplete` request's error code says how its body ended: `stream_cut` for a connection cut mid-body or a body past
+its bound, `stream_incomplete` when an event stream closed without its `message_stop`, `stream_stalled` when the
+upstream went silent past the idle bound, and `stream_undecodable` when the body did not decode. A forwarded answer with
+any other status stays `failed`, and its error code reads `stream_cut`, `stream_stalled` or `stream_undecodable` when
+its body was cut, went silent or did not decode.
+
+Every new upstream connection, on the inference and the control plane alike, logs one line at debug level naming the
+host and two durations: `dial_ms` for the TCP connect and `handshake_ms` for the TLS handshake.
 
 `Retry-After` parsing is case-insensitive and accepts integer seconds or an HTTP date, rounding fractional
 seconds up; anything non-finite, negative, malformed, or absent is invalid, and an api_key row then takes the
@@ -655,10 +671,12 @@ fresh one; any other failover moves the pin. The failover, its waits included, s
 deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
 another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
 after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a rejected replay,
-which the Accounts view and the `reauth_required` attention condition show. The refresh's mark reaches the routing
-snapshot at the reload that follows the routing writer's fenced write, and until that reload the credential cache
-refuses the marked credential, so no request dials the account on the token it still held; a rejected replay's mark
-takes the same write and reload.
+which the Accounts view and the `reauth_required` attention condition show. Whoever lands the mark reports it at once:
+the relay for a failover or a rejected replay, and the usage poll, its profile read and the catalog refresh when their
+own token refresh lands it. The routing writer's fenced write and the reload after it then take the account out of
+selection. Until that reload the credential cache refuses the marked credential, so no request dials the account on the
+token it still held. A rejected replay's mark refuses the replayed token's lineage in the credential cache the same way,
+so the token the upstream just refused is not handed to another request.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -783,10 +801,15 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
 
-Under `allow`, a subscription account whose model week is spent (for a model with a week of its own, that week or a
-shared window) stays eligible for that model while the poll reads its extra usage as enabled, ordered behind
-plan-funded siblings, since extra usage funds every model; a credits state the poll has not read yet does not count as
-enabled. Under `prefer_plan` and `never` it is passed over until the week resets.
+Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
+on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`
+cools the account. For a model with a week of its own, whose narrowing reads those windows, the account orders behind
+plan-funded siblings and drops only while the poll reads its extra usage as blocked (disabled, a reason named, or the
+spend cap reached). A credits state the poll has not read yet drops nothing. A credits reading with room, taken after
+the `429`, lifts the account's spent-window cooldowns (the account-wide rate limits that name a plan window and the
+model-scoped week rows) as it lifts the fast lane's credits refusal. Otherwise the rows end on their own at the
+window's reset, at `Retry-After` or after the fallback. Under `prefer_plan` and `never`, a model with a week of its own
+passes the account over until its spent window resets.
 
 An account is in overage when its latest quota evidence says so, and only newer evidence, by the upstream's own clock,
 replaces that state. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is true, and clears

@@ -100,7 +100,7 @@ fn main() {
         };
         assert!(
             parse_node_version(&version).is_some_and(node_supported),
-            "the console build needs Node {NODE_RANGES}; found {found}"
+            "the console build needs Node {NODE_RANGES}, and {found} was found"
         );
         // `npm ci` needs the network only when the lockfile's packages are not in the npm cache.
         let modules = from_this_lockfile || {
@@ -124,7 +124,10 @@ fn main() {
                     dist.display()
                 );
             }
-            println!("cargo:warning=the web bundle could not be built; web/dist was discarded and the router will serve the placeholder page. Set PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is.");
+            println!(
+                "cargo:warning=the web bundle could not be built, so web/dist was discarded and the router will \
+                 serve the placeholder page. Set PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is."
+            );
         }
     }
     if !dist.join("index.html").exists() {

@@ -292,19 +292,19 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
     let bucket = phoebis_ledger::bucket_of(NOW + 250_000);
-    let header = wait_for_async(Duration::from_secs(5), || async {
+    let head = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
         rows.iter()
-            .any(|r| r.window == "five_hour" && r.source == "header")
+            .any(|r| r.window == "five_hour" && r.source == "head")
             .then_some(rows)
     })
     .await;
-    let five = header.iter().find(|r| r.window == "five_hour").unwrap();
+    let five = head.iter().find(|r| r.window == "five_hour").unwrap();
     assert_eq!(
         (five.utilization, five.reset_at, five.bucket),
         (Some(0.77), Some(4_600_000), bucket)
     );
-    assert!(header
+    assert!(head
         .iter()
         .any(|r| r.window == "seven_day" && r.utilization == Some(0.2)));
     let extra =
@@ -317,12 +317,12 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
             extra[0].in_use,
             extra[0].used_credits
         ),
-        ("header", Some(false), None),
+        ("head", Some(false), None),
         "a head carries no credits"
     );
 
     // The head landed first; the account's first slot falls in the same bucket. Both samplers spell a window by
-    // the endpoint's key, so each window holds one row: the header's where the head read it, the poll's where
+    // the endpoint's key, so each window holds one row: the head's where the head read it, the poll's where
     // only the poll did, and the credits wait.
     let paused = start_polling(&h, &up).await;
     step_to(&h, &up, &paused, secs(302)).await;
@@ -342,11 +342,11 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     assert_eq!(
         windows,
         [
-            ("five_hour", "header", Some(0.77)),
-            ("seven_day", "header", Some(0.2)),
+            ("five_hour", "head", Some(0.77)),
+            ("seven_day", "head", Some(0.2)),
             ("seven_day_fable", "poll", Some(0.42)),
         ],
-        "one row per window: the header's readings survive the poll, the Fable week comes from limits[] and \
+        "one row per window: the head's readings survive the poll, the Fable week comes from limits[] and \
          not from the named key"
     );
     let extra = resumed(h.db.extra_usage_samples("a", bucket, bucket + 300))
@@ -355,8 +355,8 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     assert_eq!(extra.len(), 1, "one extra-usage row per bucket");
     assert_eq!(
         (extra[0].source.as_str(), extra[0].used_credits),
-        ("header", None),
-        "the header row keeps its bucket; credits wait for a bucket the poll owns"
+        ("head", None),
+        "the head row keeps its bucket, and credits wait for a bucket the poll owns"
     );
 
     // The next slot, an interval on, lands in the next bucket and writes the credits there.
@@ -605,9 +605,9 @@ async fn a_retry_after_is_honoured_and_capped_by_the_poll() {
 }
 
 /// A scheduler that wakes several slots late, after a stall or a suspended process, reads once and takes the
-/// cadence up at the next slot on the account's own phase: a poll ignores the cache TTL, so replaying each
-/// missed slot would ask an endpoint that rate-limits per account several times back to back, and a cadence
-/// counted from the late read would move the account off its phase for good.
+/// cadence up at the next slot on the account's own phase: replaying each missed slot would ask an endpoint that
+/// rate-limits per account several times back to back, and a cadence counted from the late read would move the
+/// account off its phase for good.
 #[tokio::test]
 async fn a_wake_several_slots_late_reads_once_and_the_next_read_keeps_the_phase() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
@@ -782,7 +782,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
         &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
         (0, None),
         LedgerConfig::default(),
-        Some(Duration::from_secs(60)),
+        true,
     )
     .await;
     let (lines, _sink) = capture_tracing();
@@ -955,34 +955,115 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
     up.shutdown().await;
 }
 
+/// A startup read the endpoint refuses counts under `failed`, apart from the account whose sample landed.
 #[tokio::test]
-async fn a_scheduled_poll_reads_the_endpoint_inside_a_long_cache_ttl() {
+async fn the_startup_step_counts_an_account_the_endpoint_refused_as_failed() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
-    let h = harness_on(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
-        Arc::new(LedgerDb::open_in_memory().unwrap()),
+    up.add_credential_rule(OAUTH_C, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(
         &up,
-        &[oauth("a", A, 0)],
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
         (0, None),
         LedgerConfig::default(),
-        Some(Duration::from_secs(3_600)),
     )
     .await;
-    let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 1)).await;
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
     assert_eq!(
-        usage_asked(&up, A),
-        10,
-        "one request per slot, the hour's cache TTL notwithstanding"
+        (sampled.reported, sampled.failed, sampled.pending),
+        (1, 1, 0),
+        "the 429 is a failed read beside the reported one"
     );
-    resumed(h.usage.as_ref().unwrap().snapshot("a"))
-        .await
+    up.shutdown().await;
+}
+
+/// The token endpoint's answer to a refresh token it no longer honors.
+fn invalid_grant() -> Rule {
+    Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    }
+}
+
+/// Commits a bundle for `id` that sits inside its refresh margin at `NOW`, so the next acquisition goes to the token
+/// endpoint rather than answering the cached token.
+fn due_for_refresh(store: &Store, id: &str) {
+    let stored = store.credentials(id).unwrap().unwrap();
+    store
+        .commit_credentials(
+            id,
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(Secret::new("sk-ant-oat01-SHORT-refresh")),
+                issued_at: NOW - 3_600_000,
+                expires_at: NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
         .unwrap();
+}
+
+/// Waits for the router's snapshot to read `id` as `reauth_required`. The manager's mark is a store write alone, which
+/// starts no registry reload, so only a report reaches the snapshot.
+async fn routing_reads_reauth_required(h: &Harness, id: &str) {
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account(id)
+            .filter(|row| row.state == AccountState::ReauthRequired)
+            .map(|_| ())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule(), invalid_grant()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    due_for_refresh(&h.store, "a");
+    let row = h.store.account("a").unwrap().unwrap();
+    let answer =
+        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
+            .await
+            .unwrap();
+    assert!(answer.error.is_some(), "the poll read nothing");
     assert_eq!(
-        usage_asked(&up, A),
-        10,
-        "an admin read between two slots is the cache's"
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
     );
+    routing_reads_reauth_required(&h, "a").await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule(), invalid_grant()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    due_for_refresh(&h.store, "a");
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
+    );
+    routing_reads_reauth_required(&h, "a").await;
     up.shutdown().await;
 }
 

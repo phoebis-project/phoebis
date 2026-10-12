@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The checker has to fail on what it exists to catch: a dangling link, a route the reference page skipped, an
-# entry the router does not serve, and a handler call it cannot consume. Every checker case runs against a throwaway
-# tree, never the real site; the favicon case at the end reads the real tree.
+# The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
+# reference page skipped, an entry the router does not serve, and a handler call it cannot consume. Every checker
+# case runs against a throwaway tree, never the real site. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -13,7 +13,7 @@ fail() { echo "FAIL $1" >&2; exit 1; }
 mkdir -p "$tmp/site/good" "$tmp/site/assets"
 : > "$tmp/site/assets/a.png"
 cat > "$tmp/site/index.html" <<'HTML'
-<a href="good/">ok</a><a href="#top">ok</a><a href="https://example.com/x">ok</a>
+<h1 id="top">top</h1><a href="good/">ok</a><a href="#top">ok</a><a href="https://example.com/x">ok</a>
 <img src="assets/a.png#only-light"><img src="assets/a.png#only-dark">
 HTML
 echo '<a href="../">ok</a><a href="/phoebis/assets/a.png">ok</a>' > "$tmp/site/good/index.html"
@@ -57,6 +57,35 @@ mkdir -p "$tmp/escape-site"
 echo '<a href="../README.md">gone</a>' > "$tmp/escape-site/index.html"
 out=$(python3 "$check" links "$tmp/escape-site" 2>&1) && fail "a relative link escaping site/ passed"
 echo "$out" | grep -q "index.html: ../README.md resolves to nothing" || fail "wrong finding for escaping link: $out"
+
+# A fragment is read against the ids of the page it lands on: the linked page's for `other/#x`, its own for `#x`.
+mkdir -p "$tmp/fragment-site/other"
+echo '<h3 id="here">here</h3><a href="other/#there">ok</a><a href="#here">ok</a>' > "$tmp/fragment-site/index.html"
+echo '<h2 id="there">there</h2>' > "$tmp/fragment-site/other/index.html"
+python3 "$check" links "$tmp/fragment-site" >/dev/null || fail "a site whose fragments all resolve was refused"
+echo '<a href="other/#missing">gone</a>' >> "$tmp/fragment-site/index.html"
+out=$(python3 "$check" links "$tmp/fragment-site" 2>&1) && fail "a fragment the linked page lacks passed"
+echo "$out" | grep -q "index.html: other/#missing names no heading or anchor in other/index.html" \
+  || fail "wrong finding for a fragment the linked page lacks: $out"
+
+# A bare fragment stays on its own page, so that page's ids are the ones it must name.
+mkdir -p "$tmp/bare-fragment-site"
+echo '<h2 id="here">here</h2><a href="#nowhere">gone</a>' > "$tmp/bare-fragment-site/index.html"
+out=$(python3 "$check" links "$tmp/bare-fragment-site" 2>&1) && fail "a bare fragment its own page lacks passed"
+echo "$out" | grep -q "index.html: #nowhere names no heading or anchor in index.html" \
+  || fail "wrong finding for a bare fragment its own page lacks: $out"
+
+# A file that is not a page carries no ids, and a binary one would not decode, so the checker skips its fragment.
+mkdir -p "$tmp/asset-fragment-site/assets"
+printf '\x89PNG\r\n\x1a\n' > "$tmp/asset-fragment-site/assets/a.png"
+echo '<h1 id="top">top</h1><a href="assets/a.png#x">ok</a>' > "$tmp/asset-fragment-site/index.html"
+out=$(python3 "$check" links "$tmp/asset-fragment-site" 2>&1) \
+  || fail "a fragment on a link to a file that is not a page was read: $out"
+
+# The theme writes its skip link as `#__skip` on a page with no heading to point at, so the checker exempts it.
+mkdir -p "$tmp/skip-link-site"
+echo '<a href="#__skip">skip</a><p>not found</p>' > "$tmp/skip-link-site/404.html"
+out=$(python3 "$check" links "$tmp/skip-link-site" 2>&1) || fail "the theme's skip link was refused: $out"
 
 cat > "$tmp/routes.rs" <<'RS'
     Router::new()

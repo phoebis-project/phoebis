@@ -1050,7 +1050,7 @@ mod tests {
         assert_eq!(
             (first.input_tokens, first.client_drift.as_deref()),
             (None, Some("version")),
-            "usage lands on the serving attempt only; drift on every attempt"
+            "usage lands on the serving attempt only, and drift on every attempt"
         );
         let last = &attempts[1];
         assert_eq!(
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(
             (request.ttfc_ms, attempts[1].ttfc_ms),
             (Some(800), Some(300)),
-            "the request row keeps the request-relative value; the attempt's is re-based on its own start"
+            "the request row keeps the request-relative value, and the attempt's is re-based on its own start"
         );
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
                 (Some("req_up_1"), None),
                 (Some("req_up_2"), Some("msg_01abc"))
             ],
-            "the 429 carries its own request id and no message; the 200 carries both"
+            "the 429 carries its own request id and no message, and the 200 carries both"
         );
     }
 
@@ -1343,7 +1343,64 @@ mod tests {
                 attempts[1].upstream_status
             ),
             ("rate_limited", "upstream_error", Some(200)),
-            "the body the head promised never ended, so the serving attempt failed; the failover keeps its own"
+            "the body the head promised never ended, so the serving attempt failed, and the failover keeps its own"
+        );
+    }
+
+    #[test]
+    fn a_body_that_did_not_decode_files_stream_undecodable_on_the_request_and_fails_the_serving_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r10", Some("k")));
+        a.observe(selected("r10", 1, "a", 1_010));
+        a.observe(head("r10", 1, 200, AttemptOutcome::Succeeded, 1_060));
+        let Some(Record::Request {
+            request, attempts, ..
+        }) = a
+            .observe(complete(
+                "r10",
+                1,
+                Some("a"),
+                Outcome::Incomplete,
+                200,
+                Some("stream_undecodable"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.error_code.as_deref(),
+                attempts[0].outcome.as_str()
+            ),
+            ("incomplete", Some("stream_undecodable"), "upstream_error")
+        );
+        a.observe(observed("r11", Some("k")));
+        a.observe(selected("r11", 1, "a", 1_010));
+        a.observe(head("r11", 1, 400, AttemptOutcome::UpstreamError, 1_060));
+        let Some(Record::Request { request, .. }) = a
+            .observe(complete(
+                "r11",
+                1,
+                Some("a"),
+                Outcome::Failed,
+                502,
+                Some("stream_undecodable"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.status,
+                request.error_code.as_deref()
+            ),
+            ("failed", Some(502), Some("stream_undecodable")),
+            "the relay's own 502 for a rejection it could not decode"
         );
     }
 
@@ -1411,7 +1468,7 @@ mod tests {
         assert_eq!(
             (request.attempts, attempts.len(), request.outcome.as_str()),
             (2, 1, "succeeded"),
-            "the count is the completion's; the trail is what arrived"
+            "the count is the completion's, and the trail is what arrived"
         );
         assert_eq!(
             (attempts[0].input_tokens, attempts[0].outcome.as_str()),
@@ -1498,7 +1555,7 @@ mod tests {
                 bodies.response_len_seen
             ),
             (Some(MAX_CAPTURED_BODY), (MAX_CAPTURED_BODY + 10) as u64),
-            "the stored body is cut at the cap; the seen length is the full count"
+            "the stored body is cut at the cap, and the seen length is the full count"
         );
     }
 

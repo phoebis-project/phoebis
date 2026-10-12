@@ -23,7 +23,7 @@ mod usage;
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
 pub use db::LedgerDb;
-pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror};
+pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror, MirrorBaseline};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
@@ -103,8 +103,8 @@ pub enum LedgerError {
     /// A file a newer build wrote: opening it would run no migration and read columns this build does not know. The
     /// message leaves `path` to the caller, whose context names the file.
     #[error(
-        "the ledger's schema version {found} is newer than this build supports ({supported}); \
-         restore the backup taken before the upgrade"
+        "the ledger's schema version {found} is newer than this build supports ({supported}), \
+         so restore the backup taken before the upgrade"
     )]
     SchemaTooNew {
         path: std::path::PathBuf,

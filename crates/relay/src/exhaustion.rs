@@ -2,18 +2,19 @@
 //! automatic continue arms, a 503 only an operator can clear, the same 503 with a one-second retry for a key moved
 //! to another pool mid-flight, and the two 429s of a fast request no upstream's fast lane can take.
 
-use axum::http::StatusCode;
 use axum::response::Response;
 use phoebis_routing::{Exhaustion, BUDGET_WINDOW};
 
 use crate::anthropic_error;
-use crate::errors::MODEL_REJECTED;
+use crate::errors::{exhaustion_status_code, MODEL_REJECTED};
 
 pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) -> Response {
+    // A pool at its cap is answered by `accounts_at_cap`, so no exhaustion here is read at the cap.
+    let status = exhaustion_status_code(exhaustion, false);
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.response(request_id),
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => anthropic_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            status,
             "api_error",
             "accounts_unavailable",
             "no account in this pool can serve requests",
@@ -21,7 +22,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
         ),
         Exhaustion::Timed { deadline, window } => {
             let mut response = anthropic_error(
-                StatusCode::TOO_MANY_REQUESTS,
+                status,
                 "rate_limit_error",
                 "accounts_exhausted",
                 "every account in this pool is rate limited",
@@ -56,7 +57,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
         }
         Exhaustion::FastLane { deadline } => {
             let mut response = anthropic_error(
-                StatusCode::TOO_MANY_REQUESTS,
+                status,
                 "rate_limit_error",
                 "fast_lane_exhausted",
                 "every account in this pool is at its fast limit",
@@ -73,7 +74,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
         }
         Exhaustion::FastCredits { reason } => {
             let mut response = anthropic_error(
-                StatusCode::TOO_MANY_REQUESTS,
+                status,
                 "rate_limit_error",
                 "fast_credits_unavailable",
                 "no account in this pool can draw usage credits for fast mode",

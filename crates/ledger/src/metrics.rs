@@ -588,7 +588,7 @@ pub fn metrics_router(
                     let attention = match attention.map(|a| a()).transpose() {
                         Ok(attention) => attention.unwrap_or_default(),
                         Err(error) => {
-                            tracing::warn!(%error, "the attention read failed; the scrape answers 500");
+                            tracing::warn!(%error, "the attention read failed, so the scrape answers 500");
                             return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
                                 .into_response();
                         }

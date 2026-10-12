@@ -103,11 +103,11 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
 
 test('a pool input holds every engine bound', () => {
   const whole = {
-    burnWindowSeconds: [60, null],
+    burnWindowSeconds: [60, 604_800],
     inFlightCap: [1, 4_294_967_295],
     overageMoveGraceMinutes: [0, 300],
     retryInPlaceSeconds: [0, 300],
-    sourceDwellSeconds: [60, null],
+    sourceDwellSeconds: [60, 604_800],
     windDownMinutes: [0, 10_080],
   };
   for (const [field, [min, max]] of Object.entries(whole)) {
@@ -312,8 +312,8 @@ test('a pool refusal names the group its control sits in', () => {
     [{ shedAheadOfPace: Number.NaN }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace needs a value from 0 to 100.')],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
     [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
-    [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],
-    [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number of at least 60.')],
+    [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number from 60 to 604,800.')],
+    [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number from 60 to 604,800.')],
     [{ warmSessions: 'sometimes' }, refused('Warm sessions', 'shedding', 'Warm sessions is one of its listed choices.')],
     [{ paceFloor: 1.2 }, refused('Pace floor (%)', 'failover', 'Pace floor (%) is from 0 to 100.')],
     [{ inFlightCap: 0 }, refused('In flight', 'failover', 'In flight is a whole number from 1 to 4,294,967,295.')],

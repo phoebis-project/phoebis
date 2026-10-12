@@ -277,7 +277,7 @@ export const KEYS: ApiKey[] = [
     poolId: 'all',
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
-      { not: false, pattern: 'claude-sonnet-5' },
+      { not: false, pattern: 'claude-sonnet-4-6' },
       { not: true, pattern: '*' },
     ],
     modelRulesMode: 'extend',

@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use bytes::Bytes;
 use fake_upstream::FakeUpstream;
@@ -260,14 +259,7 @@ pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
         profile,
         clock.clone(),
     ));
-    Arc::new(UsageService::new(
-        manager,
-        control,
-        profile,
-        Duration::from_secs(60),
-        2,
-        clock,
-    ))
+    Arc::new(UsageService::new(manager, control, profile, 2, clock))
 }
 
 /// A client inference's observation, which carries the key and pool its completion does not; `None` for a refusal

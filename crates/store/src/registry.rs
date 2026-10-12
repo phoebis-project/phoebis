@@ -638,14 +638,10 @@ pub(crate) fn record_change(
     Ok(())
 }
 
-fn now_ms() -> i64 {
-    jiff::Timestamp::now().as_millisecond()
-}
-
 /// The stamp a fenced row takes on its next write: one past `previous` when the clock has not moved, so a write
 /// inside the millisecond of the stamp it fenced on still moves it, and an edit read before it cannot pass.
-fn stamp_past(previous: i64) -> i64 {
-    now_ms().max(previous.saturating_add(1))
+fn stamp_past(now: i64, previous: i64) -> i64 {
+    now.max(previous.saturating_add(1))
 }
 
 fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
@@ -774,7 +770,7 @@ impl Store {
     ) -> Result<PoolRow, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = now_ms();
+        let now = self.now_ms();
         let incarnation = crate::accounts::next_incarnation_in(&tx, "pool_tombstones", &row.id)?;
         tx.execute(
             "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at, incarnation) \
@@ -850,7 +846,7 @@ impl Store {
         self.park_on_pool_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let at = stamp_past(expected_updated_at);
+        let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, shed_ahead_of_pace = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31 AND incarnation = ?32",
             params![
@@ -934,7 +930,7 @@ impl Store {
              ON CONFLICT(id) DO UPDATE SET incarnation = max(pool_tombstones.incarnation, excluded.incarnation)",
             params![id, incarnation],
         )?;
-        record_change(&tx, now_ms(), actor, "pool_deleted", id, "{}")?;
+        record_change(&tx, self.now_ms(), actor, "pool_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
     }
@@ -975,7 +971,7 @@ impl Store {
         let Some(current) = current else {
             return Err(StoreError::PoolNotFound(pool_id.to_string()));
         };
-        let at = stamp_past(current);
+        let at = stamp_past(self.now_ms(), current);
         set_pool_members_in(&tx, pool_id, members, at, actor)?;
         tx.commit()?;
         Ok(at)
@@ -1020,7 +1016,7 @@ impl Store {
             params![row.id],
             |r| r.get(0),
         )?;
-        let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
+        let now = previous.map_or(self.now_ms(), |p| self.now_ms().max(p + 1));
         let incarnation = crate::accounts::next_incarnation_in(&tx, "api_key_tombstones", &row.id)?;
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
@@ -1076,7 +1072,7 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
-        let at = stamp_past(expected_updated_at);
+        let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
             params![
@@ -1147,7 +1143,7 @@ impl Store {
         // otherwise read as if it belonged to the one this rotation creates.
         tx.execute(
             "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = MAX(?5, updated_at + 1) WHERE id = ?1",
-            params![id, digest, prefix, at, now_ms()],
+            params![id, digest, prefix, at, self.now_ms()],
         )?;
         record_change(
             &tx,
@@ -1172,7 +1168,7 @@ impl Store {
         let updated = tx.execute(
             "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0, \
              updated_at = MAX(?3, updated_at + 1) WHERE id = ?1",
-            params![id, at, now_ms()],
+            params![id, at, self.now_ms()],
         )?;
         if updated == 0 {
             return Err(StoreError::KeyNotFound(id.to_string()));
@@ -1203,7 +1199,7 @@ impl Store {
         // Nothing reads these rows again, since a key created under the id next takes a later generation;
         // dropping them here spares the retention purge a table of dead entries.
         tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
-        let now = now_ms();
+        let now = self.now_ms();
         record_change(&tx, now, actor, "key_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())

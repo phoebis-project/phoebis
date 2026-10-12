@@ -292,7 +292,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -495,6 +494,301 @@ usage:
     up.shutdown().await;
 }
 
+/// The formatter's output kept in memory, so a case reads back the lines the binary logged on its thread.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_durations_at_debug()
+{
+    // This thread's subscriber, set before the binary starts: `app::run` installs a global one at INFO, and a
+    // `#[tokio::test]` polls the binary's tasks on this thread, where the thread's own default outranks it.
+    let captured = Captured::default();
+    let _capture = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(captured.clone())
+            .finish(),
+    );
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: b"{\"ok\":true}".to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    let account_secret = "sk-ant-api03-CONNECTIONLINE";
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": account_secret })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let resp = fixture_request(&client, proxy_port, &secret, "e2e-connection")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), "{\"ok\":true}");
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("a new upstream connection"))
+        .collect();
+    assert!(
+        lines.iter().any(|line| line.contains("DEBUG")
+            && line.contains(&format!("host=\"{}\"", phoebis_store::INFERENCE_HOST))
+            && line.contains("dial_ms=")
+            && line.contains("handshake_ms=")),
+        "a connection line for the inference host with both durations: {lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains(account_secret) && !line.contains(&secret)),
+        "a connection line names no credential: {lines:#?}"
+    );
+}
+
+/// The binary reads its shutdown budget once, at its start, so the case sets the figure before `app::run` and
+/// removes it once the admin answers, as `probe_soon_on` and `probe_soon_off` do for the keepalive's timing.
+const SHUTDOWN_BUDGET_SECONDS: &str = "PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS";
+
+/// The figure is removed when this drops, a panic's unwinding included, so a case that fails before its admin answers
+/// leaves no short budget to a binary another case starts later.
+struct ShortShutdownBudget;
+
+impl ShortShutdownBudget {
+    fn set(seconds: &str) -> ShortShutdownBudget {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(SHUTDOWN_BUDGET_SECONDS, seconds);
+        ShortShutdownBudget
+    }
+}
+
+impl Drop for ShortShutdownBudget {
+    fn drop(&mut self) {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+    }
+}
+
+#[tokio::test]
+async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes_run() {
+    // This thread's subscriber, as in the connection line's case: the binary's own lines are logged on this thread.
+    let captured = Captured::default();
+    let _capture = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(captured.clone())
+            .finish(),
+    );
+    // The head and `message_start` commit the stream, so the relay hands the rest to a body task, and the gate
+    // holds that task on its upstream read until the release below, past the whole stop.
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::SseGated {
+                status: 200,
+                headers: vec![],
+                events: vec![
+                    fake_upstream::SseEvent {
+                        event: "message_start".into(),
+                        data: r#"{"type":"message_start","message":{"id":"msg_stalled","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}"#.into(),
+                    },
+                    fake_upstream::SseEvent {
+                        event: "message_stop".into(),
+                        data: r#"{"type":"message_stop"}"#.into(),
+                    },
+                ],
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    // Set outside the block below: its `ENV` guard drops first on a panic, so the figure's own drop can take the lock.
+    let short_budget = ShortShutdownBudget::set("3");
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    drop(short_budget);
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-STALLEDBODY" })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let held = fixture_request(&client, proxy_port, &secret, "e2e-stalled-body")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200, "the stream committed before the stop");
+
+    let _ = stop_tx.send(());
+    // Well past the three-second budget and the flushes after it, and well short of the 30 s the listeners' drain
+    // alone would wait for the stalled stream.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(15), server).await;
+    let text = captured.text();
+    assert!(
+        ended.is_ok(),
+        "the stop with a stalled body ran past 15 s: {text}"
+    );
+    ended.unwrap().unwrap().unwrap();
+    drop(held);
+    up.release();
+    up.shutdown().await;
+
+    for phase in ["listeners", "bodies"] {
+        assert!(
+            text.lines()
+                .any(|line| line.contains("WARN") && line.contains(&format!("phase=\"{phase}\""))),
+            "the budget cut the {phase} phase: {text}"
+        );
+    }
+    // One deadline leaves the bodies nothing once the listeners spent it, where a budget of their own would give them
+    // three seconds.
+    assert!(
+        text.lines()
+            .any(|line| line.contains("phase=\"bodies\"") && line.contains("seconds=0")),
+        "the bodies got what the listeners left: {text}"
+    );
+    for flushed in [
+        "the keepalive's last flush ran",
+        "the session memory's last flush ran",
+    ] {
+        assert!(
+            text.lines()
+                .any(|line| line.contains("INFO") && line.contains(flushed)),
+            "{flushed}: {text}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_back_on_passes_it_through(
 ) {
@@ -527,7 +821,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
@@ -736,7 +1030,6 @@ storage:
   encryption_key_file: {key}
   path: {db}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -831,7 +1124,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -1037,7 +1329,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
         ledger = dir.path().join("ledger.sqlite").display(),
@@ -1343,7 +1635,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -1604,7 +1895,6 @@ storage:
   encryption_key_file: {key}
   path: {db}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = key.display(),
@@ -1916,7 +2206,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), prices = dir.path().join("api_prices.yaml").display(),
         costs = dir.path().join("subscription_costs.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
@@ -2297,7 +2587,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = key_path.display(),
         db = db_path.display(),
@@ -2448,6 +2738,287 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     up.shutdown().await;
 }
 
+/// A refresh the previous run left in flight is quarantined at the start, and the routing log answers the settled
+/// refresh and the account's move into `reauth_required`: the ledger's mirror takes its baseline before the
+/// recovery runs.
+#[tokio::test]
+async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_log_answers_both_rows(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    seed_oauth_account(&db_path, &key_path);
+    // On the seeded account's incarnation and generations, so the start quarantines it rather than closing the
+    // attempt as superseded.
+    phoebis_store::Store::open(
+        &db_path,
+        &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+    )
+    .unwrap()
+    .open_refresh_attempt("a", 1, 1, 1)
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_QUARANTINE_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_QUARANTINE_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    let log = wait_json(
+        &client,
+        &admin("/routing-log?accounts=a&kinds=account_state_changed,refresh_failed"),
+        |log| log["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let row = |kind: &str| {
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} row: {log}"))
+            .clone()
+    };
+    assert_eq!(
+        row("refresh_failed")["detail"]["error"],
+        "quarantined at start",
+        "{log}"
+    );
+    assert_eq!(
+        row("account_state_changed")["detail"],
+        serde_json::json!({ "from": "ready", "to": "reauth_required", "cause": "refresh_failed", "detail": null }),
+        "{log}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// The catalog hook and the first purge's release, through the running router: a listing that changed between two
+/// reads lands a `catalog_changed` row, and a pin the start found past its pool's affinity is purged once the start
+/// releases the held tick, landing a `pin_expired` row.
+#[tokio::test]
+async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expires_a_stale_pin() {
+    let listing = |ids: &[&str]| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: serde_json::to_vec(&serde_json::json!({
+            "data": ids
+                .iter()
+                .map(|id| serde_json::json!({ "id": id, "type": "model" }))
+                .collect::<Vec<_>>(),
+        }))
+        .unwrap(),
+    };
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: listing(&["claude-sonnet-4-5"]),
+    }])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    {
+        let store = phoebis_store::Store::open(
+            &db_path,
+            &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        )
+        .unwrap();
+        pair_oauth(
+            &store,
+            "a",
+            "sk-ant-oat01-catalog-hook-aaaa",
+            "00000000-0000-4000-8000-00000000000a",
+        );
+        store
+            .insert_pool(&phoebis_store::PoolRow::for_tests("main"), "test")
+            .unwrap();
+        store
+            .set_pool_members(
+                "main",
+                &[phoebis_store::MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                }],
+                "test",
+            )
+            .unwrap();
+        store
+            .insert_api_key(
+                &phoebis_store::ApiKeyRow {
+                    id: "desktop".into(),
+                    label: "Desktop".into(),
+                    notes: None,
+                    pool_id: "main".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: phoebis_store::RulesMode::Extend,
+                    long_context_twins: true,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: store.api_key_digest("phoebis-catalog-hook-secret").to_vec(),
+                    prefix: phoebis_store::key_prefix("phoebis-catalog-hook-secret"),
+                    incarnation: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    rotated_at: None,
+                    last_used_at: None,
+                    retired_secret_last_used_at: None,
+                    auto_mode_server: None,
+                },
+                "test",
+            )
+            .unwrap();
+        // Made for the key and the account as the store holds them, so the purge reads it as the holders' own, and
+        // last used at the epoch, so the pool's hour of affinity has long run out when the first purge reads it.
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "desktop".into(),
+                session_id: "stale".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-4-5".into(),
+                account_id: "a".into(),
+                epoch: 1,
+                created_at: 0,
+                last_used_at: 0,
+                key_generation: store.api_key("desktop").unwrap().unwrap().created_at,
+                incarnation: store.account("a").unwrap().unwrap().incarnation,
+                burn: phoebis_store::PinBurn::default(),
+                burn_at: None,
+                burn_banded: phoebis_store::PinBurn::default(),
+                burn_fast: phoebis_store::PinBurn::default(),
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: String::new(),
+            })
+            .unwrap();
+    }
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_CATALOG_HOOK_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_CATALOG_HOOK_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    // An account's first listing names none before it, so it moves nothing and lands no row.
+    wait_json(&client, &admin("/accounts/a/catalog"), |catalog| {
+        catalog["models"]
+            .as_array()
+            .is_some_and(|models| !models.is_empty())
+    })
+    .await;
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        listing(&["claude-opus-5", "claude-sonnet-4-5"]),
+    );
+    let refreshed: serde_json::Value = client
+        .get(admin("/accounts/a/catalog?refresh=1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        refreshed["models"].as_array().map(Vec::len),
+        Some(2),
+        "{refreshed}"
+    );
+    let log = wait_json(
+        &client,
+        &admin("/routing-log?accounts=a&kinds=catalog_changed,pin_expired"),
+        |log| log["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let row = |kind: &str| {
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} row: {log}"))
+            .clone()
+    };
+    assert_eq!(
+        row("catalog_changed")["detail"],
+        serde_json::json!({ "added": ["claude-opus-5"], "removed": [], "count": 2 }),
+        "{log}"
+    );
+    let expired = row("pin_expired");
+    assert_eq!(
+        (&expired["session_id"], &expired["detail"]),
+        (
+            &serde_json::json!("stale"),
+            &serde_json::json!({ "agent_id": "main", "reasons": ["expired"] })
+        ),
+        "{log}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
     let dir = tempfile::tempdir().unwrap();
@@ -2474,7 +3045,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
              stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
              storage:\n  encryption_key_file: {key}\n  path: {db}\n\
              upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
-             usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+             usage:\n  refresh_concurrency: 2\n",
             ledger = ledger_path.display(),
             key = key_path.display(),
             db = db_path.display(),
@@ -2895,7 +3466,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                  stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
                  storage:\n  encryption_key_file: {key}\n  path: {db}\n\
                  upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
-                 usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+                 usage:\n  refresh_concurrency: 2\n",
                 ledger = dir.path().join(format!("{name}-ledger.sqlite")).display(),
                 key = key_path.display(),
                 db = db_path.display(),
@@ -3088,7 +3659,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3251,15 +3822,6 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         (Some(1), Some(64)),
         "the session count beside the cap the file sets"
     );
-    let settings: serde_json::Value = client
-        .get(admin("/settings"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(64));
     let text = client
         .get(format!("http://127.0.0.1:{metrics_port}/metrics"))
         .send()
@@ -3340,7 +3902,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),
@@ -3437,7 +3998,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3591,25 +4152,43 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     let started = std::time::SystemTime::now();
     // Awaited, never blocked on: the router and the fake upstream are tasks on this same current-thread
     // runtime, and a blocking wait here would starve the very server the browser is talking to.
-    let pass = tokio::process::Command::new("node")
+    let mut pass = tokio::process::Command::new("node")
         .arg("e2e/views.mjs")
         .current_dir(&web)
         .env("PHOEBIS_E2E_BASE", format!("http://127.0.0.1:{admin_port}"))
         .env("PHOEBIS_E2E_SECRET", "admin-secret-001")
         .env("PHOEBIS_SCREENSHOT_DIR", &shots)
-        .output()
-        .await
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("node runs");
-    let printed = String::from_utf8_lossy(&pass.stdout);
-    print!("{printed}");
-    eprint!("{}", String::from_utf8_lossy(&pass.stderr));
+    // Each line is passed on as the pass writes it, so a pass that hangs under `--nocapture` shows the view it
+    // reached. Both pipes drain together, or a full stderr pipe would stall the pass behind a stdout read.
+    use tokio::io::AsyncBufReadExt;
+    let mut out = tokio::io::BufReader::new(pass.stdout.take().expect("piped stdout")).lines();
+    let mut err = tokio::io::BufReader::new(pass.stderr.take().expect("piped stderr")).lines();
+    let kept = async {
+        let mut kept = Vec::new();
+        while let Some(line) = out.next_line().await.expect("the pass's stdout reads") {
+            println!("{line}");
+            kept.push(line);
+        }
+        kept
+    };
+    let forwarded = async {
+        while let Some(line) = err.next_line().await.expect("the pass's stderr reads") {
+            eprintln!("{line}");
+        }
+    };
+    let (printed, ()) = tokio::join!(kept, forwarded);
+    let status = pass.wait().await.expect("node runs");
     assert!(
-        pass.status.success(),
+        status.success(),
         "the browser pass failed; its output names the view"
     );
     // The pass names how many views it ran, so a view added to it needs no count here.
     let views: usize = printed
-        .lines()
+        .iter()
         .find_map(|line| {
             let (count, _) = line
                 .strip_prefix("browser pass: ")?
@@ -3742,7 +4321,6 @@ upstream:
   resolve_override: {addr}
   extra_ca_pem: {ca}
 usage:
-  cache_ttl_seconds: 60
   refresh_concurrency: 2
 "#,
         key = dir.path().join("storage.key").display(),

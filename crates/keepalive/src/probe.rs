@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    Agent, AgentState, Engine, Funding, Inner, ParkKind, Reason, SavingsUnit, SessionKey,
+    Agent, AgentState, Engine, Funding, Inner, Kept, ParkKind, Reason, SavingsUnit, SessionKey,
     UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
@@ -439,7 +439,8 @@ impl Inner {
 
     /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
     /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
-    /// as one wasted probe under the stop that orphaned it, since the upstream served it either way.
+    /// as one wasted probe under the stop that orphaned it, since the upstream served it either way. A held result
+    /// asked no account and settles under none, and a success the idle limit orphaned waits as a pending probe.
     pub(crate) fn apply_probe(
         &mut self,
         job: &ProbeJob,
@@ -498,6 +499,44 @@ impl Inner {
             let Some(label) = label else {
                 return Applied::Orphaned;
             };
+            if record.outcome == ProbeOutcome::Held {
+                return Applied::Orphaned;
+            }
+            // The idle limit keeps its probes pending until their entry lapses or a turn reads them, so a success
+            // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
+            if label == Wasted::IdleLimit
+                && matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated)
+            {
+                if let Exchange::Answered(result) = &exchange {
+                    if let Some(agent) = self
+                        .sessions
+                        .get_mut(key)
+                        .and_then(|s| s.agents.get_mut(agent_id))
+                        .filter(|agent| agent.incarnation == job.incarnation)
+                    {
+                        let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
+                        let ttl = record.usage.ttl_ms(agent.ttl_ms, requested_ms);
+                        agent.kept.push(Kept {
+                            key_generation: job.key_generation,
+                            pool_id: job.pool_id.clone(),
+                            canonical_model: job.canonical_model.clone(),
+                            account: Some(record.account.clone()),
+                            fast: job.recipe.fast,
+                            cost: record.cost_usd,
+                            entry_expires: job.started + ttl,
+                            kind: record.kind,
+                            in_overage: record.in_overage,
+                            // The landing's coverage checks never ran on this path, so the probe earns no credit,
+                            // and a turn on its lineage that reads the cache leaves it unwasted.
+                            covered: false,
+                            unit: covered_unit,
+                            pending: Some(Wasted::IdleLimit),
+                        });
+                        self.touch_agent(key, agent_id);
+                        return Applied::Orphaned;
+                    }
+                }
+            }
             self.settlements.push(crate::engine::Settlement {
                 key: key.clone(),
                 key_generation: job.key_generation,
@@ -505,8 +544,10 @@ impl Inner {
                 canonical_model: job.canonical_model.clone(),
                 account: Some(record.account.clone()),
                 label,
-                costs: vec![record.cost_usd],
+                cost: record.cost_usd,
                 fast: job.recipe.fast,
+                kind: record.kind,
+                in_overage: record.in_overage,
             });
             return Applied::Orphaned;
         }
@@ -576,6 +617,8 @@ impl Inner {
             model: agent.canonical_model.clone(),
             expires: job.started + ttl,
             covered: false,
+            kind: record.kind,
+            in_overage: record.in_overage,
         });
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
@@ -951,6 +994,87 @@ mod tests {
             },
         );
         (inner, key)
+    }
+
+    /// A job for `one_agent_inner`'s agent at generation 0, the recipe's first.
+    fn job_on(key: &SessionKey) -> ProbeJob {
+        ProbeJob {
+            key: key.clone(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            incarnation: 1,
+            observation_id: "o".into(),
+            generation: 0,
+            attempt: 1,
+            started: 1_000,
+            account: Some("a".into()),
+            pool_id: "main".into(),
+            canonical_model: "m".into(),
+            recipe: Recipe {
+                body: Vec::new(),
+                headers: Vec::new(),
+                model: "m".into(),
+                ttl_ms: 0,
+                longest_ttl_ms: 0,
+                size: 0,
+                static_hash: None,
+                tail_hash: None,
+                fast: false,
+            },
+            expected: 0,
+            counted_idle_tick: false,
+        }
+    }
+
+    /// The router's own `503 ledger_behind`, which asked no account.
+    fn held_answer() -> Exchange {
+        Exchange::Answered(ProbeResult {
+            status: 503,
+            request_id: Some("p".into()),
+            account: None,
+            error_code: Some(phoebis_relay::LEDGER_BEHIND.into()),
+            body: None,
+            cache_ttl_ms: None,
+            in_overage: false,
+            account_kind: None,
+            retry_after_secs: Some(5),
+            obstacle: None,
+        })
+    }
+
+    /// A held probe asked no account, so it never counts as wasted: a `Held` result orphaned by a stop or by the
+    /// session's end writes no settlement under the label that would otherwise settle it.
+    #[test]
+    fn a_held_result_of_an_orphaned_probe_writes_no_settlement() {
+        for orphaned_by in ["release", "session_end"] {
+            let (mut inner, key) = one_agent_inner();
+            let job = job_on(&key);
+            match orphaned_by {
+                "release" => {
+                    let agent = inner
+                        .sessions
+                        .get_mut(&key)
+                        .unwrap()
+                        .agents
+                        .get_mut("main")
+                        .unwrap();
+                    agent.generation = 1;
+                    agent.last_stop = Some(Wasted::Released);
+                }
+                _ => {
+                    inner.sessions.clear();
+                }
+            }
+            let exchange = held_answer();
+            let record = inner.probe_record(&job, &exchange, &PriceTable::shipped());
+            assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
+            let applied = inner.apply_probe(&job, exchange, &record, None, 2_000);
+            assert_eq!(applied, Applied::Orphaned, "{orphaned_by}");
+            assert!(
+                inner.settlements.is_empty(),
+                "{orphaned_by}: the held probe settles under no label"
+            );
+        }
     }
 
     #[test]

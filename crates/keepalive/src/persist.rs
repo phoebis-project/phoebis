@@ -10,20 +10,22 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use phoebis_ledger::Speed;
+use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
-    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, UnansweredProbe, Wasted,
-    MAIN_AGENT,
+    kind_of_word, kind_word, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket,
+    Inner, Kept, Observation, ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey,
+    Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
 
-/// The payloads' shape. Nothing is released, so no stored row of another version exists to read.
-pub(crate) const RECORD_VERSION: u32 = 1;
+/// The payloads' shape. A row of an older version is dropped at the load, since its probes carry no funding to
+/// settle under.
+pub(crate) const RECORD_VERSION: u32 = 2;
 
 /// A session row's key in the store: key id, key generation, session id.
 pub(crate) type PersistKey = (String, i64, String);
@@ -134,6 +136,8 @@ pub(crate) struct PersistedObservation {
     pub prior: Option<PersistedPrior>,
     pub poisoned: bool,
     pub recipe: PersistedRecipe,
+    pub kind: Option<String>,
+    pub in_overage: bool,
 }
 
 /// The recipe's fields beside the prompt and its header block: the hijack guard reads the two hashes, and the probe's
@@ -181,6 +185,8 @@ pub(crate) struct PersistedUnanswered {
     pub model: String,
     pub expires: i64,
     pub covered: bool,
+    pub kind: Option<String>,
+    pub in_overage: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -193,6 +199,11 @@ pub(crate) struct PersistedKept {
     #[serde(with = "exact")]
     pub cost: f64,
     pub entry_expires: i64,
+    pub kind: Option<String>,
+    pub in_overage: bool,
+    pub covered: bool,
+    pub unit: Option<String>,
+    pub pending: Option<String>,
 }
 
 /// A float as the text `f64`'s `Display` writes, which `str::parse` reads back to the same bits. serde_json's own float
@@ -230,6 +241,28 @@ fn optional_unit(word: Option<String>) -> Option<Option<SavingsUnit>> {
     match word {
         None => Some(None),
         Some(word) => unit_of(&word).map(Some),
+    }
+}
+
+/// A word the payload carries for an optional account kind: `None` reads as none, and a word this build does not know
+/// refuses the row.
+fn optional_kind(word: Option<String>) -> Option<Option<phoebis_store::AccountKind>> {
+    match word {
+        None => Some(None),
+        Some(word) => kind_of_word(&word).map(Some),
+    }
+}
+
+/// A word the payload carries for an optional wasted label: `None` reads as none, and a word this build does not know
+/// refuses the row.
+fn optional_wasted(word: Option<String>) -> Option<Option<Wasted>> {
+    match word {
+        None => Some(None),
+        Some(word) => Wasted::ALL
+            .iter()
+            .copied()
+            .find(|label| label.as_str() == word)
+            .map(Some),
     }
 }
 
@@ -328,6 +361,8 @@ impl PersistedAgent {
                     static_hash: o.recipe.static_hash.clone(),
                     tail_hash: o.recipe.tail_hash.clone(),
                 },
+                kind: o.kind.map(|kind| kind_word(kind).to_string()),
+                in_overage: o.in_overage,
             }),
             expires: agent.expires,
             jitter_frac: agent.jitter_frac,
@@ -376,6 +411,8 @@ impl PersistedAgent {
                     model: probe.model.clone(),
                     expires: probe.expires,
                     covered: probe.covered,
+                    kind: probe.kind.map(|kind| kind_word(kind).to_string()),
+                    in_overage: probe.in_overage,
                 })
                 .collect(),
             kept: agent
@@ -389,6 +426,11 @@ impl PersistedAgent {
                     fast: kept.fast,
                     cost: kept.cost,
                     entry_expires: kept.entry_expires,
+                    kind: kept.kind.map(|kind| kind_word(kind).to_string()),
+                    in_overage: kept.in_overage,
+                    covered: kept.covered,
+                    unit: kept.unit.map(unit_word),
+                    pending: kept.pending.map(|label| label.as_str().to_string()),
                 })
                 .collect(),
             last_real_at: agent.last_real_at,
@@ -474,22 +516,31 @@ impl PersistedAgent {
                     model: probe.model,
                     expires: probe.expires,
                     covered: probe.covered,
+                    kind: optional_kind(probe.kind)?,
+                    in_overage: probe.in_overage,
                 })
             })
             .collect::<Option<_>>()?;
         agent.kept = self
             .kept
             .into_iter()
-            .map(|kept| Kept {
-                key_generation: kept.key_generation,
-                pool_id: kept.pool_id,
-                canonical_model: kept.canonical_model,
-                account: kept.account,
-                fast: kept.fast,
-                cost: kept.cost,
-                entry_expires: kept.entry_expires,
+            .map(|kept| {
+                Some(Kept {
+                    key_generation: kept.key_generation,
+                    pool_id: kept.pool_id,
+                    canonical_model: kept.canonical_model,
+                    account: kept.account,
+                    fast: kept.fast,
+                    cost: kept.cost,
+                    entry_expires: kept.entry_expires,
+                    kind: optional_kind(kept.kind)?,
+                    in_overage: kept.in_overage,
+                    covered: kept.covered,
+                    unit: optional_unit(kept.unit)?,
+                    pending: optional_wasted(kept.pending)?,
+                })
             })
-            .collect();
+            .collect::<Option<_>>()?;
         agent.last_real_at = self.last_real_at;
         agent.last_stop = self.last_stop;
         agent.last_presence_at = self.last_presence_at;
@@ -540,6 +591,8 @@ impl PersistedObservation {
             prior,
             poisoned: false,
             dispatched_ms: row.dispatched_ms,
+            kind: optional_kind(self.kind)?,
+            in_overage: self.in_overage,
         })
     }
 }
@@ -560,7 +613,8 @@ fn session_row(
     })
 }
 
-/// One agent row as the store keeps it: the payload, and the recipe's prompt and columns when one is retained.
+/// One agent row as the store keeps it: the payload, the recipe's columns when one is retained, and its prompt only
+/// when the recipe changed since the last landed save that carried it.
 fn agent_row(
     key: &PersistKey,
     agent: &Agent,
@@ -568,6 +622,11 @@ fn agent_row(
 ) -> Result<KeepaliveAgentRow, serde_json::Error> {
     let recipe = agent.current.as_ref().map(|o| &o.recipe);
     let no_headers: &[(String, String)] = &[];
+    let body_write = match recipe {
+        Some(recipe) if agent.body_dirty => BodyWrite::Seal(recipe.body.clone()),
+        None if agent.body_saved => BodyWrite::Clear,
+        _ => BodyWrite::Keep,
+    };
     Ok(KeepaliveAgentRow {
         key_id: key.0.clone(),
         key_generation: key.1,
@@ -575,7 +634,8 @@ fn agent_row(
         agent_id: agent.id.clone(),
         record_version: RECORD_VERSION,
         payload: serde_json::to_string(&PersistedAgent::of(agent))?,
-        body: recipe.map(|r| r.body.clone()),
+        body: None,
+        body_write,
         headers: serde_json::to_string(recipe.map_or(no_headers, |r| r.headers.as_slice()))?,
         body_size: recipe.map_or(0, |r| r.size),
         dispatched_ms: agent.current.as_ref().and_then(|o| o.dispatched_ms),
@@ -588,8 +648,13 @@ fn agent_row(
 #[derive(Default)]
 pub(crate) struct Snapshot {
     pub batch: KeepaliveBatch,
+    /// The settlements the load held for a save, taken under the lock this snapshot was read under: a save that lands
+    /// releases them, and one that fails puts them back in front of whatever the load queued since.
+    pub settled: Vec<Settlement>,
     sessions: Vec<(PersistKey, u64)>,
     agents: Vec<((PersistKey, String), u64)>,
+    /// The agent rows whose body this save seals (true) or clears (false), at the revision each was read at.
+    bodies: Vec<((PersistKey, String), u64, bool)>,
     removed_sessions: Vec<(PersistKey, u64)>,
     removed_agents: Vec<((PersistKey, String), u64)>,
     pools: Vec<(String, u64)>,
@@ -714,11 +779,15 @@ impl Inner {
         self.dirty.removed_agents.insert(row, revision);
     }
 
-    /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at. Nothing
-    /// is cleared here: `acknowledge` does that once the save has landed. A dirty row whose record left the map without
-    /// a removal, which only `close` does, is carried by nothing and retired with the rest.
-    pub(crate) fn persist_snapshot(&self, now: i64) -> Snapshot {
-        let mut snapshot = Snapshot::default();
+    /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at, and the
+    /// settlements the load held for a save. No dirty entry is cleared here: `acknowledge` does that once the save has
+    /// landed. A dirty row whose record left the map without a removal, which only `close` does, is carried by nothing
+    /// and retired with the rest.
+    pub(crate) fn persist_snapshot(&mut self, now: i64) -> Snapshot {
+        let mut snapshot = Snapshot {
+            settled: std::mem::take(&mut self.settlements_after_save),
+            ..Snapshot::default()
+        };
         for (row, revision) in &self.dirty.sessions {
             if let Some(session) = self.session_of(row) {
                 match session_row(row, session, now) {
@@ -736,7 +805,21 @@ impl Inner {
                 .and_then(|session| session.agents.get(agent_id))
             {
                 match agent_row(row, agent, now) {
-                    Ok(agent_row) => snapshot.batch.agents.push(agent_row),
+                    Ok(agent_row) => {
+                        let sealed = match agent_row.body_write {
+                            BodyWrite::Keep => None,
+                            BodyWrite::Clear => Some(false),
+                            BodyWrite::Seal(_) => Some(true),
+                        };
+                        if let Some(sealed) = sealed {
+                            snapshot.bodies.push((
+                                (row.clone(), agent_id.clone()),
+                                *revision,
+                                sealed,
+                            ));
+                        }
+                        snapshot.batch.agents.push(agent_row);
+                    }
                     Err(error) => {
                         tracing::warn!(key = %row.0, session = %row.2, agent = %agent_id, %error, "a keepalive agent could not be written")
                     }
@@ -777,16 +860,32 @@ impl Inner {
         snapshot
     }
 
-    /// The settlements held for a landed save go to the ledger's queue, which the flush drains once the lock is
+    /// The settlements a landed save carried go to the ledger's queue, which the flush drains once the lock is
     /// released.
-    pub(crate) fn release_settled(&mut self) {
-        let held = std::mem::take(&mut self.settlements_after_save);
-        self.settlements.extend(held);
+    pub(crate) fn release_settled(&mut self, settled: Vec<Settlement>) {
+        self.settlements.extend(settled);
     }
 
     /// Retires what a landed save carried: an entry leaves only while its revision is the one saved, so a change
-    /// since the snapshot keeps it dirty for the next flush.
+    /// since the snapshot keeps it dirty for the next flush. The body the save sealed or cleared is the registry's
+    /// whatever moved since, while the mark asking for a seal leaves only with its row's entry, since a recipe set
+    /// after the snapshot is a body this save did not carry.
     pub(crate) fn acknowledge(&mut self, snapshot: &Snapshot) {
+        for ((row, agent_id), revision, sealed) in &snapshot.bodies {
+            let unchanged =
+                self.dirty.agents.get(&(row.clone(), agent_id.clone())) == Some(revision);
+            if let Some(agent) = self
+                .sessions
+                .get_mut(&(row.0.clone(), row.2.clone()))
+                .filter(|session| session.key_generation == row.1)
+                .and_then(|session| session.agents.get_mut(agent_id))
+            {
+                agent.body_saved = *sealed;
+                if unchanged {
+                    agent.body_dirty = false;
+                }
+            }
+        }
         fn retire<K: Ord>(dirty: &mut BTreeMap<K, u64>, saved: &[(K, u64)]) {
             for (key, revision) in saved {
                 if dirty.get(key) == Some(revision) {
@@ -851,8 +950,8 @@ impl Inner {
     /// The rows the store answered, restored within the limits the file sets now rather than the ones the save ran
     /// under: sessions newest first, each with its main agent and then its other agents newest first, and the recipes
     /// of what was restored newest first while the retained bytes allow. What does not fit is disposed, its rows
-    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows this build cannot read
-    /// and agents without a session row go too.
+    /// filed for deletion and each recipe among them counted as evicted. Ended sessions, rows of an older version,
+    /// rows this build cannot read and agents without a session row go too.
     fn restore_persisted(
         &mut self,
         (sessions, agents, counters): Loaded,
@@ -893,6 +992,7 @@ impl Inner {
         let mut by_sessions = Disposed::default();
         let mut by_agents = Disposed::default();
         let mut by_bytes = 0usize;
+        let mut dropped = 0usize;
         let mut unopened: Vec<(SessionKey, String)> = Vec::new();
         let mut held: Vec<(i64, SessionKey, String, Observation)> = Vec::new();
         for row in sessions {
@@ -902,6 +1002,15 @@ impl Inner {
                 row.session_id.clone(),
             );
             let agent_rows = by_session.remove(&stored).unwrap_or_default();
+            // Counted for one line after the loop rather than one per row: every row an upgrade finds is one of them.
+            if row.record_version < RECORD_VERSION {
+                dropped += 1;
+                for agent_row in agent_rows {
+                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
+                }
+                self.file_removed_session(stored);
+                continue;
+            }
             let payload = (row.record_version == RECORD_VERSION)
                 .then(|| serde_json::from_str::<PersistedSession>(&row.payload).ok())
                 .flatten();
@@ -961,10 +1070,13 @@ impl Inner {
             });
             let mut session = payload.restore(now);
             for (agent_row, decoded) in agents {
-                let Some((agent, observation)) = decoded else {
+                let Some((mut agent, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
+                // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
+                // agent's next save.
+                agent.body_saved = agent_row.body_size > 0;
                 if self.agents >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
@@ -1035,6 +1147,12 @@ impl Inner {
                 self.discard_at_load(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
             }
         }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "saved keepalive sessions of an older record version are dropped, since their probes carry no funding"
+            );
+        }
         if by_sessions.sessions > 0 {
             tracing::info!(
                 sessions = by_sessions.sessions,
@@ -1103,7 +1221,7 @@ impl Engine {
     /// A snapshot, its save and its acknowledgment, on the blocking pool under the flush lock whole: two flushes never
     /// overlap, an older batch never follows a newer one to the store, and a flush whose caller went away still runs
     /// to its end, so the shutdown's flush queues behind it. A failed save keeps every row dirty for the next flush
-    /// and holds back the settlements waiting on it; a landed save releases them, and they reach the ledger here.
+    /// and holds back the settlements waiting on it. A landed save releases them, and they reach the ledger here.
     pub async fn flush_persisted(self: &Arc<Self>) {
         let engine = self.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || engine.flush_blocking()).await {
@@ -1121,31 +1239,34 @@ impl Engine {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let now = self.now();
-        let snapshot = self.lock().persist_snapshot(now);
+        let mut snapshot = self.lock().persist_snapshot(now);
         self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
         self.persist_progress.notify_waiters();
+        let settled = std::mem::take(&mut snapshot.settled);
         // Nothing to write means the registry already holds every row, which releases the held settlements too.
         if snapshot.is_empty() {
-            self.lock().release_settled();
+            self.lock().release_settled(settled);
             return;
         }
         if snapshot.batch.is_empty() {
             let mut inner = self.lock();
             inner.acknowledge(&snapshot);
-            inner.release_settled();
+            inner.release_settled(settled);
             return;
         }
         match self.parts.store.save_keepalive(&snapshot.batch) {
             Ok(()) => {
                 let mut inner = self.lock();
                 inner.acknowledge(&snapshot);
-                inner.release_settled();
+                inner.release_settled(settled);
                 if std::mem::take(&mut inner.persist_failing) {
                     tracing::info!("the keepalive's state reaches the registry again");
                 }
             }
             Err(error) => {
                 let mut inner = self.lock();
+                let queued = std::mem::replace(&mut inner.settlements_after_save, settled);
+                inner.settlements_after_save.extend(queued);
                 if !inner.persist_failing {
                     inner.persist_failing = true;
                     tracing::warn!(%error, "the keepalive's state could not be written to the registry, so the engine keeps it and retries at every flush");
@@ -1210,8 +1331,9 @@ impl Engine {
         }
     }
 
-    /// Every session and agent as the next save would write it, dirty or not, for a test that holds what a restart
-    /// restored against what was saved. Compiled only under `debug-hooks`.
+    /// Every session and agent as the next save would write it, dirty or not, with each agent's prompt and body as a
+    /// load reads them back, for a test that holds what a restart restored against what was saved. Compiled only under
+    /// `debug-hooks`.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn persist_rows(&self) -> (Vec<KeepaliveSessionRow>, Vec<KeepaliveAgentRow>) {
         let now = self.now();
@@ -1226,7 +1348,11 @@ impl Engine {
             );
             sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
             for agent in session.agents.values() {
-                agents.push(agent_row(&row, agent, now).expect("an agent payload serializes"));
+                agents.push(KeepaliveAgentRow {
+                    body: agent.current.as_ref().map(|o| o.recipe.body.clone()),
+                    body_write: BodyWrite::Keep,
+                    ..agent_row(&row, agent, now).expect("an agent payload serializes")
+                });
             }
         }
         (sessions, agents)
@@ -1258,6 +1384,11 @@ mod tests {
                 fast: false,
                 cost,
                 entry_expires: 0,
+                kind: None,
+                in_overage: false,
+                covered: false,
+                unit: None,
+                pending: None,
             };
             let back: PersistedKept =
                 serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
