@@ -6,70 +6,13 @@
   </picture>
 </div>
 
-Phoebis Router is a router for Claude Code. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
-land on the right flower. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
-request on the wire to Anthropic, under credentials it holds itself, and picks those
-credentials from a pool of accounts with sticky sessions, quota-driven failover, prompt-cache keepalive, per-request
-statistics down to the request's shape and the answer's own facts, and a web console. Failover reads each account's
-usage windows from response heads and from a five-minute poll of the usage endpoint and predicts between them, so a
-routing decision can lag heavy use of an account outside the router by about five minutes, longer while the endpoint
-rate-limits the poll; the [routing page](docs/site/routing.md#the-windows-the-router-works-from) says what the router
-reads and how it carries a reading forward. One process serves three listeners: the proxy that relays `/v1/messages`,
-the admin API with the embedded console, and a metrics endpoint in Prometheus text format.
+Phoebis Router relays Claude Code's requests to Anthropic under the credentials of an account it holds, and picks that
+account from a pool: a session sticks to one account, a rate limit fails over to a sibling, prompt caches are kept
+warm, and every request lands in a ledger the web console reads. Phoebis is a genus of sulphur butterflies, migrants
+of the Americas that land on the right flower.
 
-The documentation lives under [`docs/site/`](docs/site/index.md) and is published at
-<https://daystrom-labs.github.io/phoebis/> once GitHub Pages is enabled for the repository
-([how](docs/site/operations.md#publishing-this-site)).
-
-## Build and run
-
-```sh
-cargo build --release
-target/release/phoebis init --config ~/.config/phoebis/config.yaml
-export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=<the printed secret>
-target/release/phoebis
-```
-
-`init` writes the bootstrap file and the storage key, and prints the admin secret once. Every stored credential is
-sealed under the key, and a lost key is replaced through `phoebis recover-key`, which discards what the old key sealed
-on a stopped registry ([how](docs/site/operations.md#the-storage-key)). `PHOEBIS_CONFIG` names the file for every
-`phoebis` call in that shell, so nothing host-specific lands in the checkout. `init` wrote the proxy on
-`127.0.0.1:8317`, the admin listener with the console on `127.0.0.1:8081`, and metrics on `127.0.0.1:9464`, with both
-databases under `~/.config/phoebis/data/`. The build embeds the console and needs Node 20.19 or a later 20, or 22.12 or
-later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file, the key file and the
-registry's key canary, taking no lock and opening no socket. Installing as a service, and every setting of the file, is
-on the [installation page](docs/site/installation.md).
-
-The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64, and as a
-static binary per architecture on every release ([download](docs/site/installation.md#download-a-release)).
-`deploy/compose.yaml` and `deploy/config.container.yaml` run the image under bridge networking, and the image's
-`HEALTHCHECK` runs `phoebis health`, which reads not-ready when the router loop, the ledger consumer or the store is
-dead ([how](docs/site/installation.md#run-the-container)).
-
-## Where things are
-
-| Page | What it covers |
-| --- | --- |
-| [Installation](docs/site/installation.md) | Build, container, service, commands, and every bootstrap setting. |
-| [Downstream client](docs/site/client.md) | The client's environment block, each variable, and the key's usage page. |
-| [Pairing an account](docs/site/pairing.md) | Pairing an OAuth account through the console or with `curl`. |
-| [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
-| [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
-| [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, gauges. |
-| [Operations](docs/site/operations.md) | Backup, restore, storage key, upgrades, re-pinning, publishing, releasing. |
-| [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
-
-The browser pass over the console is in
-[web/e2e/README.md](web/e2e/README.md).
-
-## Status
-
-Nothing in this build has talked to Anthropic yet. The wire shapes come from a capture of Claude Code 2.1.269 on
-Linux x64, and every test runs against a loopback fake upstream that replays those fixtures. A first live run
-against `api.anthropic.com` is still ahead, and until it happens, treat the relayed shape as verified against the
-capture only.
-
-## License
+The documentation lives under [`docs/site/`](docs/site/index.md), starting with the
+[Quick start](docs/site/quickstart.md), and is published at <https://daystrom-labs.github.io/phoebis/> once GitHub
+Pages is enabled for the repository.
 
 Released under the MIT license. See [`LICENSE`](LICENSE) for the full text.

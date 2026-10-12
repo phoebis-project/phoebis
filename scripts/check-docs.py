@@ -4,6 +4,11 @@
 `links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
 names no heading or anchor on the page it lands on. `client` compares the proxy listener's route table with the table
 on the client page, so a route added or removed in the router fails the build until the page follows.
+
+`check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
+the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the client page's table,
+`example` the installation page's quoted example with the file, and `prose` holds the mechanical content rules of the
+site's prose.
 """
 import functools
 import html.parser
@@ -22,6 +27,22 @@ PROXY_ROUTE_FILES = [
     ROOT / "crates/relay/src/messages.rs",
 ]
 CLIENT_MD = ROOT / "docs/site/client.md"
+MAIN_RS = ROOT / "crates/router/src/main.rs"
+INSTALLATION_MD = ROOT / "docs/site/installation.md"
+EXAMPLE_YAML = ROOT / "deploy/config.example.yaml"
+# Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy listener, and the bus
+# constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather than
+# narrowing it.
+CODE_FILES = [
+    ROOT / "crates/bus/src/event.rs",
+    ROOT / "crates/ledger/src/usage.rs",
+    ROOT / "crates/relay/src/errors.rs",
+    ROOT / "crates/relay/src/exhaustion.rs",
+    ROOT / "crates/relay/src/models.rs",
+]
+# The markers render to nothing and anchor what two checks read on a page.
+CHECK_CONFIG_BEGIN, CHECK_CONFIG_END = "<!-- check-config: begin -->", "<!-- check-config: end -->"
+REFUSAL_CODES_BEGIN, REFUSAL_CODES_END = "<!-- refusal-codes: begin -->", "<!-- refusal-codes: end -->"
 # The path zensical.toml's site_url publishes the site under; a root-relative link carries it.
 PREFIX = "phoebis"
 
@@ -307,7 +328,361 @@ def check_client(route_files, client_md):
     return 1 if findings else 0
 
 
-USAGE = "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
+def between(lines, begin, end, path):
+    """The lines between one `begin` and one `end` marker with the number of the first, or None after printing
+    why there are not exactly one of each: a page without its markers fails the check that reads them."""
+    begins = [i for i, line in enumerate(lines) if line.strip() == begin]
+    ends = [i for i, line in enumerate(lines) if line.strip() == end]
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        print(f"{path.name}: expected one {begin} before one {end}, found {len(begins)} and {len(ends)}")
+        return None
+    return begins[0] + 2, lines[begins[0] + 1 : ends[0]]
+
+
+def missing(paths):
+    """Whether any of `paths` is not a file, after printing each one that is not: a moved file is a finding that
+    names it, never a traceback."""
+    absent = [path for path in paths if not path.is_file()]
+    for path in absent:
+        print(f"{path} is missing")
+    return bool(absent)
+
+
+EXAMPLE_FENCE = '```yaml title="deploy/config.example.yaml"'
+
+
+def check_example(example_yaml, installation_md):
+    """The installation page's quoted example against the file, line for line, a trailing newline aside."""
+    if missing([example_yaml, installation_md]):
+        return 1
+    expected = example_yaml.read_text(encoding="utf-8").splitlines()
+    lines = installation_md.read_text(encoding="utf-8").splitlines()
+    opens = [i for i, line in enumerate(lines) if line.strip() == EXAMPLE_FENCE]
+    if len(opens) != 1:
+        print(f"{installation_md.name}: {len(opens)} fenced blocks titled deploy/config.example.yaml, expected one")
+        return 1
+    start = opens[0] + 1
+    close = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
+    if close is None:
+        print(f"{installation_md.name}:{start + 1}: the example block has no closing fence")
+        return 1
+    quoted = lines[start:close]
+    for offset, (page, file) in enumerate(zip(quoted, expected)):
+        if page != file:
+            print(
+                f"{installation_md.name}:{start + offset + 1}: differs from {example_yaml.name}:{offset + 1}:"
+                f" {page!r} vs {file!r}"
+            )
+            return 1
+    if len(quoted) != len(expected):
+        print(
+            f"{installation_md.name}:{start + 1}: the block has {len(quoted)} lines and"
+            f" {example_yaml.name} {len(expected)}"
+        )
+        return 1
+    return 0
+
+
+CHECK_CONFIG_ARM = "Some(Command::CheckConfig) => {"
+PRINTLN = re.compile(r"\bprintln!\(")
+PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+# A literal continued over a backslash at the end of a line: Rust drops the backslash, the newline and the next
+# line's leading whitespace, so the check joins it the same way before it reads the fragments.
+CONTINUATION = re.compile(r"\\\n\s*")
+LIST_ITEM = re.compile(r"^(\d+)\. (.*)$")
+
+
+def println_strings(code, blanked, opened, close):
+    """Every `println!` call's format string between the arm's braces, in source order, with whether the call sits
+    at the arm's own depth (unconditional) or inside a `match`, `if` or `for` block of it (conditional)."""
+    found = []
+    for call in PRINTLN.finditer(blanked, opened, close):
+        depth = blanked.count("{", opened, call.start()) - blanked.count("}", opened, call.start())
+        quote = code.find('"', call.end(), close)
+        if quote < 0:
+            raise SystemExit(f"a println! without a format string at line {line_of(code, call.start())}")
+        j = quote + 1
+        while j < close and code[j] != '"':
+            j += 2 if code[j] == "\\" else 1
+        found.append((CONTINUATION.sub("", code[quote + 1 : j]), depth == 1))
+    return found
+
+
+def skeleton(literal):
+    """The literal fragments between a format string's placeholders, trimmed, empties dropped. An empty list is a
+    wildcard: a line that is one placeholder prints whatever value it carries."""
+    return [part.strip() for part in PLACEHOLDER.split(literal) if part.strip()]
+
+
+def list_items(lines, first):
+    """A numbered list's items as (line, text): continuation lines joined by one space, code spans unwrapped."""
+    items = []
+    for offset, line in enumerate(lines):
+        item = LIST_ITEM.match(line)
+        if item:
+            items.append([first + offset, item.group(2).strip()])
+        elif items and line.strip():
+            items[-1][1] += " " + line.strip()
+    return [(line, text.replace("`", "")) for line, text in items]
+
+
+def fragments_in(fragments, text):
+    at = 0
+    for fragment in fragments:
+        at = text.find(fragment, at)
+        if at < 0:
+            return False
+        at += len(fragment)
+    return True
+
+
+def check_check_config(main_rs, installation_md):
+    """The lines `phoebis check-config` prints, read from the binary's source without building it, against the
+    installation page's list: the unconditional lines in order, every conditional line somewhere after them."""
+    if missing([main_rs, installation_md]):
+        return 1
+    code, blanked = tokenized(main_rs.read_text(encoding="utf-8"))
+    arm = code.find(CHECK_CONFIG_ARM)
+    if arm < 0:
+        print(f"{main_rs.name}: no {CHECK_CONFIG_ARM} arm")
+        return 1
+    opened = arm + len(CHECK_CONFIG_ARM) - 1
+    depth, close = 1, opened + 1
+    while close < len(blanked) and depth:
+        depth += {"{": 1, "}": -1}.get(blanked[close], 0)
+        close += 1
+    if depth:
+        raise SystemExit(f"unbalanced braces after the check-config arm at line {line_of(code, arm)}")
+    printed = println_strings(code, blanked, opened, close)
+    unconditional = [(literal, skeleton(literal)) for literal, direct in printed if direct]
+    conditional = [(literal, skeleton(literal)) for literal, direct in printed if not direct]
+    lines = installation_md.read_text(encoding="utf-8").splitlines()
+    span = between(lines, CHECK_CONFIG_BEGIN, CHECK_CONFIG_END, installation_md)
+    if span is None:
+        return 1
+    items = list_items(span[1], span[0])
+    findings, matched = 0, set()
+    for k, (literal, fragments) in enumerate(unconditional):
+        if k >= len(items):
+            print(f"{installation_md.name}: no item for the line {literal!r}, which the binary prints as line {k + 1}")
+            findings += 1
+            continue
+        line, text = items[k]
+        if not fragments_in(fragments, text):
+            print(f"{installation_md.name}:{line}: item {k + 1} does not match the line {literal!r}")
+            findings += 1
+        matched.add(k)
+    later = list(enumerate(items))[len(unconditional):]
+    for literal, fragments in conditional:
+        if not fragments:
+            # A conditional line that is one placeholder prints a value no page item can name.
+            continue
+        hits = [k for k, (line, text) in later if fragments_in(fragments, text)]
+        if not hits:
+            print(f"{installation_md.name}: no item for the conditional line {literal!r}")
+            findings += 1
+        matched.update(hits)
+    for k, (line, text) in later:
+        if k not in matched:
+            print(f"{installation_md.name}:{line}: item {k + 1} matches no line the binary prints")
+            findings += 1
+    return 1 if findings else 0
+
+
+# A refusal's code: the value of a `code:` field, or the third argument of an `anthropic_error(` call. The value is
+# a plain or raw string literal, or an identifier (with or without a path) resolved against a `const` by its last
+# segment. Any other expression is reported, because a shape the check cannot read is a finding, never a silent
+# pass. `code: &str` and `code: &'static str` are a parameter and a field, not a value: a `&` opens a type, never a
+# code, so a value opening with `&` is passed by. The lookahead spans the whitespace itself, since a `\s*` before
+# it would backtrack to zero width and test the space ahead of the `&`. `self.code` in `Failure::response` forwards
+# a `code:` field the check has read, so it is passed by too.
+CODE_FIELD = re.compile(r"\bcode:(?!\s*&)\s*")
+ERROR_CALL = re.compile(r"(?<!fn )\banthropic_error\(")
+CODE_LITERAL = re.compile(r'^r?(#*)"([a-z_]+)"\1$')
+CODE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
+FIELD_FORWARD = "self.code"
+CODE_CONST = re.compile(r"\bconst ([A-Z_][A-Z0-9_]*): &(?:'static )?str = \"([a-z_]+)\";")
+# The `auth_*` arms of `errors.rs` answer a two-string tuple, the code first.
+CODE_TUPLE = re.compile(r'\(\s*"([a-z][a-z_]*)",\s*"')
+# A row of the refusal code table: the code in backticks in its first cell.
+CODE_ROW = re.compile(r"^\| `([a-z_]+)` \|")
+
+
+def split_arguments(blanked, opened, close):
+    """The (start, end) of each top-level argument between `opened` and `close`, over the blanked text."""
+    spans, depth, at = [], 0, opened
+    for pos in range(opened, close):
+        depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(blanked[pos], 0)
+        if blanked[pos] == "," and depth == 0:
+            spans.append((at, pos))
+            at = pos + 1
+    if blanked[at:close].strip():
+        spans.append((at, close))
+    return spans
+
+
+def expression_end(blanked, start):
+    """The offset where the expression opening at `start` ends: the first `,` at its own depth, or the bracket
+    closing the field list or the argument list that holds it."""
+    depth = 0
+    for pos in range(start, len(blanked)):
+        char = blanked[pos]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return pos
+            depth -= 1
+        elif char == "," and depth == 0:
+            return pos
+    raise SystemExit(f"an expression with no end at offset {start}")
+
+
+def code_expressions(code, blanked):
+    """Every expression that carries a refusal code, as (offset, text): the value of each `code:` field and the
+    third argument of each `anthropic_error(` call, the function's own definition passed by."""
+    found = []
+    for field in CODE_FIELD.finditer(blanked):
+        start = field.end()
+        found.append((start, code[start : expression_end(blanked, start)].strip()))
+    for call in ERROR_CALL.finditer(blanked):
+        opened = call.end()
+        depth, pos = 1, opened
+        while pos < len(blanked) and depth:
+            depth += {"(": 1, ")": -1}.get(blanked[pos], 0)
+            pos += 1
+        if depth:
+            raise SystemExit(f"unbalanced parentheses after anthropic_error( at line {line_of(code, call.start())}")
+        arguments = split_arguments(blanked, opened, pos - 1)
+        if len(arguments) >= 3:
+            start, end = arguments[2]
+            start += len(code[start:end]) - len(code[start:end].lstrip())
+            found.append((start, code[start:end].strip()))
+    return found
+
+
+def check_codes(code_files, client_md):
+    """Every code the `x-phoebis-error-code` header carries on the proxy listener against the client page's refusal
+    table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
+    consts, answered, pending, findings = {}, set(), [], 0
+    for path in code_files:
+        if not path.is_file():
+            print(f"{path} is missing; the code file list names it")
+            return 1
+        code, blanked = tokenized(path.read_text(encoding="utf-8"))
+        consts.update(CODE_CONST.findall(code))
+        for offset, expression in code_expressions(code, blanked):
+            literal = CODE_LITERAL.match(expression)
+            if literal:
+                answered.add(literal.group(2))
+            elif CODE_IDENT.match(expression):
+                pending.append((path, line_of(code, offset), expression))
+            elif expression != FIELD_FORWARD:
+                print(f"{path.name}:{line_of(code, offset)}: unsupported code expression {expression}")
+                findings += 1
+        if path.name == "errors.rs":
+            answered.update(CODE_TUPLE.findall(code))
+    for path, line, ident in pending:
+        name = ident.rsplit("::", 1)[-1]
+        if name in consts:
+            answered.add(consts[name])
+        else:
+            print(f"{path.name}:{line}: code {ident} resolves to no const in the files read")
+            findings += 1
+    lines = client_md.read_text(encoding="utf-8").splitlines()
+    span = between(lines, REFUSAL_CODES_BEGIN, REFUSAL_CODES_END, client_md)
+    if span is None:
+        return 1
+    documented = {row.group(1) for row in map(CODE_ROW.match, span[1]) if row}
+    for name in sorted(answered - documented):
+        print(f"{client_md.name} has no row for {name}")
+        findings += 1
+    for name in sorted(documented - answered):
+        print(f"{client_md.name} lists {name}, which the proxy listener does not answer")
+        findings += 1
+    return 1 if findings else 0
+
+
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+HTML_COMMENT = re.compile(r"<!--.*?-->")
+DASHES = ("—", "–")
+# The planning words a page never carries. "plan", "commit", "review" and "lane" have a product sense (the plan
+# meter, a committed stream, auto mode's review, the fast lane) and are the reviewer's. "shape" with a capital
+# letter is case-sensitive, since "the shape a client sends" is prose.
+VOCABULARY = re.compile(
+    r"\b(sub-projects?|subprojects?|rulings?|tasks?|findings?|worktrees?|workstreams?|item [0-9]+|option [0-9])\b",
+    re.IGNORECASE,
+)
+SHAPE_LETTER = re.compile(r"\bshape [A-Z]\b")
+BARE_API_KEY = re.compile(r"\bapi_key\b")
+
+
+def prose_files():
+    return sorted((ROOT / "docs/site").glob("*.md")) + [ROOT / "README.md"]
+
+
+def check_prose(files):
+    """The mechanical content rules over a page's prose: fenced blocks dropped (a fence closes only on a bare fence
+    line of its own character, at least as long), code spans removed with an open span carried across lines until a
+    blank line or a fence ends its paragraph, HTML comments removed from each remaining line, the column count read
+    on the original line."""
+    findings = 0
+    for path in files:
+        if not path.is_file():
+            print(f"{path} is missing")
+            findings += 1
+            continue
+        shown = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+        fence, spanned = None, False
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            marker = FENCE.match(line)
+            if fence is None and (marker or not line.strip()):
+                # A code span never crosses a paragraph, so a backtick left open ends at a blank line or a fence.
+                spanned = False
+            if fence is None and marker:
+                fence = marker.group(1)
+                continue
+            if fence is not None:
+                # A shorter fence line, or one with an info string (a three-backtick `sh` line inside a three- or
+                # four-backtick block), is content, not the close.
+                run = marker.group(1) if marker else None
+                if run and line.strip() == run and run[0] == fence[0] and len(run) >= len(fence):
+                    fence = None
+                continue
+            if len(line) > 120 and not line.lstrip().startswith("|"):
+                print(f"{shown}:{number}: columns: {len(line)}")
+                findings += 1
+            text = line
+            if spanned:
+                # The previous line opened a span: the text up to its closing backtick is code.
+                closing = text.find("`")
+                spanned = closing < 0
+                text = "" if spanned else text[closing + 1 :]
+            text = CODE_SPAN.sub("", text)
+            if text.count("`") % 2:
+                # An odd backtick count opens a span that wraps onto the next line.
+                text = text[: text.rfind("`")]
+                spanned = True
+            text = HTML_COMMENT.sub("", text)
+            hits = (
+                ("semicolon", ";" in text),
+                ("dash", any(dash in text for dash in DASHES)),
+                ("vocabulary", bool(VOCABULARY.search(text) or SHAPE_LETTER.search(text))),
+                ("api_key", bool(BARE_API_KEY.search(text))),
+            )
+            for rule, hit in hits:
+                if hit:
+                    print(f"{shown}:{number}: {rule}: {text.strip()}")
+                    findings += 1
+    return 1 if findings else 0
+
+
+USAGE = (
+    "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
+    " | check-config [MAIN_RS INSTALLATION_MD] | codes [RS_FILE... CLIENT_MD]"
+    " | example [EXAMPLE_YAML INSTALLATION_MD] | prose [FILE...]"
+)
 
 
 def main(argv):
@@ -321,6 +696,30 @@ def main(argv):
         files = [pathlib.Path(p) for p in argv[2:-1]] if len(argv) > 3 else PROXY_ROUTE_FILES
         client_md = pathlib.Path(argv[-1]) if len(argv) > 3 else CLIENT_MD
         return check_client(files, client_md)
+    if len(argv) >= 2 and argv[1] == "check-config":
+        if len(argv) not in (2, 4):
+            print(USAGE)
+            return 2
+        main_rs = pathlib.Path(argv[2]) if len(argv) == 4 else MAIN_RS
+        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
+        return check_check_config(main_rs, page)
+    if len(argv) >= 2 and argv[1] == "codes":
+        if len(argv) == 3:
+            # A code file without the page to check it against is a mistake, as it is for `client`.
+            print(USAGE)
+            return 2
+        files = [pathlib.Path(p) for p in argv[2:-1]] if len(argv) > 3 else CODE_FILES
+        client_md = pathlib.Path(argv[-1]) if len(argv) > 3 else CLIENT_MD
+        return check_codes(files, client_md)
+    if len(argv) >= 2 and argv[1] == "example":
+        if len(argv) not in (2, 4):
+            print(USAGE)
+            return 2
+        example = pathlib.Path(argv[2]) if len(argv) == 4 else EXAMPLE_YAML
+        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
+        return check_example(example, page)
+    if len(argv) >= 2 and argv[1] == "prose":
+        return check_prose([pathlib.Path(p) for p in argv[2:]] or prose_files())
     print(USAGE)
     return 2
 
