@@ -173,18 +173,18 @@ login and status session run through a tunnel harness, a CONNECT proxy paired wi
 answered with canned responses while recording what it received.
 
 `scripts/capture-baseline.sh` reproduces the inference-plane half of this recipe in one command. It re-executes itself
-under `unshare -rn`, so the client runs with loopback as its only route, then drives the four credential modes and the
-gzip-forced run past `scripts/capture/http_raw.py` and one more run past `scripts/capture/connect_capture.py` over
-`HTTPS_PROXY` for the ClientHello. Into the output directory it writes `clean_modes.json` with one entry per recorded
-request, one `clean_body_<i>.json` per request holding that body's raw bytes, `gzip_modes.json` for the gzip-forced
-run, and `connect.json` for the hello. It finishes by running `python3 scripts/build-fixtures.py --check <output-dir>`
-and exits with that status, so capturing and comparing are the same command. The system prompt carries the current
-date, so a re-capture on a later day differs there, and `--check` prints a bounded diff of each changed body to tell
-that apart from a change in the request shape. `scripts/capture-count-tokens.sh` reproduces the count half beside it,
-in the same namespace and with the same dummy credentials: three runs, one per credential mode, past
-`scripts/capture/count_receiver.py`, which answers the first request with a canned tool call so the count the Read tool
-sends before a large file reaches the wire. It finishes by running
-`python3 scripts/build-fixtures.py --count <output-dir> --check`.
+under `unshare -rn`, so the client runs with loopback as its only route, then drives the three credential modes, the
+first-party override a second time as a second hash vector, and the gzip-forced run past `scripts/capture/http_raw.py`
+and one more run past `scripts/capture/connect_capture.py` over `HTTPS_PROXY` for the ClientHello. Into the output
+directory it writes `clean_modes.json` with one entry per recorded request, one `clean_body_<i>.json` per request
+holding that body's raw bytes, `gzip_modes.json` for the gzip-forced run, and `connect.json` for the hello. It finishes
+by running `python3 scripts/build-fixtures.py --check <output-dir>` and exits with that status, so capturing and
+comparing are the same command. The system prompt carries the current date, so a re-capture on a later day differs
+there, and `--check` prints a bounded diff of each changed body to tell that apart from a change in the request shape.
+`scripts/capture-count-tokens.sh` reproduces the count half beside it, in the same namespace and with the same dummy
+credentials: three runs, one per credential mode, past `scripts/capture/count_receiver.py`, which answers the first
+request with a canned tool call so the count the Read tool sends before a large file reaches the wire. It finishes by
+running `python3 scripts/build-fixtures.py --count <output-dir> --check`.
 
 The control-plane half needs a live session and cannot run unattended, so the baseline script's header comment covers
 it rather than automating it. A capture without that half still compares: `--check` lists the control-plane fixtures
@@ -236,27 +236,29 @@ the table after any accepted re-pin.
 
 ## Re-pinning
 
-A profile records the measured build's wire constants: its version and build tag, its two user agents, its Stainless
-headers, its three beta lists (one per credential mode), the control-plane URLs and client id, and the TLS curves and
-cipher list, each a field of the `Profile` value in `crates/profile/src/lib.rs`, with the fixtures under
-`crates/profile/fixtures/` as its record. The router's own calls send part of it: the control-plane calls go to the
-profile's URLs with its client id and its SDK user agent, and the connections toward the upstream offer its curves,
-with its cipher list on the control plane. The Stainless headers and the beta lists are what the fixture suites
-compare against, and the relay emits none of them: headers travel as the client sends them, and the beta edits and the
-restored fields are the relay's fixed rules ([The betas](relay.md#the-betas) and
-[The restoration](relay.md#the-restoration)), which do not follow a newer build. A request the profile cannot
-reproduce is refused until the router runs a build re-pinned to the client. To re-pin the profile against a new build:
+A profile records the measured build's wire constants: its version and build tag, its two CLI user agents and its
+Axios user agent, its Stainless headers, its three beta lists (one per credential mode), the control-plane URLs and
+client id, and the TLS curves and cipher list, each a field of the `Profile` value in `crates/profile/src/lib.rs`, with
+the fixtures under `crates/profile/fixtures/` as its record. The router's own calls send part of it: the control-plane
+calls go to the profile's URLs, the token, profile and roles calls with its Axios user agent and the usage call with
+its SDK user agent, the token exchange and the refresh carry its client id in their bodies as the authorize URL does
+in its query, and the connections toward the upstream offer its curves, with its cipher list on the control plane.
+The Stainless headers and the beta lists are what the fixture suites compare against, and the relay emits none of
+them: headers travel as the client sends them, and the beta edits and the restored fields are the relay's fixed rules
+([The betas](relay.md#the-betas) and [The restoration](relay.md#the-restoration)), which do not follow a newer build.
+A request the profile cannot reproduce is refused until the router runs a build re-pinned to the client. To re-pin the
+profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real
    `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN` in the environment
    (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`) and where `unshare -rn` does not work,
-   and otherwise re-executes itself in the loopback-only namespace, drives the four credential modes and a gzip-forced
-   run past the recording receiver (the forced run records a plain body, since the 2.1.286 client gzips toward
-   `api.anthropic.com` alone), records the ClientHello through the CONNECT receiver, and ends with
-   `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status. The system prompt the
-   client sends embeds the current date, so a re-capture taken on another day differs there, and `--check` prints a
-   bounded diff per body so that shows as a date difference rather than a shape change.
+   and otherwise re-executes itself in the loopback-only namespace, drives the three credential modes, the first-party
+   override a second time, and a gzip-forced run past the recording receiver (the forced run records a plain body,
+   since the 2.1.286 client gzips toward `api.anthropic.com` alone), records the ClientHello through the CONNECT
+   receiver, and ends with `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status.
+   The system prompt the client sends embeds the current date, so a re-capture taken on another day differs there, and
+   `--check` prints a bounded diff per body so that shows as a date difference rather than a shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    client has moved past the pinned profile.
 3. The control plane (the token exchange and the profile, usage and roles calls) is not captured by the script: it
