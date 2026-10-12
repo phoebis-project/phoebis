@@ -246,7 +246,9 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 12px;
+  /* An icon-only button has no line box and would take its height from the icon alone. */
+  min-height: 32px;
+  padding: 6px 12px;
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -256,7 +258,7 @@
 }
 
 .btn--sm {
-  padding: 4px 9px;
+  padding: 6px 9px;
   font-size: 12.5px;
 }
 
@@ -276,11 +278,12 @@
 .btn--secondary {
   color: var(--ink);
   background: var(--surface);
-  border-color: var(--hairline-strong);
+  border-color: var(--hairline);
 }
 
 .btn--secondary:hover:not(:disabled) {
   background: var(--surface-2);
+  border-color: var(--hairline-strong);
 }
 
 .btn--ghost {
@@ -307,18 +310,20 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 11px;
+  padding: 6px 11px;
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 18px;
   color: var(--ink-2);
   background: var(--surface);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
 }
 
 .pill:hover:not(:disabled) {
   color: var(--ink);
   background: var(--surface-2);
+  border-color: var(--hairline-strong);
 }
 
 .pill.is-active {
@@ -338,9 +343,12 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  /* An icon-only pill (the top bar's theme control) has no line box and would read 25. */
+  min-height: 28px;
+  padding: 5px 10px;
   font-size: 12.5px;
   font-weight: 500;
+  line-height: 18px;
   color: var(--ink-2);
   background: transparent;
   border: 0;
@@ -579,22 +587,21 @@
 .input {
   width: 100%;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 5px 10px;
+  line-height: 20px;
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-}
-
-/* `.mono` sets 0.92em and the body's unitless line height scales with it, drawing a mono input 1.6px shorter than a
-   plain one beside it. A length holds a plain input's line, the body's size at its leading, at either font size: the
-   pattern filters restore the full size inline. */
-.input.mono {
-  line-height: calc(var(--body-size) * var(--body-leading));
 }
 
 .input::placeholder {
   color: var(--ink-3);
+}
+
+/* A focused field keeps the accent border under the pointer. */
+.input:hover:not(:disabled):not(:focus) {
+  border-color: var(--hairline-strong);
 }
 
 .input:focus {

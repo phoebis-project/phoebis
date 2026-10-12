@@ -214,7 +214,7 @@ async function atRest() {
  * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
  * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
  * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
- * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with eight more groups at
+ * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with nine more groups at
  * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
  * rail's own color, over the groups that pass under it.
  */
@@ -492,9 +492,9 @@ async function groupedDialogFixture(theme) {
     await load('');
     await scrolls('at 700 px', { height: 652, width: 1040 });
     await page.setViewportSize({ height: 800, width: 1280 });
-    // Eight, so the scrolled end falls well inside a run rather than at a run's edge, where no run passes the top.
-    await load('?extra=8');
-    await scrolls('with eight more groups', { height: 752, width: 1040 });
+    // Nine, so the scrolled end falls well inside a run rather than at a run's edge, where no run passes the top.
+    await load('?extra=9');
+    await scrolls('with nine more groups', { height: 752, width: 1040 });
   } catch (error) {
     say(error instanceof Error ? error.message : String(error));
   }
@@ -577,6 +577,19 @@ async function attentionLine(theme) {
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
   }
+}
+
+/** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
+async function topbarHeights(theme) {
+  const read = await page.evaluate(() => {
+    const box = (el) => (el ? { height: Math.round(el.getBoundingClientRect().height), top: Math.round(el.getBoundingClientRect().top) } : null);
+    const logout = [...document.querySelectorAll('.topbar__right .btn')].find((b) => b.textContent?.trim() === 'Log out');
+    return { logout: box(logout), theme: box(document.querySelector('.topbar__right .segmented')) };
+  });
+  measurements.push(`${theme} / top bar ${JSON.stringify(read)}`);
+  if (read.logout?.height !== 32) failures.push(`${theme} /: Log out is ${read.logout?.height} px, not 32`);
+  if (read.theme?.height !== 32) failures.push(`${theme} /: the theme control is ${read.theme?.height} px, not 32`);
+  failures.push(...compare(read.logout, read.theme, ['top'], `${theme} /: Log out against the theme control`));
 }
 
 /**
@@ -827,6 +840,8 @@ async function poolCachingControls(theme) {
       policy: readSwitch(el.querySelector('button[role="switch"][aria-label="Set the cache TTL for this pool"]')),
     };
   };
+  // A field under the pointer draws the hover border, so the pointer leaves the dialog before the selects are compared.
+  await page.mouse.move(0, 0);
   const pair = await dialog.evaluate(read);
   await railEntry(dialog, 'Cache diagnostics').click();
   await settle();
@@ -1289,6 +1304,25 @@ const disabledIn = (dialog, label, selectors) =>
   );
 
 /**
+ * The drawn size and stroke of the first chevron `svg` matches against `size` and `stroke`, recorded under `label`. A
+ * select draws its chevron lighter than the shared icon stroke, which every other chevron keeps, so the pass reads one
+ * of each. Answers the findings, each worded for the failure list.
+ */
+async function chevronWeight(label, svg, size, stroke) {
+  const read =
+    (await svg.count()) === 0
+      ? null
+      : await svg.first().evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          return { height: box.height, stroke: getComputedStyle(el).strokeWidth, width: box.width };
+        });
+  measurements.push(`${label} chevron ${JSON.stringify(read)}`);
+  if (!read) return ['no chevron is drawn to measure'];
+  if (read.width === size && read.height === size && parseFloat(read.stroke) === stroke) return [];
+  return [`the chevron draws ${read.width} by ${read.height} at a ${read.stroke} stroke, not ${size} by ${size} at ${stroke}`];
+}
+
+/**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
  * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
  * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
@@ -1353,6 +1387,7 @@ async function poolDialogWalk(theme, mode) {
       measurements.push(`${theme} /pools ${mode} dialog Identity heights ${JSON.stringify(heights)}`);
       if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
       else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
+      found.push(...(await chevronWeight(`${theme} /pools ${mode} dialog Identity select`, dialog.locator('section.dialog-group[aria-label="Identity"] .select > svg'), 12, 1.5)));
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
@@ -1703,6 +1738,53 @@ async function keysLayout(theme) {
   measurements.push(`${theme} /keys layout tracks ${JSON.stringify(narrow)} at 1280 by 800, ${JSON.stringify(wide)} at 1440 by 900`);
   if (narrow?.length !== 1) say(`the cards sit in ${narrow?.length ?? 'no'} columns at 1280 by 800, not stacked in one`);
   if (wide?.length !== 2) say(`the cards sit in ${wide?.length ?? 'no'} columns at 1440 by 900, not side by side`);
+}
+
+/**
+ * The Create key dialog under the one control height: the Key group's Name input and Pool select at 32 px, its Notes
+ * field at the 72 px a text area keeps, the footer's buttons at 32 px, and each label above its control. The other
+ * groups are hidden and lay out at 0 px, so the group a new key opens on is the one read. The dialog's width is
+ * recorded, since the frame takes it from its prop.
+ */
+async function dialogControls(theme) {
+  const say = (what) => failures.push(`${theme} /keys create key dialog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  } catch (error) {
+    say(`never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await dialog.evaluate((el) => {
+    const group = el.querySelector('section.dialog-group[aria-label="Key"]');
+    const height = (node) => (node ? Math.round(node.getBoundingClientRect().height) : null);
+    const control = (label, tag) => [...(group?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector(tag) ?? null;
+    const unstacked = [...(group?.querySelectorAll('.field:not(.field--beside) > .field__control > .field__label') ?? [])]
+      .filter((label) => {
+        const below = label.nextElementSibling;
+        return below && label.getBoundingClientRect().bottom > below.getBoundingClientRect().top + 1;
+      })
+      .map((label) => label.textContent?.trim());
+    return {
+      buttons: [...el.querySelectorAll('.dialog__foot .btn')].map(height),
+      name: height(control('Name', 'input')),
+      notes: height(control('Notes', 'textarea')),
+      pool: height(control('Pool', 'select')),
+      shown: group !== null && !group.hidden,
+      unstacked,
+      width: Math.round(el.getBoundingClientRect().width),
+    };
+  });
+  measurements.push(`${theme} /keys create key dialog ${JSON.stringify(read)}`);
+  if (!read.shown) say('opens on another group than Key');
+  if (read.name !== 32 || read.pool !== 32) say(`the Name input is ${read.name} px and the Pool select ${read.pool} px, not 32`);
+  if (read.notes !== 72) say(`the Notes field is ${read.notes} px, not the text area's 72`);
+  if (read.buttons.length === 0 || read.buttons.some((n) => n !== 32)) say(`the footer's buttons are ${JSON.stringify(read.buttons)} px, not 32`);
+  if (read.unstacked.length) say(`the labels ${read.unstacked.join(', ')} do not sit above their controls`);
+  await closeByEscape(dialog, `${theme} /keys create key dialog`, say);
+  await atRest();
 }
 
 /**
@@ -3029,6 +3111,33 @@ async function requestPageWidths(theme) {
     await landed(left);
   }
   measurements.push(`${theme} /requests default pages ${JSON.stringify(widths)}`);
+}
+
+/**
+ * The table's pager under the one control height: its three buttons 32 by 32, its page-size select where it draws one
+ * at 32 px, and the footer as tall as one 32 px control with its padding and its top border.
+ */
+async function pagerControls(theme, path) {
+  const read = await page.evaluate(() => {
+    const pager = document.querySelector('.pager');
+    if (!pager) return null;
+    const style = getComputedStyle(pager);
+    const select = pager.querySelector('select');
+    return {
+      border: parseFloat(style.borderTopWidth),
+      buttons: [...pager.querySelectorAll('.pager__nav button')].map((b) => ({ height: b.getBoundingClientRect().height, width: b.getBoundingClientRect().width })),
+      height: pager.getBoundingClientRect().height,
+      padding: parseFloat(style.paddingTop) + parseFloat(style.paddingBottom),
+      select: select ? select.getBoundingClientRect().height : null,
+    };
+  });
+  measurements.push(`${theme} ${path} pager ${JSON.stringify(read)}`);
+  const say = (what) => failures.push(`${theme} ${path}: the pager's ${what}`);
+  if (!read) return say('footer is not drawn');
+  if (read.buttons.length !== 3 || read.buttons.some((b) => b.width !== 32 || b.height !== 32)) say(`buttons measure ${JSON.stringify(read.buttons)}, not three of 32 by 32`);
+  if (read.select !== null && read.select !== 32) say(`page-size select is ${read.select} px, not 32`);
+  const expected = 32 + read.padding + read.border;
+  if (Math.abs(read.height - expected) > 0.5) say(`footer is ${read.height} px, not the ${expected} px of one 32 px control, ${read.padding} px of padding and a ${read.border} px border`);
 }
 
 /**
@@ -4614,6 +4723,8 @@ async function subscriptionEndForm(theme) {
   const editButton = await open.evaluate(button);
   await open.click();
   await identity.locator('label.row input[type="checkbox"]').check();
+  // A field under the pointer draws the hover border, so the pointer leaves the card before the fields are compared.
+  await page.mouse.move(0, 0);
   await settle();
   const read = await page.evaluate(() => {
     const box = (el) => {
@@ -4798,6 +4909,8 @@ async function keyAccessSelects(theme) {
       return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
     }, label);
   await show('Access');
+  // A field under the pointer draws the hover border, so the pointer leaves the dialog before the selects are compared.
+  await page.mouse.move(0, 0);
   const expiry = await measureSelect('Expiry');
   const autoMode = await measureSelect('Server-side auto mode');
   const hints = { autoMode: await hintOf('Server-side auto mode') };
@@ -5803,6 +5916,7 @@ try {
         await sessionForkMark(theme);
         await sessionForkBadges(theme);
         await probeBarSlots(theme);
+        for (const what of await chevronWeight(`${theme} /sessions row`, page.locator('.srow__chevron > svg'), 14, 1.75)) failures.push(`${theme} /sessions row: ${what}`);
       }
       if (view.path === '/pools') {
         await expertRow(theme);
@@ -5856,11 +5970,13 @@ try {
         if (mock) await requestsTableWide(theme);
         await speedFilter(theme);
         await diagnosticsFilters(theme);
+        await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
         await firstDecisionOpen(theme);
+        await pagerControls(theme, view.path);
       }
       if (view.path === '/quota') {
         await quotaChips(theme);
@@ -5882,7 +5998,9 @@ try {
       if (offset !== 0) failures.push(`${theme} ${view.path}: the shot was taken ${offset} px down the page`);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/pools') await utilizationMargin(theme);
+      if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/keys') await keysLayout(theme);
+      if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);

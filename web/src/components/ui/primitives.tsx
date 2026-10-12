@@ -237,7 +237,7 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <span className="select">
       <select {...props} className={`input ${props.className ?? ''}`} />
-      <IconChevron size={14} />
+      <IconChevron size={12} strokeWidth={1.5} />
     </span>
   );
 }

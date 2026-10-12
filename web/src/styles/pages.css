@@ -62,6 +62,7 @@
   align-items: center;
   padding: 3px 9px;
   font-size: 12.5px;
+  line-height: 18px;
   background: var(--surface-2);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
@@ -2736,8 +2737,8 @@
 .pager__nav button {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   color: var(--ink-2);
   background: none;
   border: 1px solid var(--hairline);
@@ -3652,7 +3653,7 @@
 
 .cost-ref__tokens .input {
   width: 76px;
-  padding: 4px 4px 4px 8px;
+  padding: 5px 4px 5px 8px;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
