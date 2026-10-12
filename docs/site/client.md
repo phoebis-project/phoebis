@@ -173,10 +173,10 @@ codes [The keepalive protocol](relay.md#the-keepalive-protocol) lists, while a k
 `/v1/messages` gives.
 
 The key is presented as exactly one of `Authorization: Bearer <secret>` or `x-api-key: <secret>`. No credential
-header, two of them, one twice, or a malformed one is refused `401`, and so is a well-formed key the registry refuses:
-one it does not hold, a revoked, retired, disabled or expired one, one whose pool is disabled or gone, and one deleted,
-or deleted and created again under its id, between admission and routing. Each of these is the same `401` with its own
-code, and the message names no cause, so a caller learns nothing about which.
+header, two of them, one twice, or a malformed one is refused `401` under its own code, and so is a well-formed key
+the registry refuses: one it does not hold, a revoked, retired, disabled or expired one, one whose pool is disabled or
+gone, and one deleted, or deleted and created again under its id, between admission and routing. Every registry
+refusal is the one `auth_unknown`, whose message names no cause, so a caller learns nothing about why.
 
 When no account can serve for the moment the answer is `503`
 `accounts_unavailable`, which also stands where an account's authentication failure is the request's last word: the
@@ -324,7 +324,7 @@ abort the request and send it again. Before the head, the first byte has a windo
 32 KiB of request body, with one retry near 600 seconds. `CLAUDE_ENABLE_BYTE_WATCHDOG` and
 `CLAUDE_ENABLE_STREAM_WATCHDOG` switch the watchdog off.
 
-Two waits of the router meet those clocks, and they differ. The router's own guards on the upstream, 600 seconds for
+Two waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for
 the response head and 600 seconds for the gap between two stream events, sit above the client's window, so a dead
 upstream stream is cut by the client at 180 seconds with the watchdog on, and the router's guard stands behind it
 ([The relay's waits](relay.md#the-relays-waits)). A retry in place is the other wait: on a throttle the router sleeps
