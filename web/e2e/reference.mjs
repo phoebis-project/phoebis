@@ -20,9 +20,9 @@ const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
 };
 
-// Three operations under two tags, the bearer scheme on all but the login's shape: enough for the sidebar, the
-// Authorization input and one call. A test file, never the real document's source of truth. The summaries are the
-// real document's, period included, so the stub and the router render the same text.
+// Three operations under two tags, the bearer scheme on each of them: enough for the sidebar, the Authorization input
+// and one call. A test file, never the real document's source of truth. The summaries are the real document's, period
+// included, so the stub and the router render the same text.
 const STUB = {
   openapi: '3.1.0',
   info: { title: 'Stub admin API', version: '0.0.0' },
@@ -99,8 +99,8 @@ for (const colorScheme of ['light', 'dark']) {
   await sidebar.getByRole('link', { name: 'Session', exact: true }).waitFor();
   check(await sidebar.getByRole('link', { name: 'Accounts', exact: true }).isVisible(), `${colorScheme}: the sidebar lists the tags`);
   check(await sidebar.getByRole('link', { name: 'List the accounts' }).isVisible(), `${colorScheme}: the sidebar lists the operations`);
-  // Each of these opens a Scalar-hosted service (the agent chat, the MCP generator and its editor installs, the
-  // developer tools' sharing and deploying, the hosted client), so the page renders none of them.
+  // Each of these opens a Scalar-hosted service (the agent chat, the developer tools' sharing and deploying, the
+  // hosted client, the MCP generator and its editor installs), so the page renders none of them.
   const offOrigin = {
     'Ask AI': page.getByRole('button', { name: 'Ask AI' }),
     'Ask AI Agent': page.getByPlaceholder('Ask AI Agent'),
@@ -148,6 +148,7 @@ for (const colorScheme of ['light', 'dark']) {
   check(elsewhere.length === 0, `${colorScheme}: every request targets ${origin} (${elsewhere.join(' ')})`);
   const stored = await page.evaluate(() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)]));
   check(!stored.includes(token), `${colorScheme}: the token is in neither localStorage nor sessionStorage`);
+  check((await context.cookies()).length === 0, `${colorScheme}: the page sets no cookie`);
   const mode = await page.evaluate(() => (document.body.classList.contains('dark-mode') ? 'dark' : document.body.classList.contains('light-mode') ? 'light' : 'none'));
   check(mode === colorScheme, `${colorScheme}: the page follows the browser's scheme (${mode})`);
   await context.close();

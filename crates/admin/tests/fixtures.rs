@@ -59,6 +59,35 @@ fn shape(v: &Value) -> Vec<String> {
     out
 }
 
+#[test]
+fn shape_tells_a_moved_key_a_null_for_an_absence_and_a_float_for_an_integer_but_not_a_value() {
+    let differ = [
+        (
+            j!({ "a": 1, "b": "x" }),
+            j!({ "b": "x", "a": 1 }),
+            "a moved key",
+        ),
+        (
+            j!({ "a": 1, "b": null }),
+            j!({ "a": 1 }),
+            "a null for an absent key",
+        ),
+        (j!({ "a": 1.0 }), j!({ "a": 1 }), "a float for an integer"),
+    ];
+    for (left, right, what) in &differ {
+        assert_ne!(
+            shape(left),
+            shape(right),
+            "{what} leaves the shape unchanged"
+        );
+    }
+    assert_eq!(
+        shape(&j!({ "a": 1, "b": { "c": ["x"] }, "d": null })),
+        shape(&j!({ "a": 2, "b": { "c": ["y", "z"] }, "d": null })),
+        "the same keys, order and kinds differ in shape"
+    );
+}
+
 /// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
 /// grows a new one has to name it here as well. The two literals are the harness's own configuration.
 fn planted(access_token: &str, refresh_token: &str, key_secret: &str) -> Vec<String> {

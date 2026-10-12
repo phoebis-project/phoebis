@@ -221,10 +221,11 @@ pub(crate) struct PoolInput {
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
 #[derive(ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct KeepalivePolicyInput {
     #[schema(nullable = false)]
     pub enabled: Option<bool>,
-    /// The idle window of the main conversation, 0 for the recipe's break-even.
+    /// The idle window of the main conversation, `0` to `31536000`, 0 for the recipe's break-even.
     #[schema(nullable = false)]
     pub max_idle_seconds: Option<u64>,
     /// `60` to `604800`, or null for the recipe's break-even.
@@ -237,6 +238,7 @@ pub(crate) struct KeepalivePolicyInput {
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
 #[derive(ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CacheTtlPolicyInput {
     #[schema(nullable = false)]
     pub enabled: Option<bool>,
@@ -250,6 +252,7 @@ pub(crate) struct CacheTtlPolicyInput {
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
 #[derive(ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TtlRulesInput {
     /// `5m` or `1h`.
     #[schema(example = "5m")]
@@ -264,6 +267,7 @@ pub(crate) struct TtlRulesInput {
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
 #[derive(ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ModelTtlInput {
     pub model: String,
     /// `5m` or `1h`.

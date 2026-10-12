@@ -10,7 +10,7 @@ createApiReference('#app', {
   withDefaultFonts: false,
   authentication: { preferredSecurityScheme: 'bearer' },
   theme: 'default',
-  // The agent chat, the MCP generator, the developer tools and the hosted client each lead to a Scalar service.
+  // The agent chat, the developer tools, the hosted client and the MCP generator each lead to a Scalar service.
   agent: { disabled: true },
   hideClientButton: true,
   mcp: { disabled: true },

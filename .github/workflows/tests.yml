@@ -55,7 +55,8 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run smoke
-      # The mock pass is CI's browser check; the live pass needs a router with a secret and stays local.
+      # The mock pass and the reference smoke are CI's browser checks. The live pass needs a router with a secret
+      # and stays local.
       - run: npm run e2e:mock
         env:
           PHOEBIS_SCREENSHOT_DIR: ${{ runner.temp }}/screenshots

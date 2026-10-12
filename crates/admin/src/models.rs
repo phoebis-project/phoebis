@@ -87,17 +87,21 @@ pub(crate) struct ModelCooldowns {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rejection {
     pub at: i64,
+    #[schema(required = true)]
     pub account_id: Option<String>,
+    #[schema(required = true)]
     pub key_id: Option<String>,
+    #[schema(required = true)]
     pub session_id: Option<String>,
+    #[schema(required = true)]
     pub model: Option<String>,
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub wire_model: Value,
     /// The router's own id for the request.
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub request_id: Value,
     /// The upstream's own id for the rejected attempt.
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub upstream_request_id: Value,
 }
 
@@ -106,17 +110,21 @@ pub(crate) struct Rejection {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Permit {
     pub at: i64,
+    #[schema(required = true)]
     pub account_id: Option<String>,
+    #[schema(required = true)]
     pub key_id: Option<String>,
+    #[schema(required = true)]
     pub session_id: Option<String>,
+    #[schema(required = true)]
     pub model: Option<String>,
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub wire_model: Value,
     /// The router's own id for the request.
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub request_id: Value,
     /// The upstream's own id for the permitted attempt.
-    #[schema(value_type = Option<String>)]
+    #[schema(value_type = Option<String>, required = true)]
     pub upstream_request_id: Value,
     #[schema(value_type = Vec<String>)]
     pub rejected_by: Value,

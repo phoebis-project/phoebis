@@ -1512,7 +1512,8 @@ pub(crate) struct RouterStats {
     /// The reports a closed queue refused at shutdown, per kind (`account_state`, `accounting`, `affinity`,
     /// `cooldown`, `credits`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`, `pin_renewed`,
     /// `sample`, `usage`).
-    pub dropped_reports: BTreeMap<String, u64>,
+    #[schema(value_type = BTreeMap<String, u64>)]
+    pub dropped_reports: indexmap::IndexMap<String, u64>,
     /// The refusal records a full or closed router queue refused, each a decision row never written.
     pub dropped_refusals: u64,
     /// The routing state writer.
@@ -1613,7 +1614,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         .dropped_reports()
         .into_iter()
         .map(|(kind, n)| (kind.to_string(), n))
-        .collect::<BTreeMap<String, u64>>();
+        .collect::<indexmap::IndexMap<String, u64>>();
     let prices = state.pricing.current();
     Json(System {
         version: env!("CARGO_PKG_VERSION").into(),

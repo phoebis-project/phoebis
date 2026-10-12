@@ -55,6 +55,7 @@ pub(crate) struct RoutingLog {
     pub next_cursor: Option<String>,
     /// The rows under the whole filter, past the page too. Answered under a `request` filter alone.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub counts: Option<Counts>,
 }
 

@@ -97,6 +97,16 @@ out=$(python3 "$check" client "$tmp/routes-prebuilt.rs" "$tmp/client-prebuilt.md
   fail "a route whose handler expression has no recognized call passed"
 echo "$out" | grep -q "/admin/new" || fail "unrecognized handler expression did not name the route: $out"
 
+# A call to a method the checker does not know serves the route all the same, so it fails rather than drops out.
+cat > "$tmp/routes-unknown.rs" <<'RS'
+    Router::new()
+        .route("/v1/odd", weird(g))
+        .with_state(engine)
+RS
+: > "$tmp/client-unknown.md"
+out=$(python3 "$check" client "$tmp/routes-unknown.rs" "$tmp/client-unknown.md" 2>&1) && fail "a handler call the checker does not consume passed"
+echo "$out" | grep -q "weird(...) on /v1/odd is not a method this checker consumes" || fail "the unknown handler call did not report: $out"
+
 # The last route of a table is followed by whatever the router chains next, not always another route or a
 # layer; the parser must read it whatever follows.
 cat > "$tmp/routes-merge.rs" <<'RS'

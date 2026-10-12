@@ -37,8 +37,9 @@ Every error is `{"error": "<message>"}`. A `503` from a registry reload also car
 Each operation names its request (path segments, query parameters, or body fields with their bounds), its answer (the top-level keys, with an example captured from the route where one exists) and its refusals (status and message per refusal). The gate's own refusals above apply to every operation and are not repeated under each. Any other path under `/admin/` answers `404 not found`, behind the same gate: an anonymous caller sees the gate's `401` first, whatever the path, and a session that reaches the `404` learns only that nothing serves the path. The proxy listener's routes, `GET /v1/usage` among them, and the metrics listener are not part of this document.
 "#;
 
-/// The document's static half: the info block, the one relative server, the seventeen tags in the seed's order,
-/// the bearer requirement on every operation, and the four shared responses. The paths join it in `router()`.
+/// The document's static half: the info block, the one relative server, the seventeen tags in the API page's area order
+/// (`docs/site/api.md`), the bearer requirement on every operation, and the four shared responses. The paths join it in
+/// `router()`.
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Phoebis Router admin API"),
@@ -315,9 +316,11 @@ pub(crate) struct ModelRowView {
     pub output: f64,
     /// The fast-mode cells under the same five names, on a model that serves fast mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub fast: Option<ModelPriceView>,
     /// The threshold `over` in tokens and the five cells under the same names, on a model priced by prompt length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub long_context: Option<LongContextView>,
 }
 
@@ -422,8 +425,10 @@ pub(crate) struct ModelWindowView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct OverrideView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub type_multiplier: Option<TypeOverrideView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub weight_by_window: Option<BTreeMap<String, f64>>,
 }
 
@@ -431,14 +436,19 @@ pub(crate) struct OverrideView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct TypeOverrideView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub cache_read: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub cache_write_1h: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub cache_write_5m: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub input: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub output: Option<f64>,
 }
 

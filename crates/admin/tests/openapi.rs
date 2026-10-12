@@ -22,7 +22,7 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
-/// The seventeen tags in the order the document declares them, the seed's area order.
+/// The seventeen tags in the order the document declares them, the API page's area order.
 const TAGS: [&str; 17] = [
     "Accounts",
     "Analytics",
@@ -554,7 +554,7 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
             .iter()
             .copied()
             .collect();
-        assert_eq!(refusals, expected, "{id}: the refusals the seed names");
+        assert_eq!(refusals, expected, "{id}: the refusals the API page lists");
         for (status, response) in responses.iter().filter(|(s, _)| !s.starts_with('2')) {
             let shared = response["$ref"]
                 .as_str()
@@ -786,6 +786,93 @@ async fn every_examples_key_order_is_its_schemas_property_order() {
 }
 
 #[tokio::test]
+async fn a_model_rejection_and_a_model_permit_require_every_key_they_carry() {
+    let (_app, _up, document) = document().await;
+    for name in ["Permit", "Rejection"] {
+        let schema = &document["components"]["schemas"][name];
+        let properties: BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let required: BTreeSet<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            required, properties,
+            "{name}: the route writes every key on every row, null or not"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
+    let (_app, _up, document) = document().await;
+    for name in [
+        "CacheTtlPolicyInput",
+        "KeepalivePolicyInput",
+        "ModelTtlInput",
+        "TtlRulesInput",
+    ] {
+        assert_eq!(
+            document["components"]["schemas"][name]["additionalProperties"], false,
+            "{name}: the parser refuses an unknown field"
+        );
+    }
+}
+
+/// Whether a rendered schema admits null. Under OpenAPI 3.1 a nullable value is a `type` array naming `null`, and a
+/// nullable reference is a `oneOf` with a `null` member.
+fn admits_null(schema: &Value) -> bool {
+    let typed = match &schema["type"] {
+        Value::String(t) => t == "null",
+        Value::Array(types) => types.iter().any(|t| t == "null"),
+        _ => false,
+    };
+    typed
+        || ["anyOf", "oneOf"].iter().any(|k| {
+            schema[*k]
+                .as_array()
+                .is_some_and(|members| members.iter().any(admits_null))
+        })
+}
+
+#[tokio::test]
+async fn a_key_the_route_leaves_out_rather_than_writing_null_does_not_render_nullable() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let fields: [(&str, &[&str]); 4] = [
+        ("ModelRowView", &["fast", "long_context"]),
+        ("OverrideView", &["type_multiplier", "weight_by_window"]),
+        ("RoutingLog", &["counts"]),
+        (
+            "TypeOverrideView",
+            &[
+                "cache_read",
+                "cache_write_1h",
+                "cache_write_5m",
+                "input",
+                "output",
+            ],
+        ),
+    ];
+    for (name, keys) in fields {
+        for key in keys {
+            let property = &schemas[name]["properties"][key];
+            assert!(property.is_object(), "{name}.{key} is a property");
+            assert!(
+                !admits_null(property),
+                "{name}.{key}: the key is absent or a value, never null: {property}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_document_allows_it() {
     let parts = admin_parts_full().await;
     let now = common::NOW;
@@ -898,13 +985,12 @@ async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_docum
             schema["type"], "object",
             "{side}: the schema is not an object alone"
         );
+        // An any-value schema carries no `type`, so it admits null along with a string, a number and an object.
+        assert!(
+            schema.get("type").is_none(),
+            "{side}: the schema admits any value: {schema}"
+        );
     }
-    // An any-value schema carries no `type`, so it admits null along with a string, a number and an object.
-    assert!(
-        bodies["properties"]["response"].get("type").is_none(),
-        "response admits null: {}",
-        bodies["properties"]["response"]
-    );
 }
 
 struct Outcomes(Vec<(&'static str, Reloaded)>);
@@ -925,6 +1011,10 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
         .iter()
         .map(|member| {
             let name = member["$ref"].as_str().unwrap().rsplit('/').next().unwrap();
+            assert_eq!(
+                schemas[name]["additionalProperties"], false,
+                "{name}: a closed shape, so no payload fits two members"
+            );
             schemas[name]["properties"]
                 .as_object()
                 .unwrap()

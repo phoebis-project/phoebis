@@ -14,9 +14,10 @@ use rust_embed::Embed;
 #[folder = "../../web/dist"]
 struct Assets;
 
-/// Recharts sets inline styles on the SVG it draws, so style-src keeps 'unsafe-inline'; no script is inline,
-/// because the theme bootstrap lives in `public/theme.js`. `connect-src 'self'` covers the console's own fetches.
-/// The app has no base tag, no form post, and no plugin, so those are closed.
+/// Recharts sets inline styles on the SVG it draws, and the API reference page injects styles of its own, so style-src
+/// keeps 'unsafe-inline'. No script is inline, because the theme bootstrap lives in `public/theme.js`.
+/// `connect-src 'self'` covers the console's own fetches. The app has no base tag, no form post, and no plugin, so
+/// those are closed.
 const CSP: &str = "base-uri 'none'; connect-src 'self'; default-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'";
 
 /// A hashed asset never changes under its name, so a year costs nothing.
