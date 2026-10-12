@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import { effectiveLabel, iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { type Paging, useFollow } from '@/app/useFollow';
@@ -21,12 +21,12 @@ import { bodyLines, bodyText } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { revisionAt } from '@/lib/costs';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { FOLLOW_OVERRUN } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal, withEstimate } from '@/lib/format';
 import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
-import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
+import { planLabel } from '@/lib/quota';
+import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
 import { StatusBadge } from './DashboardPage';
@@ -189,15 +189,12 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value, titled with the serving account's tier, the price list and the cost model in force at the
- * request's instant while the settings are at hand, and the estimate.
+ * The drawer's cost value, titled with the serving account's tier by its plan, the price list and the cost model in
+ * force at the request's instant while the settings are at hand, and the estimate.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  // A list with no entry has no revision to name, and `effectiveLabel` reads a date string.
-  const dateOf = (entry: { effective: string } | null) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
-  const revisions = settings === null ? null : `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, r.at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, r.at))}`;
-  const title = withEstimate([r.tier === null ? null : `Account tier ${r.tier}`, revisions].filter((part) => part !== null).join('. '), cost.estimated);
+  const title = withEstimate([r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated);
   return (
     <td className="right num" title={title || undefined}>
       {costRowValue(cost)}

@@ -1,5 +1,6 @@
-import type { RequestLog } from '@/api/types';
-import { type Funding, fundingOf, nativeOf } from '@/lib/costs';
+import { effectiveLabel } from '@/api/decode';
+import type { RequestLog, Settings } from '@/api/types';
+import { type Funding, fundingOf, nativeOf, revisionAt } from '@/lib/costs';
 import { equivalentShort, fmtEquivalent, fmtUsd, shareLabel, shareShort, withEstimate } from '@/lib/format';
 import type { UnitPosition } from '@/lib/unit';
 
@@ -51,6 +52,10 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
   return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', shares, usd };
 }
 
+/** An equivalent unit's figures in full, then the dollar equivalent. */
+const equivalentReading = (unit: Extract<CostUnit, { kind: 'equivalent' }>): string =>
+  [...unit.equivalents.map((e) => fmtEquivalent(e.key, e.share)), `${fmtUsd(unit.usd)} equivalent`].join(', ');
+
 /** The table cell's two lines and title, before the estimated mark. */
 function plainCell(unit: CostUnit): { main: string; sub: string; title: string } {
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
@@ -63,7 +68,7 @@ function plainCell(unit: CostUnit): { main: string; sub: string; title: string }
     return {
       main: equivalentShort(main.key, main.share),
       sub: sub ? equivalentShort(sub.key, sub.share) : '',
-      title: [...unit.equivalents.map((e) => fmtEquivalent(e.key, e.share)), `${fmtUsd(unit.usd)} equivalent`].join(', '),
+      title: equivalentReading(unit),
     };
   }
   const main = unit.shares.find((s) => !SHARED_WINDOWS.includes(s.key)) ?? unit.shares.find((s) => s.key === 'seven_day') ?? unit.shares[0];
@@ -84,4 +89,27 @@ function plainCell(unit: CostUnit): { main: string; sub: string; title: string }
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   const cell = plainCell(unit);
   return unit.estimated ? { main: `~${cell.main}`, sub: cell.sub, title: withEstimate(cell.title, true) } : cell;
+}
+
+/**
+ * The price list and the cost model in force at a request's instant, as a sentence for a title, or null while the
+ * settings are not at hand.
+ */
+export function revisionsTitle(settings: Pick<Settings, 'apiPrices' | 'subscriptionCosts'> | null, at: string): string | null {
+  if (settings === null) return null;
+  // A list with no entry has no revision to name, and `effectiveLabel` reads a date string.
+  const dateOf = (entry: { effective: string } | null) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
+  return `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, at))}`;
+}
+
+/**
+ * The Dashboard's recent Cost cell, a glance on one line. An equivalent unit reads its lead window's figure alone in
+ * the window's short word, the 20x left to the title and the legend, and the title carries the full reading, the
+ * revisions in force and the estimate. Every other unit reads as the Requests cell.
+ */
+export function glanceCellOf(unit: CostUnit, revisions: string | null): { main: string; sub: string; title: string } {
+  if (unit.kind !== 'equivalent') return costCellOf(unit);
+  const [lead] = unit.equivalents;
+  const title = [equivalentReading(unit), revisions].filter((part) => part !== null).join('. ');
+  return { main: `${unit.estimated ? '~' : ''}${shareShort(lead.key, lead.share)}`, sub: '', title: withEstimate(title, unit.estimated) };
 }

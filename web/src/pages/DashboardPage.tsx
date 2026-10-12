@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, KeepaliveState, RequestLog, Session, SubscriptionCosts } from '@/api/types';
+import type { Account, KeepaliveState, RequestLog, Session, Settings, SubscriptionCosts } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
@@ -14,7 +14,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
-import { costCellOf, costUnitOf } from '@/lib/requests';
+import { costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 import type { UnitPosition } from '@/lib/unit';
 
@@ -139,7 +139,7 @@ export function DashboardPage() {
 
       <div className="dash-bottom">
         <Card title="Recent requests" subtitle="Last 10 across every pool" actions={<Link to="/requests">All requests</Link>} padded={false} className="card--table">
-          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} />
+          <RecentTable rows={requests.data?.requests ?? null} error={requests.error} settings={settings.data} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
           {failedFirst(overview) || failedFirst(sessions) ? (
@@ -265,12 +265,13 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
 const MODEL_CHARS = 12;
 
 /**
- * A recent request's Cost cell. Native reads the request in the unit its funding pays in and the share position its
- * account's own shares, as the Requests cell does. The three dollar positions read the request's dollars.
+ * A recent request's Cost cell. Native reads the request in the unit its funding pays in, a subscription request at a
+ * glance, and the share position its account's own shares, as the Requests cell does. The three dollar positions read
+ * the request's dollars.
  */
-function RecentCost({ request, unit }: { request: RequestLog; unit: UnitPosition }) {
+function RecentCost({ request, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   if (unit !== 'native' && unit !== 'share') return <td className="right num col-fit">{fmtUsd(request.costUsd)}</td>;
-  const cell = costCellOf(costUnitOf(request, unit));
+  const cell = glanceCellOf(costUnitOf(request, unit), revisionsTitle(settings, request.at));
   return (
     <td className="right num col-fit" title={cell.title || undefined}>
       {cell.main}
@@ -279,7 +280,7 @@ function RecentCost({ request, unit }: { request: RequestLog; unit: UnitPosition
   );
 }
 
-function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[] | null }) {
+function RecentTable({ rows, error, settings }: { error: string | null; rows: RequestLog[] | null; settings: Settings | null }) {
   const { unit } = useAppSettings();
   return (
     <div className="table-wrap">
@@ -338,7 +339,7 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <RecentCost request={r} unit={unit} />
+                    <RecentCost request={r} settings={settings} unit={unit} />
                   </tr>
                 );
               })}

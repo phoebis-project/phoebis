@@ -55,8 +55,9 @@ legend button at 400 px, the long labels whole at 1280 px, and the legend's popo
 1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its
 padding, the title whole on one line, and Log out a text button at 1280 px and its icon alone at 400 px), the fast lane,
 the request drawer, which opens once the request list's shot is taken (its chips in the status badge's type, and the
-Estimated cost row's share chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900),
-a reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once
+Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440
+by 900, the story's Fable request reading a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a
+reasons panel link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once
 every view's shot is taken), the routing log's decision card, which opens once the log's shot is taken (the strip and
 the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then
 1118 px, the strip's drawing as wide as the strip at each width, every station badge in the kind badge's box, the
@@ -83,8 +84,10 @@ session row menu, the agent lines, the fork badges (inside their cell and whole)
 the fork link, which is followed once the session list's shot is taken,
 the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
 on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
-row closes it again before the view's shot, and one that turns a column on turns it off again. The script exits non-zero
-with the list of failures when any of that does not hold.
+row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
+table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their 5-hour
+equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The
+script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

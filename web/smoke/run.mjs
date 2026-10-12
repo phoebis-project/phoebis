@@ -602,10 +602,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
 }
 {
-  // The recent requests' Cost cells read as the Requests cells under native, the shell's default: a subscription row
-  // its 20x 5-hour equivalent over its 7-day one, with the mark where the row is estimated, and an API key row its
-  // dollars over API key. The story's API key accounts stop serving before its end, so the ten newest rows may hold
-  // none, and the check then reads the subscription rows alone. A dollar position reads every row's dollars.
+  // The recent requests' table is a glance, so under native, the shell's default, a subscription row's Cost cell reads
+  // its 5-hour equivalent alone in the window's short word, with every equivalent, the dollar equivalent and the
+  // revisions in force on its title and the mark where the row is estimated, while the Requests cell keeps the full
+  // reading. An API key row reads its dollars over API key. The story's API key accounts stop serving before its end,
+  // so the ten newest rows may hold none, and the check then reads the subscription rows alone. A dollar position reads
+  // every row's dollars.
   const byId = new Map(requests.map((r) => [r.id, r]));
   const recentCosts = () =>
     [...m.container.querySelectorAll('.dash__recent tbody tr')].map((tr) => {
@@ -617,19 +619,32 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
         title: td?.getAttribute('title') ?? null,
       };
     });
+  const settings = decodeSettings(SETTINGS_WIRE);
+  const dateOf = (entry) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
+  const inForce = (at) => `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, at))}`;
   const native = recentCosts();
   const plan = native.filter((c) => byId.has(c.id) && costUnitOf(byId.get(c.id), 'native').kind === 'equivalent');
   const wrongPlan = plan.filter((c) => {
     const r = byId.get(c.id);
-    const tail = r.estimated ? `. ${ESTIMATED_TITLE}.` : '';
-    return !(new RegExp(`^${r.estimated ? '~' : ''}\\d[\\d.]*% 20x 5h$`).test(c.main) && /^\d[\d.]*% 20x (7d|Fable week)$/.test(c.sub ?? '') && (c.title ?? '').endsWith(` equivalent${tail}`));
+    const read = new RegExp(`^${r.estimated ? '~' : ''}(\\d[\\d.]*%) 5h$`).exec(c.main);
+    const reading = (c.title ?? '').split(' equivalent. ')[0];
+    const parts = reading.split(', ');
+    const lead = read === null ? null : read[1] === '0%' ? '0%' : `${read[1]} of 20x 5-hour`;
+    return !(
+      read !== null &&
+      c.sub === null &&
+      parts[0] === lead &&
+      parts.length === costUnitOf(r, 'native').equivalents.length + 1 &&
+      /^\$[\d,.]+$/.test(parts[parts.length - 1] ?? '') &&
+      c.title === `${reading} equivalent. ${inForce(r.at)}${r.estimated ? `. ${ESTIMATED_TITLE}.` : ''}`
+    );
   });
   const newestApiKey = requests.find((r) => r.attempts.at(-1)?.accountKind === 'api_key');
   const apiKey = newestApiKey === undefined ? undefined : native.find((c) => c.id === newestApiKey.id);
   results.push({
     name: apiKey
-      ? "/ the recent requests' Cost cells read as the Requests cells under native: a subscription row its 20x 5-hour equivalent over its 7-day one, and an API key row its dollars over API key"
-      : "/ the recent requests' Cost cells read a subscription row's 20x 5-hour equivalent over its 7-day one under native, with no API key row among the ten newest to read",
+      ? "/ the recent requests' Cost cells read a subscription row's 5-hour equivalent alone in its short word with every equivalent and the revisions in force on the title, and an API key row its dollars over API key"
+      : "/ the recent requests' Cost cells read a subscription row's 5-hour equivalent alone in its short word with every equivalent and the revisions in force on the title, with no API key row among the ten newest to read",
     ok: native.length === 10 && plan.length > 0 && wrongPlan.length === 0 && (apiKey === undefined || (apiKey.main.startsWith('$') && apiKey.sub === 'API key' && apiKey.title === 'Billed in dollars: API key')),
     missing: [`${native.length} rows, ${plan.length} subscription rows`, ...wrongPlan.map((c) => JSON.stringify(c)), JSON.stringify(apiKey ?? null)],
   });
@@ -7187,11 +7202,15 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   // model, estimated. The share position reads the account's own shares.
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
-  const fallbackRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-6' && costUnitOf(r, 'all').kind === 'shares');
+  // An estimated row with tokens, so the mark is read on figures above zero.
+  const fallbackRow = requests.find((r) => {
+    const native = costUnitOf(r, 'native');
+    return r.canonicalModel === 'claude-sonnet-4-6' && r.estimated && costUnitOf(r, 'all').kind === 'shares' && native.kind === 'equivalent' && native.equivalents.every((e) => e.share > 0);
+  });
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
   const unpriced = requests.filter((r) => costUnitOf(r, 'all').kind === 'unpriced' || costUnitOf(r, 'native').kind === 'unpriced');
-  results.push({ name: 'fixture: a request an API key account served, a subscription request on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && unpriced.length === 0, missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...unpriced.map((r) => `unpriced ${r.id}`)] });
+  results.push({ name: 'fixture: a request an API key account served, an estimated subscription request with tokens on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && unpriced.length === 0, missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...unpriced.map((r) => `unpriced ${r.id}`)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
@@ -7209,7 +7228,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const fallback = await costCellOf(fallbackRow.id);
     results.push({
       name: "/requests a subscription row on a model the cost model does not weigh reads its model tier's 20x equivalents with a tilde before its main line and the estimate after its title",
-      ok: fallbackRow.estimated && /^~\d[\d.]*% 20x 5h$/.test(fallback.main) && /^\d[\d.]*% 20x 7d$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
+      ok: fallbackRow.estimated && /^~\d[\d.]*% 20x 5h$/.test(fallback.main) && !fallback.main.startsWith('~0%') && /^\d[\d.]*% 20x 7d$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
       missing: [fallbackRow.id, `estimated ${fallbackRow.estimated}`, JSON.stringify(fallback)],
     });
   }
@@ -7286,7 +7305,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const fallback = await costCellOf(fallbackRow.id);
     results.push({
       name: "/requests under the share position a subscription row on a model the cost model does not weigh reads its model tier's shares with the tilde and the estimate too",
-      ok: /^~\d[\d.]*% 7d$/.test(fallback.main) && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
+      ok: /^~\d[\d.]*% 7d$/.test(fallback.main) && !fallback.main.startsWith('~0%') && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
       missing: [fallbackRow.id, JSON.stringify(fallback)],
     });
   }
@@ -7328,9 +7347,9 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const native = readRow();
     const titled = (nativeCell.title ?? '').split(', ');
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads the equivalent chips in order with the dollars after them, and its title names the account tier and the two revisions in force",
-      ok: native.chips.length >= 2 && JSON.stringify(native.chips) === JSON.stringify(titled.slice(0, -1)) && native.equivalent === titled[titled.length - 1] && native.ends && sharedRow.tier !== null && native.title === `Account tier ${sharedRow.tier}. ${inForce}`,
-      missing: [sharedRow.id, JSON.stringify(native), nativeCell.title ?? 'no title', `Account tier ${sharedRow.tier}. ${inForce}`],
+      name: "/requests the drawer's cost row of a subscription row reads the equivalent chips in order with the dollars after them, and its title names the account tier by its plan and the two revisions in force",
+      ok: native.chips.length >= 2 && JSON.stringify(native.chips) === JSON.stringify(titled.slice(0, -1)) && native.equivalent === titled[titled.length - 1] && native.ends && sharedRow.tier !== null && native.title === `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`,
+      missing: [sharedRow.id, JSON.stringify(native), nativeCell.title ?? 'no title', `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`],
     });
     await chooseUnit(m, 'share');
     const share = readRow();

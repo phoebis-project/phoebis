@@ -2439,7 +2439,9 @@ async function ringLinesSpan(theme) {
 /**
  * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
  * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
- * Tokens cells keep their second lines, so the rows' heights are not asserted.
+ * Tokens cells keep their second lines, so the rows' heights are not asserted. The fit is asserted in the router pass
+ * and recorded in the mock pass, whose story's subscription rows read their 5-hour equivalent in the Cost cell, wider
+ * than the card leaves at 1280 by 800, so there the table scrolls inside its wrap as the request list does.
  */
 async function recentRowsOneLine(theme) {
   const read = await page.evaluate(() => {
@@ -2483,7 +2485,10 @@ async function recentRowsOneLine(theme) {
   measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client === null || read.least === null ? 'n/a' : read.client - read.least}px), edges ${JSON.stringify(read.edges)}, model cells ${JSON.stringify(read.cells)}`);
   if (mock && read.cells.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
   if (read.client === null) failures.push(`${theme} /: no Recent requests table to measure`);
-  else if (read.scroll > read.client) failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
+  else if (read.scroll > read.client) {
+    if (mock) measurements.push(`${theme} / the Recent requests table needs ${read.scroll}px of its card's ${read.client}px and scrolls inside it`);
+    else failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
+  }
   for (const cell of read.cells) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
     // The cell drops the id's prefix and date, so the title holds the shown text inside the whole id.
@@ -5406,7 +5411,8 @@ async function sessionsTableFits(theme) {
  * widest single item, which is the need its width is held to, and the stacked read is no failure. Two or more fill
  * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
  * exists, else its parent element, unless `overflowRecorded` holds, when a table wider than its wrap is recorded
- * rather than failed (the request table in the mock pass, whose story's values run past its card at 1280 by 800).
+ * rather than failed (the request table and the Dashboard's recent requests in the mock pass, whose story's values run
+ * past their cards at 1280 by 800).
  * `fixed` counts the leading columns that keep a width of their own (the Sessions
  * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
  * row spans its cells would otherwise pass on its header alone. The measurement records every column's class, width
@@ -5959,7 +5965,7 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
-        await tableColumns(theme, '', '.dash__recent', ['Key']);
+        await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
