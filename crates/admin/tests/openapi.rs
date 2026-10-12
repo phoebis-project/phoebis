@@ -3,11 +3,13 @@
 //! the capture's answers as the examples.
 mod common;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use common::{admin_parts_full, get, json, login, post};
+use common::{admin_app_reloading, admin_parts_full, get, json, login, post};
 use http_body_util::BodyExt;
+use phoebis_admin::{Reloaded, TlsReload};
 use phoebis_ledger::{BodyRecord, RequestRecord};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -17,18 +19,8 @@ const DOCUMENT_PATH: &str = "/api-reference/openapi.json";
 /// The route table's source, read as text so a route added as a plain `.route` cannot escape the document.
 const ROUTES_RS: &str = include_str!("../src/routes.rs");
 
-/// The paths the table registers with a plain `.route(`: outside the document until their area declares them, and
-/// the two catch-alls for good, which the introduction describes.
-const PLAIN_ROUTES: &[&str] = &[
-    "/admin/sessions",
-    "/admin/sessions/{key}/{session}/release",
-    "/admin/sessions/costs",
-    "/admin/settings",
-    "/admin/system",
-    "/admin/tls/reload",
-    "/admin",
-    "/admin/{*rest}",
-];
+/// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
+const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
 /// The seventeen tags in the order the document declares them, the seed's area order.
 const TAGS: [&str; 17] = [
@@ -110,6 +102,12 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("request_bodies", &[404, 500]),
     ("request_decision", &[400, 404, 500]),
     ("routing_log_list", &[400, 500]),
+    ("sessions_list", &[500, 503]),
+    ("session_release", &[404, 503]),
+    ("sessions_costs", &[]),
+    ("settings_show", &[]),
+    ("system_show", &[]),
+    ("tls_reload", &[500]),
 ];
 
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
@@ -149,6 +147,10 @@ const EXAMPLE_FILES: &[&str] = &[
     "request_bodies",
     "decision",
     "routing_log",
+    "sessions",
+    "sessions_costs",
+    "settings",
+    "system",
 ];
 
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
@@ -159,6 +161,26 @@ const QUERY_MODULES: &[(&str, &str)] = &[
     ("pools", include_str!("../src/pools.rs")),
     ("requests", include_str!("../src/requests.rs")),
     ("routing_log", include_str!("../src/routing_log.rs")),
+];
+
+/// Every handler module, so a module that reads a query and is missing from the check is found.
+const HANDLER_MODULES: &[(&str, &str)] = &[
+    ("accounts", include_str!("../src/accounts.rs")),
+    ("analytics", include_str!("../src/analytics.rs")),
+    ("attention", include_str!("../src/attention.rs")),
+    ("dashboard", include_str!("../src/dashboard.rs")),
+    ("keepalive", include_str!("../src/keepalive.rs")),
+    ("keys", include_str!("../src/keys.rs")),
+    ("ledger", include_str!("../src/ledger.rs")),
+    ("models", include_str!("../src/models.rs")),
+    ("pools", include_str!("../src/pools.rs")),
+    ("pricing", include_str!("../src/pricing.rs")),
+    ("requests", include_str!("../src/requests.rs")),
+    ("routes", include_str!("../src/routes.rs")),
+    ("routing_log", include_str!("../src/routing_log.rs")),
+    ("sessions", include_str!("../src/sessions.rs")),
+    ("settings", include_str!("../src/settings.rs")),
+    ("tls", include_str!("../src/tls.rs")),
 ];
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -443,6 +465,16 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
         operations(&document).len(),
         "one handler per operation"
     );
+    assert_eq!(
+        document["paths"].as_object().unwrap().len(),
+        51,
+        "the admin listener's 51 paths"
+    );
+    assert_eq!(
+        operations(&document).len(),
+        61,
+        "the admin listener's 61 operations"
+    );
 }
 
 #[tokio::test]
@@ -566,6 +598,25 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
 #[tokio::test]
 async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     let (_app, _up, document) = document().await;
+    let mut on_disk: Vec<String> = std::fs::read_dir(fixtures_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .map(|e| e.path().file_stem().unwrap().to_string_lossy().into_owned())
+        .filter(|stem| stem != "bound_refusals" && stem != "test_tables")
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = EXAMPLE_FILES.iter().map(|s| s.to_string()).collect();
+    listed.sort();
+    assert_eq!(
+        listed, on_disk,
+        "every route fixture on disk is an example, and no other file is"
+    );
+    assert_eq!(
+        EXAMPLE_FILES.len(),
+        39,
+        "38 success answers and the replay's held answer"
+    );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
     // login refusal, the TLS reload's success) sits at a place no stem targets and is held by the next case.
@@ -856,6 +907,86 @@ async fn a_captured_body_outside_a_json_object_answers_as_captured_and_the_docum
     );
 }
 
+struct Outcomes(Vec<(&'static str, Reloaded)>);
+
+impl TlsReload for Outcomes {
+    fn reload(&self, _now: i64) -> Vec<(&'static str, Reloaded)> {
+        self.0.clone()
+    }
+}
+
+#[tokio::test]
+async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_closed_shapes() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let shapes: Vec<BTreeSet<&str>> = schemas["ListenerOutcome"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|member| {
+            let name = member["$ref"].as_str().unwrap().rsplit('/').next().unwrap();
+            schemas[name]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect()
+        })
+        .collect();
+    assert_eq!(shapes.len(), 3, "the oneOf names the three shapes");
+    let error = "proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem";
+    let pair = Reloaded::Pair {
+        cert_file: "/etc/phoebis/proxy.pem".into(),
+        expires_ms: 1_822_478_400_000,
+        days_left: 364,
+    };
+    let refused = Reloaded::Refused {
+        error: error.into(),
+    };
+    for (outcomes, expected) in [
+        (
+            vec![("proxy", pair), ("admin", Reloaded::Plain)],
+            [("tls", Some(true)), ("plain", None)],
+        ),
+        (
+            vec![("proxy", refused), ("admin", Reloaded::Plain)],
+            [("tls", Some(false)), ("plain", None)],
+        ),
+    ] {
+        let (app, _up) = admin_app_reloading(Arc::new(Outcomes(outcomes))).await;
+        let cookie = login(&app, "admin-secret").await;
+        let answer = json(post(&app, "/admin/tls/reload", "", Some(&cookie)).await).await;
+        let listeners = answer["listeners"].as_array().unwrap();
+        assert_eq!(
+            listeners.len(),
+            2,
+            "one object per listener, proxy then admin"
+        );
+        for (listener, (serving, reloaded)) in listeners.iter().zip(expected) {
+            let keys: BTreeSet<&str> = listener
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                shapes.iter().filter(|shape| **shape == keys).count(),
+                1,
+                "{keys:?}: one shape has this field set"
+            );
+            assert_eq!(
+                (listener["serving"].as_str(), listener["reloaded"].as_bool()),
+                (Some(serving), reloaded)
+            );
+        }
+        assert_eq!(
+            listeners[0]["error"].is_string(),
+            listeners[0]["reloaded"] == false,
+            "a refused pair carries its line"
+        );
+    }
+}
+
 #[test]
 fn every_query_name_a_handler_reads_is_declared_and_nothing_else() {
     for (module, source) in QUERY_MODULES {
@@ -864,6 +995,19 @@ fn every_query_name_a_handler_reads_is_declared_and_nothing_else() {
             declared_names(source),
             "{module}: the names read and the names declared"
         );
+    }
+}
+
+#[test]
+fn every_module_that_reads_a_query_is_in_the_query_check() {
+    let checked: BTreeSet<&str> = QUERY_MODULES.iter().map(|(m, _)| *m).collect();
+    for (module, source) in HANDLER_MODULES {
+        if !checked.contains(module) {
+            assert!(
+                reader_names(source).is_empty(),
+                "{module} reads a query and is not in QUERY_MODULES"
+            );
+        }
     }
 }
 

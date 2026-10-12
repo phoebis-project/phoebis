@@ -6,27 +6,145 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde_json::json;
+use utoipa::ToSchema;
 
 use crate::AdminState;
 
+/// The bootstrap values the console reads, redacted: a setting's value, never a secret and never the name of the
+/// variable that holds one.
+#[derive(serde::Serialize, ToSchema)]
+pub(crate) struct Settings {
+    pub about: About,
+    pub access: Access,
+    /// The price table's envelope as `GET /admin/pricing` answers it.
+    pub api_prices: crate::pricing::Envelope<crate::pricing::PriceTableContent>,
+    pub listeners: Listeners,
+    pub retention: Retention,
+    pub sessions: SessionsSettings,
+    pub storage: Storage,
+    /// The subscription cost model's envelope as `GET /admin/pricing` answers it.
+    pub subscription_costs: crate::pricing::Envelope<crate::pricing::SubscriptionCostsContent>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct About {
+    pub profile: String,
+    pub version: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Access {
+    pub admin_configured: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Listeners {
+    pub metrics: String,
+    pub proxy: String,
+    /// Whether the proxy listener terminates TLS.
+    pub proxy_tls: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Retention {
+    pub body_capture_max_hours: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionsSettings {
+    pub expire_after_seconds: u64,
+}
+
+/// The two table paths null when their key is unset.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Storage {
+    pub api_prices_path: Option<String>,
+    pub ledger_path: String,
+    pub path: String,
+    pub subscription_costs_path: Option<String>,
+}
+
+/// Read the settings.
+#[utoipa::path(
+    get,
+    path = "/admin/settings",
+    operation_id = "settings_show",
+    tag = "Settings",
+    responses(
+        (status = 200, description = "The running configuration, redacted", body = Settings),
+    ),
+)]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let s = &state.settings;
-    let envelopes = crate::pricing::table_envelopes(&state.pricing.current(), &state.tables);
-    Json(json!({
-        "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION") },
-        "access": { "admin_configured": true },
-        "api_prices": envelopes.api_prices,
-        "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen, "proxy_tls": s.proxy_tls },
-        "retention": { "body_capture_max_hours": s.body_capture_max_hours },
-        "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
-        "storage": {
-            "api_prices_path": s.api_prices_path,
-            "ledger_path": s.ledger_path,
-            "path": s.storage_path,
-            "subscription_costs_path": s.subscription_costs_path,
+    let crate::pricing::Envelopes {
+        api_prices,
+        subscription_costs,
+    } = crate::pricing::table_envelopes(&state.pricing.current(), &state.tables);
+    Json(Settings {
+        about: About {
+            profile: s.profile.clone(),
+            version: env!("CARGO_PKG_VERSION").into(),
         },
-        "subscription_costs": envelopes.subscription_costs,
-    }))
+        access: Access {
+            admin_configured: true,
+        },
+        api_prices,
+        listeners: Listeners {
+            metrics: s.metrics_listen.clone(),
+            proxy: s.proxy_listen.clone(),
+            proxy_tls: s.proxy_tls,
+        },
+        retention: Retention {
+            body_capture_max_hours: s.body_capture_max_hours,
+        },
+        sessions: SessionsSettings {
+            expire_after_seconds: s.session_expire_after_seconds,
+        },
+        storage: Storage {
+            api_prices_path: s.api_prices_path.clone(),
+            ledger_path: s.ledger_path.clone(),
+            path: s.storage_path.clone(),
+            subscription_costs_path: s.subscription_costs_path.clone(),
+        },
+        subscription_costs,
+    })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::openapi::round_trip::{round_trips, round_trips_each};
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SettingsTwin {
+        about: About,
+        access: Access,
+        api_prices: serde_json::Value,
+        listeners: Listeners,
+        retention: Retention,
+        sessions: SessionsSettings,
+        storage: Storage,
+        subscription_costs: serde_json::Value,
+    }
+
+    #[test]
+    fn the_settings_fixture_round_trips_through_its_declared_type_and_the_pricing_mirrors() {
+        round_trips::<SettingsTwin>("settings");
+        round_trips_each::<crate::openapi::ModelRowView>(
+            "settings",
+            &["api_prices", "content", "models", "*"],
+        );
+        round_trips_each::<crate::openapi::SubscriptionCostsView>(
+            "settings",
+            &["subscription_costs", "content"],
+        );
+    }
 }

@@ -14,7 +14,7 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
 use phoebis_ledger::QuotaPoll;
 use phoebis_oauth::{
@@ -99,15 +99,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(crate::routing_log::record))
         .routes(routes!(crate::routing_log::list))
         .routes(routes!(whoami, login, logout))
-        .route("/admin/sessions", get(sessions::list))
-        .route(
-            "/admin/sessions/{key}/{session}/release",
-            post(sessions::release),
-        )
-        .route("/admin/sessions/costs", get(sessions::costs))
-        .route("/admin/settings", get(settings::show))
-        .route("/admin/system", get(system))
-        .route("/admin/tls/reload", post(tls::reload))
+        .routes(routes!(sessions::list))
+        .routes(routes!(sessions::release))
+        .routes(routes!(sessions::costs))
+        .routes(routes!(settings::show))
+        .routes(routes!(system))
+        .routes(routes!(tls::reload))
         .route("/admin", any(unknown_admin_route))
         .route("/admin/{*rest}", any(unknown_admin_route))
         .split_for_parts();
@@ -1452,6 +1449,136 @@ async fn pairing_confirm(
     response
 }
 
+/// The process's standing: the version, the readiness, the ledger's and the router's counters, the bus, the
+/// pricing sources, the recent gaps and the keepalive engine.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct System {
+    pub version: String,
+    pub profile: String,
+    pub uptime_seconds: i64,
+    pub storage_ok: bool,
+    pub ready: bool,
+    /// The components that died: `ledger`, `router`, `store`.
+    pub dead: Vec<String>,
+    pub ledger: LedgerStats,
+    pub router: RouterStats,
+    /// Per subscriber.
+    pub bus: Vec<BusSubscriber>,
+    /// The requests whose usage the price table could not price, counted once per request since start.
+    pub pricing_unknown_models: u64,
+    pub pricing: PricingSources,
+    /// Recent `ledger_gap` events.
+    pub gaps: Vec<crate::requests::Event>,
+    pub keepalive: KeepaliveStats,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LedgerStats {
+    pub schema_version: Option<u32>,
+    pub written: u64,
+    pub dropped: u64,
+    pub write_failures: u64,
+    /// The cache-map writes whose decision row the ledger never stored, counted and never retried.
+    pub cache_map_orphans: u64,
+    /// The router events the ledger's mirror missed because its receiver lagged, each a decision or an event row
+    /// never written.
+    pub mirror_lagged: u64,
+    pub gaps: u64,
+    pub last_gap_at: i64,
+    pub channel_depth: usize,
+    /// The records waiting in the writer channel now.
+    pub queued: usize,
+    /// Whether admission refuses with `ledger_behind` (from 2,048 queued).
+    pub behind: bool,
+    /// The requests answered `ledger_behind`.
+    pub behind_refusals: u64,
+    /// Whether a batch failed to land and the spend has not been read again since.
+    pub degraded: bool,
+    /// 1 while a batch is under retry.
+    pub retrying: u64,
+    /// The priced records parked in the ledger file.
+    pub parked_priced: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RouterStats {
+    /// The queue's size.
+    pub command_depth: usize,
+    /// The commands waiting in it now.
+    pub queued: usize,
+    /// The reports a closed queue refused at shutdown, per kind (`account_state`, `accounting`, `affinity`,
+    /// `cooldown`, `credits`, `member_spend`, `overage`, `pin_invalidated`, `pin_released`, `pin_renewed`,
+    /// `sample`, `usage`).
+    pub dropped_reports: BTreeMap<String, u64>,
+    /// The refusal records a full or closed router queue refused, each a decision row never written.
+    pub dropped_refusals: u64,
+    /// The routing state writer.
+    pub writer: WriterStats,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WriterStats {
+    /// The batches waiting in its channel.
+    pub depth: usize,
+    /// The writes held in memory past its bound of 1,024 batches, one per row.
+    pub deferred: usize,
+    /// Whether writes are held in memory.
+    pub degraded: bool,
+    /// The batches the registry file as a whole refused since start.
+    pub failed_batches: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BusSubscriber {
+    pub subscriber: String,
+    pub dropped: u64,
+    pub panics: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PricingSources {
+    pub api_prices: PricingSource,
+    pub subscription_costs: PricingSource,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PricingSource {
+    /// The configured path or null when the key is unset.
+    pub path: Option<String>,
+    /// `shipped`, or `file` when that path was read.
+    #[schema(example = "shipped")]
+    pub source: String,
+    /// The table's date.
+    pub effective: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeepaliveStats {
+    pub agents: usize,
+    pub bus_gaps: u64,
+    pub retained_bytes: usize,
+    pub running_probes: usize,
+    pub sessions: usize,
+}
+
+/// Read the process's standing.
+#[utoipa::path(
+    get,
+    path = "/admin/system",
+    operation_id = "system_show",
+    tag = "System",
+    responses(
+        (status = 200, description = "The standing.", body = System),
+    ),
+)]
 async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let uptime = (now - state.started_at).max(0) / 1_000;
@@ -1481,59 +1608,82 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let keepalive_stats = state.keepalive.stats();
     let writer = state.router.writer_status();
     let dead = state.readiness.dead();
-    let dropped = state
+    let dropped_reports = state
         .router
         .dropped_reports()
         .into_iter()
-        .map(|(kind, n)| (kind.to_string(), serde_json::Value::from(n)))
-        .collect::<serde_json::Map<String, serde_json::Value>>();
+        .map(|(kind, n)| (kind.to_string(), n))
+        .collect::<BTreeMap<String, u64>>();
     let prices = state.pricing.current();
-    Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "profile": state.profile.name,
-        "uptime_seconds": uptime,
+    Json(System {
+        version: env!("CARGO_PKG_VERSION").into(),
+        profile: state.profile.name.to_string(),
+        uptime_seconds: uptime,
         // From the one store read `dead` made, so a transient failure cannot show both a working and a dead store.
-        "storage_ok": !dead.contains(&"store"),
-        "ready": dead.is_empty(),
-        "dead": dead,
-        "ledger": {
-            "schema_version": state.ledger.db().schema_version().await.ok(),
-            "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
-            "cache_map_orphans": load(&stats.cache_map_orphans), "mirror_lagged": load(&stats.mirror_lagged),
-            "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
-            "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
-            "queued": state.ledger.queued(), "behind": state.ledger.behind(),
-            "behind_refusals": load(&stats.behind_refusals),
-            "degraded": state.ledger.degraded(), "retrying": load(&stats.retrying), "parked_priced": parked,
+        storage_ok: !dead.contains(&"store"),
+        ready: dead.is_empty(),
+        dead: dead.iter().map(|d| d.to_string()).collect(),
+        ledger: LedgerStats {
+            schema_version: state.ledger.db().schema_version().await.ok(),
+            written: load(&stats.written),
+            dropped: load(&stats.dropped),
+            write_failures: load(&stats.write_failures),
+            cache_map_orphans: load(&stats.cache_map_orphans),
+            mirror_lagged: load(&stats.mirror_lagged),
+            gaps: load(&stats.gaps),
+            last_gap_at: stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
+            channel_depth: phoebis_ledger::CHANNEL_DEPTH,
+            queued: state.ledger.queued(),
+            behind: state.ledger.behind(),
+            behind_refusals: load(&stats.behind_refusals),
+            degraded: state.ledger.degraded(),
+            retrying: load(&stats.retrying),
+            parked_priced: parked,
         },
-        "router": {
-            "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
-            "dropped_refusals": state.router.dropped_refusals(),
-            "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
-        },
-        "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
-        "pricing_unknown_models": state.pricing.unknown_models(),
-        "pricing": {
-            "api_prices": {
-                "path": state.settings.api_prices_path,
-                "source": prices.source,
-                "effective": prices.effective,
+        router: RouterStats {
+            command_depth: phoebis_routing::COMMANDS,
+            queued: state.router.queued(),
+            dropped_reports,
+            dropped_refusals: state.router.dropped_refusals(),
+            writer: WriterStats {
+                depth: writer.depth,
+                deferred: writer.deferred,
+                degraded: writer.degraded,
+                failed_batches: writer.failed_batches,
             },
-            "subscription_costs": {
-                "path": state.settings.subscription_costs_path,
-                "source": state.tables.source,
-                "effective": state.tables.costs.effective,
+        },
+        bus: state
+            .bus
+            .stats()
+            .iter()
+            .map(|(name, s)| BusSubscriber {
+                subscriber: name.to_string(),
+                dropped: load(&s.dropped),
+                panics: load(&s.panics),
+            })
+            .collect(),
+        pricing_unknown_models: state.pricing.unknown_models(),
+        pricing: PricingSources {
+            api_prices: PricingSource {
+                path: state.settings.api_prices_path.clone(),
+                source: prices.source.clone(),
+                effective: prices.effective.clone(),
+            },
+            subscription_costs: PricingSource {
+                path: state.settings.subscription_costs_path.clone(),
+                source: state.tables.source.clone(),
+                effective: state.tables.costs.effective.clone(),
             },
         },
-        "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
-        "keepalive": {
-            "agents": keepalive_stats.agents,
-            "bus_gaps": keepalive_stats.bus_gaps,
-            "retained_bytes": keepalive_stats.retained_bytes,
-            "running_probes": keepalive_stats.running_probes,
-            "sessions": keepalive_stats.sessions,
+        gaps: gaps.iter().map(crate::requests::event_json).collect(),
+        keepalive: KeepaliveStats {
+            agents: keepalive_stats.agents,
+            bus_gaps: keepalive_stats.bus_gaps,
+            retained_bytes: keepalive_stats.retained_bytes,
+            running_probes: keepalive_stats.running_probes,
+            sessions: keepalive_stats.sessions,
         },
-    }))
+    })
     .into_response()
 }
 
@@ -2645,5 +2795,10 @@ mod tests {
     #[test]
     fn the_pairing_start_fixture_round_trips_through_its_declared_type() {
         round_trips::<super::PairingStarted>("pairing_started");
+    }
+
+    #[test]
+    fn the_system_fixture_round_trips_through_its_declared_type() {
+        round_trips::<super::System>("system");
     }
 }

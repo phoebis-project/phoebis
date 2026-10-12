@@ -10,7 +10,7 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
+    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView, TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
@@ -112,7 +112,18 @@ pub async fn admin_parts_full() -> Full {
 /// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
 /// wires it: a case that needs the router's own `503 ledger_behind` names a reading it can flip.
 pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, Some(accounting), None).await)
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            Some(accounting),
+            None,
+            None,
+        )
+        .await,
+    )
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
@@ -123,12 +134,23 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
 pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices)).await)
+    full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices), None).await)
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
 pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
-    full_from(build_app(None, ACCOUNT_UUID, false, Some(store), None, Some(prices)).await)
+    full_from(
+        build_app(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            Some(prices),
+            None,
+        )
+        .await,
+    )
 }
 
 fn full_from(parts: Parts) -> Full {
@@ -230,6 +252,12 @@ pub async fn admin_app() -> (Router, FakeUpstream) {
     (parts.app, parts.up)
 }
 
+/// The app with `reload` standing in for the router's certificate pairs, so the reload route answers its outcomes.
+pub async fn admin_app_reloading(reload: Arc<dyn TlsReload>) -> (Router, FakeUpstream) {
+    let parts = build_app(None, ACCOUNT_UUID, false, None, None, None, Some(reload)).await;
+    (parts.app, parts.up)
+}
+
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
     let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up)
@@ -253,6 +281,7 @@ pub async fn admin_parts_polled() -> Polled {
         Some(fixture_identity()),
         ACCOUNT_UUID,
         false,
+        None,
         None,
         None,
         None,
@@ -679,7 +708,7 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, None, None).await
+    build_app(identity, upstream_uuid, tls, store, None, None, None).await
 }
 
 async fn build_app(
@@ -689,6 +718,7 @@ async fn build_app(
     store: Option<Arc<Store>>,
     accounting: Option<AccountingSource>,
     prices: Option<PriceTable>,
+    tls_reload: Option<Arc<dyn TlsReload>>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -920,7 +950,7 @@ async fn build_app(
         },
         clock,
         tls,
-        tls_reload: None,
+        tls_reload,
         vault: vault.clone(),
         started_at: NOW,
         router: router_handle.clone(),

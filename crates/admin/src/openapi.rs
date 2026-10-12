@@ -613,6 +613,28 @@ pub(crate) struct HourPointView {
     pub tokens: u64,
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FastCells {
+    pub input_per_m: f64,
+    pub cache_write_5m_per_m: f64,
+    pub cache_write_1h_per_m: f64,
+    pub cache_read_per_m: f64,
+    pub output_per_m: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LongContextCells {
+    /// The prompt length in tokens past which the five cells apply.
+    pub over: u64,
+    pub input_per_m: f64,
+    pub cache_write_5m_per_m: f64,
+    pub cache_write_1h_per_m: f64,
+    pub cache_read_per_m: f64,
+    pub output_per_m: f64,
+}
+
 macro_rules! fixture {
     ($name:literal, $status:literal) => {
         (
@@ -662,6 +684,10 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("request_bodies", "200"),
     fixture!("decision", "200"),
     fixture!("routing_log", "200"),
+    fixture!("sessions", "200"),
+    fixture!("sessions_costs", "200"),
+    fixture!("settings", "200"),
+    fixture!("system", "200"),
 ];
 
 /// The bodies the fixtures capture for one answer, each with its file stem.
