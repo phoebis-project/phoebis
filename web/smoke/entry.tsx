@@ -17,7 +17,10 @@ import { fakeClock } from './clock';
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, planLabel, SessionNotKept, SETTINGS_WIRE };
 // The transport itself, for the check that needs its 401 path, which no mock call takes.
 export { call };
+// The fold the Cost section sums its groups by, so a check reads the totals the page draws from one derivation.
+export { sumGroups } from '@/api/fold';
 export { AttentionRows } from '@/components/AttentionRows';
+export { NATIVE_SUBSET } from '@/lib/analytics';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptCount, AttemptTrail } from '@/components/ui/AttemptTrail';

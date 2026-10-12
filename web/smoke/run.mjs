@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -604,9 +604,10 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // The recent requests' table is a glance, so under native, the shell's default, a subscription row's Cost cell reads
   // its 20x 5-hour equivalent alone in the short form, with every equivalent, the dollar equivalent and the revisions
-  // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An API key row reads its dollars over API key. The story's API key accounts stop serving before its end,
-  // so the ten newest rows may hold none, and the check then reads the subscription rows alone. A dollar position reads
-  // every row's dollars.
+  // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An
+  // API key row reads its dollars over API key. The story's API key accounts stop serving before its end, so the ten
+  // newest rows may hold none, and the check then reads the subscription rows alone. A dollar position reads every
+  // row's dollars.
   const byId = new Map(requests.map((r) => [r.id, r]));
   const recentCosts = () =>
     [...m.container.querySelectorAll('.dash__recent tbody tr')].map((tr) => {
@@ -11489,6 +11490,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const areasIn = (t) => cardIn(t)?.querySelectorAll('.recharts-area').length ?? 0;
     const isShare = (c) => /^\d[\d.]*%$/.test(c);
     const isCount = (c) => /^\d[\d,]*$/.test(c);
+    // Native stacks the equivalent under the same title, so the dollar areas are read under All in dollars.
+    await chooseUnit(shares, 'all');
     const dollarAreas = areasIn('Cost by key');
     await chooseUnit(shares, 'share');
     await groupPage(shares, 'account');
@@ -11596,6 +11599,164 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`legend ${JSON.stringify(namedLegend)}`, `card note ${namedCard?.textContent?.includes(SHARE_NOTE)}`, `probe tile ${JSON.stringify(probeNamed)}`, `tiles ${JSON.stringify(namedTiles)}`],
     });
     shares.unmount();
+    {
+      // Under native, a fresh browser's position, the Cost section reads one answer in two units: the plan rows' 20x
+      // 7-day equivalent and the billed rows' dollars. The story's day holds Sonnet 4.6 rows, which the cost model
+      // does not weigh, so the subscription figures carry the mark. The ratios divide the totals of the page's own read,
+      // summed as the page sums them, and the patterns take the mark where the story may or may not set it.
+      localStorage.removeItem('phoebis.unit');
+      const asked = countCalls('getAnalyticsBreakdown');
+      const native = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
+      asked.restore();
+      const keyQuery = asked.calls.map(([q]) => q).find((q) => q?.groupBy === 'key' && q.funding === undefined);
+      const totals = keyQuery ? sumGroups(await api.getAnalyticsBreakdown(keyQuery)) : null;
+      const cardOf = (t) => [...native.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const ticksOf = (t) => [...(cardOf(t)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((x) => x.textContent?.trim() ?? '');
+      // A pair line's figure is its text less the word after it.
+      const textOf = (line) => {
+        const figure = line.cloneNode(true);
+        figure.querySelector('.stat__pair-word')?.remove();
+        return figure.textContent?.trim() ?? '';
+      };
+      const tileRead = () =>
+        [...native.container.querySelectorAll('#cost .stat')].slice(0, 3).map((t) => ({
+          label: t.querySelector('.stat__label')?.textContent?.trim() ?? '',
+          lines: [...t.querySelectorAll('.stat__pair-line')].map((l) => [textOf(l), l.querySelector('.stat__pair-word')?.textContent?.trim() ?? '']),
+          note: t.querySelector('.stat__note')?.textContent?.trim() ?? '',
+          title: t.getAttribute('title'),
+          value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
+        }));
+      const tableRead = (t) => {
+        const table = [...native.container.querySelectorAll('#cost .card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+        return {
+          heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+          rows: [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => ({ cells: [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? ''), label: tr.children[0]?.textContent?.trim() ?? '', title: tr.children[0]?.getAttribute('title') ?? '' })),
+          subtitle: table?.querySelector('.card__subtitle')?.textContent?.trim() ?? '',
+        };
+      };
+      const metaEl = native.container.querySelector('#cost .analytics-section__meta');
+      const meta = { text: metaEl?.textContent ?? '', title: metaEl?.getAttribute('title') ?? null };
+      const marked = (v) => v.startsWith('~');
+      const sevenDay = (v) => /^~?\d[\d.]*% of 20x 7-day$/.test(v);
+      const isUsd = (v) => /^\$[\d,]+\.\d+$/.test(v);
+      results.push({
+        name: "/analytics under native the Cost meta reads the plan rows' 20x 7-day equivalent and the billed dollars in range, the equivalent marked where an estimate priced it",
+        ok: /^~?\d[\d.]*% of 20x 7-day and \$[\d,.]+ in range$/.test(meta.text) && totals?.estimated === true && marked(meta.text) && meta.title === ESTIMATED_TITLE,
+        missing: [JSON.stringify(meta), `estimated ${totals?.estimated}`],
+      });
+      const tiles = tileRead();
+      const billedRequests = totals === null || totals.planRequests === null ? NaN : totals.requests - totals.planRequests;
+      const billedOutput = totals === null || totals.planOutputTokens === null ? NaN : totals.tokens.output - totals.planOutputTokens;
+      const usdNear = (text, expected) => Math.abs(Number(text.replace(/[$,]/g, '')) - expected) < (expected < 0.01 ? 0.00005 : 0.005);
+      const ratio = (v) => `~${fmtShare(v)} of 20x 7-day`;
+      const pairs = tiles.every((t) => t.lines.length === 2 && t.lines[0][1] === 'subscription' && t.lines[1][1] === 'billed' && marked(t.lines[0][0]) && t.title === ESTIMATED_TITLE);
+      results.push({
+        name: '/analytics under native the first three Cost tiles stack the subscription figure over the billed one, each ratio over the plan requests and output tokens the route counts under the key grouping',
+        ok:
+          totals !== null && totals.planRequests > 0 && totals.planOutputTokens > 0 && billedRequests > 0 && billedOutput > 0 && pairs &&
+          JSON.stringify(tiles.map((t) => t.label)) === JSON.stringify(['Cost', 'Cost per request', 'Cost per 1k output tokens']) &&
+          sevenDay(tiles[0].lines[0][0]) && isUsd(tiles[0].lines[1][0]) && usdNear(tiles[0].lines[1][0], totals.billedUsd) && tiles[0].note === NATIVE_SUBSET &&
+          tiles[1].lines[0][0] === ratio(totals.costEquivalent.seven_day / totals.planRequests) && usdNear(tiles[1].lines[1][0], totals.billedUsd / billedRequests) &&
+          tiles[2].lines[0][0] === ratio((totals.costEquivalent.seven_day / totals.planOutputTokens) * 1000) && usdNear(tiles[2].lines[1][0], (totals.billedUsd / billedOutput) * 1000),
+        missing: [JSON.stringify(tiles), totals === null ? 'no key read' : JSON.stringify({ billedUsd: totals.billedUsd, equivalent: totals.costEquivalent, output: totals.tokens.output, planOutputTokens: totals.planOutputTokens, planRequests: totals.planRequests, requests: totals.requests })],
+      });
+      // The tooltip walks the chart until a bucket of an estimated group answers.
+      const tipRows = new Map();
+      for (let x = 40; x <= 580 && ![...tipRows.values()].some(marked); x += 30) {
+        cardOf('Cost by key')?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: 60 }));
+        await native.settle(150);
+        for (const row of cardOf('Cost by key')?.querySelectorAll('.chart-tip .chart-tip__row') ?? []) tipRows.set(`${x} ${row.querySelector('.chart-tip__label')?.textContent?.trim()}`, row.querySelector('.chart-tip__value')?.textContent?.trim() ?? '');
+      }
+      const legend = [...(cardOf('Cost by key')?.querySelectorAll('.legend li') ?? [])].map((li) => [li.textContent?.trim() ?? '', li.getAttribute('title')]);
+      const chart = {
+        billedSubtitle: cardOf('Billed by key')?.querySelector('.card__subtitle')?.textContent?.trim() ?? null,
+        billedTicks: ticksOf('Billed by key'),
+        legend,
+        subtitle: cardOf('Cost by key')?.querySelector('.card__subtitle')?.textContent?.trim() ?? null,
+        ticks: ticksOf('Cost by key'),
+        tips: [...tipRows.values()],
+      };
+      results.push({
+        name: "/analytics under native the Cost by chart stacks each group's 20x 7-day equivalent on a percent axis, an estimated group's legend entry titled and its tooltip figure marked, with a Billed by card in dollars beside it",
+        ok:
+          chart.subtitle === '20x 7-day equivalent per bucket, stacked, the subscription requests' && chart.legend.length > 0 && chart.legend.every(([label, title]) => label !== '' && (title === null || title === ESTIMATED_TITLE)) && chart.legend.some(([, title]) => title === ESTIMATED_TITLE) &&
+          chart.ticks.length > 1 && chart.ticks.every((t) => /^\d[\d.]*%$/.test(t)) &&
+          chart.tips.length > 0 && chart.tips.every((v) => sevenDay(v) || /^~?0%$/.test(v)) && chart.tips.some(marked) &&
+          chart.billedSubtitle === 'USD per bucket, stacked, the billed requests' && chart.billedTicks.length > 1 && chart.billedTicks.every((t) => /^\$[\d,.]+$/.test(t)),
+        missing: [JSON.stringify(chart)],
+      });
+      const split = cardOf('Cost split');
+      const rings = [...(split?.querySelectorAll('svg.donut') ?? [])].map((svg) => [svg.querySelector('.donut__label')?.textContent ?? '', svg.querySelector('.donut__value')?.textContent ?? '', svg.closest('.split-row')?.getAttribute('title') ?? null]);
+      const splitSubtitle = split?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+      results.push({
+        name: "/analytics under native the Cost split draws a ring per funding, the subscription ring's center a marked percent of the 20x 7-day window its subtitle names and the billed ring's dollars",
+        ok: splitSubtitle === 'By token kind, the subscription requests in 20x 7-day equivalents and the billed requests in dollars' && rings.length === 2 && rings[0][0] === 'subscription' && /^~\d[\d.]*%$/.test(rings[0][1]) && rings[0][2] === ESTIMATED_TITLE && rings[1][0] === 'billed' && isUsd(rings[1][1]) && rings[1][2] === null,
+        missing: [splitSubtitle, JSON.stringify(rings)],
+      });
+      const byKey = tableRead('Cost by key');
+      const windowCell = (label) => (v) => v === '-' || new RegExp(`^~?(\\d[\\d.]*% of 20x ${label}|0%)$`).test(v);
+      const CELLS = [(v) => /^\d[\d,]*$/.test(v), windowCell('5-hour'), windowCell('7-day'), windowCell('Fable week'), (v) => v === '-' || isUsd(v), windowCell('7-day'), windowCell('7-day')];
+      results.push({
+        name: "/analytics under native the Cost by table reads the requests, the three 20x columns, the billed dollars and the 20x 7-day equivalent per plan request and per 1k plan output, the dollar split columns gone",
+        ok:
+          JSON.stringify(byKey.heads) === JSON.stringify(['Key', 'Requests', '20x 5-hour', '20x 7-day', '20x 7-day Fable', 'Billed', 'Per request', 'Per 1k output']) &&
+          byKey.subtitle === `Totals for the selected range and filters, ${NATIVE_SUBSET}` &&
+          byKey.rows.length > 0 && byKey.rows.every((r) => r.cells.length === CELLS.length && r.cells.every((c, i) => CELLS[i](c))) &&
+          byKey.rows.some((r) => sevenDay(r.cells[2])) && byKey.rows.some((r) => isUsd(r.cells[4])),
+        missing: [byKey.heads.join(','), byKey.subtitle, JSON.stringify(byKey.rows.slice(0, 4))],
+      });
+      await groupPage(native, 'account');
+      const byAccount = tableRead('Cost by account');
+      const secondary = byAccount.rows.find((r) => r.label === 'secondary');
+      results.push({
+        name: "/analytics under native grouped by account the secondary account's priced equivalent cells lead with the tilde and its label carries the estimate, its unpriced week a bare dash",
+        ok: secondary !== undefined && marked(secondary.cells[1]) && marked(secondary.cells[2]) && secondary.cells[3] === '-' && marked(secondary.cells[5]) && secondary.title === `secondary. ${ESTIMATED_TITLE}.`,
+        missing: [JSON.stringify(secondary ?? byAccount.rows.map((r) => r.label))],
+      });
+      await groupPage(native, 'key');
+      // The four other positions keep today's surfaces: under the dollar positions one dollar tile, one ring and the
+      // eight-column table, and no Billed by card under any of them.
+      const others = [];
+      for (const value of ['all', 'usd', 'equivalent', 'share']) {
+        await chooseUnit(native, value);
+        const t = tileRead();
+        others.push({
+          billedCard: cardOf('Billed by key') !== undefined,
+          heads: tableRead('Cost by key').heads,
+          pairs: native.container.querySelectorAll('#cost .stat__pair').length,
+          rings: cardOf('Cost split')?.querySelectorAll('svg.donut').length ?? 0,
+          tile: t[0]?.label,
+          unit: value,
+          value: t[0]?.value ?? '',
+        });
+      }
+      const EIGHT = ['Key', 'Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output'];
+      const LABEL = { all: 'Estimated cost', equivalent: 'Dollar equivalent', share: 'Window share', usd: 'Billed dollars' };
+      results.push({
+        name: '/analytics under All in dollars, Billed dollars, Window shares and Dollar equivalent the Cost section keeps its one-figure tiles, the dollar positions one ring and the eight-column table, and no Billed by card',
+        ok: others.every((o) => !o.billedCard && o.pairs === 0 && o.tile === LABEL[o.unit] && o.rings === 1 && (o.unit === 'share' ? o.heads.length === 0 : JSON.stringify(o.heads) === JSON.stringify(EIGHT) && isUsd(o.value))),
+        missing: others.map((o) => JSON.stringify(o)),
+      });
+      native.unmount();
+      localStorage.removeItem('phoebis.unit');
+      // The same day with every row weighted, so nothing the section draws is an estimate.
+      const breakdownOf = api.getAnalyticsBreakdown;
+      const seriesOf = api.getAnalyticsSeries;
+      api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, estimated: false }));
+      api.getAnalyticsSeries = async (q) => (await seriesOf.call(api, q)).map((p) => ({ ...p, groups: p.groups.map((g) => ({ ...g, estimated: false })) }));
+      const weighted = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
+      const shown = [weighted.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '', ...[...weighted.container.querySelectorAll('#cost .stat__pair-line, #cost .donut__value, #cost td.num, #cost .chart-tip__value')].map((el) => el.textContent?.trim() ?? '')];
+      const titled = [...weighted.container.querySelectorAll('#cost [title]')].map((el) => el.getAttribute('title') ?? '').filter((t) => t.includes(ESTIMATED_TITLE));
+      const pairsDrawn = weighted.container.querySelectorAll('#cost .stat__pair').length;
+      weighted.unmount();
+      delete api.getAnalyticsBreakdown;
+      delete api.getAnalyticsSeries;
+      results.push({
+        name: '/analytics under native a day whose rows are all weighted reads no tilde and no estimate title anywhere in the Cost section',
+        ok: pairsDrawn === 3 && shown.length > 10 && !shown.some((v) => v.startsWith('~')) && titled.length === 0,
+        missing: [`${pairsDrawn} pairs`, JSON.stringify(shown.filter((v) => v.startsWith('~')).slice(0, 5)), JSON.stringify(titled.slice(0, 5))],
+      });
+    }
     {
       // One priced bucket between two gaps: the line leaves its null buckets unconnected, so the bucket draws as a dot.
       const now = Date.now();

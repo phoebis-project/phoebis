@@ -692,3 +692,52 @@ test('a sample without a utilization has no pace score', () => {
   assert.equal(d.paceScoreOf(windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null })), null, 'a reset-only sample');
   assert.equal(d.paceScoreOf(windowSample({ resetsAt: null, utilization: 0.5 })), null, 'and a sample without a reset has no horizon');
 });
+
+test('an equivalent cell names its window, carries the mark of an estimate and reads a dash where none was priced', () => {
+  const g = accountGroup();
+  const { five_hour: fiveHour, seven_day: sevenDay } = g.costEquivalent;
+  assert.equal(d.equivalentOrDash('five_hour', fiveHour), d.fmtEquivalent('five_hour', fiveHour));
+  assert.equal(d.equivalentOrDash('seven_day', sevenDay, true), `~${d.fmtEquivalent('seven_day', sevenDay)}`, 'an estimated figure leads with the tilde');
+  assert.equal(d.equivalentOrDash('seven_day_fable', g.costEquivalent.seven_day_fable, true), '-', 'a window the group priced nothing on reads a dash, which no estimate marks');
+  assert.equal(d.equivalentOrDash('seven_day', null), '-');
+});
+
+test("the Cost section's head reads each position off one group of plan and billed rows", () => {
+  const g = accountGroup();
+  assert.ok(g.planRequests > 0 && g.requests > g.planRequests && g.billedUsd > 0 && g.costEquivalent.seven_day > 0, 'the captured group holds rows of both fundings');
+  const equivalent = d.fmtEquivalent('seven_day', g.costEquivalent.seven_day);
+  const billed = d.fmtUsd(g.billedUsd);
+  const dollars = d.fmtUsd(g.costUsd);
+  const native = d.costHeadOf('native', g);
+  assert.deepEqual(native.tile, { figures: [{ text: equivalent, word: 'subscription' }, { text: billed, word: 'billed' }], label: 'Cost', note: d.NATIVE_SUBSET }, 'native stacks the 20x 7-day equivalent over the billed dollars');
+  assert.equal(native.subset, d.NATIVE_SUBSET);
+  assert.equal(native.meta, `${equivalent} and ${billed} in range`);
+  assert.equal(native.estimated, false);
+  // A dollar position reads the totals its funded read answered, so the head prints their dollars under its words.
+  const all = d.costHeadOf('all', g);
+  assert.deepEqual([all.tile, all.subset, all.meta], [{ figures: [{ text: dollars }], label: 'Estimated cost', note: 'at the effective price list' }, 'all requests', `${dollars} in range, all requests`]);
+  const usd = d.costHeadOf('usd', g);
+  assert.deepEqual([usd.tile, usd.subset, usd.meta], [{ figures: [{ text: dollars }], label: 'Billed dollars', note: d.UNIT_SUBSET.usd }, d.UNIT_SUBSET.usd, `${dollars} in range, billed`]);
+  const plan = d.costHeadOf('equivalent', g);
+  assert.deepEqual([plan.tile, plan.subset, plan.meta], [{ figures: [{ text: dollars }], label: 'Dollar equivalent', note: d.UNIT_SUBSET.equivalent }, d.UNIT_SUBSET.equivalent, `${dollars} in range, equivalent`]);
+  // The shares read per account, so the head carries the meta alone and the table its own subtitle.
+  assert.deepEqual(d.costHeadOf('share', g), { estimated: false, meta: 'shares per account', subset: null, tile: null });
+});
+
+test('native marks an estimated equivalent and leaves out a side with no rows, and no dollar figure is marked', () => {
+  const g = accountGroup({ estimated: true });
+  const equivalent = d.fmtEquivalent('seven_day', g.costEquivalent.seven_day);
+  const billed = d.fmtUsd(g.billedUsd);
+  const marked = d.costHeadOf('native', g);
+  assert.equal(marked.meta, `~${equivalent} and ${billed} in range`);
+  assert.deepEqual(marked.tile.figures, [{ text: `~${equivalent}`, word: 'subscription' }, { text: billed, word: 'billed' }]);
+  assert.equal(marked.estimated, true);
+  for (const unit of ['all', 'usd', 'equivalent']) assert.equal(d.costHeadOf(unit, g).estimated, false, `${unit} reads dollars, which no estimate prices`);
+  const plan = d.costHeadOf('native', accountGroup({ billedUsd: 0, requests: g.planRequests }));
+  assert.deepEqual([plan.tile.figures, plan.meta], [[{ text: equivalent, word: 'subscription' }], `${equivalent} in range`], 'a sum of plan rows alone reads the equivalent alone');
+  const billedOnly = d.costHeadOf('native', accountGroup({ costEquivalent: {}, estimated: true, planRequests: 0 }));
+  assert.deepEqual([billedOnly.tile.figures, billedOnly.meta, billedOnly.estimated], [[{ text: billed, word: 'billed' }], `${billed} in range`, false], 'a sum of billed rows alone reads the dollars alone, with no mark');
+  // A fold of request rows counts no plan request outside the account grouping, so its figures tell the sides apart.
+  const folded = d.costHeadOf('native', accountGroup({ planRequests: null }));
+  assert.equal(folded.meta, `${equivalent} and ${billed} in range`);
+});

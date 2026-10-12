@@ -47,9 +47,10 @@ pass and recorded in the mock pass, whose story runs past the card at 1280 by 80
 the fill, the Status, Attempts and links cells wrapping, the width past the card recorded in the mock pass), its
 text at 1920 by 1080 in the mock pass (no client class or agent type cut, each read on its own span),
 the request pages' widths, walked on a load of their own once every view's shot is taken, the speed
-filter, and the cache miss reason, effort and request class filters (each against Turn origin), the traffic cards (each
-Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of
-the Latency tab, the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the theme
+filter, and the cache miss reason, effort and request class filters (each against Turn origin), the Cost split's rings
+under native (each center figure inside its ring, two side by side in the mock pass), the traffic cards (each Analytics
+check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the
+Latency tab, the Unit select and the legend's button in the top bar (inside the bar, clear of Log out and the theme
 switch, inside the viewport at 1280 and 400 px with nothing scrolling the bar sideways, every short label whole and no
 legend button at 400 px, the long labels whole at 1280 px, and the legend's popover over the filter bar uncovered at
 1280 px), the top bar on every view at 1280 and 400 px (nothing scrolling it sideways, its last control inside its

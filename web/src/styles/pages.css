@@ -4164,6 +4164,60 @@
   align-items: center;
 }
 
+/* A native Cost figure keeps its window's name whole, so a narrow tile moves the funding's word under the figure
+   rather than breaking "7-day" at its hyphen. The inline block leaves a break before the word. */
+.cost-figure {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Each equivalent cell names its window, so the figure columns take most of a 990 px card. The group column keeps a
+   floor of sixteen characters plus its cell's 12 px of padding each side, and the table scrolls inside its wrap where
+   the figures need more. */
+.native-cost-table td.col-fill {
+  min-width: calc(16ch + 24px);
+}
+
+/* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half
+   empty beside it. Each ring sets its list under it, since half a narrow card leaves the list no room beside the ring,
+   and below 700 px the rings stack and each list returns beside its ring. */
+.grid-2 > .card:has(.split-pair) {
+  grid-column: 1 / -1;
+}
+
+.split-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.split-pair .split-row {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  justify-items: center;
+}
+
+/* A list as wide as a whole half card would set each figure far from its label. */
+.split-pair .remaining__list {
+  width: 100%;
+  max-width: 260px;
+}
+
+@media (max-width: 699.98px) {
+  .split-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .split-pair .split-row {
+    grid-template-columns: 148px 1fr;
+    justify-items: stretch;
+  }
+
+  .split-pair .remaining__list {
+    max-width: none;
+  }
+}
+
 .hbars--errors li {
   display: grid;
   grid-template-columns: 180px 1fr auto;

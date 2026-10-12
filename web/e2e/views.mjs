@@ -3099,8 +3099,8 @@ async function diagnosticsFilters(theme) {
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
- * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type). The cards are
- * read on the Traffic tab and the tiles on Cost.
+ * type and its track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile
+ * box and its figure's type). The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -3129,20 +3129,50 @@ async function trafficCards(theme) {
         const b = el.getBoundingClientRect();
         return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
       };
-      return { effort: box('Effort levels'), errors: box('Errors by code'), estimated: tile('Estimated cost'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
+      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
     });
   try {
     if (!(await tabTo(theme, 'Traffic'))) return;
     const onTraffic = await cards();
     if (!(await tabTo(theme, 'Cost'))) return;
     const onCost = await cards();
-    const read = { ...onTraffic, estimated: onCost.estimated, fastSpend: onCost.fastSpend };
+    const read = { ...onTraffic, cost: onCost.cost, fastSpend: onCost.fastSpend };
     measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
     failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
     const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
     failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
-    failures.push(...compare(read.fastSpend, read.estimated, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Estimated cost`));
+    failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The Cost split under a fresh browser's native position at the pass's 1280 by 800: a ring per funding side by side on
+ * one row, and each ring's center figure inside the ring's box, so a marked percent is never clipped. The story bills
+ * dollars beside its plan rows, so the mock pass draws both rings, and a seed with one side draws one. The view returns
+ * to Traffic afterwards, as the other Analytics checks leave it.
+ */
+async function costSplitRings(theme) {
+  try {
+    if (!(await tabTo(theme, 'Cost'))) return;
+    const read = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost split');
+      const edges = (b) => ({ bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) });
+      return [...(card?.querySelectorAll('svg.donut') ?? [])].map((svg) => {
+        const value = svg.querySelector('.donut__value');
+        return { center: value?.textContent ?? '', ring: edges(svg.getBoundingClientRect()), text: value ? edges(value.getBoundingClientRect()) : null };
+      });
+    });
+    measurements.push(`${theme} /analytics cost split rings ${JSON.stringify(read)}`);
+    const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+    if (read.length === 0) say('the Cost split draws no ring');
+    if (mock && read.length !== 2) say(`the story's day holds plan and billed rows, yet the Cost split draws ${read.length} rings`);
+    for (const r of read) {
+      if (r.text === null || r.text.left < r.ring.left || r.text.right > r.ring.right) say(`the Cost split's center "${r.center}" runs past its ring: ${JSON.stringify(r)}`);
+    }
+    if (read.length === 2 && (Math.abs(read[0].ring.top - read[1].ring.top) > 1 || read[1].ring.left < read[0].ring.right)) say(`the Cost split's two rings do not sit side by side on one row: ${JSON.stringify(read.map((r) => r.ring))}`);
   } finally {
     await tabTo(theme, 'Traffic');
   }
@@ -6024,6 +6054,7 @@ try {
         await analyticsTables(theme);
         await analyticsColumns(theme);
         await trafficCards(theme);
+        await costSplitRings(theme);
         await analyticsTabs(theme);
         await stickyStrip(theme);
         await unitControl(theme);

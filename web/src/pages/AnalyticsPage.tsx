@@ -14,17 +14,17 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
-import { Tile } from '@/components/ui/Tile';
+import { PairValue, Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, SHARE_NOTE, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, NATIVE_SUBSET, SHARE_NOTE, UNIT_SUBSET, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -61,6 +61,8 @@ const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
+// The rings' figures read bare, so the subtitle names the window the subscription ring's percents are of.
+const NATIVE_SPLIT_NOTE = 'By token kind, the subscription requests in 20x 7-day equivalents and the billed requests in dollars';
 const UNAVAILABLE_NOTE = 'not in the request log';
 const WARMING_UNAVAILABLE = 'Cache warming figures are not available for a session view.';
 /** The breakdown route's bounds on a pattern list; the field holds no more than the route accepts. */
@@ -80,21 +82,8 @@ const LATENCY_METRICS: { format: (v: number | null) => string; key: keyof Latenc
   { key: 'outputTps', label: 'Output tokens per second', unit: 'tok/s', format: (v) => (v === null ? '-' : `${v.toFixed(v >= 100 ? 0 : 1)} tok/s`) },
 ];
 
-/** The positions a dollar figure on this page reads under. */
-type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
-/**
- * Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's, as the dollar
- * figures drawn under the shares are.
- */
-const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
-/** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
-const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
-/** The same in the Cost split's, the cache cost card's and the Probe cost tile's shorter form. */
+/** A dollar position's requests in the Cost split's, the cache cost card's and the Probe cost tile's shorter form. */
 const UNIT_SPLIT: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription requests' equivalent", usd: 'billed' };
-/** The Cost section's meta line per dollar position, after the dollars in range. */
-const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
-/** The first Cost tile's label per dollar position. */
-const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
 const PER_REQUEST_SHARE_NOTE = 'of the 7-day window per plan-funded request';
 const PER_THOUSAND_SHARE_NOTE = 'of the 7-day window per 1k plan-funded output tokens';
 /** A share drawn bare, where the header or the legend already names the window. */
@@ -127,6 +116,80 @@ const usdAxis = (values: Iterable<number>) => {
 };
 /** The split as the donut draws it, or null for a group folded from request rows, which carry one total. */
 const knownSplit = (c: AnalyticsGroup['cost']): CostSplit | null => (c.cacheRead === null || c.cacheWrite === null ? null : { ...c, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
+/**
+ * A Cost tile's figures: under native the subscription figure stacked over the billed one, each with its funding's
+ * word, and a side alone on its one line with its word, so the tile still says which funding it reads. A dollar
+ * position's one figure, which carries no word, reads alone in the tile's own type.
+ */
+function figuresValue(figures: CostFigure[]): ReactNode {
+  const figure = (f: CostFigure) => <span className="cost-figure">{f.text}</span>;
+  if (figures.length === 2) return <PairValue first={figure(figures[0])} firstLabel={figures[0].word ?? ''} second={figure(figures[1])} secondLabel={figures[1].word ?? ''} />;
+  const [only] = figures;
+  if (only === undefined) return '-';
+  if (only.word === undefined) return only.text;
+  return (
+    <span className="stat__pair">
+      <span className="stat__pair-line">
+        {figure(only)}
+        <span className="stat__pair-word">{only.word}</span>
+      </span>
+    </span>
+  );
+}
+
+type NativeRatio = { estimated: boolean; figures: CostFigure[]; note: string };
+/**
+ * The native Cost per request and per 1k output tiles: the plan rows' 20x 7-day equivalent over the plan requests and
+ * output tokens the route counts beside the billed dollars over the rest, a side with no rows left out as the first
+ * tile leaves it, and a dash where a count is unknown or zero.
+ */
+function nativeRatiosOf(totals: AnalyticsGroup): { perRequest: NativeRatio; perThousand: NativeRatio } {
+  const sides = sidesOf(totals, 'seven_day');
+  const ratio = (count: number | null, whole: number, scale: number, word: string, note: (n: number) => string): NativeRatio => {
+    const billedCount = count === null ? null : whole - count;
+    const per = (v: number | null, n: number | null) => (v === null || n === null || !(n > 0) ? null : (v / n) * scale);
+    const equivalent = sides.equivalent === null ? null : per(sides.equivalent, count);
+    const estimated = totals.estimated && equivalent !== null;
+    return {
+      estimated,
+      figures: [...(sides.equivalent === null ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(sides.billed === null ? [] : [{ text: usdOrDash(per(sides.billed, billedCount)), word: 'billed' }])],
+      note: count === null || billedCount === null ? `${note(whole)} ${word}` : `${note(count)} subscription ${word}, ${note(billedCount)} billed`,
+    };
+  };
+  return { perRequest: ratio(totals.planRequests, totals.requests, 1, 'requests', fmtInt), perThousand: ratio(totals.planOutputTokens, totals.tokens.output, 1000, 'output tokens', fmtCompact) };
+}
+
+/**
+ * The native table's columns, the week column named by the groups' equivalent keys, as `weekColumnOf` names it for the
+ * shares.
+ */
+const nativeColumns = (groups: AnalyticsGroup[]): string[] => ['Requests', '20x 5-hour', '20x 7-day', `20x ${weekColumnOf(groups.map((g) => ({ costShares: g.costEquivalent })))}`, 'Billed', 'Per request', 'Per 1k output'];
+/**
+ * A group's native row: its requests, its plan rows' 20x equivalents per window and per plan request and 1k plan
+ * output tokens, and its billed dollars, a side with no rows a dash. An estimated group marks every equivalent it
+ * shows and names the estimate on its label.
+ */
+function nativeRowOf(g: AnalyticsGroup): { cells: ReactNode[]; key: string; label: string; title: string } {
+  const sides = sidesOf(g, 'seven_day');
+  const priced = (key: string | undefined) => (sides.equivalent === null || key === undefined || !own(g.costEquivalent, key) ? null : g.costEquivalent[key]);
+  const sevenDay = priced('seven_day');
+  const per = (count: number | null, scale: number) => (sevenDay === null || count === null || !(count > 0) ? null : (sevenDay / count) * scale);
+  const week = weekKeyOf(g.costEquivalent);
+  return {
+    cells: [
+      fmtInt(g.requests),
+      equivalentOrDash('five_hour', priced('five_hour'), g.estimated),
+      equivalentOrDash('seven_day', sevenDay, g.estimated),
+      equivalentOrDash(week ?? '', priced(week), g.estimated),
+      usdOrDash(sides.billed),
+      equivalentOrDash('seven_day', per(g.planRequests, 1), g.estimated),
+      equivalentOrDash('seven_day', per(g.planOutputTokens, 1000), g.estimated),
+    ],
+    key: g.key,
+    label: g.label,
+    title: withEstimate(g.label, g.estimated),
+  };
+}
 
 /** Lines past the count are dropped and each line cut at the length, counted in characters as the route counts them. */
 function boundPatterns(text: string): { cut: boolean; text: string } {
@@ -448,6 +511,8 @@ export function AnalyticsPage() {
   }, [sessionId, funding, funded, warming, groups, stale, rows, groupBy, foldOptions, costBreakdown.stale, costBreakdown.data]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
+  const costHead = costHeadOf(unit, costTotals);
+  const nativeRatios = nativeRatiosOf(costTotals);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
   // Shares of one account's windows add, so the share tiles and the cache cost card read the one account the filter
@@ -835,7 +900,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : unit === 'share' ? 'shares per account' : `${fmtUsd(costTotals.costUsd)} in range, ${UNIT_META[dollars]}`}>
+        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : costHead.meta} metaTitle={costHead.estimated ? ESTIMATED_TITLE : undefined}>
           <div className="tiles-row">
             {unit === 'share' ? (
               <>
@@ -845,24 +910,37 @@ export function AnalyticsPage() {
               </>
             ) : (
               <>
-                <Tile label={UNIT_TILE_LABEL[dollars]} value={costLoading ? null : fmtUsd(costTotals.costUsd)} note={dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars]} error={costError} />
-                <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
-                <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
+                <Tile label={costHead.tile?.label ?? ''} value={costLoading ? null : figuresValue(costHead.tile?.figures ?? [])} note={costHead.tile?.note} title={costHead.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
+                {unit === 'native' ? (
+                  <>
+                    <Tile label="Cost per request" value={costLoading ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios.perRequest.note} title={nativeRatios.perRequest.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
+                    <Tile label="Cost per 1k output tokens" value={costLoading ? null : figuresValue(nativeRatios.perThousand.figures)} note={nativeRatios.perThousand.note} title={nativeRatios.perThousand.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
+                  </>
+                ) : (
+                  <>
+                    <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
+                    <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
+                  </>
+                )}
               </>
             )}
             <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
           </div>
           <div className="grid-2">
             <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} unit={unit} />
-            {/* The split is a dollar figure in every position, so under shares it reads the whole, as under the
-                default. */}
-            <Card title="Cost split" subtitle={`By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
+            {/* Native draws a ring per funding, each in its own unit. Under the shares the split reads the whole in
+                dollars, as under All in dollars. */}
+            <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
                 <p className="muted">{SESSION_COST_NOTE}</p>
               ) : costError !== null ? (
                 <ErrorState title="Could not load cost split" body={costError} />
-              ) : costLoading || costSplit === null ? (
+              ) : costLoading ? (
+                <Skeleton height={148} />
+              ) : unit === 'native' ? (
+                <NativeSplit totals={costTotals} />
+              ) : costSplit === null ? (
                 <Skeleton height={148} />
               ) : (
                 <CostDonut cost={costSplit} />
@@ -887,10 +965,22 @@ export function AnalyticsPage() {
               })}
             />
           )}
-          {sessionId === null && unit !== 'share' && (
+          {sessionId === null && unit === 'native' && (
+            <BreakdownTable
+              className="native-cost-table"
+              title={`Cost by ${groupLabel.toLowerCase()}`}
+              subtitle={`Totals for the selected range and filters, ${NATIVE_SUBSET}`}
+              error={costError}
+              loading={costLoading}
+              groupLabel={groupLabel}
+              columns={nativeColumns(costGroups)}
+              rows={costGroups.map(nativeRowOf)}
+            />
+          )}
+          {sessionId === null && unit !== 'share' && unit !== 'native' && (
             <BreakdownTable
               title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={`Totals for the selected range and filters, ${UNIT_SUBSET[dollars]}`}
+              subtitle={`Totals for the selected range and filters, ${costHead.subset}`}
               error={costError}
               loading={costLoading}
               groupLabel={groupLabel}
@@ -1015,13 +1105,18 @@ type SectionId = (typeof SECTIONS)[number]['id'];
 /** The element the page scrolls; jsdom implements no `scrollTo` on it, so a caller guards the call. */
 const scroller = (): Element | null => document.scrollingElement;
 
-function Section({ id, title, meta, controls, shown = true, children }: { children: ReactNode; controls?: ReactNode; id: SectionId; meta?: string; shown?: boolean; title: string }) {
+/** `metaTitle` is the meta line's hover text, such as the estimate's sentence for a marked figure. */
+function Section({ id, title, meta, metaTitle, controls, shown = true, children }: { children: ReactNode; controls?: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {
   if (!shown) return null;
   return (
     <section className="analytics-section" id={id} role="tabpanel" aria-labelledby={`tab-${id}`}>
       <header className="analytics-section__head">
         <h2 className="analytics-section__title">{title}</h2>
-        {meta && <span className="analytics-section__meta">{meta}</span>}
+        {meta && (
+          <span className="analytics-section__meta" title={metaTitle}>
+            {meta}
+          </span>
+        )}
         {controls}
       </header>
       {children}
@@ -1174,7 +1269,8 @@ function BreakdownTable({
   error?: string | null;
   groupLabel: string;
   loading?: boolean;
-  rows: { cells: ReactNode[]; key: string; label: string }[];
+  /** A row's `title` is its label cell's hover text, the label itself where none is given. */
+  rows: { cells: ReactNode[]; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
 }) {
@@ -1195,7 +1291,7 @@ function BreakdownTable({
           <tbody>
             {rows.map((r) => (
               <tr key={r.key}>
-                <td className="mono col-fill" title={r.label}>
+                <td className="mono col-fill" title={r.title ?? r.label}>
                   {r.label}
                 </td>
                 {r.cells.map((c, i) => (
@@ -1476,20 +1572,24 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
   );
 }
 
-function CostDonut({ cost }: { cost: CostSplit }) {
+/**
+ * One ring of the cost by token kind. `format` prints the center's total and each kind's figure in the ring's unit,
+ * `label` names the ring at its center, and `title` is the ring's hover text, such as the estimate's sentence.
+ */
+function CostDonut({ cost, format = fmtUsd, label = 'cost', title }: { cost: CostSplit; format?: (v: number) => string; label?: string; title?: string }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
   const total = COST_PARTS.reduce((s, p) => s + cost[p.key], 0);
   return (
-    <div className="split-row">
-      <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel="cost" centerValue={fmtUsd(total)} onHover={setHover} />
+    <div className="split-row" title={title}>
+      <Donut slices={COST_PARTS.map((p) => ({ id: p.key, label: p.label, value: cost[p.key], color: ink.series[p.slot] }))} total={total} centerLabel={label} centerValue={format(total)} onHover={setHover} />
       <ul className="remaining__list">
         {COST_PARTS.map((p) => (
           <li key={p.key} className={hover && hover !== p.key ? 'is-dim' : ''}>
             <span className="legend__swatch" style={{ background: ink.series[p.slot] }} />
             <span>{p.label}</span>
             <span className="num">
-              {fmtUsd(cost[p.key])} <span className="muted">{fmtPct(total ? cost[p.key] / total : 0)}</span>
+              {format(cost[p.key])} <span className="muted">{fmtPct(total ? cost[p.key] / total : 0)}</span>
             </span>
           </li>
         ))}
@@ -1498,37 +1598,108 @@ function CostDonut({ cost }: { cost: CostSplit }) {
   );
 }
 
+/**
+ * Native's cost split: the plan rows' 20x 7-day equivalent by token kind beside the billed dollars by token kind, a
+ * side with no rows left out. The subscription ring reads bare percents, since the card's subtitle names the window,
+ * so a marked figure fits inside the ring.
+ */
+function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
+  const sides = sidesOf(totals, 'seven_day');
+  const subscription = sides.equivalent === null ? null : totals.equivalentSplit;
+  const billed = sides.billed === null ? null : knownSplit(totals.billed);
+  const mark = totals.estimated ? '~' : '';
+  const rings = [
+    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} format={(v) => `${mark}${fmtShare(v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
+    ...(billed === null ? [] : [<CostDonut key="billed" cost={billed} label="billed" />]),
+  ];
+  if (rings.length === 0) return <Skeleton height={148} />;
+  return rings.length === 1 ? rings[0] : <div className="split-pair">{rings}</div>;
+}
+
 const MAX_STACKED_GROUPS = 7;
+
+type Stack = { data: Record<string, number>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string> };
+/**
+ * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other, and
+ * per bucket the stacks an estimated group's figure fed. `drawn` keeps only the groups whose figure is above zero
+ * somewhere in range, for a side that holds some of the page's groups.
+ */
+function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number, drawn = false): Stack {
+  const totals = new Map<string, number>();
+  const labels = new Map<string, string>();
+  for (const p of points) {
+    for (const g of p.groups) {
+      totals.set(g.key, (totals.get(g.key) ?? 0) + value(g));
+      labels.set(g.key, g.label);
+    }
+  }
+  const ranked = [...totals.entries()]
+    .filter(([, total]) => !drawn || total > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+  const top = ranked.slice(0, MAX_STACKED_GROUPS);
+  const keys = ranked.length > MAX_STACKED_GROUPS ? [...top, 'Other'] : top;
+  const estimated = new Map<number, Set<string>>();
+  const data = points.map((p) => {
+    const at = Date.parse(p.at);
+    const row: Record<string, number> = { at };
+    const marked = new Set<string>();
+    for (const k of keys) row[k] = 0;
+    for (const g of p.groups) {
+      const k = top.includes(g.key) ? g.key : 'Other';
+      if (!(k in row)) continue;
+      row[k] += value(g);
+      if (g.estimated && value(g) > 0) marked.add(k);
+    }
+    estimated.set(at, marked);
+    return row;
+  });
+  return { data, estimated, keys, labels };
+}
+const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : 0);
 
 function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; unit: UnitPosition }) {
   const ink = useChartInk();
   const lines = useMemo(() => shareLines(points), [points]);
-  const { keys, labels, data } = useMemo(() => {
-    const totals = new Map<string, number>();
-    const labels = new Map<string, string>();
-    for (const p of points) {
-      for (const g of p.groups) {
-        totals.set(g.key, (totals.get(g.key) ?? 0) + g.costUsd);
-        labels.set(g.key, g.label);
-      }
-    }
-    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
-    const top = ranked.slice(0, MAX_STACKED_GROUPS);
-    const keys = ranked.length > MAX_STACKED_GROUPS ? [...top, 'Other'] : top;
-    const data = points.map((p) => {
-      const row: Record<string, number> = { at: Date.parse(p.at) };
-      for (const k of keys) row[k] = 0;
-      for (const g of p.groups) {
-        const k = top.includes(g.key) ? g.key : 'Other';
-        if (k in row) row[k] += g.costUsd;
-      }
-      return row;
-    });
-    return { keys, labels, data };
-  }, [points]);
+  // Native stacks the plan rows' equivalent and draws the billed rows' dollars on a card of their own.
+  const stack = useMemo(() => (unit === 'native' ? stackOf(points, sevenDayEquivalentOf, true) : stackOf(points, (g) => g.costUsd)), [points, unit]);
+  const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
+  const { keys, labels, data } = stack;
   const color = (k: string) => (k === 'Other' ? ink.muted : groupSlot(k));
   const label = (k: string) => labels.get(k) ?? k;
   const title = `Cost by ${GROUP_LABEL[groupBy].toLowerCase()}`;
+  const areas = (s: Stack) => s.keys.map((k) => <Area key={k} type="monotone" dataKey={k} stackId="a" stroke={color(k)} strokeWidth={1.5} fill={color(k)} fillOpacity={0.35} dot={false} isAnimationActive={false} />);
+  const dollarCard = (s: Stack, cardTitle: string, subtitle: string) => (
+    <ChartCard title={cardTitle} subtitle={subtitle} loading={loading} error={error} legend={s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k }))}>
+      <AreaChart data={s.data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke={ink.grid} />
+        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <YAxis {...usdAxis(s.data.map((row) => s.keys.reduce((n, k) => n + row[k], 0)))} tickLine={false} axisLine={false} />
+        <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number> & { at: number }>((p) => s.keys.map((k) => ({ color: color(k), label: s.labels.get(k) ?? k, value: fmtUsd(p[k] ?? 0) })))} />
+        {areas(s)}
+      </AreaChart>
+    </ChartCard>
+  );
+  if (unit === 'native') {
+    const marked = (k: string) => data.some((row) => stack.estimated.get(row.at)?.has(k) ?? false);
+    return (
+      <>
+        <ChartCard title={title} subtitle="20x 7-day equivalent per bucket, stacked, the subscription requests" loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}>
+          <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={60} />
+            <Tooltip
+              cursor={{ stroke: ink.axis }}
+              content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: equivalentOrDash('seven_day', p[k] ?? 0, stack.estimated.get(p.at)?.has(k) ?? false) })))}
+            />
+            {areas(stack)}
+          </AreaChart>
+        </ChartCard>
+        {billed !== null && billed.keys.length > 0 && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, 'USD per bucket, stacked, the billed requests')}
+      </>
+    );
+  }
   if (unit === 'share') {
     // A model week an account never priced in the range lists no dashed entry, as its line draws nothing.
     const weekOf = (a: string) => lines.data.some((row) => row[`${a}:week`] !== null);
@@ -1567,19 +1738,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
       </ChartCard>
     );
   }
-  return (
-    <ChartCard title={title} subtitle={`USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`} loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k) }))}>
-      <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-        <YAxis {...usdAxis(data.map((row) => keys.reduce((n, k) => n + row[k], 0)))} tickLine={false} axisLine={false} />
-        <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: fmtUsd(p[k] ?? 0) })))} />
-        {keys.map((k) => (
-          <Area key={k} type="monotone" dataKey={k} stackId="a" stroke={color(k)} strokeWidth={1.5} fill={color(k)} fillOpacity={0.35} dot={false} isAnimationActive={false} />
-        ))}
-      </AreaChart>
-    </ChartCard>
-  );
+  return dollarCard(stack, title, `USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`);
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';

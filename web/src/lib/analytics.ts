@@ -1,7 +1,8 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
-import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
+import { fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd } from '@/lib/format';
+import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
@@ -206,6 +207,77 @@ export function shareRow(g: AnalyticsGroup): { fiveHour: string | null; perReque
     sevenDay: cell(sevenDay),
     week: cell(windowShare(g.costShares, g.costShares === null ? undefined : weekKeyOf(g.costShares))),
   };
+}
+
+/** The positions a dollar figure of the Analytics page reads under. */
+export type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
+/**
+ * Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's, as the dollar
+ * figures drawn under the shares are.
+ */
+export const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
+/** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
+export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
+/**
+ * Native's requests, each side in the unit its funding pays in, as the Cost table's subtitle and the first tile's note
+ * name them.
+ */
+export const NATIVE_SUBSET = 'the subscription requests in 20x window equivalents and the billed requests in dollars';
+/** The Cost section's meta line per dollar position, after the dollars in range. */
+const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
+/** The first Cost tile's label per dollar position. */
+const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
+
+/**
+ * A 20x window equivalent with its window named and the tilde before it where an estimate priced it, or a dash where
+ * the window holds none, as a dollar figure's `usdOrDash`. A dash is no figure, so no estimate marks it.
+ */
+export const equivalentOrDash = (windowKey: string, v: number | null | undefined, estimated = false): string => (v === null || v === undefined ? '-' : `${estimated ? '~' : ''}${fmtEquivalent(windowKey, v)}`);
+/**
+ * The two sides of a sum over both fundings: the plan rows' 20x equivalent on a window and the billed rows' dollars,
+ * a side with no rows null. The route counts the plan requests, and a fold of request rows that counted none tells the
+ * sides apart by their figures. A sum with no row on either side reads both, so an empty range reads its zero in each
+ * unit rather than nothing.
+ */
+export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>, window: string): { billed: number | null; equivalent: number | null } {
+  const plan = g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0;
+  const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests;
+  const equivalent = own(g.costEquivalent, window) ? g.costEquivalent[window] : 0;
+  return plan || billed ? { billed: billed ? g.billedUsd : null, equivalent: plan ? equivalent : null } : { billed: g.billedUsd, equivalent };
+}
+
+/** One figure of a Cost tile, with the word naming its side where the tile stacks two. */
+export interface CostFigure {
+  text: string;
+  word?: string;
+}
+/** The Cost section's head under a position, as `costHeadOf` reads it. */
+export interface CostHead {
+  /** Whether a figure of the head carries the estimated mark, so its element takes the estimate's title. */
+  estimated: boolean;
+  meta: string;
+  /** The requests the Cost table's subtitle names, null under the shares, whose table names its own. */
+  subset: string | null;
+  /** The first tile, null under the shares, which read per account. */
+  tile: { figures: CostFigure[]; label: string; note: string } | null;
+}
+/**
+ * The Cost section's meta line, its first tile and the requests its table reads, from the position's totals. Native
+ * pairs the plan rows' 20x 7-day equivalent with the billed dollars, a side with no rows left out, the equivalent
+ * marked where an estimate priced a row of it. A dollar position reads its dollars under its own words, and the shares
+ * read per account, so under them the head holds the meta alone.
+ */
+export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead {
+  if (unit === 'share') return { estimated: false, meta: 'shares per account', subset: null, tile: null };
+  if (unit === 'native') {
+    const { billed, equivalent } = sidesOf(totals, 'seven_day');
+    const estimated = totals.estimated && equivalent !== null;
+    const figures: CostFigure[] = [...(equivalent === null ? [] : [{ text: equivalentOrDash('seven_day', equivalent, estimated), word: 'subscription' }]), ...(billed === null ? [] : [{ text: fmtUsd(billed), word: 'billed' }])];
+    return { estimated, meta: `${figures.map((f) => f.text).join(' and ')} in range`, subset: NATIVE_SUBSET, tile: { figures, label: 'Cost', note: NATIVE_SUBSET } };
+  }
+  const dollars = dollarsOf(unit);
+  const figure = fmtUsd(totals.costUsd);
+  return { estimated: false, meta: `${figure} in range, ${UNIT_META[dollars]}`, subset: UNIT_SUBSET[dollars], tile: { figures: [{ text: figure }], label: UNIT_TILE_LABEL[dollars], note: dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars] } };
 }
 
 /**
