@@ -1,7 +1,7 @@
 import { PIN_RELEASE_REASON_VALUES, planLabel } from '@/api/decode';
 import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogPage, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { moveLabel, own } from './analytics';
-import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
+import { fmtCompact, fmtInt, fmtPct, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { POLL_OUTCOME_LABEL } from './quota';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
@@ -230,16 +230,6 @@ function span(ms: number): string {
   if (abs < HOUR) return pair(Math.floor(abs / MINUTE), 'min', Math.floor((abs % MINUTE) / 1_000), 's');
   if (abs < 24 * HOUR) return pair(Math.floor(abs / HOUR), 'h', Math.floor((abs % HOUR) / MINUTE), 'min');
   return pair(Math.floor(abs / (24 * HOUR)), 'd', Math.floor((abs % (24 * HOUR)) / HOUR), 'h');
-}
-
-/**
- * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`). One
- * further off carries its date (`Sep 18 08:42`).
- */
-export function instant(ms: number, now: number): string {
-  const at = new Date(ms).toISOString();
-  if (Math.abs(ms - now) < 24 * HOUR) return fmtShortTime(at);
-  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;
 }
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
@@ -873,6 +863,8 @@ export const WALK_KEY: Record<string, string> = {
   ahead_seven_day: '7d ahead',
   at_cap: 'at cap',
   bound_ms: 'bound',
+  deadline_five_hour: '5h to its end at',
+  deadline_seven_day: '7d to its end at',
   dwell_age_ms: 'dwell age',
   elapsed_five_hour: '5h elapsed',
   elapsed_seven_day: '7d elapsed',

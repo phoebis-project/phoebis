@@ -82,8 +82,8 @@ test("the pace words read ahead, behind or on pace from the window's used and el
   assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR), now, null), 'on pace', 'a lead under a point reads on pace');
   assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR), now, null), '1% ahead of pace', 'the smallest lead past a point reads one');
   assert.equal(d.paceWords(window(5, 0.62, null), now, null), null, 'a window without a reset time has no pace');
-  assert.equal(d.remainingTimeShare(session, now).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
-  assert.equal(d.remainingTimeShare(window(5, 0.62, null), now), null, 'a window without a reset time has no share still to come');
+  assert.equal(d.remainingTimeShare(session, now, null).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
+  assert.equal(d.remainingTimeShare(window(5, 0.62, null), now, null), null, 'a window without a reset time has no share still to come');
 });
 
 test("the pace words run to the account's end when it comes before the window's reset, and name it", () => {
@@ -98,6 +98,11 @@ test("the pace words run to the account's end when it comes before the window's 
   assert.equal(d.paceWords(week, now, now + 200 * HOUR), '33% ahead of pace', 'an end past the reset is the reset');
   const soon = now + 3 * HOUR;
   assert.equal(d.paceWords({ ...week, utilization: 0.9 }, now, soon), `4% behind pace to its end at ${d.formatFact(soon, 'time', now)}`, '48 of 51 hours gone to an end three hours out');
+  // The meter's mark reads the same deadline, so the fill against it shows the lead the words name.
+  assert.equal(d.remainingTimeShare(week, now, end), 0.5, 'half the span to the end still to come');
+  assert.equal(d.remainingTimeShare(week, now, null).toFixed(4), (120 / 168).toFixed(4), 'five days of the week still to come');
+  assert.equal(d.remainingTimeShare(week, now, Date.parse(week.resetsAt)), d.remainingTimeShare(week, now, null), 'an end at the reset is the reset');
+  assert.equal(d.remainingTimeShare(week, now, now - 72 * HOUR), 0, 'an end at or before the window opened leaves nothing to come');
 });
 
 test('the end a pace reads is the saved end while cancelled, else a trial end still ahead, as the router reads it', () => {

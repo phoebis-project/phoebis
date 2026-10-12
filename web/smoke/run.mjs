@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -669,7 +669,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
       const meter = chip?.nextElementSibling;
       const marks = [...(meter?.querySelectorAll('.meter__mark') ?? [])];
       const live = w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at);
-      const share = live ? remainingTimeShare(w, at) : null;
+      const share = live ? remainingTimeShare(w, at, endOf(a, at)) : null;
       rows.push({ account: a.label, left: marks[0]?.style.left ?? null, marks: marks.length, name, title: meter?.getAttribute('title') ?? '', want: share === null ? null : `${share * 100}%` });
     }
   }
@@ -3279,13 +3279,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         util?.querySelector('.ubar__band') !== null,
       missing: [String(percent?.value), ...ticks, String(leadTicks().length), String(marginLine()?.style.left), String(marginLine()?.getAttribute('title')), String(util?.querySelector('.ubar__band') !== null)],
     });
-    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of
-    // the run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The
-    // 7-day windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits
-    // minutes away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's
-    // 41% used reads about 54% elapsed and 13 points behind, secondary's 88% about 28% elapsed to its end, two hours
-    // before its reset, and 60 points ahead, nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the typed value: 20 points sits
-    // at 60% of the track with the band 7.5% wide, 50 at 75%.
+    // This mount runs on the moving clock, so a 5-hour window's elapsed share drifts a point every three minutes of the
+    // run: primary's reads about 55% elapsed and 7 points ahead, and its figures are read by shape alone. The 7-day
+    // windows drift 5/168 of that, a point every hundred minutes, which still crosses a rounding edge that sits minutes
+    // away, so their elapsed and lead figures are read by shape too, under each window's used share: primary's 41% used
+    // reads about 54% elapsed and 13 points behind, secondary's 88% about 28% elapsed to its end, two hours before its
+    // reset, and 60 points ahead, nightly's 35% about 75% elapsed and 40 points behind. The margin line follows the
+    // typed value: 20 points sits at 60% of the track with the band 7.5% wide, 50 at 75%.
     const leadTitle = /^\w+: (5-hour|7-day) \d+% used, \d+% elapsed( to its end at .+)?, (\d+ points? (ahead|behind)|on pace)$/;
     const atFifty = leadTicks();
     if (percent) setter.call(percent, '20');

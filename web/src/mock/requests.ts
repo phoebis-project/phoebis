@@ -1078,9 +1078,10 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const holds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
   // A move prefers a cool destination: one whose leads over pace sit under the band and that no round shed from
   // within the dwell. One that is not cool is taken only where no sibling is, which this rule leaves undecided.
-  const elapsed = (w: AttemptWindow) => Math.min(1, Math.max(0, 1 - (Date.parse(w.resetsAt ?? '') - at) / (w.id === '5h' ? 5 * HOUR : 7 * DAY)));
+  const headAccount = ACCOUNTS.find((a) => a.id === head.accountId);
+  const end = headAccount === undefined ? null : endOf(headAccount, at);
   const band = pool.shedAheadOfPace === null ? null : pool.shedAheadOfPace - 0.05;
-  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || w.utilization - elapsed(w) < band);
+  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || aheadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, w.id === '5h' ? 5 * HOUR : 7 * DAY, at, end) < band);
   const rested = !(head.accountId === SHED_ROUND.accountId && at >= SHED_ROUND.at && at - SHED_ROUND.at < pool.sourceDwellSeconds * 1_000);
   if (!under || !rested) return null;
   const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;

@@ -587,6 +587,35 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
+  test(`every decision record reads a plan window's lead and deadline as the console's arithmetic does, to the end where it comes first, at ${at}`, async () => {
+    const s = await story;
+    let named = 0;
+    for (const r of await decisionsOf(s)) {
+      const t = Date.parse(r.request.at);
+      const deadlines = r.walk.flatMap((w) => w.facts).filter((f) => f.key.startsWith('deadline_'));
+      for (const c of r.candidates) {
+        const account = s.accounts.find((a) => a.id === c.accountId);
+        if (account?.kind !== 'oauth') continue;
+        const end = s.lib.endOf(account, t);
+        for (const [name, hours] of [['five_hour', 5], ['seven_day', 168]]) {
+          const w = c.windows[name];
+          if (!w || w.ahead === null) continue;
+          const want = Math.round(s.aheadOf({ resetsAt: w.reset, utilization: w.utilization }, hours * HOUR, t, end) * 1000) / 1000;
+          assert.ok(near(w.ahead, want), `${r.requestId}: ${c.accountId}'s ${name} reads ${w.ahead}, not ${want}`);
+        }
+      }
+      for (const f of deadlines) {
+        // The shed line's facts read the pinned account, a cool line's the member each names.
+        const pinned = r.walk.find((w) => w.step === 'pin')?.facts.find((p) => p.key === 'account_id')?.value;
+        const account = s.accounts.find((a) => a.id === (f.accountId ?? pinned));
+        const w = r.candidates.find((c) => c.accountId === account?.id)?.windows[f.key.slice('deadline_'.length)];
+        assert.equal(f.value, s.lib.paceEnd(w?.reset ?? null, s.lib.endOf(account, t)), `${r.requestId}: ${f.key} names the end its pace runs to`);
+        named += 1;
+      }
+    }
+    assert.ok(named > 0, "the story holds a lead whose pace runs to its account's end");
+  });
+
   test(`every plan-funded row of a weighted model carries non-null shares and no API key, overage or fast row carries one, at ${at}`, async () => {
     const s = await story;
     const costs = s.settings.subscriptionCosts;

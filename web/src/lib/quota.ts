@@ -1,7 +1,6 @@
 import { planLabel } from '@/api/decode';
 import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
-import { fmtAbsolute, fmtRelative } from '@/lib/format';
-import { formatFact } from '@/lib/routingLog';
+import { fmtAbsolute, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -34,7 +33,16 @@ export function endOf(account: Pick<Account, 'cancelled' | 'subscription'>, now:
 export const paceEnd = (resetsAt: string | null, end: number | null): number | null => (resetsAt !== null && end !== null && end < Date.parse(resetsAt) ? end : null);
 
 /** " to its end at 15:42" for the end a pace runs to (`paceEnd`), as the decision card's Pace hover names it; empty for none. */
-export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${formatFact(end, 'time', now)}`);
+export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
+
+/** The share of a window elapsed from its start to the earlier of its `reset` and the account's `end`, clamped to 0 to 1. */
+function elapsedShare(reset: number, lengthMs: number, now: number, end: number | null): number {
+  const start = reset - lengthMs;
+  const span = Math.min(reset, end ?? reset) - start;
+  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
+  const elapsed = span <= 0 ? 1 : (now - start) / span;
+  return Math.min(1, Math.max(0, elapsed));
+}
 
 /**
  * The router's reading: a window's utilization less the share of it that has elapsed, from its start to the earlier
@@ -42,20 +50,16 @@ export const toEndWords = (end: number | null, now: number): string => (end === 
  */
 export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number, end: number | null): number {
   if (window.resetsAt === null) return window.utilization;
-  const reset = Date.parse(window.resetsAt);
-  const start = reset - lengthMs;
-  const span = Math.min(reset, end ?? reset) - start;
-  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
-  const elapsed = span <= 0 ? 1 : (now - start) / span;
-  return window.utilization - Math.min(1, Math.max(0, elapsed));
+  return window.utilization - elapsedShare(Date.parse(window.resetsAt), lengthMs, now, end);
 }
 
-/** The share of a window's period still to come, 0 to 1. Null without a reset time. */
-export function remainingTimeShare(w: RateLimitWindow, now: number): number | null {
+/**
+ * The share of a window's period still to come toward the earlier of its reset and the account's `end`, 0 to 1, so
+ * the pace mark and `paceWords` read one deadline. Null without a reset time.
+ */
+export function remainingTimeShare(w: RateLimitWindow, now: number, end: number | null): number | null {
   if (w.resetsAt === null) return null;
-  const period = w.periodHours * HOUR;
-  const elapsed = (period - (Date.parse(w.resetsAt) - now)) / period;
-  return 1 - Math.min(1, Math.max(0, elapsed));
+  return 1 - elapsedShare(Date.parse(w.resetsAt), w.periodHours * HOUR, now, end);
 }
 
 /** The lead over pace in words, as `aheadOf` reads it: "12% ahead of pace", "5% behind pace", or "on pace" within

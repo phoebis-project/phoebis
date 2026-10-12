@@ -305,7 +305,7 @@ function QuotaWindow({ end, name, window: w, now, soon }: { end: number | null; 
     <>
       <WindowChip name={name} window={w} now={now} className="qwin__chip" />
       {live ? (
-        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live, now) ?? undefined} />
+        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live, now, end) ?? undefined} />
       ) : (
         <div className="meter meter--thin meter--absent" role="presentation">
           <div className="meter__fill" style={{ width: '100%' }} />
