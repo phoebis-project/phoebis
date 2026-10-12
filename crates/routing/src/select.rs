@@ -1716,18 +1716,26 @@ const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
 /// so a reading at 0.5 ten percent into a week is 0.4 ahead and the same reading sixty percent in is behind, and an
 /// account whose subscription ends inside the window reads the steeper pace to its end. A prediction with no reset
 /// (a 5-hour window past its reset reads the router's own use since) is ahead by exactly its utilization. Answered
-/// as `(lead, elapsed)`, so the record states the pace beside the lead from one reading. `None` without a reading,
-/// which every caller treats as under.
+/// as `(lead, elapsed, end)`, `end` the account's end only where the pace runs to it, so the record states the pace
+/// and its deadline beside the lead from one reading. `None` without a reading, which every caller treats as under.
 fn ahead(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     account_id: &str,
     window: &str,
     now: i64,
-) -> Option<(f64, f64)> {
+) -> Option<(f64, f64, Option<i64>)> {
     let reading = state.predicted(account_id, window, now)?;
     let elapsed = elapsed_share(snapshot, account_id, &reading, window, now);
-    Some((reading.utilization - elapsed, elapsed))
+    let end = account_end(snapshot, account_id, now)
+        .filter(|&end| reading.reset.is_some_and(|reset| end < reset));
+    Some((reading.utilization - elapsed, elapsed, end))
+}
+
+fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
+    snapshot
+        .term(account_id)
+        .and_then(|term| term::end_of(term, now))
 }
 
 /// The share of `window` that has elapsed at `now` toward the earlier of the reading's reset and the account's
@@ -1739,9 +1747,7 @@ fn elapsed_share(
     window: &str,
     now: i64,
 ) -> f64 {
-    let end = snapshot
-        .term(account_id)
-        .and_then(|term| term::end_of(term, now));
+    let end = account_end(snapshot, account_id, now);
     elapsed_share_at(window, reading.reset, end, now)
 }
 
@@ -1795,7 +1801,7 @@ fn under_band(
             [FIVE_HOUR, SEVEN_DAY]
                 .into_iter()
                 .filter_map(|window| ahead(state, snapshot, account_id, window, now))
-                .all(|(lead, _)| lead < band)
+                .all(|(lead, _, _)| lead < band)
         }
     }
 }
@@ -1839,27 +1845,40 @@ fn band_facts(
     (facts, under)
 }
 
-/// The two shared windows' leads and elapsed shares as facts, and the larger lead's margin over `against` (the
-/// shed threshold or the band): what the shed line and the cool line state of one reading each. Answers the two
-/// leads, 5-hour first.
+/// The two shared windows' leads and elapsed shares as facts, each window's deadline where its pace runs to the
+/// account's end, and the larger lead's margin over `against` (the shed threshold or the band): what the shed line
+/// and the cool line state of one reading each. Answers the two leads, 5-hour first.
 fn lead_facts(
     facts: &mut Vec<Fact>,
-    five_hour: Option<(f64, f64)>,
-    seven_day: Option<(f64, f64)>,
+    five_hour: Option<(f64, f64, Option<i64>)>,
+    seven_day: Option<(f64, f64, Option<i64>)>,
     against: f64,
 ) -> [Option<f64>; 2] {
-    for (ahead_key, elapsed_key, read) in [
-        ("ahead_five_hour", "elapsed_five_hour", five_hour),
-        ("ahead_seven_day", "elapsed_seven_day", seven_day),
+    for (ahead_key, elapsed_key, deadline_key, read) in [
+        (
+            "ahead_five_hour",
+            "elapsed_five_hour",
+            "deadline_five_hour",
+            five_hour,
+        ),
+        (
+            "ahead_seven_day",
+            "elapsed_seven_day",
+            "deadline_seven_day",
+            seven_day,
+        ),
     ] {
-        if let Some((lead, elapsed)) = read {
+        if let Some((lead, elapsed, end)) = read {
             facts.push(Fact::number(ahead_key, lead).unit("percent"));
             facts.push(Fact::number(elapsed_key, elapsed).unit("percent"));
+            if let Some(end) = end {
+                facts.push(Fact::int(deadline_key, end).unit("time"));
+            }
         }
     }
     let leads = [
-        five_hour.map(|(lead, _)| lead),
-        seven_day.map(|(lead, _)| lead),
+        five_hour.map(|(lead, _, _)| lead),
+        seven_day.map(|(lead, _, _)| lead),
     ];
     if let Some(larger) = leads.into_iter().flatten().reduce(f64::max) {
         facts.push(Fact::number("margin", larger - against).unit("percent"));
@@ -2121,8 +2140,8 @@ fn move_of<'a>(
     ];
     lead_facts(&mut facts, leads[0].1, leads[1].1, threshold);
     facts.push(Fact::number("threshold", threshold).unit("percent"));
-    let Some((window, (lead, elapsed))) = leads.into_iter().find_map(|(window, read)| {
-        read.filter(|(lead, _)| *lead >= threshold)
+    let Some((window, (lead, elapsed, _))) = leads.into_iter().find_map(|(window, read)| {
+        read.filter(|(lead, _, _)| *lead >= threshold)
             .map(|read| (window, read))
     }) else {
         rec.step(RULES[4], "no", facts);

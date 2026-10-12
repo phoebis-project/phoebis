@@ -292,7 +292,9 @@ fn base_windows() -> Map<String, Value> {
 /// An hour's last sample of one window as the wire carries it. The lead is scored at the sample's own instant,
 /// since the bucket is the sampler's 300-second floor and a reset minutes away would read wrong from it, and a
 /// sample that reported the reset alone has no lead. The pace runs to the account's end in the registry's current
-/// term, resolved at the sample's instant, so a trial end still ahead then counts as the router counted it.
+/// term, resolved at the sample's instant, since the ledger keeps no term history. The lead matches the router's for
+/// a trial end and for the samples taken after a cancellation was recorded, and the older samples of the window that
+/// holds a cancelled end re-read with it.
 fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Value {
     let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
     let end = term.and_then(|t| term::end_of(t, sampled_at));
