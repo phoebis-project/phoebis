@@ -45,7 +45,7 @@ Each operation names its request (path segments, query parameters, or body field
     servers((url = "/", description = "This router's admin listener")),
     tags(
         (name = "Accounts"),
-        (name = "Analytics", description = "`GET /admin/analytics/accounts`, `/breakdown`, and `/series` share `range` \
+        (name = "Analytics", description = "`GET /admin/analytics/breakdown` and `/series` share `range` \
             (default `24h`), `group_by` (`account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, \
             `request_class`, `speed`, or `user_agent`), and filters `keys`, `pools`, `accounts`, `models`, `kinds` \
             (comma-separated lists), `user_agents` (newline-separated patterns over the agent's first product token, \
@@ -53,15 +53,16 @@ Each operation names its request (path segments, query parameters, or body field
             and a backslash quotes either, so a value with no wildcard matches in full), `user_agent_groups` \
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
-            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). `/breakdown` \
-            and `/series` also take `funding` (`billed` keeps the overage and fast rows and every row an API key \
-            account served, `plan` the rows a subscription window paid for and the rows of a request no account \
-            served. Each row files under the funding its serving attempt had when the ledger recorded it, so deleting \
-            an account, or recreating its id as the other kind, moves none of its rows. A probe's cost files under the \
-            funding of the probe's own request, while a recipe's settlement, which carries the probes' waste, files \
-            under the kind its record carries: `billed` for an API key account, else `fast` for a fast recipe, else \
-            `plan`. Absent keeps every row. The two subsets partition the rows). `GET /admin/analytics/budgets`, \
-            `/burn`, `/placements`, and `/rewrites`, elsewhere under this tag, take their own request shapes."),
+            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`), and \
+            `/accounts` takes `range` alone. `/breakdown` and `/series` also take `funding` (`billed` keeps the \
+            overage and fast rows and every row an API key account served, `plan` the rows a subscription window paid \
+            for and the rows of a request no account served. Each row files under the funding its serving attempt \
+            had when the ledger recorded it, so deleting an account, or recreating its id as the other kind, moves \
+            none of its rows. A probe's cost files under the funding of the probe's own request, while a recipe's \
+            settlement, which carries the probes' waste, files under the kind its record carries: `billed` for an API \
+            key account, else `fast` for a fast recipe, else `plan`. Absent keeps every row. The two subsets \
+            partition the rows). `GET /admin/analytics/budgets`, `/burn`, `/placements`, and `/rewrites`, elsewhere \
+            under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Keepalive"),
@@ -167,7 +168,7 @@ pub(crate) struct AgentCountsView {
     pub parked: u64,
 }
 
-/// The probes of the last 24 hours.
+/// The probe counts by outcome.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeCountsView {
@@ -441,6 +442,177 @@ pub(crate) struct TypeOverrideView {
     pub output: Option<f64>,
 }
 
+/// One group of the breakdown.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BreakdownRow {
+    /// Under `group_by=key` the key's id for the key that holds it now and `<id>@<generation>` for rows an earlier
+    /// key filed under the same id, the generation being that key's `created_at`. Under `group_by=effort` the
+    /// request's effort as the drawer shows it (the last per-turn control entry's level, else the top-level
+    /// `output_config.effort`), `none` for a request that asked for none, or `other` for a level the API does not
+    /// name. Under `group_by=user_agent` the agent's first product token cut to 64 bytes, `other` for an agent
+    /// without one, and `-` for a request that sent none. Under `group_by=client` the request's client class, `-`
+    /// for a row folded before the class was recorded. Under `group_by=speed` the speed the last attempt's answer
+    /// reported, `fast` or `standard`, and a request no answer named a speed for files under `fast` when it asked
+    /// for `fast` and under `standard` otherwise.
+    pub key: String,
+    /// Under `group_by=key` an earlier holder's rows read `<id> (deleted, created 2026-09-14 09:31 UTC)`, the
+    /// generation's date and time at minute precision in UTC, and `<id> (deleted)` at generation 0, which holds no
+    /// creation time. Under `group_by=client` the `-` row reads `unattributed`.
+    pub label: String,
+    /// The key's id under `group_by=key`. Absent for another dimension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time, which the
+    /// console prints in the viewer's zone. Absent for the key that holds the id now and for another dimension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_created_at: Option<i64>,
+    pub requests: u64,
+    pub succeeded: u64,
+    pub rate_limited: u64,
+    pub failed: u64,
+    pub exhausted: u64,
+    pub rejected: u64,
+    pub attempts: u64,
+    pub failovers: u64,
+    pub incomplete: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub uncached: u64,
+    pub expired_between_turns: u64,
+    pub tokens: TokenSplitView,
+    pub cost: CostSplitView,
+    pub cost_usd: f64,
+    /// By error code.
+    pub errors: BTreeMap<String, u64>,
+    pub cache_miss_reasons: BTreeMap<String, u64>,
+    pub histograms: HistogramsView,
+    pub percentiles: PercentilesView,
+    pub kept_warm: KeptWarmView,
+    /// `ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused with
+    /// `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
+    pub probes: ProbeCountsView,
+    pub probe_cost_usd: f64,
+    pub wasted_probes: u64,
+    pub wasted_probe_usd: f64,
+    pub wasted_probe_reasons: BTreeMap<String, u64>,
+    /// Under `group_by=account`, a subscription account's plan-funded rows priced at their hour under the
+    /// account's current tier and summed, keyed by the account's window ids (`five_hour`, `seven_day` and the
+    /// model's own week where the model has one), the probe rows joining under the `include_probes` rule, and a
+    /// window absent where a row could not be priced on it. Null for an API key account's group, for a
+    /// subscription account whose tier is unknown, for an account the registry no longer holds, and under every
+    /// grouping but `account`.
+    pub cost_shares: Option<BTreeMap<String, f64>>,
+    /// Each `read` and `write`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
+    /// joining under the `include_probes` rule.
+    pub cache_shares: Option<BTreeMap<String, CacheShareView>>,
+    /// Each `cost` and `wasted`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
+    /// always joining.
+    pub probe_shares: Option<BTreeMap<String, ProbeShareView>>,
+    /// The plan-funded requests the shares were summed over, null where `cost_shares` is.
+    pub plan_requests: Option<u64>,
+    /// The plan-funded output tokens the shares were summed over, null where `cost_shares` is.
+    pub plan_output_tokens: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TokenSplitView {
+    pub cache_read: u64,
+    pub cache_write_1h: u64,
+    pub cache_write_5m: u64,
+    pub output: u64,
+    /// The share of `output` spent thinking.
+    pub thinking: u64,
+    pub uncached_input: u64,
+    /// Server-tool calls.
+    pub web_fetch: u64,
+    /// Server-tool calls.
+    pub web_search: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CostSplitView {
+    pub cache_read: f64,
+    pub cache_write: f64,
+    pub input: f64,
+    pub output: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HistogramsView {
+    pub duration_ms: Vec<u64>,
+    pub output_tps: Vec<u64>,
+    pub ttfb_ms: Vec<u64>,
+    pub ttft_ms: Vec<u64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QuartetView {
+    pub p50: Option<f64>,
+    pub p90: Option<f64>,
+    pub p95: Option<f64>,
+    pub p99: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PercentilesView {
+    pub duration_ms: QuartetView,
+    pub output_tps: QuartetView,
+    pub ttfb_ms: QuartetView,
+    pub ttft_ms: QuartetView,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeptWarmView {
+    pub requests: u64,
+    pub tokens: u64,
+}
+
+/// The read and write halves of a window's cache share, as fractions of the window.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CacheShareView {
+    pub read: f64,
+    pub write: f64,
+}
+
+/// The probe rows' share of a window and the wasted probes' part of it.
+// No captured row carries a probe share, so the round trip never reaches this type: its fields are held to the
+// ledger's `ProbeShare` by reading the two side by side.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProbeShareView {
+    pub cost: f64,
+    /// The wasted probes' part of the probe share, by the group's wasted-probe dollars over its plan-funded
+    /// probe-cost dollars, null while those dollars are zero.
+    pub wasted: Option<f64>,
+}
+
+/// One bucket of the series: the groups of the bucket, each a breakdown row.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SeriesPointView {
+    pub at: i64,
+    pub groups: Vec<BreakdownRow>,
+}
+
+/// One hour of the dashboard's last day.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HourPointView {
+    pub at: i64,
+    pub cost: f64,
+    pub errors: u64,
+    pub requests: u64,
+    pub tokens: u64,
+}
+
 macro_rules! fixture {
     ($name:literal, $status:literal) => {
         (
@@ -461,6 +633,18 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("account_catalog", "200"),
     fixture!("account_quota", "200"),
     fixture!("account_usage", "200"),
+    fixture!("analytics_accounts", "200"),
+    fixture!("analytics_breakdown", "200"),
+    fixture!("analytics_breakdown_accounts", "200"),
+    fixture!("analytics_breakdown_speed", "200"),
+    fixture!("analytics_budgets", "200"),
+    fixture!("analytics_burn", "200"),
+    fixture!("analytics_placements", "200"),
+    fixture!("analytics_rewrites", "200"),
+    fixture!("analytics_series", "200"),
+    fixture!("analytics_series_accounts", "200"),
+    fixture!("attention", "200"),
+    fixture!("dashboard", "200"),
     fixture!("keepalive_overview", "200"),
     fixture!("keepalive_recipes", "200"),
     fixture!("keys", "200"),
