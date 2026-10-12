@@ -492,8 +492,9 @@ pub(crate) struct BreakdownRow {
     /// `output_config.effort`), `none` for a request that asked for none, or `other` for a level the API does not
     /// name. Under `group_by=user_agent` the agent's first product token cut to 64 bytes, `other` for an agent
     /// without one, and `-` for a request that sent none. Under `group_by=client` the request's client class, `-`
-    /// for a row folded before the class was recorded. Under `group_by=speed` the speed the last attempt's answer
-    /// reported, `fast` or `standard`, and a request no answer named a speed for files under `fast` when it asked
+    /// for a row folded before the class was recorded. Under `group_by=speed` the speed the attempts' answers
+    /// reported, `fast` or `standard`, `standard` for an answer that named none whatever the request asked for. A
+    /// request no attempt answered files under the speed its last attempt reported, else under `fast` when it asked
     /// for `fast` and under `standard` otherwise.
     pub key: String,
     /// Under `group_by=key` an earlier holder's rows read `<id> (deleted, created 2026-09-14 09:31 UTC)`, the
@@ -536,12 +537,13 @@ pub(crate) struct BreakdownRow {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
-    /// Under `group_by=account`, a subscription account's plan-funded rows priced at their hour under the account
-    /// tier each row recorded when it landed and summed, keyed by the account's window ids (`five_hour`,
-    /// `seven_day` and the model's own week where the model has one), the probe rows joining under the
-    /// `include_probes` rule, and a window absent where a row could not be priced on it. Null for a group whose rows
-    /// recorded no tier (an API key account's group, a subscription account whose profile was not yet read) and under
-    /// every grouping but `account`.
+    /// Where each group holds one account's rows, under `group_by=account` or with an `accounts` filter naming
+    /// exactly one account, a subscription account's plan-funded rows priced at their hour under the account tier
+    /// each row recorded when it landed and summed, keyed by the account's window ids (`five_hour`, `seven_day` and
+    /// the model's own week where the model has one), the probe rows joining under the `include_probes` rule, and a
+    /// window absent where a row could not be priced on it. Null for a group whose rows recorded no tier (an API key
+    /// account's group, a subscription account whose profile was not yet read), and under every grouping but
+    /// `account` without such a filter, since shares of different accounts' windows do not add.
     pub cost_shares: Option<BTreeMap<String, f64>>,
     /// Each `read` and `write`, keyed and summed as `cost_shares` and null under the same rule, the probe rows
     /// joining under the `include_probes` rule.

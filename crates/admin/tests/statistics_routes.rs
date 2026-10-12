@@ -1529,15 +1529,16 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    // An hour of a million Opus 5.5 input tokens on `business`.
-    let opus = |id: &str, at: i64| {
-        let mut opus = record(id, at, "claude-opus-5-5", "s1");
-        if let Record::Request { attempts, .. } = &mut opus {
+    // An hour of a million input tokens on `business`.
+    let million = |id: &str, at: i64, model: &str| {
+        let mut row = record(id, at, model, "s1");
+        if let Record::Request { attempts, .. } = &mut row {
             attempts[0].input_tokens = Some(1_000_000);
             attempts[0].output_tokens = None;
         }
-        opus
+        row
     };
+    let opus = |id: &str, at: i64| million(id, at, "claude-opus-5-5");
     let business = |v: &serde_json::Value, at: i64| {
         v["points"]
             .as_array()
@@ -1563,7 +1564,11 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     );
     set_max_20x(&parts).await;
     parts.ledger.record(opus("burn-1", now - HOUR));
-    landed(&parts, &["burn-1"]).await;
+    // Fable is the one model the shipped table gives a week of its own.
+    parts
+        .ledger
+        .record(million("burn-fable", now - 3 * HOUR, "claude-fable-5-1"));
+    landed(&parts, &["burn-1", "burn-fable"]).await;
     let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
     let earlier = business(&burn, now - 2 * HOUR);
     assert!(
@@ -1585,16 +1590,17 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let point = business(&burn, now - HOUR);
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000_000,
+        ..phoebis_routing::PinUsage::default()
+    };
     let share = |window: &str| {
         tables
             .share_at(
                 window,
                 "default_claude_max_20x",
                 "claude-opus-5-5",
-                phoebis_routing::PinUsage {
-                    input: 1_000_000,
-                    ..phoebis_routing::PinUsage::default()
-                },
+                usage,
                 hour,
             )
             .unwrap()
@@ -1614,6 +1620,42 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
         "a subscription spends no dollars: {point}"
     );
+    let equivalent = |window: &str, model: &str, at: i64| {
+        tables.equivalent_at(window, model, usage, at).unwrap()
+    };
+    let five_hour_equivalent = equivalent(phoebis_routing::FIVE_HOUR, "claude-opus-5-5", hour);
+    let seven_day_equivalent = equivalent(phoebis_routing::SEVEN_DAY, "claude-opus-5-5", hour);
+    assert!(
+        close_to(&point["five_hour_equivalent"], five_hour_equivalent)
+            && close_to(&point["seven_day_equivalent"], seven_day_equivalent)
+            && point["estimated"] == false,
+        "beside its shares the bucket reads the 20x equivalent of both windows, its model weighted: {point}"
+    );
+    assert!(
+        null_field(&point, "model_week_share") && null_field(&point, "model_week_equivalent"),
+        "Opus 5.5 has no week of its own: {point}"
+    );
+    let fable = business(&burn, now - 3 * HOUR);
+    let fable_hour = fable["at"].as_i64().unwrap();
+    let week_share = tables
+        .share_at(
+            phoebis_routing::SEVEN_DAY_FABLE,
+            "default_claude_max_20x",
+            "claude-fable-5-1",
+            usage,
+            fable_hour,
+        )
+        .unwrap();
+    let week_equivalent = equivalent(
+        phoebis_routing::SEVEN_DAY_FABLE,
+        "claude-fable-5-1",
+        fable_hour,
+    );
+    assert!(
+        close_to(&fable["model_week_share"], week_share)
+            && close_to(&fable["model_week_equivalent"], week_equivalent),
+        "a Fable row reads its model week's share and equivalent beside the shared windows: {fable}"
+    );
     let mut keys: Vec<&str> = point
         .as_object()
         .unwrap()
@@ -1626,15 +1668,20 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         [
             "at",
             "cached_tokens",
+            "estimated",
+            "five_hour_equivalent",
             "five_hour_share",
             "group",
+            "model_week_equivalent",
+            "model_week_share",
+            "seven_day_equivalent",
             "seven_day_share",
             "tokens",
             "uncached_tokens",
             "unit",
             "usd"
         ],
-        "a point carries its shares with no flag beside them: {point}"
+        "a point carries its shares, its 20x equivalents and the estimated flag: {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -1708,19 +1755,79 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     assert!(
         keyed.iter().all(|p| null_field(p, "five_hour_share")
             && null_field(p, "seven_day_share")
+            && null_field(p, "model_week_share")
             && null_field(p, "unit")),
-        "the shares are an account-grouped figure alone, since shares of different accounts' windows do not add"
+        "a key spans accounts whose window shares do not add, so with no filter naming one account it answers no \
+         share and no unit"
     );
-    assert_eq!(
+    let bucket_at = |points: &[serde_json::Value], at: i64| {
+        points
+            .iter()
+            .find(|p| p["at"] == at)
+            .cloned()
+            .unwrap_or_else(|| panic!("a bucket at {at}: {points:?}"))
+    };
+    let keyed_opus = bucket_at(keyed, hour);
+    assert!(
+        close_to(&keyed_opus["five_hour_equivalent"], five_hour_equivalent)
+            && close_to(&keyed_opus["seven_day_equivalent"], seven_day_equivalent)
+            && keyed_opus["estimated"] == false,
+        "the 20x equivalent adds across accounts, the api_key row adding a zero to the subscription's: {keyed_opus}"
+    );
+    assert!(
+        close_to(
+            &bucket_at(keyed, fable_hour)["model_week_equivalent"],
+            week_equivalent
+        ),
+        "and so does the model week's: {by_key}"
+    );
+    let one_account = json(
         get(
             &parts.app,
-            "/admin/analytics/burn?group_by=pool",
-            Some(&cookie)
+            "/admin/analytics/burn?range=24h&group_by=key&accounts=business",
+            Some(&cookie),
         )
-        .await
-        .status(),
-        400,
-        "pool is not one of the burn route's own group_by values"
+        .await,
+    )
+    .await;
+    let named = one_account["points"].as_array().unwrap();
+    let named_opus = bucket_at(named, hour);
+    assert!(
+        named_opus["unit"] == "window_share"
+            && close_to(&named_opus["five_hour_share"], five_hour)
+            && close_to(&named_opus["seven_day_share"], seven_day)
+            && named_opus["usd"] == 0.0,
+        "a filter naming one account answers its unit and its shares under any grouping, its rows alone: {named_opus}"
+    );
+    assert!(
+        close_to(
+            &bucket_at(named, fable_hour)["model_week_share"],
+            week_share
+        ),
+        "the model week's share among them: {one_account}"
+    );
+    let by_pool = get(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=pool",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        by_pool.status(),
+        200,
+        "the burn groups by every dimension of the page's group-by"
+    );
+    let by_pool = json(by_pool).await;
+    let pools: std::collections::BTreeSet<&str> = by_pool["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["group"].as_str())
+        .collect();
+    assert_eq!(
+        pools,
+        std::collections::BTreeSet::from(["main"]),
+        "the groups are the pools the range's rows name: {by_pool}"
     );
 }
 
@@ -1775,6 +1882,19 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         ),
         "the account still charts in its window unit at a zero share, so it reads as priced beside its dollars: \
          {point}"
+    );
+    assert_eq!(
+        (
+            &point["five_hour_equivalent"],
+            &point["seven_day_equivalent"],
+            &point["estimated"],
+        ),
+        (
+            &serde_json::json!(0.0),
+            &serde_json::json!(0.0),
+            &serde_json::json!(false),
+        ),
+        "a bucket with tokens and no plan row reads a zero 20x equivalent, and a fast row marks no estimate: {point}"
     );
 }
 
@@ -1951,7 +2071,7 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
         for member in SHARES {
             assert!(
                 null_field(row, member),
-                "no grouping but account answers {member}: {row}"
+                "a model spans accounts, so with no filter naming one it answers {member} null: {row}"
             );
         }
     }
@@ -1967,6 +2087,27 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
             && sonnet["estimated"] == false,
         "the plan row's equivalent and the api_key row's dollars answer beside today's members: {sonnet}"
     );
+    let one_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=model&accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let named = row_of(&one_account, "claude-sonnet-5-5");
+    assert!(
+        positive(&named["cost_shares"]["five_hour"]),
+        "a filter naming one account answers the shares under the model grouping: {named}"
+    );
+    for member in SHARES {
+        assert_eq!(
+            named[member], business[member],
+            "the one account's model row answers the account row's {member}, its rows the same: {named} vs \
+             {business}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2019,6 +2160,54 @@ async fn the_series_points_carry_the_same_shares_per_bucket() {
         positive(&point["cost_shares"]["five_hour"]),
         "and it is priced: {point}"
     );
+    let model_group = |by_model: &serde_json::Value| {
+        by_model["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|p| {
+                p["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["key"] == "claude-sonnet-5-5")
+                    .cloned()
+            })
+            .unwrap_or_else(|| panic!("a bucket carries the model's group: {by_model}"))
+    };
+    let unfiltered = model_group(
+        &json(
+            get(
+                &parts.app,
+                "/admin/analytics/series?range=24h&group_by=model",
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await,
+    );
+    let named = model_group(
+        &json(
+            get(
+                &parts.app,
+                "/admin/analytics/series?range=24h&group_by=model&accounts=business",
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await,
+    );
+    for member in SHARES {
+        assert!(
+            null_field(&unfiltered, member),
+            "a model spans accounts, so with no filter naming one its bucket answers {member} null: {unfiltered}"
+        );
+        assert_eq!(
+            named[member], point[member],
+            "a filter naming one account answers the account bucket's {member} under the model grouping: {named} \
+             vs {point}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2324,51 +2513,218 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         (mid_point["usd"].as_f64().unwrap() - mid_usd).abs() < 1e-12,
         "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
     );
+    assert_eq!(
+        (
+            &mid_point["five_hour_equivalent"],
+            &mid_point["seven_day_equivalent"]
+        ),
+        (&serde_json::json!(0.0), &serde_json::json!(0.0)),
+        "an api_key session draws no plan window: {mid_point}"
+    );
     // A session can move between upstreams, and shares of different accounts' windows do not add.
     assert!(
         points.iter().all(|p| null_field(p, "five_hour_share")
             && null_field(p, "seven_day_share")
             && null_field(p, "unit")),
-        "the session grouping answers no share, a tier on file or not: {points:?}"
+        "the session grouping answers no share with no filter naming one account, a tier on file or not: \
+         {points:?}"
+    );
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let usage = phoebis_routing::PinUsage {
+        input: 2_000,
+        output: 200,
+        ..phoebis_routing::PinUsage::default()
+    };
+    let one_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=session&accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let named = one_account["points"].as_array().unwrap();
+    assert!(
+        named.iter().all(|p| p["group"] != "s-mid"),
+        "the sessions rank by the named account's attempts alone: {one_account}"
+    );
+    for started in [now - HOUR - 100, now - 100] {
+        let bucket_of = |points: &[serde_json::Value]| {
+            points
+                .iter()
+                .find(|p| {
+                    p["group"] == "s-big" && p["at"] == phoebis_ledger::hour_of(started) * 1_000
+                })
+                .cloned()
+                .unwrap_or_else(|| panic!("s-big's bucket of {started}: {points:?}"))
+        };
+        // The band reads at the attempt's completion, the request's finish half a second after its start.
+        let completed = started + 500;
+        let equivalent = |window: &str| {
+            tables
+                .equivalent_at(window, "claude-sonnet-5", usage, completed)
+                .unwrap()
+        };
+        let any = bucket_of(points);
+        assert!(
+            close_to(
+                &any["five_hour_equivalent"],
+                equivalent(phoebis_routing::FIVE_HOUR)
+            ) && close_to(
+                &any["seven_day_equivalent"],
+                equivalent(phoebis_routing::SEVEN_DAY)
+            ) && any["estimated"] == false,
+            "a session's bucket reads its attempt's 20x equivalent with no account named: {any}"
+        );
+        let share = |window: &str| {
+            tables
+                .share_at(
+                    window,
+                    "default_claude_max_20x",
+                    "claude-sonnet-5",
+                    usage,
+                    completed,
+                )
+                .unwrap()
+        };
+        let one = bucket_of(named);
+        assert!(
+            one["unit"] == "window_share"
+                && close_to(&one["five_hour_share"], share(phoebis_routing::FIVE_HOUR))
+                && close_to(&one["seven_day_share"], share(phoebis_routing::SEVEN_DAY)),
+            "with one account named, the bucket reads the shares of the tier its attempt recorded: {one}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_burn_key_grouping_names_the_live_holder_by_its_id_and_an_earlier_one_by_its_generation(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let earlier = generation - 1;
+    let at = common::NOW - HOUR;
+    parts.ledger.record(record_at(
+        "key-live",
+        at,
+        "claude-sonnet-5-5",
+        "s1",
+        generation,
+    ));
+    parts.ledger.record(record_at(
+        "key-earlier",
+        at,
+        "claude-sonnet-5-5",
+        "s2",
+        earlier,
+    ));
+    landed(&parts, &["key-live", "key-earlier"]).await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let tokens: std::collections::BTreeMap<String, u64> = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["tokens"].as_u64().unwrap_or(0) > 0)
+        .map(|p| {
+            (
+                p["group"].as_str().unwrap().to_string(),
+                p["tokens"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        tokens,
+        std::collections::BTreeMap::from([
+            ("desktop".to_string(), 1_100),
+            (format!("desktop@{earlier}"), 1_100),
+        ]),
+        "the key that holds the id now reads under the id and an earlier holder under its generation"
     );
 }
 
 #[tokio::test]
-async fn a_failed_tier_read_fails_the_account_burn_grouping_alone() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let store = std::sync::Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
-    );
-    let parts = common::admin_parts_full_on(store).await;
+async fn the_burn_files_an_agent_under_the_user_agent_group_its_pattern_names() {
+    let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // A blob where the tier's text belongs fails every read of the OAuth account's subscription, and no other read
-    // the burn route makes touches the column.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute(
-        "UPDATE accounts SET subscription_tier = X'00' WHERE id = 'business'",
-        [],
+    let agent = |id: &str, user_agent: &str| {
+        let mut row = record(id, common::NOW - HOUR, "claude-sonnet-5-5", "s1");
+        if let Record::Request { request, .. } = &mut row {
+            request.user_agent = Some(user_agent.into());
+        }
+        row
+    };
+    parts
+        .ledger
+        .record(agent("agent-cli", "claude-cli/2.1.300 (external, cli)"));
+    parts.ledger.record(agent("agent-curl", "curl/8.5.0"));
+    landed(&parts, &["agent-cli", "agent-curl"]).await;
+    let response = get(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=user_agent&user_agent_groups=claude-cli%2F*",
+        Some(&cookie),
     )
-    .unwrap();
-    drop(conn);
-    for (group_by, status) in [
-        ("account", 500),
-        ("key", 200),
-        ("request_class", 200),
-        ("session", 200),
-    ] {
-        let response = get(
-            &parts.app,
-            &format!("/admin/analytics/burn?range=24h&group_by={group_by}"),
-            Some(&cookie),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            status,
-            "only the account grouping answers a share, so only it reads the tier: {group_by}"
-        );
-    }
+    .await;
+    assert_eq!(
+        response.status(),
+        200,
+        "the burn groups by the user agent as the page does"
+    );
+    let burn = json(response).await;
+    let tokens: std::collections::BTreeMap<&str, u64> = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["tokens"].as_u64().unwrap_or(0) > 0)
+        .map(|p| (p["group"].as_str().unwrap(), p["tokens"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        tokens,
+        std::collections::BTreeMap::from([("claude-cli/*", 1_100), ("other", 1_100)]),
+        "a pattern names its group and an agent no pattern matches files under other"
+    );
+    let too_many = (0..33)
+        .map(|i| format!("p{i}"))
+        .collect::<Vec<_>>()
+        .join("%0A");
+    let refused = get(
+        &parts.app,
+        &format!("/admin/analytics/burn?range=24h&user_agent_groups={too_many}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refused.status(),
+        400,
+        "the patterns are held to the bound the breakdown holds them to"
+    );
+    assert_eq!(
+        json(refused).await["error"],
+        phoebis_ledger::PATTERNS_TOO_LONG
+    );
 }
 
 #[tokio::test]

@@ -1179,6 +1179,24 @@ fn every_query_name_a_handler_reads_is_declared_and_nothing_else() {
     }
 }
 
+/// The query check compares names per module, and the breakdown's query declares the same names, so it would pass a
+/// burn operation that left the two it reads out of the document.
+#[tokio::test]
+async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_reads() {
+    let (_app, _up, document) = document().await;
+    let names: BTreeSet<&str> = document["paths"]["/admin/analytics/burn"]["get"]["parameters"]
+        .as_array()
+        .expect("the burn operation's parameters")
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["accounts", "group_by", "range", "user_agent_groups"]),
+        "the burn operation's query"
+    );
+}
+
 #[test]
 fn every_module_that_reads_a_query_is_in_the_query_check() {
     let checked: BTreeSet<&str> = QUERY_MODULES.iter().map(|(m, _)| *m).collect();
