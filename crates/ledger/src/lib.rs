@@ -11,6 +11,7 @@ mod keys;
 mod metrics;
 mod pattern;
 mod plan;
+mod price;
 mod pricing;
 mod query;
 mod quota;
@@ -35,12 +36,13 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{
-    funding_of, price_shares, Capacity, CostRevisions, DefinedBy, Funding, ModelWindow, Override,
-    Peak, PerWindow, PlanTables, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit,
-    WindowShares,
+    funding_of, price_equivalent, price_shares, Capacity, CostRevisions, DefinedBy, Funding,
+    ModelWindow, Override, Peak, PerWindow, PlanTables, PricedShares, SubscriptionCosts,
+    TypeMultiplier, TypeOverride, Unit, WindowShares,
 };
+pub use price::{price_row, Priced, RowKey};
 pub use pricing::{
-    effective_instant, price_attempts, prompt_tokens, LongContext, ModelPrice, ModelRow,
+    effective_instant, price_attempts, prompt_tokens, Band, LongContext, ModelPrice, ModelRow,
     PriceRevisions, PriceTable, Pricing, Speed,
 };
 #[cfg(any(test, feature = "test-support"))]

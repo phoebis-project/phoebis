@@ -191,7 +191,9 @@ pub struct SubscriptionCosts {
     pub capacity: IndexMap<String, Capacity>,
     pub peak: Peak,
     pub type_multiplier: TypeMultiplier,
-    /// Units per plain input token, keyed by undated model id; `null` prices nothing.
+    /// Units per plain input token, keyed by undated model id. A `null` weight, like a model left out, prices at the
+    /// weight of its model tier's latest weighted model as an estimate, and a model of no model tier, or of one with
+    /// no weighted model, prices nothing.
     pub model_weight: IndexMap<String, Option<f64>>,
     pub model_windows: IndexMap<String, ModelWindow>,
     pub overrides: IndexMap<String, Override>,
@@ -576,6 +578,23 @@ impl SubscriptionCosts {
         Some(units / capacity / self.factor_at(priced, at) / divisor)
     }
 
+    /// `share_at` under the anchor tier (`unit.defined_by.tier`): the cost model's units over the Max 20x capacity.
+    pub fn equivalent_at(
+        &self,
+        window: &str,
+        canonical_model: &str,
+        usage: PinUsage,
+        at: i64,
+    ) -> Option<f64> {
+        self.share_at(
+            window,
+            &self.unit.defined_by.tier,
+            canonical_model,
+            usage,
+            at,
+        )
+    }
+
     /// The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's
     /// capacity factor inside the band, else 1.
     pub fn band_factor(&self, window: &str, at: i64) -> f64 {
@@ -678,6 +697,12 @@ impl SubscriptionCosts {
                     .map(|(model, _)| model.as_str()),
             )
             .collect()
+    }
+
+    /// Whether the account tier holds a capacity on either window, the tiers `sized_tier_count` counts.
+    pub(crate) fn sizes(&self, tier: &str) -> bool {
+        tier_row(&self.capacity, tier)
+            .is_some_and(|c| c.five_hour.is_some() || c.seven_day.is_some())
     }
 
     /// The tiers with a capacity on either window; a listed tier null on both prices nothing. The count sits on the
@@ -825,6 +850,18 @@ impl PlanTables {
             .share_at(window, tier, canonical_model, usage, at)
     }
 
+    pub fn equivalent_at(
+        &self,
+        window: &str,
+        canonical_model: &str,
+        usage: PinUsage,
+        at: i64,
+    ) -> Option<f64> {
+        self.revisions
+            .in_force(at)
+            .equivalent_at(window, canonical_model, usage, at)
+    }
+
     pub fn band_factor(&self, window: &str, at: i64) -> f64 {
         self.revisions.in_force(at).band_factor(window, at)
     }
@@ -928,23 +965,76 @@ impl Funding {
 /// could not price (`None`), and a model week is never nulled by a model that has none.
 pub type WindowShares = IndexMap<&'static str, Option<f64>>;
 
-/// `share_at` on the two shared windows and on `window_for(canonical_model)` where that is a model week, at `at`.
+/// Shares with the fallback's mark per window: `estimated` holds the keys of `shares`, true where that window's
+/// share priced at the weight of the model tier's latest weighted model. A model with a null weight and an override
+/// weight on one window prices that window on its own weight and the others through the fallback.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct PricedShares {
+    pub shares: WindowShares,
+    pub estimated: IndexMap<&'static str, bool>,
+}
+
+impl PricedShares {
+    /// Whether any window priced through the fallback, the flag a reader marking a whole figure reads.
+    pub fn any_estimated(&self) -> bool {
+        self.estimated.values().any(|estimated| *estimated)
+    }
+}
+
+/// `share_at` under the account tier on the two shared windows and on `window_for(canonical_model)` where that is a
+/// model week, each window flagged where it priced through the fallback. `at` selects the cost revision (the
+/// request's receipt, what the dollars and the rollup select on) and `band_at` the peak band inside that revision (the
+/// completion where a reader has one, else `at`). The revision never reads `band_at`.
 pub fn price_shares(
     tables: &PlanTables,
     tier: &str,
     canonical_model: &str,
     usage: PinUsage,
     at: i64,
-) -> WindowShares {
+    band_at: i64,
+) -> PricedShares {
+    let costs = tables.revisions.in_force(at);
+    priced_windows(costs, canonical_model, |window| {
+        costs.share_at(window, tier, canonical_model, usage, band_at)
+    })
+}
+
+/// The three equivalent columns (`five_hour`, `seven_day`, the model week where the model carries one) at the
+/// revision in force at `at`, the band read at `band_at`, the weight through the fallback.
+pub fn price_equivalent(
+    tables: &PlanTables,
+    canonical_model: &str,
+    usage: PinUsage,
+    at: i64,
+    band_at: i64,
+) -> PricedShares {
+    let costs = tables.revisions.in_force(at);
+    priced_windows(costs, canonical_model, |window| {
+        costs.equivalent_at(window, canonical_model, usage, band_at)
+    })
+}
+
+/// `share` on the two shared windows and on `window_for(canonical_model)` where that is a model week, each window
+/// marked where it priced through the fallback.
+fn priced_windows(
+    costs: &SubscriptionCosts,
+    canonical_model: &str,
+    share: impl Fn(&'static str) -> Option<f64>,
+) -> PricedShares {
     let week = window_for(canonical_model);
-    [FIVE_HOUR, SEVEN_DAY]
+    let mut priced = PricedShares::default();
+    for window in [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain((week != SEVEN_DAY).then_some(week))
-        .map(|window| {
-            (
-                window,
-                tables.share_at(window, tier, canonical_model, usage, at),
-            )
-        })
-        .collect()
+    {
+        let share = share(window);
+        // A window that prices nothing carries no estimate, so a bucket the readers null is never marked.
+        let estimated = share.is_some()
+            && costs
+                .weight_or_fallback(canonical_model, window)
+                .is_some_and(|(_, fallback)| fallback);
+        priced.shares.insert(window, share);
+        priced.estimated.insert(window, estimated);
+    }
+    priced
 }

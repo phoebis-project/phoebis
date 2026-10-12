@@ -1188,13 +1188,8 @@ fn with_probes() -> RollupFilter {
 
 /// A Fable share on `test_tier` at the off-band hour, the share cases' instant.
 fn fable_shares(tables: &PlanTables, usage: PinUsage) -> WindowShares {
-    price_shares(
-        tables,
-        "test_tier",
-        "claude-fable-5-1",
-        usage,
-        hour_range(WEEKDAY_OFF_PEAK).0,
-    )
+    let at = hour_range(WEEKDAY_OFF_PEAK).0;
+    price_shares(tables, "test_tier", "claude-fable-5-1", usage, at, at).shares
 }
 
 #[tokio::test]
@@ -1334,7 +1329,9 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
         "claude-fable-5-1",
         usage(1_000, 100),
         from,
-    )[FIVE_HOUR]
+        from,
+    )
+    .shares[FIVE_HOUR]
         .unwrap();
     assert_eq!(
         cost.keys().copied().collect::<Vec<_>>(),
@@ -1381,7 +1378,9 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
         "claude-haiku-4-5",
         usage(1_000, 100),
         from,
-    );
+        from,
+    )
+    .shares;
     for order in ["as read", "reversed"] {
         let groups = breakdown(
             &rows,
@@ -3291,7 +3290,9 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
         "claude-fable-5-1",
         one,
         WEEKDAY_OFF_PEAK,
-    );
+        WEEKDAY_OFF_PEAK,
+    )
+    .shares;
     assert_eq!(keys(&fable), [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]);
     assert!(
         close(fable[FIVE_HOUR], 0.1)
@@ -3305,7 +3306,9 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
         "claude-haiku-4-5",
         one,
         WEEKDAY_OFF_PEAK,
-    );
+        WEEKDAY_OFF_PEAK,
+    )
+    .shares;
     assert_eq!(
         keys(&haiku),
         [FIVE_HOUR, SEVEN_DAY],
@@ -3321,7 +3324,9 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
         "claude-fable-5-1",
         one,
         WEEKDAY_OFF_PEAK,
-    );
+        WEEKDAY_OFF_PEAK,
+    )
+    .shares;
     assert_eq!(keys(&narrow), [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]);
     assert!(
         close(narrow[FIVE_HOUR], 0.1) && narrow[SEVEN_DAY].is_none() && narrow[SEVEN_DAY_FABLE].is_none(),
@@ -3333,7 +3338,9 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
         "claude-opus-5-5",
         one,
         WEEKDAY_OFF_PEAK,
-    );
+        WEEKDAY_OFF_PEAK,
+    )
+    .shares;
     assert_eq!(
         unweighted.into_iter().collect::<Vec<_>>(),
         [(FIVE_HOUR, None), (SEVEN_DAY, None)],
@@ -3345,7 +3352,9 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
         "claude-fable-5-1",
         one,
         WEEKDAY_OFF_PEAK,
-    );
+        WEEKDAY_OFF_PEAK,
+    )
+    .shares;
     assert_eq!(
         no_tier.into_iter().collect::<Vec<_>>(),
         [

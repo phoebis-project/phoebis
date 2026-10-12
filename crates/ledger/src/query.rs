@@ -1819,7 +1819,8 @@ impl ShareSums {
     /// take the row, and the probe cost when the row is a probe's, each window priced at the row's own hour.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
         self.add_priced(row, counted, |usage| {
-            price_shares(tables, tier, &row.canonical_model, usage, row.hour * 1_000)
+            let at = row.hour * 1_000;
+            price_shares(tables, tier, &row.canonical_model, usage, at, at).shares
         });
     }
 
@@ -3558,7 +3559,7 @@ mod tests {
             if priced == usage {
                 whole.set(whole.get() + 1);
             }
-            price_shares(&tables, TIER, model, priced, HOUR * 1_000)
+            price_shares(&tables, TIER, model, priced, HOUR * 1_000, HOUR * 1_000).shares
         });
         assert_eq!(whole.get(), 1, "the row's usage is priced once");
         let sums_of = |windows: &IndexMap<&'static str, WindowSum>| {

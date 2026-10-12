@@ -5,8 +5,8 @@
 
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    funding_of, CostRevisions, Funding, LedgerError, PlanTables, SubscriptionCosts, BILLED_FUNDING,
-    FAST_FUNDING,
+    funding_of, price_equivalent, price_shares, CostRevisions, Funding, LedgerError, PlanTables,
+    SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -30,6 +30,8 @@ const NOVEMBER_HALF_PAST_SIX: i64 = 1_793_644_200_000;
 /// Inside the band and outside it, on the same weekday.
 const IN_BAND: i64 = SEPTEMBER_AFTERNOON;
 const OUT_OF_BAND: i64 = SEPTEMBER_BEFORE_NOON;
+/// Thursday 2026-01-15 at 14:00 UTC, inside the band and inside the test table's first revision.
+const JANUARY_IN_BAND: i64 = 1_768_485_600_000;
 
 const MAX_20X: &str = "default_claude_max_20x";
 const MAX_5X: &str = "default_claude_max_5x";
@@ -37,6 +39,7 @@ const PRO: &str = "default_claude_ai";
 const TEAM: &str = "default_claude_team";
 const OPUS: &str = "claude-opus-5-5";
 const HAIKU: &str = "claude-haiku-4-5";
+const FABLE: &str = "claude-fable-5-1";
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs().max(1.0)
@@ -57,6 +60,13 @@ fn input(tokens: u64) -> PinUsage {
 fn cache_read(tokens: u64) -> PinUsage {
     PinUsage {
         cache_read: tokens,
+        ..Default::default()
+    }
+}
+
+fn output(tokens: u64) -> PinUsage {
+    PinUsage {
+        output: tokens,
         ..Default::default()
     }
 }
@@ -401,6 +411,225 @@ fn a_tier_the_file_lacks_or_a_null_capacity_prices_nothing_on_that_window() {
         "Team on the 5-hour window: 2 / 10",
     );
     assert!(tables.priced(FIVE_HOUR, TEAM, OPUS));
+}
+
+// The equivalent is the share of the anchor account tier, Max 20x: one Opus 5.5 input token is 2 units, 2 / 100 of
+// the 5-hour window out of band and over the band's 0.5 inside it, 2 / 1000 of the week, and one Fable 5.1 input
+// token is 10 units over the week's 1000 and the Fable week's 0.5.
+#[test]
+fn the_equivalent_is_the_share_of_the_max_20x_windows_on_the_three_columns() {
+    let tables = tables();
+    assert_share(
+        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_2026),
+        0.02,
+        "the 5-hour window out of band",
+    );
+    assert_share(
+        tables.equivalent_at(FIVE_HOUR, OPUS, input(1), JANUARY_IN_BAND),
+        0.04,
+        "the 5-hour window inside the band",
+    );
+    assert_share(
+        first().equivalent_at(FIVE_HOUR, OPUS, input(1), IN_BAND),
+        0.04,
+        "one revision's equivalent reads the band at its instant",
+    );
+    assert_share(
+        tables.equivalent_at(SEVEN_DAY, OPUS, input(1), JANUARY_2026),
+        0.002,
+        "the week",
+    );
+    assert_share(
+        tables.equivalent_at(SEVEN_DAY_FABLE, FABLE, input(1), JANUARY_2026),
+        0.02,
+        "the Fable week: 10 / 1000 / 0.5",
+    );
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert_eq!(
+            tables.equivalent_at(window, "claude-mystery-2", input(1), JANUARY_2026),
+            None,
+            "a model tier with no weighted model on {window}"
+        );
+    }
+}
+
+#[test]
+fn the_equivalent_answers_the_model_week_for_a_model_that_carries_one_and_the_fallback_marked() {
+    let tables = tables();
+    let fable = price_equivalent(&tables, FABLE, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        fable.shares.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+    );
+    for (window, want) in [(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.01), (SEVEN_DAY_FABLE, 0.02)] {
+        assert_share(fable.shares[window], want, window);
+        assert!(!fable.estimated[window], "{window}");
+    }
+    let opus = price_equivalent(&tables, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        opus.shares.keys().copied().collect::<Vec<_>>(),
+        [FIVE_HOUR, SEVEN_DAY]
+    );
+    assert_share(
+        opus.shares[FIVE_HOUR],
+        0.02,
+        "Opus 5.5 on the 5-hour window",
+    );
+    assert_share(opus.shares[SEVEN_DAY], 0.002, "Opus 5.5 on the week");
+    assert!(!opus.any_estimated());
+    let unweighted = price_equivalent(
+        &tables,
+        "claude-opus-5",
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert_eq!(
+        unweighted.shares, opus.shares,
+        "Opus 5 at Opus 5.5's weight"
+    );
+    assert!(
+        unweighted.estimated.values().all(|estimated| *estimated),
+        "{unweighted:?}"
+    );
+}
+
+#[test]
+fn a_share_priced_at_its_model_tiers_latest_weight_is_marked_estimated() {
+    let tables = tables();
+    let unweighted = price_shares(
+        &tables,
+        MAX_20X,
+        "claude-opus-5",
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert_eq!(
+        unweighted.estimated.into_iter().collect::<Vec<_>>(),
+        [(FIVE_HOUR, true), (SEVEN_DAY, true)]
+    );
+    let weighted = price_shares(&tables, MAX_20X, OPUS, input(1), JANUARY_2026, JANUARY_2026);
+    assert_eq!(
+        weighted.estimated.into_iter().collect::<Vec<_>>(),
+        [(FIVE_HOUR, false), (SEVEN_DAY, false)]
+    );
+    assert_eq!(unweighted.shares, weighted.shares);
+}
+
+// Haiku 4.5 keeps its override of 1 on the week with its shared weight set to null, and Haiku 5.5 weighs 0.25: the
+// week prices on the override's own weight, the 5-hour window on Haiku 5.5's as the estimate.
+#[test]
+fn a_null_weight_with_an_override_on_one_window_marks_the_other_windows_alone_as_estimated() {
+    let text = test_tables::first_entry_costs_text()
+        .replace(
+            "      claude-haiku-4-5: 0.5\n",
+            "      claude-haiku-4-5: null\n      claude-haiku-5-5: 0.25\n",
+        )
+        .replace(
+            "      claude-haiku-4-5: haiku\n",
+            "      claude-haiku-4-5: haiku\n      claude-haiku-5-5: haiku\n",
+        );
+    let edited = PlanTables {
+        revisions: CostRevisions::from_yaml(&text).expect("the edited model loads"),
+        path: None,
+        source: "test".to_string(),
+    };
+    for priced in [
+        price_shares(
+            &edited,
+            MAX_20X,
+            HAIKU,
+            input(1),
+            JANUARY_2026,
+            JANUARY_2026,
+        ),
+        price_equivalent(&edited, HAIKU, input(1), JANUARY_2026, JANUARY_2026),
+    ] {
+        assert_share(priced.shares[FIVE_HOUR], 0.0025, "Haiku 5.5's 0.25 / 100");
+        assert_share(priced.shares[SEVEN_DAY], 0.001, "the override's 1 / 1000");
+        assert_eq!(
+            priced
+                .estimated
+                .iter()
+                .map(|(w, e)| (*w, *e))
+                .collect::<Vec<_>>(),
+            [(FIVE_HOUR, true), (SEVEN_DAY, false)]
+        );
+        assert!(priced.any_estimated());
+    }
+    let unedited = price_shares(
+        &tables(),
+        MAX_20X,
+        HAIKU,
+        input(1),
+        JANUARY_2026,
+        JANUARY_2026,
+    );
+    assert!(!unedited.any_estimated(), "{unedited:?}");
+}
+
+// The worked figures on the shipped file, each derived from its members rather than written down, so a revision edits
+// no test: one million input tokens of Opus 5.5 and of Fable 5.1, one million Opus 5.5 output tokens, and the Opus 5.5
+// request as a share of a Pro account's own 5-hour window.
+#[test]
+fn the_shipped_equivalent_is_the_units_over_the_max_20x_capacity_and_a_pro_share_scales_it_by_the_capacities(
+) {
+    let costs = CostRevisions::shipped().in_force(OUT_OF_BAND).clone();
+    assert_eq!(
+        costs.band_factor(FIVE_HOUR, OUT_OF_BAND),
+        1.0,
+        "out of band"
+    );
+    for model in [OPUS, FABLE] {
+        assert!(
+            !costs.overrides.contains_key(model),
+            "{model} carries no override"
+        );
+    }
+    let anchor = &costs.capacity[&costs.unit.defined_by.tier];
+    let (five_hour, seven_day) = (anchor.five_hour.unwrap(), anchor.seven_day.unwrap());
+    let fable_week = costs.model_windows[SEVEN_DAY_FABLE].capacity_factor;
+    let million = 1_000_000;
+    let units = |model: &str, multiplier: f64| {
+        million as f64 * costs.model_weight[model].unwrap() * multiplier
+    };
+    let multiplier = &costs.type_multiplier;
+    let opus = units(OPUS, multiplier.input);
+    let opus_equivalent = opus / five_hour;
+    assert_share(
+        costs.equivalent_at(FIVE_HOUR, OPUS, input(million), OUT_OF_BAND),
+        opus_equivalent,
+        "Opus 5.5 input on the 5-hour window",
+    );
+    assert_share(
+        costs.equivalent_at(SEVEN_DAY, OPUS, input(million), OUT_OF_BAND),
+        opus / seven_day,
+        "Opus 5.5 input on the week",
+    );
+    let fable = units(FABLE, multiplier.input);
+    for (window, want) in [
+        (FIVE_HOUR, fable / five_hour),
+        (SEVEN_DAY, fable / seven_day),
+        (SEVEN_DAY_FABLE, fable / seven_day / fable_week),
+    ] {
+        assert_share(
+            costs.equivalent_at(window, FABLE, input(million), OUT_OF_BAND),
+            want,
+            &format!("Fable 5.1 input on {window}"),
+        );
+    }
+    assert_share(
+        costs.equivalent_at(FIVE_HOUR, OPUS, output(million), OUT_OF_BAND),
+        units(OPUS, multiplier.output) / five_hour,
+        "Opus 5.5 output on the 5-hour window",
+    );
+    let pro = costs.capacity[PRO].five_hour.unwrap();
+    assert_share(
+        costs.share_at(FIVE_HOUR, PRO, OPUS, input(million), OUT_OF_BAND),
+        opus_equivalent * five_hour / pro,
+        "the Pro share is the equivalent times the anchor's capacity over Pro's",
+    );
 }
 
 // Pro holds 5 of the anchor's 100 on the 5-hour window, Max 5x 250 of its 1000 on the week.

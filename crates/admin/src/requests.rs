@@ -507,10 +507,18 @@ fn cost_shares_json(
     // A sorted map keeps the order `price_shares` inserts the window ids in: `five_hour`, `seven_day`, then the
     // model week named `seven_day_<family>`.
     Some(
-        price_shares(&shares.tables, tier, &r.canonical_model, usage, at)
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect(),
+        price_shares(
+            &shares.tables,
+            tier,
+            &r.canonical_model,
+            usage,
+            r.received_at,
+            at,
+        )
+        .shares
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
     )
 }
 

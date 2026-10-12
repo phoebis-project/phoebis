@@ -42,6 +42,31 @@ impl Speed {
     }
 }
 
+/// Which cells a prompt's length selects on a row that carries a long-context block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Band {
+    Standard,
+    LongContext,
+}
+
+impl Band {
+    /// The rollup key word: `standard` or `long`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Band::Standard => "standard",
+            Band::LongContext => "long",
+        }
+    }
+
+    /// `long` reads `LongContext`, any other word `Standard`.
+    pub fn of_rollup(word: &str) -> Band {
+        match word {
+            "long" => Band::LongContext,
+            _ => Band::Standard,
+        }
+    }
+}
+
 /// One model's row: the standard cells, the fast cells on a model that serves fast mode, and the long-context
 /// cells on a model priced by prompt length.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -146,6 +171,13 @@ impl PriceRevisions {
 
     pub fn len(&self) -> usize {
         self.revisions.len()
+    }
+
+    /// The dearest listed standard cell of each type in the revision in force at `at_ms` (what `rate_table().fallback`
+    /// computes on one table), for a probe row on a model the revision lacks: the keepalive's `probe_dollars` charges
+    /// such a probe at these cells, and a zero would read a probe that consumed quota as free.
+    pub fn fallback_rates(&self, at_ms: i64) -> phoebis_routing::Rates {
+        self.in_force(at_ms).rate_table().fallback
     }
 }
 
@@ -297,6 +329,47 @@ impl PriceTable {
         })
     }
 
+    /// `LongContext` when the row carries `long_context` and the prompt is longer than its `over`, else `Standard`.
+    pub fn band_of(&self, canonical_model: &str, prompt_tokens: u64) -> Band {
+        match self.entry(canonical_model) {
+            Some((_, row))
+                if row
+                    .long_context
+                    .as_ref()
+                    .is_some_and(|l| prompt_tokens > l.over) =>
+            {
+                Band::LongContext
+            }
+            _ => Band::Standard,
+        }
+    }
+
+    /// The cells `speed` and `band` select in `price_at`'s order: the `fast` block for a fast answer, else the
+    /// long-context cells for `LongContext` on a row that carries them, else the standard cells.
+    pub fn estimate_banded(
+        &self,
+        canonical_model: &str,
+        speed: Speed,
+        band: Band,
+        counts: phoebis_routing::PinUsage,
+    ) -> Option<(f64, CostSplit)> {
+        let (_, row) = self.entry(canonical_model)?;
+        let p = match (speed, row.fast.as_ref(), band, row.long_context.as_ref()) {
+            (Speed::Fast, Some(fast), _, _) => fast,
+            (_, _, Band::LongContext, Some(long)) => &long.cells,
+            _ => &row.standard,
+        };
+        let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
+        let split = CostSplit {
+            input_usd: per_m(counts.input, p.input),
+            cache_read_usd: per_m(counts.cache_read, p.cache_read),
+            cache_write_usd: per_m(counts.write_5m, p.cache_write_5m)
+                + per_m(counts.write_1h, p.cache_write_1h),
+            output_usd: per_m(counts.output, p.output),
+        };
+        Some((split.total(), split))
+    }
+
     /// Whether the row `entry` finds for `canonical_model` carries a `long_context` set: such a model's attempts
     /// cannot be re-priced from a period's token sums, which carry no per-attempt prompt.
     pub fn priced_by_prompt_length(&self, canonical_model: &str) -> bool {
@@ -386,19 +459,15 @@ impl PriceTable {
         write_1h: u64,
         output: u64,
     ) -> Option<(f64, CostSplit)> {
-        let p = self.price_at(
-            model,
-            speed,
-            prompt_tokens(input, cache_read, write_5m, write_1h),
-        )?;
-        let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
-        let split = CostSplit {
-            input_usd: per_m(input, p.input),
-            cache_read_usd: per_m(cache_read, p.cache_read),
-            cache_write_usd: per_m(write_5m, p.cache_write_5m) + per_m(write_1h, p.cache_write_1h),
-            output_usd: per_m(output, p.output),
+        let band = self.band_of(model, prompt_tokens(input, cache_read, write_5m, write_1h));
+        let counts = phoebis_routing::PinUsage {
+            input,
+            cache_read,
+            write_5m,
+            write_1h,
+            output,
         };
-        Some((split.total(), split))
+        self.estimate_banded(model, speed, band, counts)
     }
 }
 
@@ -1034,6 +1103,132 @@ mod tests {
         );
         assert!(close(usd, 7_942.5e-6), "{usd}");
         assert_eq!(prompt_tokens(1, 2, 3, 4), 10);
+    }
+
+    /// 2026-02-15 12:00 UTC, inside the price fixture's second entry.
+    const FEBRUARY_2026: i64 = 1_771_156_800_000;
+
+    fn input(tokens: u64) -> phoebis_routing::PinUsage {
+        phoebis_routing::PinUsage {
+            input: tokens,
+            ..Default::default()
+        }
+    }
+
+    // Haiku 5.5's block starts past 1,000 prompt tokens on the first entry and past 2,000 on the second, and Sonnet
+    // 5.5 carries no block.
+    #[test]
+    fn the_band_reads_long_context_past_the_rows_threshold_in_the_revision_and_standard_otherwise()
+    {
+        let revisions = crate::test_tables::api_prices();
+        let january = revisions.in_force(JANUARY_2026);
+        let february = revisions.in_force(FEBRUARY_2026);
+        assert_eq!(january.band_of("claude-haiku-5-5", 1_000), Band::Standard);
+        assert_eq!(
+            january.band_of("claude-haiku-5-5", 1_001),
+            Band::LongContext
+        );
+        for prompt in [0, 1_001, u64::MAX] {
+            assert_eq!(
+                january.band_of("claude-sonnet-5-5", prompt),
+                Band::Standard,
+                "a row without the block at {prompt}"
+            );
+            assert_eq!(
+                january.band_of("claude-mystery-9", prompt),
+                Band::Standard,
+                "an unlisted model at {prompt}"
+            );
+        }
+        assert_eq!(
+            january.band_of("claude-haiku-5-5", 1_500),
+            Band::LongContext
+        );
+        assert_eq!(
+            february.band_of("claude-haiku-5-5", 1_500),
+            Band::Standard,
+            "the second entry moves the threshold to 2,000"
+        );
+    }
+
+    #[test]
+    fn a_band_reads_back_from_its_rollup_word() {
+        for band in [Band::Standard, Band::LongContext] {
+            assert_eq!(Band::of_rollup(band.as_str()), band);
+        }
+        assert_eq!(Band::Standard.as_str(), "standard");
+        assert_eq!(Band::LongContext.as_str(), "long");
+    }
+
+    // One million input tokens read the input cell: Opus 5.5's fast 20, Haiku 5.5's long-context 5 and standard 1,
+    // and Sonnet 5.5's standard 3, since its row carries no long-context block.
+    #[test]
+    fn the_speed_and_the_band_select_the_fast_the_long_context_or_the_standard_cells() {
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
+        let usd = |model: &str, speed: Speed, band: Band| {
+            table
+                .estimate_banded(model, speed, band, input(1_000_000))
+                .map(|(usd, split)| {
+                    assert_eq!(usd, split.total());
+                    split.input_usd
+                })
+        };
+        assert_eq!(
+            usd("claude-opus-5-5", Speed::Fast, Band::Standard),
+            Some(20.0)
+        );
+        assert_eq!(
+            usd("claude-haiku-5-5", Speed::Standard, Band::LongContext),
+            Some(5.0)
+        );
+        assert_eq!(
+            usd("claude-haiku-5-5", Speed::Standard, Band::Standard),
+            Some(1.0)
+        );
+        assert_eq!(
+            usd("claude-sonnet-5-5", Speed::Standard, Band::LongContext),
+            Some(3.0)
+        );
+        assert_eq!(
+            usd("claude-mystery-9", Speed::Standard, Band::Standard),
+            None
+        );
+    }
+
+    #[test]
+    fn the_fallback_rates_are_the_dearest_listed_standard_cell_of_each_type_in_the_revision_in_force(
+    ) {
+        let revisions = crate::test_tables::api_prices();
+        let dearest = |at: i64, cell: fn(&ModelPrice) -> f64| {
+            revisions
+                .in_force(at)
+                .models
+                .values()
+                .map(|row| cell(&row.standard))
+                .fold(0.0, f64::max)
+                / 1_000_000.0
+        };
+        let cells = |at: i64| {
+            [
+                dearest(at, |p| p.input),
+                dearest(at, |p| p.cache_read),
+                dearest(at, |p| p.cache_write_5m),
+                dearest(at, |p| p.cache_write_1h),
+                dearest(at, |p| p.output),
+            ]
+        };
+        let rates = |at: i64| {
+            let r = revisions.fallback_rates(at);
+            [r.input, r.cache_read, r.write_5m, r.write_1h, r.output].map(Option::unwrap)
+        };
+        assert_eq!(rates(JANUARY_2026), cells(JANUARY_2026));
+        assert_eq!(rates(FEBRUARY_2026), cells(FEBRUARY_2026));
+        assert_eq!(
+            rates(FEBRUARY_2026),
+            cells(JANUARY_2026).map(|cell| cell * 2.0),
+            "the second entry doubles every standard cell"
+        );
     }
 
     #[test]
