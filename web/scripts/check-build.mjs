@@ -43,5 +43,32 @@ for (const name of loaded) {
   const which = name === entry ? 'the entry' : `${name}, loaded with the entry,`;
   if (read(name).includes('recharts-')) failures.push(`${which} carries Recharts code`);
 }
+// The API reference page is the bundle's second entry: its shell names a module script under dist/assets/, the
+// chunks that entry loads statically carry no Recharts code, and neither entry loads the other. Its size is
+// printed and takes no ceiling, since the size is Scalar's and a ceiling would move with every Scalar release.
+const referenceHtml = readFileSync(join(dist, 'api-reference', 'index.html'), 'utf8');
+const referenceTag = referenceHtml.match(/<script\b[^>]*\btype="module"[^>]*>/);
+const referenceSrc = referenceTag?.[0].match(/\bsrc="([^"]+)"/)?.[1];
+if (!referenceSrc) {
+  failures.push('dist/api-reference/index.html names no module script');
+} else {
+  const referenceEntry = basename(referenceSrc);
+  if (!referenceSrc.startsWith('/assets/')) failures.push(`the reference entry is loaded from ${referenceSrc}, not from /assets/`);
+  if (!chunks.includes(referenceEntry)) {
+    failures.push(`the reference entry ${referenceEntry} is not under dist/assets`);
+  } else {
+    const referenceKb = Buffer.byteLength(read(referenceEntry)) / 1000;
+    console.log(`reference entry ${referenceEntry} ${referenceKb.toFixed(1)} kB`);
+    const referenceLoaded = new Set([referenceEntry]);
+    for (const name of referenceLoaded) {
+      for (const [, next] of read(name).matchAll(/\b(?:from|import)\s*["']\.\/([^"']+\.js)["']/g)) referenceLoaded.add(next);
+    }
+    for (const name of referenceLoaded) {
+      if (read(name).includes('recharts-')) failures.push(`${name}, loaded by the reference, carries Recharts code`);
+    }
+    if (loaded.has(referenceEntry)) failures.push('the console entry loads the reference entry');
+    if (referenceLoaded.has(entry)) failures.push('the reference entry loads the console entry');
+  }
+}
 for (const failure of failures) console.error(failure);
 process.exit(failures.length ? 1 : 0);

@@ -39,6 +39,7 @@ fn main() {
     let web = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web");
     let dist = web.join("dist");
     let inputs = [
+        "api-reference",
         "src",
         "public",
         "index.html",

@@ -59,6 +59,7 @@ jobs:
       - run: npm run e2e:mock
         env:
           PHOEBIS_SCREENSHOT_DIR: ${{ runner.temp }}/screenshots
+      - run: npm run e2e:reference
   tests:
     name: Tests
     needs: [rust, web]

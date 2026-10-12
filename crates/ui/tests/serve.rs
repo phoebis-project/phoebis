@@ -1,5 +1,5 @@
-//! The embedded app: hashed assets cached for a year, the shell never cached, every unknown path the shell, and
-//! the admin and metrics paths never shadowed.
+//! The embedded app: hashed assets cached for a year, the shell never cached, every unknown path outside the API
+//! reference page's directory the shell, and the admin and metrics paths never shadowed.
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
@@ -152,6 +152,76 @@ async fn the_admin_and_metrics_routes_are_never_shadowed() {
         body.contains("not found") && !body.contains("<div"),
         "an unknown admin path is JSON, never the shell"
     );
+}
+
+/// The API reference page lives at its directory and its index, never under the console's shell rule, and
+/// anything else under the directory is a JSON 404, so a typo there never shows the console.
+#[tokio::test]
+async fn the_api_reference_page_is_served_at_its_directory_and_nothing_else_under_it() {
+    for path in [
+        "/api-reference",
+        "/api-reference/",
+        "/api-reference/index.html",
+    ] {
+        let (status, headers, body) = send("GET", path).await;
+        assert_eq!(headers["cache-control"], "no-store", "{path}");
+        assert_security_headers(&headers, path);
+        if phoebis_ui::is_placeholder() {
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "{path}: a placeholder build carries no reference page"
+            );
+            assert!(body.contains("not found"), "{path}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(
+                headers["content-type"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html"),
+                "{path}"
+            );
+            assert!(
+                body.contains(r#"<div id="app">"#),
+                "{path}: the reference shell"
+            );
+            assert!(
+                body.contains("<title>Phoebis Router API reference</title>"),
+                "{path}"
+            );
+            assert!(
+                !body.contains("theme.js"),
+                "{path}: the page's theme is its own"
+            );
+            assert!(
+                body.contains(r#"src="/assets/"#),
+                "{path}: the entry is loaded from the hashed assets"
+            );
+        }
+    }
+    for path in [
+        "/api-reference/x",
+        "/api-reference/x.js",
+        "/api-reference/openapi.json",
+    ] {
+        let (status, headers, body) = send("GET", path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(headers["cache-control"], "no-store", "{path}");
+        assert!(
+            body.contains("not found") && !body.contains("<div"),
+            "{path}: JSON, never a shell"
+        );
+    }
+    let (status, headers, body) = send("HEAD", "/api-reference/").await;
+    if !phoebis_ui::is_placeholder() {
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.contains_key("content-length"));
+    }
+    assert!(body.is_empty(), "a HEAD carries no body");
+    let (status, headers, _) = send("POST", "/api-reference/").await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(headers["allow"], "GET, HEAD");
 }
 
 /// `PHOEBIS_UI_EXPECT` pins which shell the build embedded, so a run that removes the bundle or sets

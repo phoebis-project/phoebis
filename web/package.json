@@ -13,12 +13,14 @@
     "dev": "vite",
     "e2e": "node e2e/views.mjs",
     "e2e:mock": "npm run build:mock && node e2e/mock-pass.mjs",
+    "e2e:reference": "node e2e/reference.mjs",
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",
     "sync-mock": "node scripts/sync-mock.mjs",
     "test": "vite build -c test/vite.config.ts && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@scalar/api-reference": "1.72.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "7.18.4",

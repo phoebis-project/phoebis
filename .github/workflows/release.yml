@@ -292,6 +292,18 @@ jobs:
           asset=$(printf '%s' "$shell" | grep -o '/assets/[^"'"'"' ]*' | head -1)
           [ -n "$asset" ] || { echo "the console page references no /assets/ path"; exit 1; }
           curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
+          # The API reference page and its document are served without a session: the page must be the built
+          # bundle's, and the document must name every operation of the admin listener.
+          reference=$(curl -fsS http://127.0.0.1:18081/api-reference/)
+          case "$reference" in
+            *'<div id="app">'*) ;;
+            *) echo "the image serves no API reference page"; exit 1;;
+          esac
+          curl -fsS http://127.0.0.1:18081/api-reference/openapi.json > "$tmp/openapi.json"
+          [ "$(jq -r .openapi "$tmp/openapi.json")" = 3.1.0 ] \
+            || { echo "the document is not OpenAPI 3.1.0"; exit 1; }
+          [ "$(jq '.paths | length' "$tmp/openapi.json")" = 51 ] \
+            || { echo "the document does not hold the admin listener's 51 paths"; exit 1; }
           # The container's environment carries the secret, so this smokes the bearer
           # path, the five reads and the screen.
           docker exec phoebis-smoke phoebis status > "$tmp/status.txt" \
