@@ -65,10 +65,9 @@ does not hold the file, since Claude Code resolves a relative path against that 
 and cannot read its mode, so keeping that file private (mode `0600`) falls to you.
 
 The backoff, the heartbeat interval and the presence throttle are constants, and the mod has no other setting. A report
-that did not get through, for a transport failure, a 5xx or a limit, goes out again along a fixed backoff, whose steps
-are on [The relay](relay.md#the-keepalive-protocol). The answer to a `session_start` or a `heartbeat` arms the next
-heartbeat at a third of the remaining lease, between 1 and 25 seconds. A presence report goes out at most once a minute
-([Presence](#presence)).
+that did not get through, for a transport failure, a 5xx or a limit, goes out again along a fixed backoff. A heartbeat
+goes out at a share of the remaining lease, within fixed bounds, and both figures are on
+[The relay](relay.md#the-keepalive-protocol). A presence report goes out at most once a minute ([Presence](#presence)).
 
 ## What the mod reports
 
@@ -90,8 +89,8 @@ acknowledgment, the refusal codes and how the mod queues, sends and retries are 
 | `tool.call` after CronCreate or ScheduleWakeup | a wakeup is scheduled | it joins the crons with its next fire |
 | `tool.call` after CronDelete | a cron is gone | it leaves the crons |
 | `agent.spawn` | a subagent started | `agent_start`, and it joins its parent's open set |
-| `classic.Stop` | main's turn ended, with the client's list of its background work | a command the list no longer runs leaves its owner's open set |
-| `classic.SubagentStop` | a subagent's turn ended, with the same list | the same |
+| `classic.Stop` | main's turn ended, with the client's background list | a command the background list no longer runs leaves its owner's open set |
+| `classic.SubagentStop` | a subagent's turn ended, with the background list | the same |
 | `turn.complete` of a subagent | the subagent's turn ended | `state parked` on its open set, or `state released` |
 | `turn.complete` of main | main's turn ended | `state idle`, or `state parked` with its park |
 | `session.end` | the session ends or changes id | `session_end`, one request |
@@ -102,11 +101,11 @@ prompt), `sdk` (handed over by an SDK host) or `slack-ping` (sent from Slack). T
 itself, and a prompt of any other origin reports no activity.
 
 A stop event, `classic.Stop` at the end of main's turn and `classic.SubagentStop` at the end of a subagent's, carries
-the client's list of its background work: every background command and subagent, with its id, type and status. A
-command in an open set that the list reads as ended, whatever ended it, or no longer holds, leaves its owner's open set
-there. The mod reads no notification's text: a subagent's end is the agent list's to tell, and a notification that
-names a subagent changes nothing, so a subagent that stopped with a background command of its own stays parked on that
-command until a stop event's list no longer runs it.
+the client's background list: every background command and subagent, with its id, type and status. A command in an open
+set that the background list reads as ended, whatever ended it, or no longer holds, leaves its owner's open set there.
+The mod reads no notification's text: a subagent's end is the agent list's to tell, and a notification that names a
+subagent changes nothing, so a subagent that stopped with a background command of its own stays parked on that command
+until a stop event's background list no longer runs it.
 
 A Bash call counts as a background command when its result carries `backgroundTaskId`. A tool call that another plugin
 raises marks no agent busy, although a background command or a cron it starts still counts for the session. A loop the
@@ -117,10 +116,11 @@ The mod reads `$.session.id()` at session start, at every prompt and at every he
 `/resume`, `session.end` ends the registered session at once and no `session.start` follows, so the next prompt or
 heartbeat that reads the new id registers it under the same instance. Nothing the old session had open or scheduled
 carries over. At each heartbeat the mod also releases the subagents the client's agent list reads `completed`, `failed`
-or `killed` or no longer lists, and closes the background commands past their deadline. The list describes the agents
-the mod held when it asked for it, so a subagent spawned while the answer was out is judged at the next heartbeat, and
-an answer that arrives after a `/clear` or a `/resume` replaced the session is dropped. A tool result or a spawn answer
-that lands after such a replacement is dropped the same way: the work belongs to the session that started it.
+or `killed` or no longer lists, and closes the background commands past their deadline. The agent list describes the
+agents the mod held when it asked for it, so a subagent spawned while the answer was out is judged at the next
+heartbeat, and an answer that arrives after a `/clear` or a `/resume` replaced the session is dropped. A tool result or
+a spawn answer that lands after such a replacement is dropped the same way: the work belongs to the session that
+started it.
 
 The mod writes its tracked work, each agent's open set, the session's crons and the subagents it released, to the
 plugin's host state whenever it changes. A hot reload of the module in the same session reads it back before the
@@ -155,7 +155,7 @@ reports `released`, since its work went back to its parent, and its next turn un
 
 An entry leaves its open set on the first of these:
 
-- a stop event of main or of a subagent whose list of background work no longer runs it
+- a stop event of main or of a subagent whose background list no longer runs it
 - the end of a subagent: its release at its turn end, or the client's agent list reading it ended or no longer naming it
 - the first heartbeat after a background command's deadline
 - main's next real prompt, for every command an earlier turn of main started, still running or not
@@ -197,7 +197,7 @@ sends the parent's session id.
 ### What the mod leaves alone
 
 The mod runs no shell command. It hooks two settings-hook events, `classic.Stop` and `classic.SubagentStop`, for the
-list of background work they carry, and reads no transcript, no background command's output and no conversation text.
+background list they carry, and reads no transcript, no background command's output and no conversation text.
 The one file it reads is the key file that `token_file` names.
 
 ## Where it runs
