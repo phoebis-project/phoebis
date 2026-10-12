@@ -194,10 +194,11 @@ The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships besi
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
 units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
 capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
-the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. The console shows the
-unit as the 20x window equivalent: the share of a Max 20x window the same tokens would spend, so figures of different
-account tiers compare and add. It reads in three columns, the 5-hour window with the peak band's weight, the 7-day
-window with the week's factor, and a model week over its capacity factor. One million plain input tokens of Opus 5.5 are
+the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. The admin routes answer
+the unit as the 20x window equivalent beside the dollars, with an `estimated` flag: the share of a Max 20x window the
+same tokens would spend, so figures of different account tiers compare and add. It comes in up to three columns, the
+5-hour window with the peak band's weight, the 7-day window with the week's factor, and a model week over its capacity
+factor, and the dashboard, key and pool routes answer the first two. One million plain input tokens of Opus 5.5 are
 2,200,000 units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on
 a Pro account reads 29.3% of its own 5-hour window.
 
@@ -241,26 +242,27 @@ of its capacity inside the band, so a request completing inside it spends 1/0.7 
 7-day window's factor is 1, so the week has no band. The edges are steps, and Saturday and Sunday are outside the band.
 The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force at
 its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round prices
-on plan quota so the order reads what the meter charges. The analytics read the hourly rollups instead, which fold a
-request under the hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by
-the band at its completion. The burn chart groups by the analytics' ten dimensions, read from the rollups the same way,
-and by session, which reads the attempts, each weighed by the band at its completion. The shares answer under the
-account grouping, or under every grouping when the filter names exactly one account, since shares of different accounts'
-windows do not add, and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost
-reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
+on plan quota so the order reads what the meter charges. The analytics routes read the hourly rollups instead, which
+fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather
+than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from the rollups the
+same way, and by session, which reads the attempts, each weighed by the band at its completion. The shares answer under
+the account grouping, or under every grouping when the filter names exactly one account, since shares of different
+accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the
+cost reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
 
-A model without a weight of its own reads the weight of the latest weighed model of its model tier, marked estimated
-wherever it is shown: the prediction charges it, the shedding round ranks its pin by that estimate, and once it has
-served a request since the start, the `model_unweighted` attention item names it. A model of no model tier, or of a
-model tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after
-every priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
-without a capacity on a window prices no share there either, and the prediction adds no charge on that window. The
-shedding round ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a
-tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
-dated model id reads the weight of its undated name.
+A model without a weight of its own reads the weight of the latest weighed model of its model tier as an estimate: the
+prediction charges it, the shedding round ranks its pin by that estimate, and every route that answers its figure
+answers `estimated` true beside it. Once the model has served a request since the start, the ledger raises the
+`model_unweighted` attention item for the `phoebis_attention` gauge, and `GET /admin/attention` leaves the item out
+until the console can show it. A model of no model tier, or of a model tier with no weighed model, prices no share: the
+prediction adds no charge, the shedding round ranks the pin after every priced one, the analytics list the share under
+model unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
+either, and the prediction adds no charge on that window. The shedding round ranks that tier's pins like any other, on
+the anchor tier's rates, and in the analytics an account on a tier the file lacks reads tier unknown, while a window the
+file leaves `null` on a listed tier reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
@@ -268,9 +270,10 @@ first. The shipped file carries one entry, and `stats.subscription_costs_path` r
 weight that replaces an assumed one edits every entry, since it says what the weight always was.
 
 Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
-`haiku` on the shipped file), and `model_tier`, each model's tier by undated id. They order the console's model tables
-and name the tier whose latest weighed model stands in for an unweighted one, so a new model or a new family is an edit
-of the file. A model the map does not name takes the tier its id names after `claude-` when `tier_order` lists it.
+`haiku` on the shipped file), and `model_tier`, each model's tier by undated id. They name the tier whose latest weighed
+model stands in for an unweighted one, and `GET /admin/pricing` answers both with the rest of the cost model, so a new
+model or a new family is an edit of the file. A model the map does not name takes the tier its id names after `claude-`
+when `tier_order` lists it.
 
 A new model is one weight line and its `model_tier` entry: the weight is its plain input rate in percent of the Max 20x
 5-hour window per million tokens, measured outside the band, times 1.5. An operator who cannot wait for a release copies
