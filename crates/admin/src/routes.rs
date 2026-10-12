@@ -35,10 +35,13 @@ use phoebis_store::{
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use utoipa::{Modify, OpenApi, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
+use crate::openapi::ErrorBody;
 use crate::{
-    accounts, analytics, attention, dashboard, keepalive, keys, models, pools, pricing, requests,
-    sessions, settings, tls, AdminState, LoginError, NewAccount,
+    accounts, analytics, attention, dashboard, keepalive, keys, models, openapi, pools, pricing,
+    requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -50,7 +53,7 @@ const COOKIE_NAME: &str = "phoebis_admin";
 const LOGIN_PATH: &str = "/admin/session";
 
 pub fn router(state: Arc<AdminState>) -> Router {
-    Router::new()
+    let (router, mut api) = OpenApiRouter::with_openapi(openapi::Document::openapi())
         .route("/admin/accounts", get(list_accounts).post(accounts::create))
         .route(
             "/admin/accounts/{id}",
@@ -121,7 +124,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
             get(crate::routing_log::record),
         )
         .route("/admin/routing-log", get(crate::routing_log::list))
-        .route("/admin/session", get(whoami).post(login).delete(logout))
+        .routes(routes!(whoami, login, logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
             "/admin/sessions/{key}/{session}/release",
@@ -133,7 +136,18 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/tls/reload", post(tls::reload))
         .route("/admin", any(unknown_admin_route))
         .route("/admin/{*rest}", any(unknown_admin_route))
+        .split_for_parts();
+    openapi::Examples.modify(&mut api);
+    let document = Bytes::from(api.to_json().expect("the admin document serializes"));
+    router
         .layer(from_fn_with_state(state.clone(), gate))
+        .route(
+            openapi::DOCUMENT_PATH,
+            get(move || {
+                let document = document.clone();
+                async move { openapi::document(document) }
+            }),
+        )
         .with_state(state)
 }
 
@@ -421,12 +435,46 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
+/// The login's body.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct LoginInput {
+    /// The admin secret.
+    pub secret: String,
+}
+
+/// Whether the cookie the console holds still names a session, by the id pairing ownership uses, never by the
+/// cookie value.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionView {
+    /// The session's id as pairing ownership and the mutation log name it. `bearer` for a bearer caller.
+    #[schema(example = "bearer")]
+    pub session_id: String,
+}
+
+/// Log in with the admin secret.
+///
+/// No session required: this is the login itself. The answer sets the `phoebis_admin` cookie, with `Secure` when
+/// the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`, and carries no body. See
+/// `GET /admin/session` for what the session answers afterwards. A bearer on this operation is ignored: the login
+/// stays the cookie's door.
+#[utoipa::path(
+    post,
+    path = "/admin/session",
+    operation_id = "session_login",
+    tag = "Session",
+    request_body(content = LoginInput, description = "The admin secret", content_type = "application/json"),
+    responses(
+        (status = 204, description = "Logged in. The `phoebis_admin` cookie is set and the answer carries no body.",
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`"))),
+        (status = 400, description = "`body must carry a secret`", body = ErrorBody, example = json!({"error": "body must carry a secret"})),
+        (status = 401, description = "`secret does not match`", body = ErrorBody, example = json!({"error": "secret does not match"})),
+        (status = 429, description = "`too many failed logins, try again in a minute`", body = ErrorBody, example = json!({"error": "too many failed logins, try again in a minute"})),
+    ),
+    security(),
+)]
 async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: Bytes) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        secret: String,
-    }
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<LoginInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a secret");
     };
     match state
@@ -449,6 +497,21 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     }
 }
 
+/// End the caller's own session.
+///
+/// The gate admits this operation without a live session: a cookie that names no session, an expired one included,
+/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it.
+#[utoipa::path(
+    delete,
+    path = "/admin/session",
+    operation_id = "session_logout",
+    tag = "Session",
+    responses(
+        (status = 204, description = "The session is ended and the browser's cookie cleared.",
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0`"))),
+    ),
+    security(),
+)]
 async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
     if let Some(cookie) = presented_cookie(&headers) {
         state.sessions.logout(&cookie);
@@ -461,10 +524,22 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
     )
 }
 
-/// The console's first call: whether the cookie it holds still names a session. The body names the session by
-/// the id pairing ownership uses, never by the cookie value.
+/// Whether the cookie the console holds still names a session.
+///
+/// Answers `session_id`, the id pairing ownership uses, never the cookie value. A bearer caller answers
+/// `session_id` `bearer`.
+#[utoipa::path(
+    get,
+    path = "/admin/session",
+    operation_id = "session_show",
+    tag = "Session",
+    responses((status = 200, description = "The session's id", body = SessionView)),
+)]
 async fn whoami(Extension(caller): Extension<Caller>) -> Response {
-    Json(json!({ "session_id": caller.session_id })).into_response()
+    Json(SessionView {
+        session_id: caller.session_id,
+    })
+    .into_response()
 }
 
 async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {

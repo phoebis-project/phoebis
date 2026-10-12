@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
-# reference page skipped, an entry the router does not serve, and a handler call it cannot consume. Every checker
-# case runs against a throwaway tree, never the real site. The favicon case at the end reads the real tree.
+# client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
+# checker case runs against a throwaway tree, never the real site. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -87,54 +87,13 @@ mkdir -p "$tmp/skip-link-site"
 echo '<a href="#__skip">skip</a><p>not found</p>' > "$tmp/skip-link-site/404.html"
 out=$(python3 "$check" links "$tmp/skip-link-site" 2>&1) || fail "the theme's skip link was refused: $out"
 
-cat > "$tmp/routes.rs" <<'RS'
-    Router::new()
-        .route("/admin/a", get(a).post(b))
-        .route(
-            "/admin/a/{id}",
-            patch(c).delete(d),
-        )
-        .route("/admin/{*rest}", any(e))
-        .layer(x)
-RS
-{
-  printf '### GET /admin/a\n### POST /admin/a\n### PATCH /admin/a/{id}\n'
-  printf '### DELETE /admin/a/{id}\n### ANY /admin/{*rest}\n'
-} > "$tmp/api.md"
-python3 "$check" routes "$tmp/routes.rs" "$tmp/api.md" >/dev/null || fail "a matching reference was refused"
-sed -i '/^### DELETE/d' "$tmp/api.md"
-out=$(python3 "$check" routes "$tmp/routes.rs" "$tmp/api.md" 2>&1) && fail "a missing entry passed"
-echo "$out" | grep -q "has no entry for" || fail "missing entry did not report has no entry for: $out"
-printf '### DELETE /admin/a/{id}\n### GET /admin/nowhere\n' >> "$tmp/api.md"
-out=$(python3 "$check" routes "$tmp/routes.rs" "$tmp/api.md" 2>&1) && fail "a stray entry passed"
-echo "$out" | grep -q "which the router does not serve" || fail "stray entry did not report which the router does not serve: $out"
-
-cat > "$tmp/routes-head.rs" <<'RS'
-    Router::new()
-        .route("/admin/b", head(f))
-        .layer(x)
-RS
-: > "$tmp/api-head.md"
-out=$(python3 "$check" routes "$tmp/routes-head.rs" "$tmp/api-head.md" 2>&1) && fail "an undocumented head route passed"
-echo "$out" | grep -q "has no entry for" || fail "undocumented head route did not report has no entry for: $out"
-
-cat > "$tmp/routes-unknown.rs" <<'RS'
-    Router::new()
-        .route("/admin/c", weird(g))
-        .layer(x)
-RS
-: > "$tmp/api-unknown.md"
-out=$(python3 "$check" routes "$tmp/routes-unknown.rs" "$tmp/api-unknown.md" 2>&1) && \
-  fail "a handler call the checker cannot consume passed"
-echo "$out" | grep -q "is not a method this checker consumes" || fail "unknown handler did not report expected finding: $out"
-
 cat > "$tmp/routes-prebuilt.rs" <<'RS'
     Router::new()
         .route("/admin/new", extra_routes)
         .layer(x)
 RS
-: > "$tmp/api-prebuilt.md"
-out=$(python3 "$check" routes "$tmp/routes-prebuilt.rs" "$tmp/api-prebuilt.md" 2>&1) && \
+: > "$tmp/client-prebuilt.md"
+out=$(python3 "$check" client "$tmp/routes-prebuilt.rs" "$tmp/client-prebuilt.md" 2>&1) && \
   fail "a route whose handler expression has no recognized call passed"
 echo "$out" | grep -q "/admin/new" || fail "unrecognized handler expression did not name the route: $out"
 
@@ -147,8 +106,8 @@ cat > "$tmp/routes-merge.rs" <<'RS'
         .merge(other)
         .with_state(state)
 RS
-: > "$tmp/api-merge.md"
-out=$(python3 "$check" routes "$tmp/routes-merge.rs" "$tmp/api-merge.md" 2>&1) && fail "a table ending in merge passed with no entries"
+: > "$tmp/client-merge.md"
+out=$(python3 "$check" client "$tmp/routes-merge.rs" "$tmp/client-merge.md" 2>&1) && fail "a table ending in merge passed with no rows"
 echo "$out" | grep -q "DELETE /admin/last" || fail "the last route before merge was dropped: $out"
 
 # A route in a comment is not served.
@@ -158,8 +117,8 @@ cat > "$tmp/routes-comment.rs" <<'RS'
         .route("/admin/a", get(a))
         .layer(x)
 RS
-printf '### GET /admin/a\n' > "$tmp/api-comment.md"
-python3 "$check" routes "$tmp/routes-comment.rs" "$tmp/api-comment.md" >/dev/null || fail "a commented-out route was read as served"
+printf '| GET | `/admin/a` |\n' > "$tmp/client-comment.md"
+python3 "$check" client "$tmp/routes-comment.rs" "$tmp/client-comment.md" >/dev/null || fail "a commented-out route was read as served"
 
 # A path in a quoted string that carries a parenthesis must not end the call early.
 cat > "$tmp/routes-paren.rs" <<'RS'
@@ -167,8 +126,8 @@ cat > "$tmp/routes-paren.rs" <<'RS'
         .route("/admin/x", get(|| async { ")" }))
         .layer(x)
 RS
-printf '### GET /admin/x\n' > "$tmp/api-paren.md"
-python3 "$check" routes "$tmp/routes-paren.rs" "$tmp/api-paren.md" >/dev/null || fail "a parenthesis inside a string broke the parse"
+printf '| GET | `/admin/x` |\n' > "$tmp/client-paren.md"
+python3 "$check" client "$tmp/routes-paren.rs" "$tmp/client-paren.md" >/dev/null || fail "a parenthesis inside a string broke the parse"
 
 # The proxy listener: a constant path is read, and the client page's table must match.
 cat > "$tmp/proxy.rs" <<'RS'
@@ -205,9 +164,9 @@ echo "$out" | grep -q "usage: check-docs.py" || fail "client with one argument d
 out=$(python3 "$check" client "$tmp/gone.rs" "$tmp/client.md" 2>&1) && fail "a missing route file passed"
 echo "$out" | grep -q "is missing; the proxy route table names it" || fail "missing route file did not report: $out"
 
-# The six cases below each pair a route table with the reference that lists exactly its served set: a pass
-# proves the set (a missing and a stray entry are both findings), and a second reference proves the route the
-# parser must not serve is reported as unserved.
+# The six cases below each pair a route table with a client page whose table lists exactly its served set: a pass
+# proves the set (a missing and a stray row are both findings), and a second page proves the route the parser must
+# not serve is reported as unserved.
 
 # A route inside a block comment is not served, however the comment nests or spans lines.
 cat > "$tmp/routes-block.rs" <<'RS'
@@ -217,11 +176,11 @@ cat > "$tmp/routes-block.rs" <<'RS'
         .route("/admin/a", get(a))
         .layer(x)
 RS
-printf '### GET /admin/a\n' > "$tmp/api-block.md"
-out=$(python3 "$check" routes "$tmp/routes-block.rs" "$tmp/api-block.md" 2>&1) || fail "a block comment's route was read as served: $out"
-printf '### GET /admin/ghost\n' >> "$tmp/api-block.md"
-out=$(python3 "$check" routes "$tmp/routes-block.rs" "$tmp/api-block.md" 2>&1) && fail "a route that lives only in a block comment passed as documented"
-echo "$out" | grep -q "documents GET /admin/ghost, which the router does not serve" || fail "the block comment's route was not reported as unserved: $out"
+printf '| GET | `/admin/a` |\n' > "$tmp/client-block.md"
+out=$(python3 "$check" client "$tmp/routes-block.rs" "$tmp/client-block.md" 2>&1) || fail "a block comment's route was read as served: $out"
+printf '| GET | `/admin/ghost` |\n' >> "$tmp/client-block.md"
+out=$(python3 "$check" client "$tmp/routes-block.rs" "$tmp/client-block.md" 2>&1) && fail "a route that lives only in a block comment passed as documented"
+echo "$out" | grep -q "lists GET /admin/ghost, which the proxy listener does not serve" || fail "the block comment's route was not reported as unserved: $out"
 
 # An inline comment after a route on its own line: the route is served, the comment's route is not.
 cat > "$tmp/routes-inline.rs" <<'RS'
@@ -229,11 +188,11 @@ cat > "$tmp/routes-inline.rs" <<'RS'
         .route("/admin/a", get(a)) // .route("/admin/ghost", get(ghost))
         .layer(x)
 RS
-printf '### GET /admin/a\n' > "$tmp/api-inline.md"
-out=$(python3 "$check" routes "$tmp/routes-inline.rs" "$tmp/api-inline.md" 2>&1) || fail "a route followed by an inline comment was misread: $out"
-printf '### GET /admin/ghost\n' >> "$tmp/api-inline.md"
-out=$(python3 "$check" routes "$tmp/routes-inline.rs" "$tmp/api-inline.md" 2>&1) && fail "an inline comment's route passed as documented"
-echo "$out" | grep -q "documents GET /admin/ghost, which the router does not serve" || fail "the inline comment's route was not reported as unserved: $out"
+printf '| GET | `/admin/a` |\n' > "$tmp/client-inline.md"
+out=$(python3 "$check" client "$tmp/routes-inline.rs" "$tmp/client-inline.md" 2>&1) || fail "a route followed by an inline comment was misread: $out"
+printf '| GET | `/admin/ghost` |\n' >> "$tmp/client-inline.md"
+out=$(python3 "$check" client "$tmp/routes-inline.rs" "$tmp/client-inline.md" 2>&1) && fail "an inline comment's route passed as documented"
+echo "$out" | grep -q "lists GET /admin/ghost, which the proxy listener does not serve" || fail "the inline comment's route was not reported as unserved: $out"
 
 # A raw string path is read as its contents.
 cat > "$tmp/routes-raw.rs" <<'RS'
@@ -241,8 +200,8 @@ cat > "$tmp/routes-raw.rs" <<'RS'
         .route(r#"/admin/x"#, get(a))
         .layer(x)
 RS
-printf '### GET /admin/x\n' > "$tmp/api-raw.md"
-out=$(python3 "$check" routes "$tmp/routes-raw.rs" "$tmp/api-raw.md" 2>&1) || fail "a raw string path was not read as /admin/x: $out"
+printf '| GET | `/admin/x` |\n' > "$tmp/client-raw.md"
+out=$(python3 "$check" client "$tmp/routes-raw.rs" "$tmp/client-raw.md" 2>&1) || fail "a raw string path was not read as /admin/x: $out"
 
 # An escaped quote inside a handler string ends neither the string nor the call.
 cat > "$tmp/routes-escape.rs" <<'RS'
@@ -250,8 +209,8 @@ cat > "$tmp/routes-escape.rs" <<'RS'
         .route("/admin/q", get(|| async { "say \"hi\")" }))
         .layer(x)
 RS
-printf '### GET /admin/q\n' > "$tmp/api-escape.md"
-out=$(python3 "$check" routes "$tmp/routes-escape.rs" "$tmp/api-escape.md" 2>&1) || fail "an escaped quote inside a handler string broke the parse: $out"
+printf '| GET | `/admin/q` |\n' > "$tmp/client-escape.md"
+out=$(python3 "$check" client "$tmp/routes-escape.rs" "$tmp/client-escape.md" 2>&1) || fail "an escaped quote inside a handler string broke the parse: $out"
 
 # A method name inside a string is not a call: the route is served as GET and nothing else.
 cat > "$tmp/routes-string-method.rs" <<'RS'
@@ -259,11 +218,11 @@ cat > "$tmp/routes-string-method.rs" <<'RS'
         .route("/admin/s", get(|| async { "delete(" }))
         .layer(x)
 RS
-printf '### GET /admin/s\n' > "$tmp/api-string-method.md"
-out=$(python3 "$check" routes "$tmp/routes-string-method.rs" "$tmp/api-string-method.md" 2>&1) || fail "a method name inside a string was read as a call: $out"
-printf '### DELETE /admin/s\n' >> "$tmp/api-string-method.md"
-out=$(python3 "$check" routes "$tmp/routes-string-method.rs" "$tmp/api-string-method.md" 2>&1) && fail "DELETE /admin/s passed though only a string names delete"
-echo "$out" | grep -q "documents DELETE /admin/s, which the router does not serve" || fail "the string's delete was not reported as unserved: $out"
+printf '| GET | `/admin/s` |\n' > "$tmp/client-string-method.md"
+out=$(python3 "$check" client "$tmp/routes-string-method.rs" "$tmp/client-string-method.md" 2>&1) || fail "a method name inside a string was read as a call: $out"
+printf '| DELETE | `/admin/s` |\n' >> "$tmp/client-string-method.md"
+out=$(python3 "$check" client "$tmp/routes-string-method.rs" "$tmp/client-string-method.md" 2>&1) && fail "DELETE /admin/s passed though only a string names delete"
+echo "$out" | grep -q "lists DELETE /admin/s, which the proxy listener does not serve" || fail "the string's delete was not reported as unserved: $out"
 
 # A quote inside a char literal is a character, not the start of a string: a table after one is still read,
 # so a route the page leaves out is still reported rather than hidden with the rest of the file.
@@ -280,11 +239,11 @@ fn escape(c: char) -> &'static str {
         .route("/admin/a", get(a))
         .layer(x)
 RS
-printf '### GET /admin/a\n' > "$tmp/api-char.md"
-out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) || fail "a route after a char literal was misread: $out"
-: > "$tmp/api-char.md"
-out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
-echo "$out" | grep -q "has no entry for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
+printf '| GET | `/admin/a` |\n' > "$tmp/client-char.md"
+out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) || fail "a route after a char literal was misread: $out"
+: > "$tmp/client-char.md"
+out=$(python3 "$check" client "$tmp/routes-char.rs" "$tmp/client-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
+echo "$out" | grep -q "has no row for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
 
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.

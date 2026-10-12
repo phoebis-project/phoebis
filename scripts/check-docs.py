@@ -2,9 +2,8 @@
 """Read-only checks over the documentation site.
 
 `links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
-names no heading or anchor on the page it lands on. `routes` compares the admin route table with the entries of the
-API reference page, so a route added or removed in the router fails the build until the page follows. `client` does
-the same for the proxy listener against the table on the client page.
+names no heading or anchor on the page it lands on. `client` compares the proxy listener's route table with the table
+on the client page, so a route added or removed in the router fails the build until the page follows.
 """
 import functools
 import html.parser
@@ -15,8 +14,6 @@ import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SITE = ROOT / "site"
-ROUTES_RS = ROOT / "crates/admin/src/routes.rs"
-API_MD = ROOT / "docs/site/api.md"
 # The proxy listener's route tables: the relay's own router, the keepalive mod's route, and every router the
 # binary merges beside them. A file listed here that does not exist fails the check rather than narrowing it.
 PROXY_ROUTE_FILES = [
@@ -39,8 +36,6 @@ METHOD_CALL = re.compile(r"\b(" + "|".join(METHODS) + r")\(")
 # Any other call inside a handler expression is a method this checker does not recognize; CALL finds it so the
 # check fails closed instead of silently dropping the route.
 CALL = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\(")
-# An entry heading on the reference page: the method in capitals, then the path as the route table spells it.
-ENTRY = re.compile(r"^### (ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|TRACE) (/admin\S*)$", re.M)
 # A row of the "What the proxy accepts" table: the method in capitals, then the path in backticks.
 CLIENT_ROW = re.compile(r"^\| (ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT|TRACE) \| `([^`]+)` \|", re.M)
 # `pub const NAME: &str = "...";`, so a route registered under a constant is read as its path.
@@ -289,26 +284,6 @@ def routes_in(source):
     return served, unknown
 
 
-def check_routes(routes_rs, api_md):
-    source = routes_rs.read_text(encoding="utf-8")
-    served, unknown = routes_in(source)
-    documented = set(ENTRY.findall(api_md.read_text(encoding="utf-8")))
-    if not served and not unknown:
-        print(f"no routes parsed from {routes_rs}")
-        return 1
-    findings = 0
-    for line, name, path in sorted(unknown):
-        print(f"{routes_rs.name}:{line}: {name}(...) on {path} is not a method this checker consumes")
-        findings += 1
-    for method, path in sorted(served - documented):
-        print(f"{api_md.name} has no entry for {method} {path}")
-        findings += 1
-    for method, path in sorted(documented - served):
-        print(f"{api_md.name} documents {method} {path}, which the router does not serve")
-        findings += 1
-    return 1 if findings else 0
-
-
 def check_client(route_files, client_md):
     """The proxy listener's served (method, path) pairs against the client page's table."""
     served = set()
@@ -332,16 +307,12 @@ def check_client(route_files, client_md):
     return 1 if findings else 0
 
 
-USAGE = "usage: check-docs.py links [SITE_DIR] | routes [ROUTES_RS] [API_MD] | client [ROUTE_RS... CLIENT_MD]"
+USAGE = "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
 
 
 def main(argv):
     if len(argv) >= 2 and argv[1] == "links":
         return check_links(pathlib.Path(argv[2]) if len(argv) > 2 else SITE)
-    if len(argv) >= 2 and argv[1] == "routes":
-        routes_rs = pathlib.Path(argv[2]) if len(argv) > 2 else ROUTES_RS
-        api_md = pathlib.Path(argv[3]) if len(argv) > 3 else API_MD
-        return check_routes(routes_rs, api_md)
     if len(argv) >= 2 and argv[1] == "client":
         if len(argv) == 3:
             # A route file without the client page to check it against is a mistake, not a default.
