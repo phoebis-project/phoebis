@@ -719,9 +719,10 @@ fn a_week_the_file_does_not_name_prices_the_seven_day_share_once_and_any_other_w
 }
 
 // Per token on the anchor's 5-hour window of 100: Opus 5.5 at 2 times (1, 0.1, 2, 2, 10), Haiku at 0.5 times
-// (1, 0.2, 2, 2, 10) with its cache read override.
+// (1, 0.2, 2, 2, 10) with its cache read override. Opus 5 (a null weight) and Opus 4.8 (a model tier entry alone)
+// take Opus 5.5's 2 and the shared multipliers, and the Mystery model tier has no weighted model.
 #[test]
-fn the_rate_table_carries_a_row_per_weighted_model_on_the_anchor_and_no_rate_for_any_other() {
+fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a_weighted_tier() {
     let rates = first().rate_table(FIVE_HOUR);
     assert!(
         all_close(
@@ -739,7 +740,17 @@ fn the_rate_table_carries_a_row_per_weighted_model_on_the_anchor_and_no_rate_for
         "{:?}",
         rates.rows[HAIKU]
     );
-    assert_eq!(rates.rows.get("claude-opus-5"), None);
+    for model in ["claude-opus-5", "claude-opus-4-8"] {
+        let row = rates
+            .rows
+            .get(model)
+            .unwrap_or_else(|| panic!("{model}: no row"));
+        assert!(
+            all_close(per_type(*row), per_type(rates.rows[OPUS])),
+            "{model} at Opus 5.5's weight: {row:?}"
+        );
+    }
+    assert_eq!(rates.rows.get("claude-mystery-2"), None);
     assert_eq!(per_type(rates.fallback), [None; 5]);
     assert_eq!(
         per_type(rates.rates_for("claude-opus-5-5-20260401", 0)),

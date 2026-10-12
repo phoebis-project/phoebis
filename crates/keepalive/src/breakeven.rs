@@ -2,7 +2,6 @@
 //! default every ceiling of the policy resolves to and the cap each of its numbers stays under.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
@@ -60,13 +59,14 @@ pub fn break_even_ms(
 }
 
 /// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
-/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, and a model the cost model leaves unweighted or names nowhere reads its type
-/// multipliers, the model's own override where it has one. A token costs the model's weight times the type's
-/// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike. Dollars read
-/// `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits
-/// at the fast cells, at a row's long-context rates when `prompt_tokens` is above their threshold, the set a probe's
-/// cost reads on the same prompt, and a model the price table prices nowhere takes the tightest row of that table (the
-/// smallest break-even among the priced rows). Probe costs do not read these factors.
+/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, a model without a weight of its own at its model
+/// tier's estimate there, and a model of no weighted model tier reads its type multipliers, the model's own override
+/// where it has one. A token costs the model's weight times the type's multiplier, so the weight cancels from read
+/// over write and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, or
+/// `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits at the fast cells, at a row's
+/// long-context rates when `prompt_tokens` is above their threshold, the set a probe's cost reads on the same prompt,
+/// and a model the price table prices nowhere takes the tightest row of that table (the smallest break-even among the
+/// priced rows). Probe costs do not read these factors.
 pub fn factors_for(
     pricing: &PriceTable,
     tables: &PlanTables,
@@ -192,35 +192,21 @@ impl FactorRows {
     }
 }
 
-/// The shipped price table's tightest row at the recipe's speed: what a recipe's ceilings fall back to when the tables
-/// in force give no break-even, since an operator's price file with no usable row must not leave a parked session
-/// probed until the session expires. The revision in force at the first call's `now` holds for the process, as the
-/// tables built at start do, so a pending revision takes effect at the next start.
+/// The tightest row at the recipe's speed of the shipped price revision in force at `now`: what a recipe's ceilings
+/// fall back to when the tables in force give no break-even, since an operator's price file with no usable row must
+/// not leave a parked session probed until the session expires.
 pub(crate) fn shipped_tightest(fast: bool, now: i64) -> BreakEvenFactors {
-    static STANDARD: OnceLock<BreakEvenFactors> = OnceLock::new();
-    static FAST: OnceLock<BreakEvenFactors> = OnceLock::new();
-    let shipped = || PriceRevisions::shipped().in_force(now).clone();
-    if fast {
-        *FAST.get_or_init(|| {
-            tightest(
-                shipped()
-                    .fast_rate_table()
-                    .rows
-                    .values()
-                    .filter_map(BreakEvenFactors::of),
-            )
-        })
+    // Read on each call: only the branch without a break-even reaches it, and a figure held from the first call would
+    // keep that call's revision past the instant the next one takes over.
+    let shipped = PriceRevisions::shipped();
+    let table = shipped.in_force(now);
+    let rows = if fast {
+        table.fast_rate_table()
     } else {
-        *STANDARD.get_or_init(|| {
-            tightest(
-                shipped()
-                    .rate_table()
-                    .rows
-                    .values()
-                    .filter_map(BreakEvenFactors::of),
-            )
-        })
+        table.rate_table()
     }
+    .rows;
+    tightest(rows.values().filter_map(BreakEvenFactors::of))
 }
 
 /// The smallest break-even any row gives at each TTL, as one set of factors in the ratio's own unit: a row

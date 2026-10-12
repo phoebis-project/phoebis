@@ -22,7 +22,7 @@ use crate::engine::{
     UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_dollars, settlement_unit, typed, unpriced_reason};
+use crate::savings::{probe_cost, settlement_unit, typed, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -140,7 +140,7 @@ pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool 
     }
 }
 
-/// What one probe cost and how it ended, from the job and the exchange alone. Whether the recipe it ran for
+/// The counts one probe used and how it ended, from the job and the exchange alone. Whether the recipe it ran for
 /// still exists changes nothing here: the upstream served it, so the pool's spend, the metrics, and the ledger
 /// carry it either way.
 #[derive(Clone, Debug, PartialEq)]
@@ -148,7 +148,6 @@ pub struct ProbeRecord {
     pub account: String,
     pub agent_id: String,
     pub canonical_model: String,
-    pub cost_usd: f64,
     /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
     pub fast: bool,
     /// Whether the probe's answer reported overage in use, the fact its request row files under: the credit row
@@ -182,7 +181,7 @@ pub(crate) enum Applied {
 }
 
 /// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be
-/// priced. Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
+/// priced. Only the unit is kept, since the credit reads its presence and the ledger prices the probe's counts.
 #[allow(clippy::too_many_arguments)]
 fn settled_unit(
     default_unit: SavingsUnit,
@@ -387,7 +386,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
 }
 
 impl Inner {
-    /// The immutable half: the outcome the exchange had and what it cost at the canonical model's list prices.
+    /// The immutable half: the outcome the exchange had, the counts it used and their prompt-length band on the price
+    /// revision in force at the exchange.
     /// A migrated probe is one the relay served on an account other than the job's; it is priced like any other
     /// and reported as migrated.
     pub(crate) fn probe_record(
@@ -401,7 +401,6 @@ impl Inner {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
-            cost_usd: 0.0,
             fast: job.recipe.fast,
             in_overage: false,
             key: job.key.clone(),
@@ -446,10 +445,6 @@ impl Inner {
                     counts.write_1h,
                 ),
             );
-            // The record's dollars price through the price table whatever funded the account, at the cells the
-            // answer's own `usage.speed` selects. The funding unit is decided once the serving account's kind is
-            // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
-            record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
         }
         if result
             .account

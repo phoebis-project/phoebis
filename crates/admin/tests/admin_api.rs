@@ -3128,9 +3128,10 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
 }
 
 #[tokio::test]
-async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
-    // The pin burns Opus 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
-    // in overage prices in dollars, since the price table lists the model.
+async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
+    // The pin burns Opus 5, which the shipped cost model has no weight for: the share is estimated at the weight of
+    // its model tier's latest weighted model, and the same pin in overage prices in dollars, since the price table
+    // lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
@@ -3142,10 +3143,31 @@ async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    assert_eq!(
-        burn_of(&sessions, "s1"),
-        (None, Some("window_share".into())),
-        "a model the cost model has no weight for prices no share"
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let donor = tables
+        .tier_of("claude-opus-5", now)
+        .and_then(|tier| tables.latest_weighted(tier, now))
+        .expect("the shipped model weighs a model of Opus 5's model tier");
+    // The banded copy at the fixed clock, which the peak band never covers, priced at the donor's weight on Max 20x.
+    let share_per_hour = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            donor,
+            phoebis_routing::PinUsage {
+                input: 100,
+                ..phoebis_routing::PinUsage::default()
+            },
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let (burn, unit) = burn_of(&sessions, "s1");
+    assert!(
+        close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
+        "a model the cost model has no weight for burns at its model tier's latest weight: {:?} against \
+         {share_per_hour}",
+        (burn, unit)
     );
     parts
         .router

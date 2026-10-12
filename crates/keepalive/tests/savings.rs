@@ -2646,6 +2646,75 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     assert!(row(&r, &kept).await.kept_warm);
 }
 
+/// A plan-funded probe on a model the cost model leaves unweighted settles in the window share when its model tier
+/// has a weighted model, at that model's weight: the test table leaves Opus 5 null beside Opus 5.5 at 2, so the
+/// share the settlement books for the probe's own counts on Max 20x is Opus 5.5's.
+#[tokio::test]
+async fn a_plan_funded_probe_on_an_unweighted_model_of_a_weighted_tier_settles_in_the_share_at_its_tiers_weight(
+) {
+    let mut r = rig(RigSpec {
+        tables: phoebis_ledger::test_tables::subscription_costs(),
+        tier: Some("default_claude_max_20x"),
+        ..plan_funded_spec()
+    })
+    .await;
+    let body = body_on("claude-opus-5");
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let probe = &payload["unanswered"][0];
+    assert_eq!(
+        (
+            probe["model"].as_str(),
+            probe["unit"].as_str(),
+            probe["tier"].as_str()
+        ),
+        (
+            Some("claude-opus-5"),
+            Some("window_share"),
+            Some("default_claude_max_20x")
+        ),
+        "the probe settled in a share of Max 20x's 5-hour window: {probe}"
+    );
+    // The counts as the settlement types them: an aggregate write without the split is a five-minute write.
+    let count = |member: &str| probe["usage"][member].as_u64().expect("a count");
+    let (write_5m, write_1h) = match (count("five_minutes"), count("one_hour")) {
+        (0, 0) => (count("write"), 0),
+        split => split,
+    };
+    let usage = PinUsage {
+        input: count("input"),
+        cache_read: count("read"),
+        write_5m,
+        write_1h,
+        output: count("output"),
+    };
+    assert!(tokens(usage) > 0, "the probe read its prefix back");
+    let at = probe["at"].as_i64().expect("the exchange instant");
+    let donor = r
+        .tables
+        .tier_of("claude-opus-5", at)
+        .and_then(|tier| r.tables.latest_weighted(tier, at))
+        .expect("the test table weighs a model of Opus 5's model tier");
+    assert_eq!(donor, OPUS);
+    let share = |model: &str| {
+        r.tables.share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            model,
+            usage,
+            at,
+        )
+    };
+    let booked = share("claude-opus-5").expect("the settlement prices the share");
+    assert!(booked > 0.0, "{booked}");
+    assert_eq!(Some(booked), share(donor), "at Opus 5.5's weight");
+}
+
 const OPUS: &str = "claude-opus-5-5";
 
 fn opus_body() -> String {

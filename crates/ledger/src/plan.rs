@@ -602,11 +602,14 @@ impl SubscriptionCosts {
             .map_or(1.0, |(priced, _)| 1.0 / self.factor_at(priced, at))
     }
 
-    /// The per-token share of the anchor tier's `window` out of band, a row per model with a weight on it; empty
-    /// for a window that prices nothing.
+    /// The per-token share of the anchor tier's `window` out of band, empty for a window that prices nothing. A row
+    /// per `model_weight` key with a weight on the window, and one per `model_tier` entry without a weight whose
+    /// model tier has a weighted model, at the base weight of that model tier's `latest_weighted`: the estimate is the
+    /// same model tier's measured weight, so a pin on an unweighted model ranks by it rather than last, as the console
+    /// prices it.
     pub fn rate_table(&self, window: &str) -> RateTable {
-        // A model the file does not price has no rate: a guessed burn could order a shed the meter never
-        // charged, while an unpriced pin only ranks last and stays unmarked.
+        // An estimate is the model tier's measured weight, the one `share_at` charges the model at, so a shed it
+        // orders is one the meter books. A model no row names takes no rate, and its pin ranks last.
         let fallback = Rates {
             input: None,
             cache_read: None,
@@ -628,11 +631,15 @@ impl SubscriptionCosts {
                 fallback,
             };
         };
-        let rows = self
+        let models: HashSet<&String> = self
             .model_weight
             .keys()
+            .chain(self.model_tier.keys())
+            .collect();
+        let rows = models
+            .into_iter()
             .filter_map(|model| {
-                let weight = self.weight(model, window)?;
+                let (weight, _) = self.weight_or_fallback(model, window)?;
                 let [cache_read, write_1h, write_5m, input, output] = self.multipliers(model);
                 let rate = |multiplier: f64| Some(weight * multiplier / capacity / divisor);
                 Some((

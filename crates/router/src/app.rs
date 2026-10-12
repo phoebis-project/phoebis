@@ -1212,13 +1212,29 @@ mod tests {
                 .expect("a priced model"),
             "the share table, not the unit table's token count"
         );
+        let estimated = config
+            .rates
+            .five_hour
+            .price("claude-opus-4-8", usage, prompt)
+            .expect("a model of a weighted model tier");
+        let expected = tables
+            .share_at(
+                phoebis_routing::FIVE_HOUR,
+                "default_claude_max_20x",
+                "claude-opus-4-8",
+                usage,
+                out_of_band,
+            )
+            .unwrap();
+        assert!(
+            (estimated - expected).abs() < 1e-15,
+            "a model the cost model has no weight for prices at its model tier's estimate, as the meter charges it: \
+             {estimated} against {expected}"
+        );
         assert_eq!(
-            config
-                .rates
-                .five_hour
-                .price("claude-opus-4-8", usage, prompt),
+            config.rates.five_hour.price("gpt-5", usage, prompt),
             None,
-            "the share table prices no model the cost model has no weight for"
+            "the share table prices no model outside every weighted model tier"
         );
         assert!(
             config
@@ -1449,28 +1465,32 @@ revisions:
         assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
     }
 
-    /// The anchor tier carries a capacity on both windows, so every model with a weight has a burn rate on each.
+    /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on
+    /// each, at its own weight or, as an estimate, at its model tier's latest weight: a pin on a model without a
+    /// weight ranks by its estimated burn rather than last.
     #[test]
-    fn the_burn_rates_the_router_installs_carry_a_row_per_weighted_model_on_both_windows() {
+    fn the_burn_rates_carry_a_row_per_model_the_fallback_prices_so_an_unweighted_pin_ranks_by_its_estimate(
+    ) {
         let tables = phoebis_ledger::PlanTables::shipped();
         let costs = tables.revisions.in_force(START);
-        let anchor = &costs.unit.defined_by.tier;
         for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
             let rates = tables.rate_table(window, START);
             let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
             rows.sort_unstable();
-            let mut weighted: Vec<&str> = costs
+            let mut priced: Vec<&str> = costs
                 .model_weight
                 .keys()
+                .chain(costs.model_tier.keys())
                 .map(String::as_str)
-                .filter(|model| tables.priced(window, anchor, model, START))
+                .filter(|model| costs.weight_or_fallback(model, window).is_some())
                 .collect();
-            weighted.sort_unstable();
+            priced.sort_unstable();
+            priced.dedup();
             assert!(
                 !rows.is_empty(),
                 "{window}: the shipped model weighs a model"
             );
-            assert_eq!(rows, weighted, "{window}");
+            assert_eq!(rows, priced, "{window}");
         }
     }
 

@@ -12,8 +12,8 @@ use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
-/// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
-/// tier it has no capacity for on the window.
+/// inside the price). `None` on the share side alone, for a model the subscription cost model gives no weight, its own
+/// or its model tier's latest, or an account tier it has no capacity for on the window.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -33,7 +33,7 @@ pub(crate) fn probe_cost(
 
 /// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
 /// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
-/// dollar burn: the ledger's probe cost reads this figure, and a zero would book a probe that consumed quota as free.
+/// dollar burn and the ledger prices such a probe's row at: a zero would book a probe that consumed quota as free.
 pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
     let typed = typed(usage);
     if let Some((total, _)) = table.estimate(
@@ -73,9 +73,9 @@ pub(crate) fn typed(usage: ProbeUsage) -> PinUsage {
     }
 }
 
-/// `row` when the model has no weight on the 5-hour window in the cost model in force at `at`, else `tier`: the only
-/// two reasons left, since the loader refuses an anchor tier without a capacity on either window and a weighted model
-/// prices every type.
+/// `row` when the cost model in force at `at` gives the model no weight on the 5-hour window, neither its own nor its
+/// model tier's latest, else `tier`: the only two reasons left, since the loader refuses an anchor tier without a
+/// capacity on either window and a weighted model prices every type.
 pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i64) -> &'static str {
     if !tables.priced(
         FIVE_HOUR,
@@ -90,7 +90,8 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i6
 }
 
 /// The unit a probe settles in: `default_unit`, unless that is the window share and the cost model in force at `at`
-/// cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which case dollars.
+/// cannot price the account's tier and model on the 5-hour window (no weight of the model's own or of its model
+/// tier, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
