@@ -11011,11 +11011,42 @@ fn the_round_s_elapsed_share_is_the_exported_reading_of_its_window_s_reset() {
     st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
     let round = d.shed_round.expect("the round ran on this decision").facts;
-    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), T);
+    let exported = elapsed_share_at(SEVEN_DAY, Some(T + WEEK_MS * 9 / 10), None, T);
     assert!(
         (round.elapsed_share - exported).abs() < 1e-12 && (exported - 0.1).abs() < 1e-9,
         "the engine's reading and the exported arithmetic agree on a tenth of the week: {} against {exported}",
         round.elapsed_share
+    );
+}
+
+#[test]
+fn a_sibling_that_ends_inside_its_week_reads_the_smaller_lead_and_takes_the_shed_pin() {
+    // a and b read the same week, 0.5 with a tenth gone, so each runs 0.4 ahead of a pace to the reset. b's
+    // subscription ends a tenth of a week from now, so half its span to the end has gone and it runs level.
+    let b_ends = vec![SubscriptionTerm {
+        account_id: "b".into(),
+        since: Some(0),
+        trial_ends_at: None,
+        cancelled: true,
+        ends_at: Some(T + WEEK_MS / 10),
+        tier: None,
+    }];
+    let run = |terms: Vec<SubscriptionTerm>| {
+        let s = snapshot_with_terms(pace_pool(), terms);
+        let mut st = two_pins_on_a();
+        st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+        st.record_sample("b", weekly(0.1, 0.5, 9, T - 500));
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0)
+    };
+    assert_eq!(
+        run(b_ends),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "b's lead reads 0 to its end, under the cool line of 0.15, so the round moves the marked pin there"
+    );
+    assert_eq!(
+        run(Vec::new()),
+        ("a".into(), None),
+        "without the end b runs 0.4 ahead like a, so the round finds no cool sibling and the pin stays"
     );
 }
 

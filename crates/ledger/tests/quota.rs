@@ -1592,29 +1592,46 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
 fn the_lead_over_pace_reads_the_sample_against_its_window_s_elapsed_share() {
     let week = 7 * 24 * 3_600_000;
     let at = 1_700_000_000_000;
-    let ahead = lead_over_pace("seven_day", 0.5, Some(at + week * 9 / 10), at);
+    let ahead = lead_over_pace("seven_day", 0.5, Some(at + week * 9 / 10), None, at);
     assert!(
         (ahead - 0.4).abs() < 1e-9,
         "a tenth of the week elapsed by the sample's instant: {ahead}"
     );
     assert_eq!(
-        lead_over_pace("five_hour", 0.7, None, at),
+        lead_over_pace("five_hour", 0.7, None, None, at),
         0.7,
         "without a reset nothing has elapsed"
     );
-    let past = lead_over_pace("five_hour", 0.7, Some(at - 1), at);
+    let past = lead_over_pace("five_hour", 0.7, Some(at - 1), None, at);
     assert!(
         (past - (0.7 - 1.0)).abs() < 1e-9,
         "a reset in the past is the whole window elapsed: {past}"
     );
-    let fable = lead_over_pace("seven_day_fable", 0.2, Some(at + week / 2), at);
+    let fable = lead_over_pace("seven_day_fable", 0.2, Some(at + week / 2), None, at);
     assert!(
         (fable - (0.2 - 0.5)).abs() < 1e-9,
         "the model week is a seven_day window a week long: {fable}"
     );
-    let half = lead_over_pace("five_hour", 0.6, Some(at + 9_000_000), at);
+    let half = lead_over_pace("five_hour", 0.6, Some(at + 9_000_000), None, at);
     assert!(
         (half - 0.1).abs() < 1e-9,
         "a five-hour window half way to its reset: {half}"
+    );
+}
+
+#[test]
+fn the_lead_over_pace_reads_the_steeper_pace_to_an_end_inside_the_window() {
+    let week = 7 * 24 * 3_600_000;
+    let at = 1_700_000_000_000;
+    let reset = Some(at + week * 9 / 10);
+    let to_end = lead_over_pace("seven_day", 0.5, reset, Some(at + week / 10), at);
+    assert!(
+        to_end.abs() < 1e-9,
+        "half the span to an end a tenth of the week out has elapsed: {to_end}"
+    );
+    assert_eq!(
+        lead_over_pace("seven_day", 0.5, reset, Some(at + week), at),
+        lead_over_pace("seven_day", 0.5, reset, None, at),
+        "an end past the reset reads the reset's pace"
     );
 }

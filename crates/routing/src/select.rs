@@ -1712,32 +1712,58 @@ fn utilization_at_least(
 const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
 
 /// How far a window's prediction runs ahead of its pace: the utilization less the share of the window that has
-/// elapsed, so a reading at 0.5 ten percent into a week is 0.4 ahead and the same reading sixty percent in is
-/// behind. A prediction with no reset (a 5-hour window past its reset reads the router's own use since) is ahead
-/// by exactly its utilization. Answered as `(lead, elapsed)`, so the record states the pace beside the lead from
-/// one reading. `None` without a reading, which every caller treats as under.
-fn ahead(state: &RoutingState, account_id: &str, window: &str, now: i64) -> Option<(f64, f64)> {
+/// elapsed toward the earlier of its reset and the account's end (`term::end_of`, the deadline Pace's score reads),
+/// so a reading at 0.5 ten percent into a week is 0.4 ahead and the same reading sixty percent in is behind, and an
+/// account whose subscription ends inside the window reads the steeper pace to its end. A prediction with no reset
+/// (a 5-hour window past its reset reads the router's own use since) is ahead by exactly its utilization. Answered
+/// as `(lead, elapsed)`, so the record states the pace beside the lead from one reading. `None` without a reading,
+/// which every caller treats as under.
+fn ahead(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    window: &str,
+    now: i64,
+) -> Option<(f64, f64)> {
     let reading = state.predicted(account_id, window, now)?;
-    let elapsed = elapsed_share(&reading, window, now);
+    let elapsed = elapsed_share(snapshot, account_id, &reading, window, now);
     Some((reading.utilization - elapsed, elapsed))
 }
 
-/// The share of `window` that has elapsed at `now` by the reading's reset, 0 for a reading that names none.
-fn elapsed_share(reading: &WindowReading, window: &str, now: i64) -> f64 {
-    elapsed_share_at(window, reading.reset, now)
+/// The share of `window` that has elapsed at `now` toward the earlier of the reading's reset and the account's
+/// end, 0 for a reading that names no reset.
+fn elapsed_share(
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    reading: &WindowReading,
+    window: &str,
+    now: i64,
+) -> f64 {
+    let end = snapshot
+        .term(account_id)
+        .and_then(|term| term::end_of(term, now));
+    elapsed_share_at(window, reading.reset, end, now)
 }
 
-/// The share of `window` that has elapsed at `at` by its reset `reset_at`: a week for a `seven_day*` window and
-/// five hours otherwise, clamped to the window, and 0 without a reset. The one arithmetic behind the engine's
-/// pace reading and the ledger's lead over a raw sample, so the two readings cannot drift apart.
-pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, at: i64) -> f64 {
+/// The share of `window` that has elapsed at `at`, from the window's start (its reset `reset_at` less a week for a
+/// `seven_day*` window, five hours otherwise) to the earlier of the reset and the account's `end`, clamped to the
+/// range 0 to 1. An end at or past the reset leaves the share to the reset, an end at or before the window's start
+/// reads 1, and without a reset the share is 0. The one arithmetic behind the engine's pace reading and the
+/// ledger's lead over a raw sample, so the two readings cannot drift apart.
+pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, at: i64) -> f64 {
     let length = if window.starts_with(SEVEN_DAY) {
         WEEK_MS
     } else {
         FIVE_HOUR_MS
     };
     reset_at.map_or(0.0, |reset| {
-        (length.saturating_sub(reset.saturating_sub(at)) as f64 / length as f64).clamp(0.0, 1.0)
+        let start = reset.saturating_sub(length);
+        let deadline = end.map_or(reset, |end| end.min(reset));
+        let span = deadline.saturating_sub(start);
+        if span <= 0 {
+            return 1.0;
+        }
+        (at.saturating_sub(start) as f64 / span as f64).clamp(0.0, 1.0)
     })
 }
 
@@ -1768,7 +1794,7 @@ fn under_band(
             let band = threshold - MIGRATE_BAND;
             [FIVE_HOUR, SEVEN_DAY]
                 .into_iter()
-                .filter_map(|window| ahead(state, account_id, window, now))
+                .filter_map(|window| ahead(state, snapshot, account_id, window, now))
                 .all(|(lead, _)| lead < band)
         }
     }
@@ -1802,8 +1828,8 @@ fn band_facts(
             let band = threshold - MIGRATE_BAND;
             lead_facts(
                 &mut facts,
-                ahead(state, account_id, FIVE_HOUR, now),
-                ahead(state, account_id, SEVEN_DAY, now),
+                ahead(state, snapshot, account_id, FIVE_HOUR, now),
+                ahead(state, snapshot, account_id, SEVEN_DAY, now),
                 band,
             );
             band
@@ -2084,8 +2110,14 @@ fn move_of<'a>(
     };
     let mut facts = Vec::new();
     let leads = [
-        (FIVE_HOUR, ahead(state, &current.account_id, FIVE_HOUR, now)),
-        (SEVEN_DAY, ahead(state, &current.account_id, SEVEN_DAY, now)),
+        (
+            FIVE_HOUR,
+            ahead(state, snapshot, &current.account_id, FIVE_HOUR, now),
+        ),
+        (
+            SEVEN_DAY,
+            ahead(state, snapshot, &current.account_id, SEVEN_DAY, now),
+        ),
     ];
     lead_facts(&mut facts, leads[0].1, leads[1].1, threshold);
     facts.push(Fact::number("threshold", threshold).unit("percent"));
@@ -3470,8 +3502,9 @@ fn candidate_facts(
     if kind != Some(AccountKind::ApiKey) {
         for name in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
             if let Some(reading) = state.predicted(id, name, now) {
-                let ahead = (name != SEVEN_DAY_FABLE)
-                    .then(|| reading.utilization - elapsed_share(&reading, name, now));
+                let ahead = (name != SEVEN_DAY_FABLE).then(|| {
+                    reading.utilization - elapsed_share(snapshot, id, &reading, name, now)
+                });
                 windows.insert(name.to_string(), window_facts(&reading, ahead, now));
             }
         }
@@ -4116,6 +4149,67 @@ fn answer_fact(status: u16) -> SummaryFact {
         value: FactValue::Int(i64::from(status)),
         unit: None,
         entity: None,
+    }
+}
+
+#[cfg(test)]
+mod elapsed_share_tests {
+    use super::{elapsed_share_at, FIVE_HOUR, SEVEN_DAY, WEEK_MS};
+
+    const AT: i64 = 1_700_000_000_000;
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn an_end_inside_the_window_steepens_the_share_toward_it() {
+        // A tenth of the week gone, the end a tenth ahead: half of the span to the end has elapsed.
+        let share = elapsed_share_at(
+            SEVEN_DAY,
+            Some(AT + WEEK_MS * 9 / 10),
+            Some(AT + WEEK_MS / 10),
+            AT,
+        );
+        assert!(close(share, 0.5), "{share}");
+    }
+
+    #[test]
+    fn an_end_at_or_past_the_reset_reads_the_reset_alone() {
+        let reset = Some(AT + WEEK_MS * 9 / 10);
+        let plain = elapsed_share_at(SEVEN_DAY, reset, None, AT);
+        assert!(close(plain, 0.1), "{plain}");
+        assert_eq!(elapsed_share_at(SEVEN_DAY, reset, reset, AT), plain);
+        assert_eq!(
+            elapsed_share_at(SEVEN_DAY, reset, Some(AT + WEEK_MS * 3), AT),
+            plain
+        );
+    }
+
+    #[test]
+    fn without_a_reset_nothing_has_elapsed_whatever_the_end() {
+        assert_eq!(elapsed_share_at(FIVE_HOUR, None, None, AT), 0.0);
+        assert_eq!(
+            elapsed_share_at(FIVE_HOUR, None, Some(AT + 60_000), AT),
+            0.0
+        );
+    }
+
+    #[test]
+    fn an_end_at_or_before_the_window_s_start_reads_fully_elapsed() {
+        let reset = Some(AT + WEEK_MS / 2);
+        let start = AT - WEEK_MS / 2;
+        assert_eq!(elapsed_share_at(SEVEN_DAY, reset, Some(start), AT), 1.0);
+        assert_eq!(
+            elapsed_share_at(SEVEN_DAY, reset, Some(start - WEEK_MS), AT),
+            1.0
+        );
+    }
+
+    #[test]
+    fn an_end_already_passed_inside_the_window_reads_fully_elapsed() {
+        let share = elapsed_share_at(FIVE_HOUR, Some(AT + 3_600_000), Some(AT - 3_600_000), AT);
+        assert_eq!(share, 1.0);
     }
 }
 

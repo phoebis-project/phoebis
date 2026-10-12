@@ -13,8 +13,8 @@ use phoebis_ledger::{
     series_paged, session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample,
     LedgerError, LiveKeys, RollupFilter, SeriesFilter, SharePricing, Tiers, GROUP_BYS,
 };
-use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::AccountKind;
+use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_store::{AccountKind, SubscriptionTerm};
 use serde_json::{json, Map, Value};
 
 use crate::routes::{failure, store_failure};
@@ -291,13 +291,15 @@ fn base_windows() -> Map<String, Value> {
 
 /// An hour's last sample of one window as the wire carries it. The lead is scored at the sample's own instant,
 /// since the bucket is the sampler's 300-second floor and a reset minutes away would read wrong from it, and a
-/// sample that reported the reset alone has no lead.
-fn window_json(s: &HourlyWindowSample) -> Value {
+/// sample that reported the reset alone has no lead. The pace runs to the account's end in the registry's current
+/// term, resolved at the sample's instant, so a trial end still ahead then counts as the router counted it.
+fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Value {
     let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
+    let end = term.and_then(|t| term::end_of(t, sampled_at));
     json!({
         "utilization": s.utilization,
         "reset_at": s.reset_at,
-        "lead": s.utilization.map(|u| lead_over_pace(&s.window, u, s.reset_at, sampled_at)),
+        "lead": s.utilization.map(|u| lead_over_pace(&s.window, u, s.reset_at, end, sampled_at)),
         "sampled_at": sampled_at,
     })
 }
@@ -330,6 +332,7 @@ pub(crate) async fn accounts(
         Err(e) => return ledger_failure(e),
     };
     type Hour = (AccountRollupRow, Map<String, Value>);
+    let snapshot = state.router.snapshot();
     let mut by_account: BTreeMap<String, (AccountRollupRow, BTreeMap<i64, Hour>)> = BTreeMap::new();
     for row in rows {
         let entry = by_account.entry(row.account_id.clone()).or_insert_with(|| {
@@ -367,7 +370,10 @@ pub(crate) async fn accounts(
                 base_windows(),
             )
         });
-        windows.insert(s.window.clone(), window_json(&s));
+        windows.insert(
+            s.window.clone(),
+            window_json(&s, snapshot.term(&s.account_id)),
+        );
     }
     let accounts: Vec<_> = by_account.into_iter().map(|(id, (sum, hours))| json!({
         "account_id": id,
