@@ -55,8 +55,9 @@ The attempt row names the account and its kind, the upstream status, request id 
 cooldown the attempt set, the stop reason, the model the answer names when it differs from the one the router resolved,
 the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended
 model. It carries the five token counts, with the thinking share of the output and the web search and fetch calls the
-answer made, the cache miss reason the diagnostics beta reports, the unified rate-limit window readings, overage, the
-cost split across input, cache read, cache write and output, and the pricing version the estimate used.
+answer made, the cache miss reason the diagnostics beta reports, the unified rate-limit window readings, overage, and
+the serving account's rate-limit tier as the router held it when the request landed. No dollar is stored: every price is
+computed when it is read, from these counts, at the price revision in force when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -66,13 +67,12 @@ every account at its cap, by any request's landing on another agent's pin of its
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month: an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
 `fast`). A keepalive probe's cost counts toward it the same as any other request's, since a probe on an API-key member
-still draws real money. The table in force is fixed at startup, so a member held at its budget waits for the period to
-end or its budget to be raised, rather than for a price correction. A member's rows on a model priced by prompt length
-are summed at the dollars they were booked at, since an hour's sums carry no per-attempt prompt. The rollups file each
-hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
-An account's rollups also book a cooldown's time when its announcement lands, each part to the hour it falls in, up to
-seven days past the announcement, a later announcement booking on from the end already booked, and a cooldown cleared
-early gives back the time after the clear.
+still draws real money. A member's spend is the period's hourly sums priced at the revision in force at each hour, so a
+revision that lands moves the spend at the next refresh, and a model priced by prompt length sums its hours by the band
+each attempt fell in. The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's
+usage credits, as the response reported it. An account's rollups also book a cooldown's time when its announcement
+lands, each part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from
+the end already booked, and a cooldown cleared early gives back the time after the clear.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -117,16 +117,25 @@ five minutes. A transport failure or another error keeps the cadence. The other 
 
 ## Pricing
 
-Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,
-since tier and batch modifiers are not known here and subscription quota is the rate-limit windows, never this
-number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the binary.
-`stats.api_prices_path` overrides it with a file of the operator's own, Settings names each table's path and date
-on its About card, and the cost reference dialog the Sessions view opens draws the table
-([The cost reference](console.md#the-cost-reference)). An attempt on a model the table does not price carries no cost
+A request's cost is an estimate at list prices per million tokens, computed from its token counts when a page or a route
+reads it: an estimate rather than a bill, since tier and batch modifiers are not known here and subscription quota is
+the rate-limit windows, never this number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the
+binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
+path and date on its About card, and the cost reference dialog the Sessions view opens draws the table ([The cost
+reference](console.md#the-cost-reference)). An attempt on a model the entry in force does not price reads no cost
 estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
-The nine shipped rows, in USD per million tokens, as the shipped file effective 2026-10-08 lists them, in its order
-(the three Opus models' fast cells are twice each figure):
+The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`
+form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
+and an instant before the first entry reads the first. A request is priced at the entry in force when it arrived, so all
+its attempts price under one entry. An entry added late re-prices the ledger's rows from its date on at their next read.
+An entry dated after now is held: every read takes it from its date on, and the burn rates the router builds at start
+for the shedding round take it at the first start after that date. A correction of a figure the file had wrong edits
+every entry that carries the row and adds no entry, since the correction says what was always true, while a provider's
+price change, a new model or a moved threshold adds one.
+
+The nine rows of the shipped revision in force, in USD per million tokens, in the file's order (the three Opus models'
+fast cells are twice each figure):
 
 | Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
 | --- | --- | --- | --- | --- | --- |
@@ -153,7 +162,8 @@ A model priced by prompt length carries a `long_context` block, a threshold `ove
 five cells. An attempt whose prompt is longer than the threshold is priced at that set for all five counts, the output
 included. The prompt is the attempt's uncached input, cache reads and cache writes together, as the answer's usage
 reports them. A fast answer prices at the fast cells whatever its prompt. The shipped table lists Claude Haiku 5.5 with
-both sets.
+both sets. The band an attempt's prompt selects is a dimension of the hourly rollups, so a range read from them prices
+each band at its own cells.
 
 A keepalive probe's own row is priced from the table in dollars, whatever the account's funding, at the cells the
 answer's reported speed selects. A probe on a model the table does not list prices at the dearest standard cell of each
@@ -161,10 +171,12 @@ type the table carries, never at zero, so a probe that consumed quota is never b
 prompt length, a probe prices at the set its own prompt selects.
 
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
-model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the threshold): a
-negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A `long_context.over`
-that is not a whole number of tokens above zero is refused the same way, since a zero would price every prompt at the
-long-context cells.
+entry's date, the model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the
+threshold): a negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A
+`long_context.over` that is not a whole number of tokens above zero is refused the same way, since a zero would price
+every prompt at the long-context cells. The list itself is refused when it is empty, when an entry's date is not in
+`YYYY-MM-DD` form, naming the entry's place in the list, and when two entries carry one date, naming the date
+([stats](installation.md#stats) gives each message).
 
 ## Plan meter
 
@@ -178,12 +190,16 @@ charts under every grouping. An answer in overage reads the same in the burn fig
 its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription member's as an API-key
 member's.
 
-The subscription cost model (`crates/ledger/subscription_costs.yaml`, effective 2026-10-11) ships beside the price
-table and holds constants: a token costs its model's weight times its type's multiplier in units on every window, a
-window holds a capacity in units per tier, and a request's share of a window is the units it spent over that capacity,
-over the peak band's capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max
-20x 5-hour window outside the band, so one percent of that window, the step the usage header moves in, is 1,500,000
-units. Nothing the console shows is a unit count.
+The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
+a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
+units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
+capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
+the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. The console shows the
+unit as the 20x window equivalent: the share of a Max 20x window the same tokens would spend, so figures of different
+account tiers compare and add. It reads in three columns, the 5-hour window with the peak band's weight, the 7-day
+window with the week's factor, and a model week over its capacity factor. One million plain input tokens of Opus 5.5 are
+2,200,000 units, 1.47% of a 20x 5-hour window outside the band and 0.244% of a 20x 7-day window, and the same request on
+a Pro account reads 29.3% of its own 5-hour window.
 
 The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
 subscription reports `default_claude_ai`):
@@ -194,21 +210,26 @@ subscription reports `default_claude_ai`):
 | `default_claude_max_5x` | 37,500,000 | 450,000,000 |
 | `default_claude_max_20x` | 150,000,000 | 900,000,000 |
 
-The weights of the same file, in units per plain input token, with the share of a Max 20x window one million input
-tokens spend outside the band, derived from the weight over the capacity:
+The account's tier is recorded on each attempt when it lands, as the router held it, and carried into the hourly
+rollups, so a share reads under the tier the account had when it served the request, and a tier change lands on new rows
+only.
 
-| Model | Weight | 5-hour input per million on Max 20x | 7-day input per million on Max 20x |
-| --- | --- | --- | --- |
-| `claude-fable-5-1` | 10 | 6.67% | 1.11% |
-| `claude-opus-5-5` | 2.2 | 1.47% | 0.244% |
-| `claude-sonnet-5-5` | 1.5 | 1.00% | 0.167% |
-| `claude-sonnet-5` | 1.5 | 1.00% | 0.167% |
-| `claude-haiku-5-5` | 0.1 | 0.0667% | 0.0111% |
-| `claude-haiku-4-5` | 1 | 0.667% | 0.111% |
+The weights of the same file, in units per plain input token, each with the date the plan meter measured it, and the
+share of a Max 20x window one million input tokens spend outside the band, derived from the weight over the capacity:
 
-`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The models the
-plan meter has not measured and the file leaves out (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no row
-and price no share.
+| Model | Weight | Measured | 5-hour input per million on Max 20x | 7-day input per million on Max 20x |
+| --- | --- | --- | --- | --- |
+| `claude-fable-5-1` | 10 | 2026-09-30 | 6.67% | 1.11% |
+| `claude-opus-5-5` | 2.2 | 2026-10-04 | 1.47% | 0.244% |
+| `claude-sonnet-5-5` | 1.5 | 2026-09-30 | 1.00% | 0.167% |
+| `claude-sonnet-5` | 1.5 | not measured | 1.00% | 0.167% |
+| `claude-haiku-5-5` | 0.1 | 2026-10-08 | 0.0667% | 0.0111% |
+| `claude-haiku-4-5` | 1 | 2026-10-05 | 0.667% | 0.111% |
+
+`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The priced
+models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no weight row and
+read the weight of the latest weighed model of their model tier as an estimate, Fable 5 that of Fable 5.1 and the two
+Opus models that of Opus 5.5.
 
 Every model shares one multiplier per token type: input 1, output 5, a cache write 1.25 whatever its TTL, and a cache
 read 0.025. Thinking tokens count as output. A model that breaks a shared constant takes an `overrides` row, which may
@@ -218,26 +239,42 @@ The peak band covers weekdays from 5 to 11 AM Pacific time, read in the `America
 the end hour excluded, so its UTC hours move by an hour when daylight time starts and ends. A 5-hour window holds 0.7
 of its capacity inside the band, so a request completing inside it spends 1/0.7 of the share it would outside. The
 7-day window's factor is 1, so the week has no band. The edges are steps, and Saturday and Sunday are outside the band.
-The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force
-at its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round
-prices on plan quota so the order reads what the meter charges. The account, key and request class groupings of the
-analytics read the hourly rollups instead, which fold a request under the hour it arrived in, so the account
-grouping's shares weigh it by that hour's band rather than by the band at its completion. The Tiers and peak band tab
-of the cost reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
+The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force at
+its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round prices
+on plan quota so the order reads what the meter charges. The analytics read the hourly rollups instead, which fold a
+request under the hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by
+the band at its completion. The burn chart groups by the analytics' ten dimensions, read from the rollups the same way,
+and by session, which reads the attempts, each weighed by the band at its completion. The shares answer under the
+account grouping, or under every grouping when the filter names exactly one account, since shares of different accounts'
+windows do not add, and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost
+reference names this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
 
-A model without a weight prices no share: the prediction adds no charge, the shedding round ranks the pin after every
-priced one, the analytics list the share under model unlisted and the cost reference shows a dash. A tier without a
-capacity on a window prices no share there either, and the prediction adds no charge on that window. The shedding round
-ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a tier the file
-lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. The file carries
-one date, `effective`. A dated model id reads the weight of its undated name.
+A model without a weight of its own reads the weight of the latest weighed model of its model tier, marked estimated
+wherever it is shown: the prediction charges it, the shedding round ranks its pin by that estimate, and once it has
+served a request since the start, the `model_unweighted` attention item names it. A model of no model tier, or of a
+model tier with no weighed model, prices no share: the prediction adds no charge, the shedding round ranks the pin after
+every priced one, the analytics list the share under model unlisted and the cost reference shows a dash. An account tier
+without a capacity on a window prices no share there either, and the prediction adds no charge on that window. The
+shedding round ranks that tier's pins like any other, on the anchor tier's rates, and in the analytics an account on a
+tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A
+dated model id reads the weight of its undated name.
 
-A new model is one weight line: its plain input rate in percent of the Max 20x 5-hour window per million tokens,
-measured outside the band, times 1.5. An operator who cannot wait for a release copies the shipped file, adds the line
-and points `stats.subscription_costs_path` at the copy.
+The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
+of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
+first. The shipped file carries one entry, and `stats.subscription_costs_path` replaces the whole list. A measured
+weight that replaces an assumed one edits every entry, since it says what the weight always was.
+
+Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
+`haiku` on the shipped file), and `model_tier`, each model's tier by undated id. They order the console's model tables
+and name the tier whose latest weighed model stands in for an unweighted one, so a new model or a new family is an edit
+of the file. A model the map does not name takes the tier its id names after `claude-` when `tier_order` lists it.
+
+A new model is one weight line and its `model_tier` entry: the weight is its plain input rate in percent of the Max 20x
+5-hour window per million tokens, measured outside the band, times 1.5. An operator who cannot wait for a release copies
+the shipped file, adds both lines and points `stats.subscription_costs_path` at the copy.
 
 ## Body capture
 
@@ -291,6 +328,9 @@ rows stay from its period's start on, so a retention shorter than the period nev
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
 
+A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
+older hours keep their split.
+
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
@@ -323,11 +363,11 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
-The `model` label is bounded by the price table: a model reads as the table entry that prices it, its own id or, for a
-dated id priced under its undated base, that base, and every other model is reported as `other`, so a downstream caller
-cannot grow the label set by naming models it likes. `phoebis_tokens_total` counts under five `kind` values,
-`cache_read`, `cache_write_1h`, `cache_write_5m`, `input` and `output`, and `phoebis_upstream_ttfb_seconds` uses the
-same 64 log-spaced buckets the rollups use, with an overflow bucket.
+The `model` label is bounded by the price entry in force at the request: a model reads as the row that prices it, its
+own id or, for a dated id priced under its undated base, that base, and every other model is reported as `other`, so a
+downstream caller cannot grow the label set by naming models it likes. `phoebis_tokens_total` counts under five `kind`
+values, `cache_read`, `cache_write_1h`, `cache_write_5m`, `input` and `output`, and `phoebis_upstream_ttfb_seconds` uses
+the same 64 log-spaced buckets the rollups use, with an overflow bucket.
 `phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the
 whole prefix back, or wrote it on the account a migration moved it to, `cold` when the upstream served it without that
 read, `failed` when the upstream did not serve it, and `held` when the router refused it with `503 ledger_behind` while

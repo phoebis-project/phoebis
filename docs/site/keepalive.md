@@ -121,13 +121,13 @@ The pool's `keepalive` object carries four fields:
 The break-even of a recipe is the pause length at which its chain of probes costs one re-write of its prefix, `(write -
 read) / (cadence * read)`. The read and write factors are those of the recipe's model under its account's funding. A
 plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs the
-model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight, and a
-model the cost model leaves unweighted breaks even where a weighted one does. A dollar-funded recipe reads its model's
-row of the price table, and a model the price table does not price reads its tightest row, the one with the smallest
-break-even among the priced rows. On a row priced by prompt length, the recipe reads the set its request's prompt length
-selects, as the probe's own cost does. The cadence is the TTL's: 15 probes an hour on a five-minute entry and 1.11 on a
-one-hour entry. On the shipped cost model, effective 2026-10-11, a plan-funded recipe breaks even after 44.1 hours on a
-one-hour entry and 3 hours 16 minutes on a five-minute entry.
+model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight: a model
+the cost model leaves unweighted reads its model tier's measured weight, and a model of no model tier breaks even where
+a weighted one does. A dollar-funded recipe reads its model's row of the price table, and a model the price table does
+not price reads its tightest row, the one with the smallest break-even among the priced rows. On a row priced by prompt
+length, the recipe reads the set its request's prompt length selects, as the probe's own cost does. The cadence is the
+TTL's: 15 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model, a plan-funded
+recipe breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
 
 A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
 number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range
@@ -337,15 +337,16 @@ used, and a high parked-limit or horizon share says the parked ceilings do.
 
 Every probe is a row of the request ledger, of kind `probe`, priced as any request is. Per pool and per hour, the
 ledger's rollup carries the keepalive fields the console reads. `kept_warm_requests` and `kept_warm_tokens` count the
-requests and tokens a probe kept off a cache miss on any model the request named. `probe_cost_usd` is what sending the
-probes cost, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe
-that landed on a different account than the recipe's. `wasted_probes` and `wasted_probe_usd` are the probes settled
-wasted by one of the reasons above and what they cost, and `wasted_probe_reasons` counts those wasted probes by the
-reason. Each wasted probe files under the funding its own cost row took, from the kind of the account that served it and
-whether its answer reported overage in use, so the wasted part of a probe share reads the plan-funded probes' waste
-against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for
-example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with `503
-ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
+requests and tokens a probe kept off a cache miss on any model the request named. A probe's cost is its own request
+row's counts priced when read, at the dearest listed cells for a model the price table does not know, and
+`probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes` counts the probes
+settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes'
+five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files under the
+funding its own cost row took, from the kind of the account that served it and whether its answer reported overage in
+use, so the wasted part of a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped`
+counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a cooldown already held
+the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent
+again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
