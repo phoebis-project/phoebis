@@ -326,13 +326,13 @@ with the whole id on hover. The client column reads the class the router derived
 turn.
 Status reads the code with the outcome
 word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`) and
-a `held` badge for a request that waited for a slot while every account was at its cap. One row is one client request
-however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, and nothing
-for a request of one attempt. Cost reads window shares for a request a subscription window paid, each with its window's
-short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), and dollars for an overage, fast mode or
-API-key request. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the
-requests up to the moment you opened it so paging does not shift, and Refresh brings it up to now. An empty table reads
-"No requests match" with "Widen the date range or clear a filter." What each figure means is on
+a `held {time}` badge for a request that waited for a slot while every account was at its cap. One row is one client
+request however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, and
+nothing for a request of one attempt. Cost reads window shares for a request a subscription window paid, each with its
+window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), and dollars for an overage, fast
+mode or API-key request. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
+holds the requests up to the moment you opened it so paging does not shift, and Refresh brings it up to now. An empty
+table reads "No requests match" with "Widen the date range or clear a filter." What each figure means is on
 [Statistics](statistics.md).
 
 Follow, off by default, reads the list every 5 seconds with the range ending now, takes every row that arrived since
@@ -512,10 +512,10 @@ band control and a token field in millions with quick picks for 100k, 1M and 10M
 week row under a Fable model's 7-day group, a warning tint on a cell past a full window, and the models the cost model
 does not weigh after a divider. API prices draws the dollar list prices per million tokens, input, cache read, cache
 write 5m, cache write 1h and output, with a fast-mode row under each model that serves fast mode and a row under each
-model priced by prompt length, under the caption "USD per million tokens at list price. An API-key account pays these.
-A subscription account pays them in overage and for fast-mode answers." Both tables list the models family by family,
-newest first, in the order the shipped files keep. The price rows, the weights and how a probe is priced are on
-[Pricing](statistics.md#pricing).
+model priced by prompt length, under the caption "USD per million tokens at list price" and its note "An API-key
+account pays these. A subscription account pays them in overage and for fast-mode answers." Both tables list the
+models family by family, newest first, in the order the shipped files keep. The price rows, the weights and how a
+probe is priced are on [Pricing](statistics.md#pricing).
 
 ## Settings
 
