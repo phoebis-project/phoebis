@@ -2872,6 +2872,28 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         Some(now - 5),
         "the fold's own timestamp, not the cache clock"
     );
+    let equivalent_per_hour = phoebis_ledger::PlanTables::shipped()
+        .equivalent_at(
+            phoebis_routing::FIVE_HOUR,
+            "claude-opus-5-5",
+            phoebis_routing::PinUsage {
+                input: 145,
+                ..phoebis_routing::PinUsage::default()
+            },
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let (s1, s2) = (row(&sessions, "s1"), row(&sessions, "s2"));
+    assert!(
+        close(s1["burn_equivalent"].as_f64(), equivalent_per_hour) && s1["estimated"] == false,
+        "the plan pin's banded copy as its 20x 5-hour equivalent per hour, on a weighted model: {s1}"
+    );
+    assert_eq!(
+        (s2.get("burn_equivalent"), &s2["estimated"]),
+        (Some(&serde_json::Value::Null), &serde_json::json!(false)),
+        "a pin billed in dollars has no window equivalent to mark, whatever its model: {s2}"
+    );
     // Pushed into overage with a reset ahead of now: the same pin reads the dollar average instead.
     parts
         .router
@@ -2900,6 +2922,11 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         close(row(&overage_sessions, "s1")["burn"].as_f64(), s1_usd_per_hour),
         "overage evidence whose reset is ahead moves a subscription account's reading to dollars: {}",
         row(&overage_sessions, "s1")
+    );
+    assert_eq!(
+        row(&overage_sessions, "s1").get("burn_equivalent"),
+        Some(&serde_json::Value::Null),
+        "and its window equivalent goes with the plan reading"
     );
     // A reset that has already passed no longer counts as overage: a raw `in_use` read would still answer
     // `usd` here, since the flag itself never cleared. A later `observed_at` than the ahead-of-now report
@@ -2990,6 +3017,12 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             "{session} reads its burn per hour at the cells its last prompt selects: {:?} against {}",
             (burn, unit),
             usd_per_hour(100.0, Speed::Standard, prompt)
+        );
+        let row = session_row(&sessions, session);
+        assert_eq!(
+            (row.get("burn_equivalent"), &row["estimated"]),
+            (Some(&serde_json::Value::Null), &serde_json::json!(false)),
+            "{session}: a pin billed in dollars reads no window equivalent: {row}"
         );
     }
     // 60,000 fast input tokens over the pool's default 600 s window are 100 a second at the fast cells, whatever
@@ -3094,6 +3127,21 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
          against {on_max_20x}",
         (burn, unit)
     );
+    // The 20x equivalent reads no account tier, so the same figure on every tier the account moves to below.
+    let equivalent = tables
+        .equivalent_at(phoebis_routing::FIVE_HOUR, "claude-opus-5-5", million, now)
+        .unwrap()
+        * 3_600.0
+        / window;
+    let equivalent_of = |sessions: &serde_json::Value| {
+        let row = session_row(sessions, "s1");
+        (row["burn_equivalent"].as_f64(), row["estimated"].clone())
+    };
+    let (on_20x, estimated) = equivalent_of(&renewed);
+    assert!(
+        close(on_20x, equivalent) && estimated == false,
+        "the burn as the 20x 5-hour equivalent per hour: {on_20x:?} against {equivalent}"
+    );
     name_the_tier(&parts.store, "business", "default_claude_ai");
     let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
@@ -3115,6 +3163,11 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         "the same tokens read on Pro are their share of Pro's own 5-hour window: {:?} against {pro}",
         burn_of(&on_pro, "s1")
     );
+    assert!(
+        close(equivalent_of(&on_pro).0, equivalent),
+        "the equivalent takes no tier division on Pro: {:?} against {equivalent}",
+        equivalent_of(&on_pro)
+    );
     name_the_tier(&parts.store, "business", "default_claude_team");
     let on_team = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"].is_null()
@@ -3124,6 +3177,11 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         burn_of(&on_team, "s1"),
         (None, Some("window_share".into())),
         "a tier the cost model does not size sizes no window, so the figure is null rather than a guess"
+    );
+    assert!(
+        close(equivalent_of(&on_team).0, equivalent),
+        "while the 20x equivalent still reads on a tier the cost model does not size: {:?} against {equivalent}",
+        equivalent_of(&on_team)
     );
 }
 
@@ -3169,6 +3227,23 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
          {share_per_hour}",
         (burn, unit)
     );
+    let equivalent_per_hour = tables
+        .equivalent_at(
+            phoebis_routing::FIVE_HOUR,
+            donor,
+            phoebis_routing::PinUsage {
+                input: 100,
+                ..phoebis_routing::PinUsage::default()
+            },
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let row = session_row(&sessions, "s1");
+    assert!(
+        close(row["burn_equivalent"].as_f64(), equivalent_per_hour) && row["estimated"] == true,
+        "the 20x equivalent at the donor's weight, marked estimated: {row}"
+    );
     parts
         .router
         .report(phoebis_routing::Report::Overage {
@@ -3191,6 +3266,12 @@ async fn a_pin_on_a_model_without_a_weight_reads_an_estimated_burn() {
     assert!(
         burn_of(&in_overage, "s1").0.is_some_and(|b| b > 0.0),
         "dollars price the same pin, since the price table lists the model"
+    );
+    let row = session_row(&in_overage, "s1");
+    assert_eq!(
+        (row.get("burn_equivalent"), &row["estimated"]),
+        (Some(&serde_json::Value::Null), &serde_json::json!(false)),
+        "the dollars are the price table's own, so nothing is estimated: {row}"
     );
 }
 

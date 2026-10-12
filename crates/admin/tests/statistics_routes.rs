@@ -50,6 +50,58 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
     }
 }
 
+/// One seeded request's row as the readers price it: at the start of its hour, at the cells its prompt selects, with
+/// no account tier, which the 20x window equivalent never reads.
+fn priced_row(
+    model: &str,
+    funding: phoebis_ledger::Funding,
+    at: i64,
+    usage: phoebis_routing::PinUsage,
+) -> phoebis_ledger::Priced {
+    let prices = phoebis_ledger::PriceRevisions::shipped();
+    let hour = at.div_euclid(HOUR) * HOUR;
+    let prompt = phoebis_ledger::prompt_tokens(
+        usage.input,
+        usage.cache_read,
+        usage.write_5m,
+        usage.write_1h,
+    );
+    phoebis_ledger::price_row(
+        &prices,
+        &phoebis_ledger::PlanTables::shipped(),
+        &phoebis_ledger::RowKey {
+            model,
+            speed: phoebis_ledger::Speed::Standard,
+            band: prices.in_force(hour).band_of(model, prompt),
+            funding,
+            kind: "inference",
+            tier: None,
+            at: hour,
+            band_at: None,
+        },
+        usage,
+    )
+}
+
+/// A priced row's dollars, zero for a model the revision lacks.
+fn usd_of(priced: &phoebis_ledger::Priced) -> f64 {
+    priced.usd.as_ref().map_or(0.0, |usd| usd.total())
+}
+
+/// A priced row's 20x equivalent on `window`, zero for a billed row or a window it could not price.
+fn equivalent_of(priced: &phoebis_ledger::Priced, window: &str) -> f64 {
+    priced
+        .equivalent
+        .as_ref()
+        .and_then(|windows| windows.get(window).copied().flatten())
+        .unwrap_or(0.0)
+}
+
+fn close_to(got: &serde_json::Value, want: f64) -> bool {
+    got.as_f64()
+        .is_some_and(|got| (got - want).abs() <= 1e-12 + want.abs() * 1e-9)
+}
+
 /// A JSON object's keys as the body orders them; comparing two `Value`s ignores the order.
 fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
     object
@@ -83,7 +135,10 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let expected: Vec<(String, Vec<String>)> = [
         ("about", &["profile", "version"][..]),
         ("access", &["admin_configured"]),
-        ("api_prices", &["content", "effective", "source"]),
+        (
+            "api_prices",
+            &["content", "effective", "revisions", "source"],
+        ),
         ("listeners", &["metrics", "proxy", "proxy_tls"]),
         ("retention", &["body_capture_max_hours"]),
         ("sessions", &["expire_after_seconds"]),
@@ -96,7 +151,10 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
                 "subscription_costs_path",
             ],
         ),
-        ("subscription_costs", &["content", "effective", "source"]),
+        (
+            "subscription_costs",
+            &["content", "effective", "revisions", "source"],
+        ),
     ]
     .iter()
     .map(|(name, keys)| {
@@ -168,6 +226,41 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         "in the file's order"
     );
     assert_eq!(
+        prices["revisions"],
+        serde_json::Value::Array(
+            revisions
+                .iter()
+                .map(|table| serde_json::json!({
+                    "effective": table.effective,
+                    "content": {"effective": table.effective, "models": table.models},
+                }))
+                .collect()
+        ),
+        "every revision the price list holds, ascending by date, each in the shape of `content`"
+    );
+    assert_eq!(
+        costs["revisions"],
+        serde_json::Value::Array(
+            loaded
+                .revisions
+                .iter()
+                .map(|entry| serde_json::json!({
+                    "effective": entry.effective,
+                    "content": serde_json::to_value(entry).unwrap(),
+                }))
+                .collect()
+        ),
+        "every revision of the cost model, ascending by date, each in the shape of `content`"
+    );
+    assert_eq!(
+        (
+            prices["revisions"].as_array().map(Vec::len),
+            costs["revisions"].as_array().map(Vec::len),
+        ),
+        (Some(revisions.len()), Some(loaded.revisions.len())),
+        "one entry per revision of each file"
+    );
+    assert_eq!(
         (settings.get("pricing"), settings.get("plan_tables")),
         (None, None),
         "each table answers under its file's name alone"
@@ -209,10 +302,17 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             &system["pricing"]["subscription_costs"]
         ),
         (
-            &serde_json::json!({"path": null, "source": "shipped", "effective": shipped.effective}),
-            &serde_json::json!({"path": null, "source": "shipped", "effective": cost_model.effective})
+            &serde_json::json!({
+                "path": null, "source": "shipped", "effective": shipped.effective,
+                "revisions": revisions.len(), "next": null,
+            }),
+            &serde_json::json!({
+                "path": null, "source": "shipped", "effective": cost_model.effective,
+                "revisions": loaded.revisions.len(), "next": null,
+            })
         ),
-        "the harness configures neither path, so both tables are the shipped ones: {system}"
+        "the harness configures neither path, so both tables are the shipped ones, and the clock is past every \
+         shipped entry, so neither holds a pending one: {system}"
     );
     assert_eq!(
         (
@@ -296,6 +396,55 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (&system["ready"], &system["dead"]),
         (&serde_json::json!(true), &serde_json::json!([])),
         "the harness's router task, ledger consumer and store are all alive"
+    );
+}
+
+#[tokio::test]
+async fn a_price_file_with_an_entry_dated_ahead_names_it_as_next_and_lists_it_beside_the_one_in_force(
+) {
+    // The file lists its later entry first, so the route's ascending order is the loader's, not the file's.
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2099-01-01\n    models:\n      claude-sonnet-5: {input: 3, cache_write_5m: 3, \
+         cache_write_1h: 3, cache_read: 3, output: 3}\n  - effective: 2026-01-01\n    models:\n      \
+         claude-sonnet-5: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}\n",
+        "file",
+    )
+    .unwrap();
+    let parts = common::admin_parts_full_priced(prices.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            &system["pricing"]["api_prices"]["effective"],
+            &system["pricing"]["api_prices"]["revisions"],
+            &system["pricing"]["api_prices"]["next"],
+        ),
+        (
+            &serde_json::json!("2026-01-01"),
+            &serde_json::json!(prices.len()),
+            &serde_json::json!("2099-01-01"),
+        ),
+        "the entry the clock has not reached is the next one, and the one before it stays in force: {system}"
+    );
+    assert_eq!(
+        system["pricing"]["subscription_costs"]["next"],
+        serde_json::Value::Null,
+        "the shipped cost model holds no entry ahead of the clock: {system}"
+    );
+    let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    let dates: Vec<&str> = pricing["api_prices"]["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["effective"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        (dates, &pricing["api_prices"]["effective"]),
+        (
+            vec!["2026-01-01", "2099-01-01"],
+            &serde_json::json!("2026-01-01")
+        ),
+        "the price route answers the pending entry beside the one in force: {pricing}"
     );
 }
 
@@ -676,6 +825,11 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
         .find(|(_, row)| row.fast.is_none())
         .expect("a shipped row serves no fast mode");
     let fast = fast_row.fast.as_ref().unwrap();
+    assert_eq!(
+        (costs.get("version"), &costs["effective"]),
+        (None, &serde_json::json!(shipped.effective)),
+        "sessions/costs names the date of the revision in force and no version: {costs}"
+    );
     for (route, models) in [
         ("settings", &settings["api_prices"]["content"]["models"]),
         ("pricing", &pricing["api_prices"]["content"]["models"]),
@@ -756,6 +910,11 @@ async fn the_price_routes_answer_the_long_context_set_beside_the_standard_cells(
         .find(|(_, row)| row.long_context.is_none())
         .expect("a row priced one way");
     let long = long_row.long_context.as_ref().unwrap();
+    assert_eq!(
+        (costs.get("version"), &costs["effective"]),
+        (None, &serde_json::json!(table.effective)),
+        "sessions/costs names the date of the test table's revision in force and no version: {costs}"
+    );
     for (route, models) in [
         ("settings", &settings["api_prices"]["content"]["models"]),
         ("pricing", &pricing["api_prices"]["content"]["models"]),
@@ -891,18 +1050,60 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         404
     );
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    // The oldest request is answered in overage, so the day holds billed dollars beside the plan rows' equivalent.
+    const OVERAGE: i64 = 4;
     for i in 0..5 {
-        parts.ledger.record(record(
+        let mut seeded = record(
             &format!("t{i}"),
             now - i * HOUR,
             "claude-sonnet-5",
             &format!("s{}", i % 2),
-        ));
+        );
+        if i == OVERAGE {
+            let Record::Request { attempts, .. } = &mut seeded else {
+                unreachable!("record builds a request")
+            };
+            attempts[0].overage_in_use = Some(true);
+        }
+        parts.ledger.record(seeded);
     }
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("t4").await.unwrap()
     })
     .await;
+    let seeded: Vec<phoebis_ledger::Priced> = (0..5)
+        .map(|i| {
+            let funding = if i == OVERAGE {
+                phoebis_ledger::Funding::Overage
+            } else {
+                phoebis_ledger::Funding::Plan
+            };
+            priced_row(
+                "claude-sonnet-5",
+                funding,
+                now - i * HOUR,
+                phoebis_routing::PinUsage {
+                    input: 1_000,
+                    output: 100,
+                    ..phoebis_routing::PinUsage::default()
+                },
+            )
+        })
+        .collect();
+    let billed = usd_of(&seeded[OVERAGE as usize]);
+    let dollars: f64 = seeded.iter().map(usd_of).sum();
+    let five_hour: f64 = seeded
+        .iter()
+        .map(|p| equivalent_of(p, phoebis_routing::FIVE_HOUR))
+        .sum();
+    let seven_day: f64 = seeded
+        .iter()
+        .map(|p| equivalent_of(p, phoebis_routing::SEVEN_DAY))
+        .sum();
+    assert!(
+        billed > 0.0 && billed < dollars && five_hour > 0.0 && seven_day > 0.0,
+        "the seed prices both sides: {billed} of {dollars}, {five_hour} and {seven_day}"
+    );
     let traffic = json(
         get(
             &parts.app,
@@ -934,6 +1135,58 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             .unwrap()
             > 0
     );
+    let buckets = traffic["buckets"].as_array().unwrap();
+    let summed = |read: &dyn Fn(&serde_json::Value) -> f64| -> serde_json::Value {
+        serde_json::json!(buckets.iter().map(read).sum::<f64>())
+    };
+    assert!(
+        close_to(&summed(&|b| b["billed_usd"].as_f64().unwrap()), billed)
+            && close_to(&summed(&|b| b["cost_usd"].as_f64().unwrap()), dollars)
+            && close_to(
+                &summed(&|b| b["equivalent"]["five_hour"].as_f64().unwrap()),
+                five_hour
+            )
+            && close_to(
+                &summed(&|b| b["equivalent"]["seven_day"].as_f64().unwrap()),
+                seven_day
+            )
+            && buckets.iter().all(|b| b["estimated"] == false),
+        "the buckets carry the overage row's dollars as billed and the plan rows' equivalent: {traffic}"
+    );
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert!(
+        close_to(&pool["cost_24h"], dollars)
+            && close_to(&pool["billed_24h"], billed)
+            && close_to(&pool["equivalent_24h"]["five_hour"], five_hour)
+            && close_to(&pool["equivalent_24h"]["seven_day"], seven_day)
+            && pool["estimated_24h"] == false,
+        "the pool's day answers its billed dollars and its 20x equivalent beside its dollars: {pool}"
+    );
+    let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
+    assert!(
+        close_to(&board["cost_24h"], dollars)
+            && close_to(&board["billed_24h"], billed)
+            && close_to(&board["equivalent_24h"]["five_hour"], five_hour)
+            && close_to(&board["equivalent_24h"]["seven_day"], seven_day)
+            && board["estimated_24h"] == false,
+        "the dashboard's day answers the same figures: {board}"
+    );
+    let hourly = board["hourly"].as_array().unwrap();
+    let hourly_sum = |read: &dyn Fn(&serde_json::Value) -> f64| -> serde_json::Value {
+        serde_json::json!(hourly.iter().map(read).sum::<f64>())
+    };
+    assert!(
+        close_to(&hourly_sum(&|h| h["billed"].as_f64().unwrap()), billed)
+            && close_to(
+                &hourly_sum(&|h| h["equivalent"]["five_hour"].as_f64().unwrap()),
+                five_hour
+            )
+            && close_to(
+                &hourly_sum(&|h| h["equivalent"]["seven_day"].as_f64().unwrap()),
+                seven_day
+            ),
+        "the hours sum to the day: {board}"
+    );
     assert_eq!(
         get(&parts.app, "/admin/pools/nope/traffic", Some(&cookie))
             .await
@@ -964,6 +1217,98 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
         )
     );
     assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
+}
+
+#[tokio::test]
+async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estimated_equivalent() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables::shipped();
+    assert!(
+        tables
+            .revisions
+            .in_force(now)
+            .weight_or_fallback("claude-opus-5", phoebis_routing::FIVE_HOUR)
+            .is_some_and(|(_, fallback)| fallback),
+        "the shipped cost model has no weight of its own for Opus 5"
+    );
+    let donor = tables
+        .tier_of("claude-opus-5", now)
+        .and_then(|tier| tables.latest_weighted(tier, now))
+        .expect("the shipped cost model weighs a model of Opus 5's model tier");
+    // The landing records the account's Max 20x tier on each attempt. One request on the plan, one answered in
+    // overage.
+    set_max_20x(&parts).await;
+    let plan = record("opus-plan", now - HOUR, "claude-opus-5", "s0");
+    let mut billed = record("opus-billed", now - HOUR, "claude-opus-5", "s1");
+    let Record::Request { attempts, .. } = &mut billed else {
+        unreachable!("record builds a request")
+    };
+    attempts[0].overage_in_use = Some(true);
+    parts.ledger.record(plan);
+    parts.ledger.record(billed);
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("opus-billed").await.unwrap()
+    })
+    .await;
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000,
+        output: 100,
+        ..phoebis_routing::PinUsage::default()
+    };
+    // The request finished 500 ms after its receipt, where its plan figures read the peak band.
+    let band_at = now - HOUR + 500;
+    let summary = json(get(&parts.app, "/admin/requests/opus-plan", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    let windows = summary["cost_equivalent"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect::<Vec<_>>());
+    assert_eq!(
+        windows,
+        Some(vec!["five_hour".to_string(), "seven_day".to_string()]),
+        "an Opus model's equivalent reads the two shared windows: {summary}"
+    );
+    for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
+        let at_the_donor = tables.equivalent_at(window, donor, usage, band_at).unwrap();
+        assert!(
+            close_to(&summary["cost_equivalent"][window], at_the_donor),
+            "{window}: the 20x equivalent at the weight of the model tier's latest weighted model, \
+             {at_the_donor}: {summary}"
+        );
+    }
+    assert_eq!(
+        (&summary["estimated"], &summary["tier"]),
+        (
+            &serde_json::json!(true),
+            &serde_json::json!("default_claude_max_20x")
+        ),
+        "the figure is marked estimated, and the summary names the tier the serving attempt recorded: {summary}"
+    );
+    assert!(
+        summary["cost_shares"]["five_hour"]
+            .as_f64()
+            .is_some_and(|share| share > 0.0),
+        "the shares price under that tier: {summary}"
+    );
+    let billed = json(get(&parts.app, "/admin/requests/opus-billed", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    assert_eq!(
+        (
+            billed.get("cost_equivalent"),
+            &billed["estimated"],
+            billed.get("tier")
+        ),
+        (
+            Some(&serde_json::Value::Null),
+            &serde_json::json!(false),
+            Some(&serde_json::json!("default_claude_max_20x"))
+        ),
+        "a request billed in dollars answers a null equivalent and nothing estimated, and still names the account \
+         tier its attempt recorded: {billed}"
+    );
 }
 
 /// The request count on a session row is the ledger's. A pin the ledger has no row for has no count, and

@@ -1001,6 +1001,14 @@ pub(crate) struct Pool {
     pub status: String,
     pub requests_24h: u64,
     pub cost_24h: f64,
+    /// The dollars of the day's billed rows alone (fast mode, overage and API key accounts), a part of `cost_24h`.
+    pub billed_24h: f64,
+    /// The day's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    #[schema(value_type = crate::openapi::SharedEquivalentView)]
+    pub equivalent_24h: phoebis_ledger::SharedEquivalent,
+    /// Whether a plan-funded row of the day priced at its model tier's latest weight, for a model the cost model does
+    /// not weight.
+    pub estimated_24h: bool,
     /// The pins under the pool's keys.
     pub active_pins: usize,
     /// 25 hourly buckets from 24 hours before the current hour's start, the current partial hour last, whose
@@ -1330,6 +1338,12 @@ pub(crate) async fn pool_json_from(
         status: status.to_string(),
         requests_24h: day.get(&row.id).map_or(0, |t| t.requests),
         cost_24h: day.get(&row.id).map_or(0.0, |t| t.cost_usd),
+        billed_24h: day.get(&row.id).map_or(0.0, |t| t.billed_usd),
+        equivalent_24h: day
+            .get(&row.id)
+            .map(|t| t.equivalent.clone())
+            .unwrap_or_default(),
+        estimated_24h: day.get(&row.id).is_some_and(|t| t.estimated),
         active_pins,
         traffic_24h: traffic,
     }
@@ -1403,7 +1417,7 @@ mod tests {
     use crate::openapi::round_trip::{round_trips, round_trips_each};
     use crate::openapi::{
         CacheTtlPolicyView, KeepalivePolicyView, ModelRuleView, ResolvedCeilingsView,
-        TrafficBucketView,
+        SharedEquivalentView, TrafficBucketView,
     };
     use std::collections::BTreeMap;
 
@@ -1450,6 +1464,9 @@ mod tests {
         status: String,
         requests_24h: u64,
         cost_24h: f64,
+        billed_24h: f64,
+        equivalent_24h: SharedEquivalentView,
+        estimated_24h: bool,
         active_pins: usize,
         traffic_24h: Vec<TrafficBucketView>,
     }

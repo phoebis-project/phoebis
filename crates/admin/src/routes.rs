@@ -1556,8 +1556,13 @@ pub(crate) struct PricingSource {
     /// `shipped`, or `file` when that path was read.
     #[schema(example = "shipped")]
     pub source: String,
-    /// The table's date.
+    /// The date of the revision in force.
     pub effective: String,
+    /// How many revisions the file lists.
+    pub revisions: usize,
+    /// The date of the first revision dated after now, which takes effect at that date's midnight UTC, null when
+    /// none is.
+    pub next: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -1670,11 +1675,19 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
                 path: state.settings.api_prices_path.clone(),
                 source: revisions.source.clone(),
                 effective: prices.effective.clone(),
+                revisions: revisions.len(),
+                next: revisions.pending(now).map(|t| t.effective.clone()),
             },
             subscription_costs: PricingSource {
                 path: state.settings.subscription_costs_path.clone(),
                 source: state.tables.source.clone(),
                 effective: state.tables.revisions.in_force(now).effective.clone(),
+                revisions: state.tables.revisions.len(),
+                next: state
+                    .tables
+                    .revisions
+                    .pending(now)
+                    .map(|t| t.effective.clone()),
             },
         },
         gaps: gaps.iter().map(crate::requests::event_json).collect(),

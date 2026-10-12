@@ -5,173 +5,299 @@
     "tokens_24h": 12600,
     "tokens_cached_24h": 3500,
     "cost_24h": 0.0249,
+    "billed_24h": 0.0107,
+    "equivalent_24h": {
+      "five_hour": 0.0000705,
+      "seven_day": 0.00001175
+    },
+    "estimated_24h": false,
     "error_rate_24h": 0.3333333333333333,
     "top_error_code": "upstream_error",
     "hourly": [
       {
         "at": 1791637200000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791640800000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791644400000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791648000000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791651600000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791655200000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791658800000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791662400000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791666000000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791669600000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791673200000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791676800000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791680400000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791684000000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791687600000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791691200000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791694800000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791698400000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791702000000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791705600000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791709200000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791712800000,
+        "billed": 0.0,
         "cost": 0.0,
+        "equivalent": {
+          "five_hour": 0.0,
+          "seven_day": 0.0
+        },
         "errors": 0,
         "requests": 0,
         "tokens": 0
       },
       {
         "at": 1791716400000,
+        "billed": 0.0071,
         "cost": 0.0142,
+        "equivalent": {
+          "five_hour": 0.00003525,
+          "seven_day": 5.875e-6
+        },
         "errors": 1,
         "requests": 3,
         "tokens": 7200
       },
       {
         "at": 1791720000000,
+        "billed": 0.0036,
         "cost": 0.0107,
+        "equivalent": {
+          "five_hour": 0.00003525,
+          "seven_day": 5.875e-6
+        },
         "errors": 1,
         "requests": 3,
         "tokens": 5400
@@ -245,6 +371,9 @@
         },
         "cost_usd": 0.0036,
         "cost_shares": null,
+        "cost_equivalent": null,
+        "estimated": false,
+        "tier": null,
         "phases": {
           "received_at": 1791720970000,
           "selected_at": 1791720970000,
@@ -373,6 +502,12 @@
           "five_hour": 0.000017625,
           "seven_day": 2.9375e-6
         },
+        "cost_equivalent": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791720940000,
           "selected_at": 1791720940000,
@@ -495,6 +630,12 @@
           "five_hour": 0.000017625,
           "seven_day": 2.9375e-6
         },
+        "cost_equivalent": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791720880000,
           "selected_at": 1791720880000,
@@ -621,6 +762,12 @@
           "five_hour": 0.000017625,
           "seven_day": 2.9375e-6
         },
+        "cost_equivalent": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400600,
           "selected_at": 1791717400600,
@@ -743,6 +890,12 @@
           "five_hour": 0.000017625,
           "seven_day": 2.9375e-6
         },
+        "cost_equivalent": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400500,
           "selected_at": 1791717400500,
@@ -862,6 +1015,9 @@
         },
         "cost_usd": 0.0071,
         "cost_shares": null,
+        "cost_equivalent": null,
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400000,
           "selected_at": 1791717400000,

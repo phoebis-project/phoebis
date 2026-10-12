@@ -1196,6 +1196,103 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
         (2, Some(1)),
         "the card's head figure equals its bars"
     );
+    // A plan request on the subscription account beside the api_key rows, on Opus 5, which the shipped cost model
+    // prices at its model tier's latest weight: the dollars count it, the billed part does not, and the equivalent
+    // is its own.
+    let plan_at = now - 30_000;
+    let usage = phoebis_routing::PinUsage {
+        input: 100,
+        output: 50,
+        ..phoebis_routing::PinUsage::default()
+    };
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "p1".into(),
+            received_at: plan_at,
+            finished_at: Some(plan_at + 100),
+            key_id: Some("desktop".into()),
+            key_generation,
+            pool_id: Some("main".into()),
+            model: "claude-opus-5".into(),
+            canonical_model: "claude-opus-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "p1".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: plan_at,
+            outcome: "succeeded".into(),
+            input_tokens: Some(usage.input),
+            output_tokens: Some(usage.output),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    let prices = phoebis_ledger::PriceRevisions::shipped();
+    let plan_hour = plan_at.div_euclid(3_600_000) * 3_600_000;
+    let plan = phoebis_ledger::price_row(
+        &prices,
+        &phoebis_ledger::PlanTables::shipped(),
+        &phoebis_ledger::RowKey {
+            model: "claude-opus-5",
+            speed: phoebis_ledger::Speed::Standard,
+            band: prices
+                .in_force(plan_hour)
+                .band_of("claude-opus-5", usage.input),
+            funding: phoebis_ledger::Funding::Plan,
+            kind: "inference",
+            tier: None,
+            at: plan_hour,
+            band_at: None,
+        },
+        usage,
+    );
+    let plan_usd = plan.usd.as_ref().unwrap().total();
+    let windows = plan.equivalent.as_ref().unwrap();
+    let (five_hour, seven_day) = (
+        windows[phoebis_routing::FIVE_HOUR].unwrap(),
+        windows[phoebis_routing::SEVEN_DAY].unwrap(),
+    );
+    assert!(
+        plan_usd > 0.0 && five_hour > 0.0 && seven_day > 0.0 && plan.estimated,
+        "the plan request prices in dollars and in an estimated equivalent: {plan:?}"
+    );
+    let close = |got: &serde_json::Value, want: f64| {
+        got.as_f64()
+            .is_some_and(|got| (got - want).abs() <= 1e-12 + want.abs() * 1e-9)
+    };
+    let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
+        v["keys"][0]["lifetime"]["requests"].as_u64() == Some(4)
+    })
+    .await;
+    for member in ["usage_7d", "lifetime"] {
+        let totals = &keys["keys"][0][member];
+        let cost = totals["cost_usd"].as_f64().unwrap();
+        assert!(
+            close(&totals["billed_usd"], cost - plan_usd)
+                && close(&totals["equivalent"]["five_hour"], five_hour)
+                && close(&totals["equivalent"]["seven_day"], seven_day)
+                && totals["estimated"] == true,
+            "{member}: the api_key rows' dollars as billed, below the plan request's beside them, and its \
+             estimated equivalent: {totals}"
+        );
+    }
+    let pool = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    let cost = pool["cost_24h"].as_f64().unwrap();
+    assert!(
+        close(&pool["billed_24h"], cost - plan_usd)
+            && close(&pool["equivalent_24h"]["five_hour"], five_hour)
+            && close(&pool["equivalent_24h"]["seven_day"], seven_day)
+            && pool["estimated_24h"] == true,
+        "the pool's day: its billed dollars below its dollars, and the estimated equivalent: {pool}"
+    );
     assert_eq!(
         post(
             &parts.app,

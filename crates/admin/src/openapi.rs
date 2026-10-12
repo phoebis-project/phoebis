@@ -313,11 +313,20 @@ pub(crate) struct TrafficBucketView {
 }
 
 /// A figure as the share of a Max 20x account's 5-hour and 7-day windows.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Default, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SharedEquivalentView {
     pub five_hour: f64,
     pub seven_day: f64,
+}
+
+impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
+    fn from(equivalent: &phoebis_ledger::SharedEquivalent) -> Self {
+        SharedEquivalentView {
+            five_hour: equivalent.five_hour,
+            seven_day: equivalent.seven_day,
+        }
+    }
 }
 
 /// One model's list prices, each cell per million tokens.
@@ -371,7 +380,9 @@ pub(crate) struct SubscriptionCostsView {
     pub capacity: BTreeMap<String, CapacityView>,
     pub peak: PeakView,
     pub type_multiplier: TypeMultiplierView,
-    /// Units per plain input token, keyed by undated model id. Null prices nothing.
+    /// Units per plain input token, keyed by undated model id. A null weight, like a model left out, prices at the
+    /// weight of its model tier's latest weighted model as an estimate, and a model of no model tier, or of one with
+    /// no weighted model, prices nothing.
     pub model_weight: BTreeMap<String, Option<f64>>,
     pub model_windows: BTreeMap<String, ModelWindowView>,
     pub overrides: BTreeMap<String, OverrideView>,
@@ -670,7 +681,11 @@ pub(crate) struct SeriesPointView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct HourPointView {
     pub at: i64,
+    /// The dollars of the hour's billed rows alone (fast mode, overage and API key accounts), a part of `cost`.
+    pub billed: f64,
     pub cost: f64,
+    /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    pub equivalent: SharedEquivalentView,
     pub errors: u64,
     pub requests: u64,
     pub tokens: u64,

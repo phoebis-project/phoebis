@@ -6364,173 +6364,299 @@ export const FIXTURES: Record<string, Fixture> = {
       "tokens_24h": 12600,
       "tokens_cached_24h": 3500,
       "cost_24h": 0.0249,
+      "billed_24h": 0.0107,
+      "equivalent_24h": {
+        "five_hour": 0.0000705,
+        "seven_day": 0.00001175
+      },
+      "estimated_24h": false,
       "error_rate_24h": 0.3333333333333333,
       "top_error_code": "upstream_error",
       "hourly": [
         {
           "at": 1791637200000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791640800000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791644400000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791648000000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791651600000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791655200000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791658800000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791662400000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791666000000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791669600000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791673200000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791676800000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791680400000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791684000000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791687600000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791691200000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791694800000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791698400000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791702000000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791705600000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791709200000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791712800000,
+          "billed": 0,
           "cost": 0,
+          "equivalent": {
+            "five_hour": 0,
+            "seven_day": 0
+          },
           "errors": 0,
           "requests": 0,
           "tokens": 0
         },
         {
           "at": 1791716400000,
+          "billed": 0.0071,
           "cost": 0.0142,
+          "equivalent": {
+            "five_hour": 0.00003525,
+            "seven_day": 0.000005875
+          },
           "errors": 1,
           "requests": 3,
           "tokens": 7200
         },
         {
           "at": 1791720000000,
+          "billed": 0.0036,
           "cost": 0.0107,
+          "equivalent": {
+            "five_hour": 0.00003525,
+            "seven_day": 0.000005875
+          },
           "errors": 1,
           "requests": 3,
           "tokens": 5400
@@ -6604,6 +6730,9 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0036,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
           "phases": {
             "received_at": 1791720970000,
             "selected_at": 1791720970000,
@@ -6732,6 +6861,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791720940000,
             "selected_at": 1791720940000,
@@ -6854,6 +6989,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791720880000,
             "selected_at": 1791720880000,
@@ -6980,6 +7121,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400600,
             "selected_at": 1791717400600,
@@ -7102,6 +7249,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400500,
             "selected_at": 1791717400500,
@@ -7221,6 +7374,9 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0071,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400000,
             "selected_at": 1791717400000,
@@ -7982,7 +8138,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "8GvMBC1L",
+      "prefix": "ZFPxvgA5",
       "created_at": 1791721000000,
       "updated_at": 1791721000000,
       "revision": 6189767511104,
@@ -7991,12 +8147,24 @@ export const FIXTURES: Record<string, Fixture> = {
       "retired_secret_last_used_at": null,
       "sessions_on_retired_secret": 0,
       "usage_7d": {
+        "billed_usd": 0,
         "cost_usd": 0,
+        "equivalent": {
+          "five_hour": 0,
+          "seven_day": 0
+        },
+        "estimated": false,
         "requests": 0,
         "tokens": 0
       },
       "lifetime": {
+        "billed_usd": 0,
         "cost_usd": 0,
+        "equivalent": {
+          "five_hour": 0,
+          "seven_day": 0
+        },
+        "estimated": false,
         "requests": 0
       },
       "secret": "phoebis-fixture"
@@ -8050,7 +8218,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "iMQkX5sG",
+          "prefix": "ZFPxvgA5",
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
           "revision": 6189767511104,
@@ -8059,12 +8227,24 @@ export const FIXTURES: Record<string, Fixture> = {
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
           "usage_7d": {
+            "billed_usd": 0.0107,
             "cost_usd": 0.02135,
+            "equivalent": {
+              "five_hour": 0.00005287500000000001,
+              "seven_day": 0.000008812499999999999
+            },
+            "estimated": false,
             "requests": 5,
             "tokens": 10800
           },
           "lifetime": {
+            "billed_usd": 0.0107,
             "cost_usd": 0.02135,
+            "equivalent": {
+              "five_hour": 0.00005287500000000001,
+              "seven_day": 0.000008812499999999999
+            },
+            "estimated": false,
             "requests": 5
           }
         }
@@ -8588,13 +8768,19 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "lmddX3og",
+              "prefix": "ZFPxvgA5",
               "enabled": true
             }
           ],
           "status": "active",
           "requests_24h": 6,
           "cost_24h": 0.024900000000000005,
+          "billed_24h": 0.0107,
+          "equivalent_24h": {
+            "five_hour": 0.0000705,
+            "seven_day": 0.00001175
+          },
+          "estimated_24h": false,
           "active_pins": 1,
           "traffic_24h": [
             {
@@ -9029,7 +9215,194 @@ export const FIXTURES: Record<string, Fixture> = {
               "output": 5
             }
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-10-01",
+            "content": {
+              "effective": "2026-10-01",
+              "models": {
+                "claude-fable-5-1": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-fable-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-opus-5-5": {
+                  "input": 4,
+                  "cache_write_5m": 5,
+                  "cache_write_1h": 8,
+                  "cache_read": 0.2,
+                  "output": 20,
+                  "fast": {
+                    "input": 8,
+                    "cache_write_5m": 10,
+                    "cache_write_1h": 16,
+                    "cache_read": 0.4,
+                    "output": 40
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-opus-4-8": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-sonnet-5-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-sonnet-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-haiku-4-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5
+                }
+              }
+            }
+          },
+          {
+            "effective": "2026-10-08",
+            "content": {
+              "effective": "2026-10-08",
+              "models": {
+                "claude-fable-5-1": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-fable-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 1,
+                  "output": 50
+                },
+                "claude-opus-5-5": {
+                  "input": 4,
+                  "cache_write_5m": 5,
+                  "cache_write_1h": 8,
+                  "cache_read": 0.2,
+                  "output": 20,
+                  "fast": {
+                    "input": 8,
+                    "cache_write_5m": 10,
+                    "cache_write_1h": 16,
+                    "cache_read": 0.4,
+                    "output": 40
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-opus-4-8": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-sonnet-5-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.1,
+                  "output": 10
+                },
+                "claude-sonnet-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-haiku-5-5": {
+                  "input": 0.1,
+                  "cache_write_5m": 0.125,
+                  "cache_write_1h": 0.2,
+                  "cache_read": 0.01,
+                  "output": 0.5,
+                  "long_context": {
+                    "over": 100000,
+                    "input": 0.5,
+                    "cache_write_5m": 0.625,
+                    "cache_write_1h": 1,
+                    "cache_read": 0.05,
+                    "output": 2.5
+                  }
+                },
+                "claude-haiku-4-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5
+                }
+              }
+            }
+          }
+        ]
       },
       "subscription_costs": {
         "effective": "2026-10-05",
@@ -9112,7 +9485,91 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-haiku-5-5": "haiku",
             "claude-haiku-4-5": "haiku"
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-10-05",
+            "content": {
+              "effective": "2026-10-05",
+              "unit": {
+                "defined_by": {
+                  "band": "out_of_band",
+                  "tier": "default_claude_max_20x",
+                  "window": "five_hour"
+                },
+                "units_per_window": 150000000
+              },
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 7500000,
+                  "seven_day": 90000000
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 37500000,
+                  "seven_day": 450000000
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 150000000,
+                  "seven_day": 900000000
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 0.7,
+                  "seven_day": 1
+                },
+                "from_hour": 5,
+                "to_hour": 11,
+                "weekdays": true,
+                "zone": "America/Los_Angeles"
+              },
+              "type_multiplier": {
+                "cache_read": 0.025,
+                "cache_write_1h": 1.25,
+                "cache_write_5m": 1.25,
+                "input": 1,
+                "output": 5
+              },
+              "model_weight": {
+                "claude-fable-5-1": 10,
+                "claude-opus-5-5": 2.2,
+                "claude-sonnet-5-5": 1.5,
+                "claude-sonnet-5": 1.5,
+                "claude-haiku-5-5": 0.1,
+                "claude-haiku-4-5": 1
+              },
+              "model_windows": {
+                "seven_day_fable": {
+                  "capacity_factor": 0.5,
+                  "of": "seven_day"
+                }
+              },
+              "overrides": {},
+              "tier_order": [
+                "fable",
+                "opus",
+                "sonnet",
+                "haiku"
+              ],
+              "model_tier": {
+                "claude-fable-5-1": "fable",
+                "claude-fable-5": "fable",
+                "claude-opus-5-5": "opus",
+                "claude-opus-5": "opus",
+                "claude-opus-4-8": "opus",
+                "claude-opus-4-7": "opus",
+                "claude-opus-4-6": "opus",
+                "claude-opus-4-5": "opus",
+                "claude-sonnet-5-5": "sonnet",
+                "claude-sonnet-5": "sonnet",
+                "claude-sonnet-4-6": "sonnet",
+                "claude-sonnet-4-5": "sonnet",
+                "claude-haiku-5-5": "haiku",
+                "claude-haiku-4-5": "haiku"
+              }
+            }
+          }
+        ]
       }
     }
   },
@@ -9199,6 +9656,9 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "cost_usd": 0.0071,
         "cost_shares": null,
+        "cost_equivalent": null,
+        "estimated": false,
+        "tier": "default_claude_max_20x",
         "phases": {
           "received_at": 1791717400000,
           "selected_at": 1791717400000,
@@ -9505,6 +9965,9 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0036,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": null,
           "phases": {
             "received_at": 1791720970000,
             "selected_at": 1791720970000,
@@ -9633,6 +10096,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791720940000,
             "selected_at": 1791720940000,
@@ -9755,6 +10224,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791720880000,
             "selected_at": 1791720880000,
@@ -9881,6 +10356,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400600,
             "selected_at": 1791717400600,
@@ -10003,6 +10484,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000029375
           },
+          "cost_equivalent": {
+            "five_hour": 0.000017625,
+            "seven_day": 0.0000029375
+          },
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400500,
             "selected_at": 1791717400500,
@@ -10122,6 +10609,9 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0071,
           "cost_shares": null,
+          "cost_equivalent": null,
+          "estimated": false,
+          "tier": "default_claude_max_20x",
           "phases": {
             "received_at": 1791717400000,
             "selected_at": 1791717400000,
@@ -11866,6 +12356,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": true,
           "burn": 0,
           "burn_unit": "window_share",
+          "burn_equivalent": 0,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
@@ -11900,6 +12392,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -11934,6 +12428,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -11968,6 +12464,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12002,6 +12500,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_equivalent": null,
+          "estimated": false,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -12027,7 +12527,6 @@ export const FIXTURES: Record<string, Fixture> = {
   "sessions_costs": {
     "route": "GET /admin/sessions/costs",
     "body": {
-      "version": "2026-10-08",
       "effective": "2026-10-08",
       "models": [
         {
@@ -12266,7 +12765,194 @@ export const FIXTURES: Record<string, Fixture> = {
               "output": 5
             }
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-10-01",
+            "content": {
+              "effective": "2026-10-01",
+              "models": {
+                "claude-fable-5-1": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-fable-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-opus-5-5": {
+                  "input": 4,
+                  "cache_write_5m": 5,
+                  "cache_write_1h": 8,
+                  "cache_read": 0.2,
+                  "output": 20,
+                  "fast": {
+                    "input": 8,
+                    "cache_write_5m": 10,
+                    "cache_write_1h": 16,
+                    "cache_read": 0.4,
+                    "output": 40
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-opus-4-8": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-sonnet-5-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-sonnet-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-haiku-4-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5
+                }
+              }
+            }
+          },
+          {
+            "effective": "2026-10-08",
+            "content": {
+              "effective": "2026-10-08",
+              "models": {
+                "claude-fable-5-1": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 0.25,
+                  "output": 50
+                },
+                "claude-fable-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 1,
+                  "output": 50
+                },
+                "claude-opus-5-5": {
+                  "input": 4,
+                  "cache_write_5m": 5,
+                  "cache_write_1h": 8,
+                  "cache_read": 0.2,
+                  "output": 20,
+                  "fast": {
+                    "input": 8,
+                    "cache_write_5m": 10,
+                    "cache_write_1h": 16,
+                    "cache_read": 0.4,
+                    "output": 40
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-opus-4-8": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25,
+                  "fast": {
+                    "input": 10,
+                    "cache_write_5m": 12.5,
+                    "cache_write_1h": 20,
+                    "cache_read": 1,
+                    "output": 50
+                  }
+                },
+                "claude-sonnet-5-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.1,
+                  "output": 10
+                },
+                "claude-sonnet-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                },
+                "claude-haiku-5-5": {
+                  "input": 0.1,
+                  "cache_write_5m": 0.125,
+                  "cache_write_1h": 0.2,
+                  "cache_read": 0.01,
+                  "output": 0.5,
+                  "long_context": {
+                    "over": 100000,
+                    "input": 0.5,
+                    "cache_write_5m": 0.625,
+                    "cache_write_1h": 1,
+                    "cache_read": 0.05,
+                    "output": 2.5
+                  }
+                },
+                "claude-haiku-4-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5
+                }
+              }
+            }
+          }
+        ]
       },
       "listeners": {
         "metrics": "127.0.0.1:9464",
@@ -12366,7 +13052,91 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-haiku-5-5": "haiku",
             "claude-haiku-4-5": "haiku"
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-10-05",
+            "content": {
+              "effective": "2026-10-05",
+              "unit": {
+                "defined_by": {
+                  "band": "out_of_band",
+                  "tier": "default_claude_max_20x",
+                  "window": "five_hour"
+                },
+                "units_per_window": 150000000
+              },
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 7500000,
+                  "seven_day": 90000000
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 37500000,
+                  "seven_day": 450000000
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 150000000,
+                  "seven_day": 900000000
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 0.7,
+                  "seven_day": 1
+                },
+                "from_hour": 5,
+                "to_hour": 11,
+                "weekdays": true,
+                "zone": "America/Los_Angeles"
+              },
+              "type_multiplier": {
+                "cache_read": 0.025,
+                "cache_write_1h": 1.25,
+                "cache_write_5m": 1.25,
+                "input": 1,
+                "output": 5
+              },
+              "model_weight": {
+                "claude-fable-5-1": 10,
+                "claude-opus-5-5": 2.2,
+                "claude-sonnet-5-5": 1.5,
+                "claude-sonnet-5": 1.5,
+                "claude-haiku-5-5": 0.1,
+                "claude-haiku-4-5": 1
+              },
+              "model_windows": {
+                "seven_day_fable": {
+                  "capacity_factor": 0.5,
+                  "of": "seven_day"
+                }
+              },
+              "overrides": {},
+              "tier_order": [
+                "fable",
+                "opus",
+                "sonnet",
+                "haiku"
+              ],
+              "model_tier": {
+                "claude-fable-5-1": "fable",
+                "claude-fable-5": "fable",
+                "claude-opus-5-5": "opus",
+                "claude-opus-5": "opus",
+                "claude-opus-4-8": "opus",
+                "claude-opus-4-7": "opus",
+                "claude-opus-4-6": "opus",
+                "claude-opus-4-5": "opus",
+                "claude-sonnet-5-5": "sonnet",
+                "claude-sonnet-5": "sonnet",
+                "claude-sonnet-4-6": "sonnet",
+                "claude-sonnet-4-5": "sonnet",
+                "claude-haiku-5-5": "haiku",
+                "claude-haiku-4-5": "haiku"
+              }
+            }
+          }
+        ]
       }
     }
   },
@@ -12438,12 +13208,16 @@ export const FIXTURES: Record<string, Fixture> = {
         "api_prices": {
           "path": null,
           "source": "shipped",
-          "effective": "2026-10-08"
+          "effective": "2026-10-08",
+          "revisions": 2,
+          "next": null
         },
         "subscription_costs": {
           "path": null,
           "source": "shipped",
-          "effective": "2026-10-05"
+          "effective": "2026-10-05",
+          "revisions": 1,
+          "next": null
         }
       },
       "gaps": [],
@@ -12516,7 +13290,125 @@ export const FIXTURES: Record<string, Fixture> = {
               "output": 5
             }
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-01-01",
+            "content": {
+              "effective": "2026-01-01",
+              "models": {
+                "claude-opus-5-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 1,
+                  "output": 50,
+                  "fast": {
+                    "input": 20,
+                    "cache_write_5m": 25,
+                    "cache_write_1h": 40,
+                    "cache_read": 2,
+                    "output": 100
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 5,
+                  "cache_write_5m": 6.25,
+                  "cache_write_1h": 10,
+                  "cache_read": 0.5,
+                  "output": 25
+                },
+                "claude-sonnet-5-5": {
+                  "input": 3,
+                  "cache_write_5m": 3.75,
+                  "cache_write_1h": 6,
+                  "cache_read": 0.3,
+                  "output": 15
+                },
+                "claude-haiku-5-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5,
+                  "long_context": {
+                    "over": 1000,
+                    "input": 5,
+                    "cache_write_5m": 6.25,
+                    "cache_write_1h": 10,
+                    "cache_read": 0.5,
+                    "output": 25
+                  }
+                },
+                "claude-haiku-4-5": {
+                  "input": 1,
+                  "cache_write_5m": 1.25,
+                  "cache_write_1h": 2,
+                  "cache_read": 0.1,
+                  "output": 5
+                }
+              }
+            }
+          },
+          {
+            "effective": "2026-02-01",
+            "content": {
+              "effective": "2026-02-01",
+              "models": {
+                "claude-opus-5-5": {
+                  "input": 20,
+                  "cache_write_5m": 25,
+                  "cache_write_1h": 40,
+                  "cache_read": 2,
+                  "output": 100,
+                  "fast": {
+                    "input": 20,
+                    "cache_write_5m": 25,
+                    "cache_write_1h": 40,
+                    "cache_read": 2,
+                    "output": 100
+                  }
+                },
+                "claude-opus-5": {
+                  "input": 10,
+                  "cache_write_5m": 12.5,
+                  "cache_write_1h": 20,
+                  "cache_read": 1,
+                  "output": 50
+                },
+                "claude-sonnet-5-5": {
+                  "input": 6,
+                  "cache_write_5m": 7.5,
+                  "cache_write_1h": 12,
+                  "cache_read": 0.6,
+                  "output": 30
+                },
+                "claude-haiku-5-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10,
+                  "long_context": {
+                    "over": 2000,
+                    "input": 5,
+                    "cache_write_5m": 6.25,
+                    "cache_write_1h": 10,
+                    "cache_read": 0.5,
+                    "output": 25
+                  }
+                },
+                "claude-haiku-4-5": {
+                  "input": 2,
+                  "cache_write_5m": 2.5,
+                  "cache_write_1h": 4,
+                  "cache_read": 0.2,
+                  "output": 10
+                }
+              }
+            }
+          }
+        ]
       },
       "subscription_costs": {
         "effective": "2026-01-01",
@@ -12605,7 +13497,185 @@ export const FIXTURES: Record<string, Fixture> = {
             "claude-haiku-4-5": "haiku",
             "claude-mystery-2": "mystery"
           }
-        }
+        },
+        "revisions": [
+          {
+            "effective": "2026-01-01",
+            "content": {
+              "effective": "2026-01-01",
+              "unit": {
+                "defined_by": {
+                  "band": "out_of_band",
+                  "tier": "default_claude_max_20x",
+                  "window": "five_hour"
+                },
+                "units_per_window": 100
+              },
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 5,
+                  "seven_day": 50
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 25,
+                  "seven_day": 250
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 100,
+                  "seven_day": 1000
+                },
+                "default_claude_team": {
+                  "five_hour": 10,
+                  "seven_day": null
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 0.5,
+                  "seven_day": 1
+                },
+                "from_hour": 5,
+                "to_hour": 11,
+                "weekdays": true,
+                "zone": "America/Los_Angeles"
+              },
+              "type_multiplier": {
+                "cache_read": 0.1,
+                "cache_write_1h": 2,
+                "cache_write_5m": 2,
+                "input": 1,
+                "output": 10
+              },
+              "model_weight": {
+                "claude-fable-5-1": 10,
+                "claude-opus-5-5": 2,
+                "claude-opus-5": null,
+                "claude-sonnet-5-5": 1,
+                "claude-haiku-4-5": 0.5
+              },
+              "model_windows": {
+                "seven_day_fable": {
+                  "capacity_factor": 0.5,
+                  "of": "seven_day"
+                }
+              },
+              "overrides": {
+                "claude-haiku-4-5": {
+                  "type_multiplier": {
+                    "cache_read": 0.2
+                  },
+                  "weight_by_window": {
+                    "seven_day": 1
+                  }
+                }
+              },
+              "tier_order": [
+                "fable",
+                "opus",
+                "sonnet",
+                "haiku",
+                "mystery"
+              ],
+              "model_tier": {
+                "claude-fable-5-1": "fable",
+                "claude-opus-5-5": "opus",
+                "claude-opus-5": "opus",
+                "claude-opus-4-8": "opus",
+                "claude-sonnet-5-5": "sonnet",
+                "claude-haiku-4-5": "haiku",
+                "claude-mystery-2": "mystery"
+              }
+            }
+          },
+          {
+            "effective": "2026-02-01",
+            "content": {
+              "effective": "2026-02-01",
+              "unit": {
+                "defined_by": {
+                  "band": "out_of_band",
+                  "tier": "default_claude_max_20x",
+                  "window": "five_hour"
+                },
+                "units_per_window": 100
+              },
+              "capacity": {
+                "default_claude_ai": {
+                  "five_hour": 5,
+                  "seven_day": 50
+                },
+                "default_claude_max_5x": {
+                  "five_hour": 25,
+                  "seven_day": 250
+                },
+                "default_claude_max_20x": {
+                  "five_hour": 100,
+                  "seven_day": 1000
+                },
+                "default_claude_team": {
+                  "five_hour": 10,
+                  "seven_day": null
+                }
+              },
+              "peak": {
+                "capacity_factor": {
+                  "five_hour": 0.5,
+                  "seven_day": 1
+                },
+                "from_hour": 5,
+                "to_hour": 11,
+                "weekdays": true,
+                "zone": "America/Los_Angeles"
+              },
+              "type_multiplier": {
+                "cache_read": 0.1,
+                "cache_write_1h": 2,
+                "cache_write_5m": 2,
+                "input": 1,
+                "output": 10
+              },
+              "model_weight": {
+                "claude-fable-5-1": 20,
+                "claude-opus-5-5": 4,
+                "claude-opus-5": null,
+                "claude-sonnet-5-5": 2,
+                "claude-haiku-4-5": 1
+              },
+              "model_windows": {
+                "seven_day_fable": {
+                  "capacity_factor": 0.5,
+                  "of": "seven_day"
+                }
+              },
+              "overrides": {
+                "claude-haiku-4-5": {
+                  "type_multiplier": {
+                    "cache_read": 0.2
+                  },
+                  "weight_by_window": {
+                    "seven_day": 1
+                  }
+                }
+              },
+              "tier_order": [
+                "fable",
+                "opus",
+                "sonnet",
+                "haiku",
+                "mystery"
+              ],
+              "model_tier": {
+                "claude-fable-5-1": "fable",
+                "claude-opus-5-5": "opus",
+                "claude-opus-5": "opus",
+                "claude-opus-4-8": "opus",
+                "claude-sonnet-5-5": "sonnet",
+                "claude-haiku-4-5": "haiku",
+                "claude-mystery-2": "mystery"
+              }
+            }
+          }
+        ]
       }
     }
   }

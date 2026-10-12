@@ -123,13 +123,19 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "lmddX3og",
+            "prefix": "ZFPxvgA5",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 6,
         "cost_24h": 0.024900000000000005,
+        "billed_24h": 0.0107,
+        "equivalent_24h": {
+          "five_hour": 0.0000705,
+          "seven_day": 0.00001175
+        },
+        "estimated_24h": false,
         "active_pins": 1,
         "traffic_24h": [
           {

@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::accounts::within_text_bound;
-use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::openapi::{ErrorBody, RegistryUnavailable, SharedEquivalentView, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
@@ -138,7 +138,14 @@ pub(crate) struct Key {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyUsage {
+    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    pub billed_usd: f64,
     pub cost_usd: f64,
+    /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    pub equivalent: SharedEquivalentView,
+    /// Whether a plan-funded row priced at its model tier's latest weight, for a model the cost model does not
+    /// weight.
+    pub estimated: bool,
     pub requests: u64,
     pub tokens: u64,
 }
@@ -146,7 +153,14 @@ pub(crate) struct KeyUsage {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyLifetime {
+    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    pub billed_usd: f64,
     pub cost_usd: f64,
+    /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
+    pub equivalent: SharedEquivalentView,
+    /// Whether a plan-funded row priced at its model tier's latest weight, for a model the cost model does not
+    /// weight.
+    pub estimated: bool,
     pub requests: u64,
 }
 
@@ -689,12 +703,19 @@ fn key_json(
         retired_secret_last_used_at: row.retired_secret_last_used_at,
         sessions_on_retired_secret,
         usage_7d: KeyUsage {
+            billed_usd: week.map_or(0.0, |t| t.billed_usd),
             cost_usd: week.map_or(0.0, |t| t.cost_usd),
+            equivalent: week.map_or_else(SharedEquivalentView::default, |t| (&t.equivalent).into()),
+            estimated: week.is_some_and(|t| t.estimated),
             requests: week.map_or(0, |t| t.requests),
             tokens: week.map_or(0, |t| t.tokens),
         },
         lifetime: KeyLifetime {
+            billed_usd: lifetime.map_or(0.0, |t| t.billed_usd),
             cost_usd: lifetime.map_or(0.0, |t| t.cost_usd),
+            equivalent: lifetime
+                .map_or_else(SharedEquivalentView::default, |t| (&t.equivalent).into()),
+            estimated: lifetime.is_some_and(|t| t.estimated),
             requests: lifetime.map_or(0, |t| t.requests),
         },
     }
