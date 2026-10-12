@@ -223,8 +223,8 @@ Every request carries a class, read off its user agent: `claude-code/<entrypoint
 entrypoint token it names, `cli` when it names none)
 and `other` for anything else.
 
-Under the pool's `auto_mode_server`, or a key's override, a Claude Code session's tool uses are reviewed by the
-upstream on the model's own turn, or by the client with classifier requests of its own, which the router routes as
+With the pool's `auto_mode_server` on, or a key's override on, the upstream reviews a Claude Code session's tool uses on
+the model's own turn. Off, the client reviews them with classifier requests of its own, which the router routes as
 requests of the session: they carry its id and pin, on the client's Sonnet default, so a session on another model takes
 a second pin beside its own, and they draw on the account's windows. A body whose `safeguards` member the router cannot
 cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the error code `body_shape`
@@ -797,9 +797,9 @@ the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilizati
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
 organization's spend cap is reached it answers `429` with the overage window rejected and the claim
-`seven_day_overage_included`. Both shared windows still read healthy, so the oauth table's model-scoped rows, which
-stand ahead of the shared row, take that rejection: it cools the requested model on its own week when the model has one
-(the Fable week), and the account otherwise.
+`seven_day_overage_included`. Both shared windows still read healthy, so for a model with a week of its own (the Fable
+week) the oauth table's model-scoped rows, which stand ahead of the shared row, take that rejection and cool that model
+alone, and for any other model it cools the account.
 
 Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
 included: an account counts as in overage while the reset its evidence names is ahead of the present instant. Evidence

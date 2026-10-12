@@ -264,10 +264,11 @@ Request headers travel as the client sent them, in the client's own order and sp
 the wire before its HTTP parser reads it, since the parser keeps no spelling a server can read back. The router drops
 the hop-by-hop and forwarding headers, puts the account's credential where the client put the key, and edits
 `anthropic-beta` as [The betas](#the-betas) lists. It owns `Host` and `Content-Length`, and adds nothing for a header
-the client left out beyond the restored `x-client-request-id` and an `anthropic-beta` line for a beta it injects, so any
-Claude Code version relays on its own shape rather than a guessed one. A client's `Expect: 100-continue` is dropped: the
-router writes the body right behind the head, so the upstream would otherwise wait for a continue the router never
-sends.
+the client left out beyond what [The header edits](#the-header-edits) lists: the credential slot a request without one
+gets, a `content-encoding` line when the body leaves gzip and the client sent none, the restored `x-client-request-id`
+and an `anthropic-beta` line for a beta it injects, so any Claude Code version relays on its own shape rather than a
+guessed one. A client's `Expect: 100-continue` is dropped: the router writes the body right behind the head, so the
+upstream would otherwise wait for a continue the router never sends.
 
 The proxy listener speaks HTTP/1.1 and no HTTP/2. An HTTP/2 client's head would reach the router through its HTTP
 library's own map, in that library's own spelling, which is the silently different outbound shape the pass-through
@@ -342,14 +343,14 @@ event, a `session_start`, a `heartbeat` or a `session_end`, main's generation, w
 acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for every agent the
 router holds for the session, main included. The mod adopts every generation the answer names and reconciles that list
 with its own agents. An agent only the router holds is adopted when the client's own agent list reads it live, and
-released otherwise, and without that list the router's entry stays as it is. An agent the mod released in this run,
-which the client has not spawned or given a turn since, is not adopted again whatever the list reads, since that
-release ends the run the router holds, and the mod sends the release once more when none is still queued, so a router
-restored from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only
-the mod holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both
-ways, so a subagent the mod holds as parked stays released on the router until its next report starts it again with
-`agent_start`. An agent the answer names while the mod's release of it still waits in the queue stays unannounced, so
-the agent's next run starts it again with `agent_start`.
+released otherwise, and without that list the router's entry stays as it is. An agent the mod released in this session,
+which the client has not spawned or given a turn since, is not adopted again whatever the list reads, since that release
+ends the run the router holds, and the mod sends the release once more when none is still queued, so a router restored
+from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only the mod
+holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both ways, so a
+subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`.
+An agent the answer names while the mod's release of it still waits in the queue stays unannounced, so the agent's next
+run starts it again with `agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code
@@ -392,7 +393,7 @@ out before a registration has been acknowledged. What each answer makes the mod 
 - A transport failure, a `5xx`, a `session_limit`, or an `agent_limit` on a `session_start`: the report goes back to the
   head of the queue and the whole queue is retried after 1, 2, 4, 8 and 16 seconds, then every 30 seconds.
 - An `agent_limit` on an `agent_start`: the start goes back and that agent's reports wait behind it, retried along the
-  same backoff under the agent's own deadline, while the heartbeats and the other agents' reports go on.
+  same backoff under the agent's own retry time, while the heartbeats and the other agents' reports go on.
 - A `401` or a `403`: the mod empties its queue and reports nothing more until the module loads again.
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report

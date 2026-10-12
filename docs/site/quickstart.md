@@ -89,18 +89,17 @@ Six steps in the console, in this order.
 
 1. Open `http://127.0.0.1:8081/` in the browser, enter the secret `init` printed under Admin secret and choose Log in.
    A wrong value answers `That secret does not match.` ([The console](console.md)).
-2. Pair an account. Open Accounts and choose Add account. Pick OAuth login under Account type, give the account a
-   label and choose Start pairing. The pairing dialog runs two steps, Log in and paste the address, then Confirm: open
-   the authorization link, sign in to Claude.ai and approve the router, paste the address the browser lands on, then
-   confirm the email and organization shown. A pairing expires ten minutes after it starts. The account appears in
-   the list with the toast `Paired {email}` once it is confirmed
-   ([Through the console](pairing.md#through-the-console)).
-3. Add an Anthropic key, as well or instead. Choose Add account again, pick API key under Account type, give it a
-   label, paste the key under API key and choose Add API key. The dialog's subtitle says which kind does what:
-   "Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace." The router
-   verifies the key against the upstream before it stores it, so a rejected key answers
-   `400 credential rejected by the upstream` and creates no account
-   ([Two kinds of account](pairing.md#two-kinds-of-account)). The console toasts `API key added` once it is stored.
+2. Pair an account. Open Accounts and choose Add account. Pick "OAuth login", give the account a label and choose Start
+   pairing. The pairing dialog runs two steps, Log in and paste the address, then Confirm: open the authorization link,
+   sign in to Claude.ai and approve the router, paste the address the browser lands on, then confirm the email and
+   organization shown. A pairing expires ten minutes after it starts. The account appears in the list with the toast
+   `Paired {email}` once it is confirmed ([Through the console](pairing.md#through-the-console)).
+3. Add an Anthropic key, as well or instead. Choose Add account again, pick "API key", give it a label, paste the key
+   under API key and choose Add API key. The dialog's subtitle says which kind does what: "Subscription logins share
+   your Claude.ai quota. API keys bill per token against a Console workspace." The router verifies the key against the
+   upstream before it stores it, so a rejected key answers `400 credential rejected by the upstream` and creates no
+   account ([Two kinds of account](pairing.md#two-kinds-of-account)). The console toasts `API key added` once it is
+   stored.
 4. Create a pool. Open Pools and choose Create pool. Give it a Name, tick the account's checkbox in the Members table
    and choose Create pool. The dialog marks Keys "after saving", since a key needs its pool to exist. The toast reads
    `Pool created` ([Pools](routing.md#pools)).

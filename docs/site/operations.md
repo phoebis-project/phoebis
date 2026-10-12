@@ -375,14 +375,13 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can rebuild a table too. This build writes the registry at schema 52 and the
-ledger at schema 32. Both refuse to open a file a newer build wrote: the registry with `the registry's
-schema version {found} is newer than this build supports ({supported}), so restore the backup taken before the
-upgrade`, and the ledger with the same words after `the ledger's schema version`. `phoebis check-config` reads both
-versions read-only, taking no lock, and refuses first with `the registry at {path} is at schema {found}, newer than the
-{supported} this build reads` or `the ledger at {path} is at schema {found}, newer than the {supported} this build
-reads`. Returning to an older binary after an upgrade therefore means restoring from the backup, not downgrading the
-binary in place.
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 52 and the
+ledger at schema 32. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+{found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
+with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no
+lock, and refuses first with `the registry at {path} is at schema {found}, newer than the {supported} this build reads`
+or `the ledger at {path} is at schema {found}, newer than the {supported} this build reads`. Returning to an older
+binary after an upgrade therefore means restoring from the backup, not downgrading the binary in place.
 
 Every configuration block denies unknown keys, so a key the new build does not recognize refuses startup, and running
 `check-config` first catches that before the restart does.
@@ -397,16 +396,16 @@ client: no setting clears it. What the router restores and edits is on [The rela
 link follow the newest one ([Conditions and gauges](statistics.md#conditions-and-gauges)). The re-pin is a source
 change and a release: a capture of the new build's requests, a new profile with its constants, the fixtures
 regenerated and the tests graded against them, then a release the operator installs. The capture steps are on
-[Development](development.md).
+[Development](development.md#re-pinning).
 
 ## On other pages
 
-The continuous checks that run on every push and pull request are on [Development](development.md). Publishing this
-site is on [Development](development.md).
+The continuous checks that run on every push and pull request are on [Development](development.md#continuous-checks).
+Publishing this site is on [Development](development.md#publishing-the-site).
 
 <a id="releasing"></a>
 
 Releasing the container image and the static binaries, and the `read:packages` token a private package needs, are on
-[Development](development.md).
+[Development](development.md#releasing).
 
 The license is on [the Overview](index.md#license).

@@ -26,7 +26,7 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 
 ## How a request travels
 
-The client sends `/v1/messages` to the proxy listener with a key the router issued in the credential header it would
+The client sends `/v1/messages` to the proxy listener with a key the router issued, in the credential header it would
 have used for Anthropic. The router authenticates the key, resolves its pool and selects one account: the session's
 pin when it has one, otherwise the pool's strategy ([Pools, keys and routing](routing.md)). It puts the account's
 credential where the client put the key, edits the body and the headers as [The relay](relay.md) lists them, and
@@ -36,12 +36,13 @@ The request, each attempt and the usage land in the ledger.
 
 ## The vocabulary
 
-The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
-issues a key. The console and this site call the account kind whose credential is an Anthropic API key "API key".
-The API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
-bootstrap file's `upstream` block, the `upstream_error` outcome and the `upstream_unreachable` code, the
-`upstream_message_id`, `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds`
-metric). This site calls the client Claude Code and the plugin that reports to the router the keepalive mod.
+The console, the API, the bootstrap file and this site call what the router holds an account and a key the router issues
+a key. The console and this site call the account kind whose credential is an Anthropic API key "API key". The API's
+kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the bootstrap
+file's `upstream` block, the `upstream_error` outcome and the `upstream_unreachable` code, the `upstream_message_id`,
+`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric). The bootstrap file, the
+one `init` writes, names two database files: the registry at `storage.path` and the ledger at `stats.ledger_path`. This
+site calls the client Claude Code and the plugin that reports to the router the keepalive mod.
 
 ## What the router does not do
 

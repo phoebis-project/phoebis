@@ -33,8 +33,8 @@ proxy:
 ```
 
 Run `phoebis check-config` after the edit or the `init`: it prints `proxy listens on {config.proxy.listen} over plain
-HTTP`, or `proxy listens on {addr} over TLS (certificate {cert_file}, expires {date})` with a pair, and the start's
-`listening` line names each listener's scheme and address the same way.
+HTTP`, or `proxy listens on {config.proxy.listen} over TLS (certificate {cert_file}, expires {date})` with a pair, and
+the start's `listening` line names each listener's scheme and address the same way.
 
 ## TLS on the proxy
 
@@ -57,10 +57,10 @@ anything else, so the leaf needs no pin.
 
 Create one key per client machine on the console's [Keys view](console.md), as the Quick start's
 [First run](quickstart.md#first-run) creates the first, named for the machine ([Keys](routing.md#keys)). Each key has
-its own secret, its own usage page and its own rows. The secret is shown once, in the Key created dialog: "Copy the
-secret now. The router stores only a hash, so it cannot be shown again." The usage page is `GET /v1/usage` on the
-proxy listener, which answers the figures of the key that presents it and of no other
-([Your key's usage](client.md#your-keys-usage)). The rows are the Requests view's, where the Key column names the key.
+its own secret, its own usage page and its own rows. The secret is shown once, in the Key created dialog
+([Keys](console.md#keys)). The usage page is `GET /v1/usage` on the proxy listener, which answers the figures of the key
+that presents it and of no other ([Your key's usage](client.md#your-keys-usage)). The rows are the Requests view's,
+where the Key column names the key.
 
 Revoking a key cuts off that machine and no other, since every other machine presents a key of its own. Its session
 pins are its own as well: moving a key to another pool ends its current pins and no other key's, and the Pools view
@@ -83,14 +83,13 @@ your own machine:
 ssh -L 8081:127.0.0.1:8081 <host>
 ```
 
-A router still running on your own machine from the Quick start holds `127.0.0.1:8081`, so stop it first or forward
-another local port. Then open `http://127.0.0.1:8081/` in the browser on your machine. The listener issues its session
-cookie without
-`Secure` on plain HTTP, which costs nothing behind the tunnel. The alternative is the admin listener on the LAN
-with a pair of its own: `--admin-listen` with `--admin-cert` and `--admin-key` on the `init` line, or `admin.listen`
-and the `tls` key under `admin` in the file ([admin](installation.md#admin)). A plain admin listener on a network
-address sends the admin secret at login and the session cookie on every call in the clear, so a LAN address on it
-wants the pair.
+Then open `http://127.0.0.1:8081/` in the browser on your machine. A router still running on your own machine from the
+Quick start holds `127.0.0.1:8081`, so stop it first, or forward another local port and open that one. The listener
+issues its session cookie without `Secure` on plain HTTP, which costs nothing behind the tunnel. The alternative is the
+admin listener on the LAN with a pair of its own: `--admin-listen` with `--admin-cert` and `--admin-key` on the `init`
+line, or `admin.listen` and the `tls` key under `admin` in the file ([admin](installation.md#admin)). A plain admin
+listener on a network address sends the admin secret at login and the session cookie on every call in the clear, so a
+LAN address on it wants the pair.
 
 To run the router as a service on the host, follow [Install as a service](installation.md#install-as-a-service), whose
 `init` line takes `--proxy-listen` as well.

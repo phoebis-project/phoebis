@@ -22,17 +22,17 @@ NODE_EXTRA_CA_CERTS=<path to the CA's PEM>   # a private CA only
 ![The Settings view: Appearance, About and the client block](assets/settings-dark.png#only-dark)
 
 Copy the seven lines from the Downstream client configuration card of the Settings view
-([Settings](console.md#settings)), which renders them for the router it serves. The card builds the first line from
-the proxy listener: `https` when the listener terminates TLS, else `http`, and the port the listener binds, on the
+([Settings](console.md#settings)), which renders them for the router it serves. The card builds the first line from the
+proxy listener: `https` when the listener terminates TLS, else `http`, and the port the listener binds, on the
 placeholder host `router.example.com`, since the router knows the address it binds and never the name a client reaches
-it by. The block above is a listener bound to `127.0.0.1:8317` without TLS. The hint under the card's block says what
-to replace: "Inference is served on `{proxy}`, the address the proxy listener binds, so the base URL carries its scheme
-and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where
-a TLS proxy or a port mapping stands between Claude Code and it." The second line reads `<key>` because the router
-stores a hash of the secret and shows it once, in the Key created or Key rotated dialog: "Set it as
-`CLAUDE_CODE_OAUTH_TOKEN` on the client. The Settings page has the full snippet." The eighth line is yours to add when
-the listener's certificate comes from a private CA: the path of a copy of the CA's PEM. A public CA needs nothing
-here.
+it by. The pictured router binds its proxy on `127.0.0.1:8080`, so its card reads that port, and the block above is the
+same card for a listener bound to `127.0.0.1:8317` without TLS. The hint under the card's block says what to replace:
+"Inference is served on `{proxy}`, the address the proxy listener binds, so the base URL carries its scheme and port.
+Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where a TLS proxy
+or a port mapping stands between Claude Code and it." The second line reads `<key>` because the router stores a hash of
+the secret and shows it once, in the Key created or Key rotated dialog, which names this line as the secret's place
+([Keys](console.md#keys)). The eighth line is yours to add when the listener's certificate comes from a private CA: the
+path of a copy of the CA's PEM. A public CA needs nothing here.
 
 The block has two homes, the `env` block of the client's settings file or the shell that launches the client. When the
 same variable is set in both, the settings file's value applies in most sessions of Claude Code 2.1.296, as its
@@ -56,8 +56,8 @@ Holds the key's secret, the one the Key created or Key rotated dialog shows once
 `ANTHROPIC_API_KEY`: Claude Code treats the token as a subscription credential, which keeps three behaviors that a
 credential in `ANTHROPIC_API_KEY` switches off, the one-hour cache TTL for the main conversation, the parsing of the
 unified rate-limit headers on a `429`, and the automatic continue after a usage window resets. The three hold with or
-without `CLAUDE_CODE_SUBSCRIPTION_TYPE`. Without a key the proxy listener refuses every request to a route that takes
-one `401` `auth_missing`.
+without `CLAUDE_CODE_SUBSCRIPTION_TYPE`. Without a key the proxy listener answers every request to a route that takes
+one with `401` `auth_missing`.
 
 ### CLAUDE_CODE_SUBSCRIPTION_TYPE
 
@@ -97,12 +97,11 @@ Optional, and worth setting in the reduced shape. Under `_CLAUDE_CODE_ASSUME_FIR
 anyway. Set to `1`, it makes the client send its gateway hint headers on a custom base URL: `x-claude-code-agent-type`
 (the subagent's type on its own turns), `x-claude-code-compaction` (on the summarization request),
 `x-claude-code-context-compacted` (once, on the first request after a compaction) and
-`x-claude-code-prev-tool-durations` (the tool calls of the turn before and their milliseconds, a value over 4,096
-bytes left unread).
-The router reads them for the request log and the analytics: the row carries each value as sent, the tool durations as
-their sum, and the drawer shows them ([Requests](statistics.md#requests)). `x-claude-code-context-compacted` also
-reaches routing: the session's pin reads cold on the request that carries it, so a move that waits for a cold cache may
-take the session and a shedding round orders it first ([Moves](routing.md#moves)). The router reads
+`x-claude-code-prev-tool-durations` (the tool calls of the turn before and their milliseconds, a value over 4,096 bytes
+left unread). The router reads them for the request log and the analytics: the row carries each value as sent, the tool
+durations as their sum, and the drawer shows them ([Requests](console.md#requests)). `x-claude-code-context-compacted`
+also reaches routing: the session's pin reads cold on the request that carries it, so a move that waits for a cold cache
+may take the session and a shedding round orders it first ([Moves](routing.md#moves)). The router reads
 `x-claude-code-request-class` whenever the client sends it: a `main`, `subagent` or `compaction` class refreshes the
 session's pin and re-arms its keepalive recipe, and any other class does neither
 ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). Every header is optional, a request
@@ -223,7 +222,7 @@ with.
 | `auth_unknown` | 401 | `authentication_error` | `the presented key is not valid` | The key is unknown, revoked, retired, disabled or expired, or its pool is disabled or gone. Ask the operator. |
 | `body_budget_exhausted` | 503 | `api_error` | `the router holds as many request bytes as it allows` | Send the request again. The bodies in flight held `proxy.body_budget_bytes`. |
 | `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no metadata.user_id the account can be bound to`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
-| `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to ([The relay](relay.md)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
+| `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to ([Client drift](relay.md#client-drift)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
 | `client_not_allowed` | 403 | `permission_error` | `this key admits Claude Code clients only`, `the pool has no API-key member to serve a client that is not Claude Code` | Use Claude Code with this key, or ask the operator for a key whose pool admits your client ([clients](routing.md#clients)). |
 | `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
 | `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
@@ -329,16 +328,18 @@ abort the request and send it again. Before the head, the first byte has a windo
 32 KiB of request body, with one retry near 600 seconds. `CLAUDE_ENABLE_BYTE_WATCHDOG` and
 `CLAUDE_ENABLE_STREAM_WATCHDOG` switch the watchdog off.
 
-Two waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for
-the response head and 600 seconds for the gap between two stream events, sit above the client's window, so a dead
-upstream stream is cut by the client at 180 seconds with the watchdog on, and the router's guard stands behind it
-([The relay's waits](relay.md#the-relays-waits)). A retry in place is the other wait: on a throttle the router sleeps
+Three waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for the response head
+and 600 seconds for the gap between two stream events, sit above the client's window, so a dead upstream stream is cut
+by the client at 180 seconds with the watchdog on, and the router's guard stands behind it
+([The relay's waits](relay.md#the-relays-waits)). A retry in place is the second wait: on a throttle the router sleeps
 the throttle's delay on the same account before any byte of the head reaches the client, up to the pool's
 `retry_in_place_seconds` (0 to 300, default 60), so a bound above the client's first-byte window makes the client end
-the request and send it again while the router is still waiting ([Retry in place](routing.md#retry-in-place)). The
-choice is the operator's: keep the bound at or under the window, or switch the watchdog off for that client with
-`CLAUDE_ENABLE_BYTE_WATCHDOG=0`, `API_FORCE_IDLE_TIMEOUT=0` and `API_TIMEOUT_MS=18000000`, which lets the client wait
-out a hold longer than its window.
+the request and send it again while the router is still waiting ([Retry in place](routing.md#retry-in-place)). The hold
+for a slot is the third, under the same bound: when every account that could serve is at its in-flight cap, the router
+holds the request for a slot before any byte of the head reaches the client
+([In-flight caps](routing.md#in-flight-caps)). The choice is the operator's: keep the bound at or under the window, or
+switch the watchdog off for that client with `CLAUDE_ENABLE_BYTE_WATCHDOG=0`, `API_FORCE_IDLE_TIMEOUT=0` and
+`API_TIMEOUT_MS=18000000`, which lets the client wait out a hold longer than its window.
 
 ## How a request is identified
 
@@ -351,10 +352,9 @@ its facts, and the cut character travels as the client sent it.
 ## Auto mode behind the router
 
 Claude Code in auto mode asks the upstream to review each tool use on the model's own turn, and what the router does
-with that request is the pool's `auto_mode_server` (on by default), which a key can override: on, the member, the beta
-and the verdict pass through unchanged, and off, the router cuts them and the client reviews each tool use with a
-classifier request of its own. The mechanism, the latch, the classifier's two stages and the client's notice are
-on [Auto mode behind the router](relay.md#auto-mode-behind-the-router).
+with that request is the pool's `auto_mode_server` (on by default), which a key can override. The mechanism, the latch,
+the classifier's two stages and the client's notice are on
+[Auto mode behind the router](relay.md#auto-mode-behind-the-router).
 
 ## Headers and transport
 

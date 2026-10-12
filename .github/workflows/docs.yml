@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.x"
       - run: scripts/tests/check-docs.sh
-      # Pinned to the version the site is written and checked against; a newer Zensical may warn on
+      # Pinned to the version the site is written and checked against. A newer Zensical may warn on
       # syntax this one accepts, and a warning fails the build below.
       - run: pip install zensical==0.0.62
       - run: zensical build --clean --strict

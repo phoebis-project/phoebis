@@ -18,18 +18,17 @@ colon. Neither creates the account. A new key for an existing account goes throu
 `secret` and is verified the same way, and a check that does not succeed refuses the edit whole.
 
 An id matches `[a-z0-9][a-z0-9-]{0,63}`, a label is at most 256 bytes, and an id in use answers
-`409 an account with this id exists`. The create route takes `"kind": "oauth"` too, with no secret
-(`an oauth account is paired, not keyed`), for a script that makes the slot ahead of its pairing: the slot reads
-`unpaired` until a pairing confirms.
+`409 an account with this id exists`. The create route takes `"kind": "oauth"` too, with no secret, for a script that
+makes the account ahead of its pairing: the account reads `unpaired` until a pairing confirms, and an `oauth` create
+that carries a secret answers `400 an oauth account is paired, not keyed`.
 
 ## Through the console
 
-Open Accounts ([The console](console.md#accounts)) and choose Add account. The dialog's subtitle says which kind does
-what: "Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace." Pick OAuth
-login or API key under Account type and give the account a label. The id the router will use is derived from the label
-and shown under it, and "customize" opens it for editing. Choose Start pairing, or paste the key under API key and
-choose Add API key. An API-key account is in the list once the router has verified its key. An OAuth account appears
-once its pairing is confirmed, and a pairing you cancel leaves no account.
+Open Accounts ([The console](console.md#accounts)) and choose Add account. Pick "OAuth login" or "API key" and give the
+account a label. The id the router will use is derived from the label and shown under it, and "customize" opens it for
+editing. Choose Start pairing, or paste the key under API key and choose Add API key. An API-key account is in the list
+once the router has verified its key. An OAuth account appears once its pairing is confirmed, and a pairing you cancel
+leaves no account.
 
 The pairing dialog runs two steps.
 
@@ -112,8 +111,8 @@ curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions/$ID/confirm \
 
 The answer is `200` with the `account_id` and `status` `confirmed`. The credential is committed and the account's state
 set to `ready`, and a session started with `new` creates the row `ready` with its identity, credential and profile in
-one write. The confirm reads the usage endpoint right after answering, so the windows show within seconds. A slot stays
-bound to the upstream account it was first paired to, so moving it elsewhere means deleting it: confirming another
+one write. The confirm reads the usage endpoint right after answering, so the windows show within seconds. An account
+stays bound to the upstream account it was first paired to, so moving it elsewhere means deleting it: confirming another
 upstream account answers `409 this slot is already paired to a different upstream account`, and an upstream account
 paired to another slot `409 that upstream account is already paired to another slot`.
 
@@ -141,8 +140,8 @@ curl -sS -H "authorization: Bearer $PHOEBIS_ADMIN_SECRET" http://127.0.0.1:8081/
 A pairing session on an existing account leaves its state unchanged, `unpaired`, `disconnected` or `reauth_required`,
 until the confirm writes `ready`. A session started with `new` has no row until the confirm writes one, and a cancel, an
 expiry or a failure before that leaves nothing. Renewing an access token leaves the state at `ready` for the whole
-attempt: a refresh the token endpoint refuses with a status that can pass, or one that fails in transport, arms a
-backoff and tries again, and only a definitive failure moves the state.
+attempt: a refresh the token endpoint refuses with any status but `401` or `400` with `invalid_grant`, or one that fails
+in transport, arms a backoff and tries again, and only a definitive failure, listed below, moves the state.
 
 `reauth_required` follows one definitive failure, never a retry count. An API-key account is marked on a `401`, or a
 `403` whose error type is `authentication_error`, from the upstream. An OAuth account is marked when a refresh finds no
@@ -151,8 +150,8 @@ refreshed token names an identity other than the account's, when a request repla
 refused again, or when a refresh was in flight as the process stopped, which the next start cannot settle and so
 quarantines.
 
-The Accounts view offers these actions, each behind a confirm dialog that [The console](console.md#accounts) describes,
-and each calls its own route:
+The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
+each calls its own route:
 
 | Action | Route | What it does |
 | --- | --- | --- |
@@ -165,5 +164,5 @@ and each calls its own route:
 | Pause and Resume | `POST /admin/accounts/{id}/pause`, `POST /admin/accounts/{id}/resume` | Flips `enabled`. Selection skips a paused account, and its state stays as it was. |
 | Verify | `POST /admin/accounts/{id}/verify` | Sends a models request to the upstream with the stored key and answers `ok` with the upstream's `status`, `200` on success and `401` for a rejected key. It writes no state. An OAuth account answers `400 only an API-key account is verified this way`, and an API-key account without a key `409 account holds no API key`. |
 
-The console warns before Clear cooldown runs: "The account becomes eligible immediately. If the account is still rate
-limited, the next request re-enters cooldown."
+The console warns before Clear cooldown runs that the account is eligible at once, and that an account still rate
+limited re-enters cooldown on its next request ([Accounts](console.md#accounts)).

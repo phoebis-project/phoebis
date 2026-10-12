@@ -24,7 +24,7 @@ The archive is `phoebis-<version>-<target>.tar.gz` for the two targets `x86_64-u
 checksum file and lists both archives, so `--ignore-missing` checks the one you downloaded.
 
 While the repository is private, downloading a release asset needs a token with `repo` scope, as
-[Releasing](operations.md#releasing) says of `read:packages` for the image. GitHub answers the `curl -LO` lines above
+[Releasing](development.md#releasing) says of `read:packages` for the image. GitHub answers the `curl -LO` lines above
 with `404` while the repository is private, token or not, so fetch the archive and `SHA256SUMS` in their place with the
 GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs/phoebis --pattern
 'phoebis-<version>-x86_64-unknown-linux-musl.tar.gz' --pattern SHA256SUMS`. An operator who builds from source follows
@@ -73,14 +73,14 @@ until it was copied again.
 A router that already runs from a file in your home directory moves under the unit after every line of the block but
 `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
 creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
-`/etc/phoebis/storage.key` and the data directory's contents into `/var/lib/phoebis`, give the key file and that
-directory to `phoebis`, and edit the five path keys `init` wrote absolute to those places, since `ProtectHome=true`
-keeps the service out of `/home`: `storage.encryption_key_file: /etc/phoebis/storage.key`,
-`storage.path: /var/lib/phoebis/router.sqlite`, `stats.ledger_path: /var/lib/phoebis/ledger.sqlite`,
-`stats.api_prices_path: /etc/phoebis/api_prices.yaml` and
+`/etc/phoebis/storage.key` and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
+and everything moved into it to `phoebis` (`chown -R phoebis:phoebis /var/lib/phoebis`, since a moved file keeps its
+owner), and edit the five path keys `init` wrote absolute to those places, since `ProtectHome=true` keeps the service
+out of `/home`: `storage.encryption_key_file: /etc/phoebis/storage.key`, `storage.path: /var/lib/phoebis/router.sqlite`,
+`stats.ledger_path: /var/lib/phoebis/ledger.sqlite`, `stats.api_prices_path: /etc/phoebis/api_prices.yaml` and
 `stats.subscription_costs_path: /etc/phoebis/subscription_costs.yaml`. The registry opens under the key that sealed it
-wherever the file names it, and the environment file is `deploy/phoebis.env.example` with the secret you export today
-in place of its placeholder, at `0600` owned by root.
+wherever the file names it, and the environment file is `deploy/phoebis.env.example` with the secret you export today in
+place of its placeholder, at `0600` owned by root.
 
 Then validate the file before enabling the service:
 
@@ -88,10 +88,10 @@ Then validate the file before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-`check-config` reads `admin.secret_env` from the process environment when it is set and prints
-`warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file
-is optional for it. The service and `phoebis health` refuse an unset secret, and the start, `check-config`, `health`,
-`status` and `tls reload` refuse a secret of another shape with the line
+`check-config` reads `admin.secret_env` from the process environment when it is set and prints `warning: environment
+variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file is optional for it.
+The service, `phoebis health`, `status` and `tls reload` refuse an unset secret, and the start, `check-config`,
+`health`, `status` and `tls reload` refuse a secret of another shape with the line
 [Environment variables](#environment-variables) gives. Once the check is clean, the owner warnings for the key file and
 the data directory aside, since root runs it and `phoebis` owns them, `sudo systemctl enable --now phoebis`.
 
@@ -181,8 +181,8 @@ against a production file while the router is up. It prints, in order:
 
 <!-- check-config: begin -->
 1. `{config path} is valid`
-2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
-   {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
+2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {config.proxy.listen} over TLS
+   (certificate {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
 3. the admin line in the same two shapes, with `admin` and `config.admin.listen`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
@@ -225,15 +225,10 @@ spaces)`.
 An unreadable, mismatched, expired or not-yet-valid certificate pair fails the check with exit 1 and the line the start
 prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listeners)).
 
-On shutdown, Ctrl-C or SIGTERM, the router stops under one budget of 35 seconds, which its phases share in order: the
-keepalive shutdown and the listeners' drain of in-flight requests, the relayed bodies still running, the catalog's
-retries, a credential refresh still in flight, the ledger's last writes and then the routing state's. In-flight requests
-drain for up to 30 seconds inside that budget, so a stream that outlives the drain still leaves the phases after it five
-seconds. Each phase takes what the ones before it left, so a slow keepalive shutdown leaves the listeners less rather
-than a fresh budget of their own, and a phase still running when the budget is spent is ended. A credential refresh
-still in flight is waited for up to its own 30-second timeout or what is left of the budget, whichever is shorter, so a
-token the upstream already rotated is stored rather than lost to the next start's quarantine. The session memory's last
-flush and the store's close run whatever the budget reads.
+On shutdown, Ctrl-C or SIGTERM, the router stops under one budget of 35 seconds, which its phases share in the order
+[Upgrades and renewals](operations.md#upgrades) gives, with up to 30 of them for the drain of in-flight requests. A
+credential refresh still in flight is waited for up to its own 30-second timeout or what is left of the budget,
+whichever is shorter, so a token the upstream already rotated is stored rather than lost to the next start's quarantine.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
 the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
@@ -305,13 +300,11 @@ errors beside it. The summary ends with the steps that remain, the key file's ow
 `compose.yaml`, and with `docker compose run --rm phoebis check-config` as the next command, since the key's path in the
 file is the container's.
 
-`status` probes the proxy listener as `health` does, reads `GET /admin/system`, `/admin/attention`, `/admin/pools`,
-`/admin/accounts` and `/admin/sessions`, each call under the `--timeout` deadline, and prints one screen of readiness,
-pools, accounts and live pins at most 80 columns wide, or one JSON object with `--json`.
-[Is it up?](operations.md#is-it-up) shows the screen, reads it line by line and gives the exit codes. `--all` prints
-every pin and every account in no pool rather than the first 20 of each. After a refused secret or a throttled login
-the reads that follow print its line without calling again, so a run with a wrong secret counts one failed login toward
-the throttle ([admin](#admin)).
+`status` probes the proxy listener as `health` does, reads the admin API with each call under the `--timeout` deadline,
+and prints one screen of readiness, pools, accounts and live pins, or one JSON object with `--json`:
+[Is it up?](operations.md#is-it-up) shows the screen, reads it line by line and gives the exit codes. After a refused
+secret or a throttled login the reads that follow print its line without calling again, so a run with a wrong secret
+counts one failed login toward the throttle ([admin](#admin)).
 
 The commands that call the admin API, `status` and `tls reload`, send the admin secret as `Authorization: Bearer`, one
 connection per call, and share five flags:

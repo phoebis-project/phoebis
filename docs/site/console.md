@@ -170,7 +170,7 @@ tokens, Output tokens and Effort levels, a model past the long-context bound car
 upstream lists no models."
 
 "Add account" opens the dialog of that name under "Subscription logins share your Claude.ai quota. API keys bill per
-token against a Console workspace.": the "Account type" (OAuth login or API key), Label ("Short name used in pools and
+token against a Console workspace.": the choice "OAuth login" or "API key", Label ("Short name used in pools and
 logs."), the id the label derives as `Id: {id}` with a "customize" link that opens the Id field, the "API key" field
 for an API-key account, and "Start pairing" or "Add API key". For a subscription account the dialog says "Pairing
 opens the Claude.ai login in your browser and asks you to paste the address it lands on. The router stores the refresh
@@ -232,39 +232,40 @@ Identity and Members "needed" and Keys "after saving". The groups by rail parent
 
 Selection's Strategy field explains the chosen strategy under it. Under Pace it reads "Pace scores each member by the
 allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per
-hour until that window resets or the subscription ends, within the first priority tier that has an eligible account.
-An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts page."
+hour until that window resets or the subscription ends, within the first priority tier that has an eligible account. An
+unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts page."
 Utilization thresholds opens on "A window's pace is the share of it that has elapsed, to its reset, or to the
 subscription's end when that comes first. A member runs ahead of pace by the points its used share exceeds the elapsed
-share, read on its 5-hour and its 7-day window. The readings are the Quota page's.", holds the Shed ahead of pace
-switch with its margin and, in the expert view, Select below utilization with its threshold, and closes on the
-"Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on the Quota
-page. The lower track reads each window's lead over pace, from 100 points behind to 100 ahead, with the shedding
-margin and the cool band under it." The bar draws a tick per member window on the used track and on the lead track,
-the latter around "on pace" with the margin as a line (hover `Shedding margin: {n} points`), the cool band "cool
-under here" and the legend "5-hour reading", "7-day reading" and "Shedding margin", each tick's hover reading
-`{account}: {window} {used} used, {elapsed} elapsed to its end at {time}, {lead}` (the end named where the pace runs
-to the subscription's end), and in the expert view the "Select-below threshold" handle, dragged or moved with the
-arrow keys. In the expert view, Load shedding closes on a "Preview" line, the round's dry run as the fields stand:
-"No round runs while shed ahead of pace is off." while the switch is off, `No member is ahead of pace by the margin:
-the closest is {account}, {lead}` while none is, and otherwise `{n} members run ahead of pace by the margin:
-{account} ({window}, {lead})` followed by `A round there would move {n} sessions ({n} warm), {pct} of the hot
-members' recent burn together, to a cool sibling.`, or by `A round there would mark {n} sessions ({n} warm), {pct} of
-the hot members' recent burn together, but no sibling reads under the margin less 5 points, so the sessions would be
-marked and stay.` Until the cost model is read the line says so and counts no window-share pin. Keys holds "Create
-key" and the pool's keys as Key, Prefix and
-Status with a menu of "Move to…" and "Revoke". "Move to…" opens `Move key {name}` ("A key reaches only its own pool's
-members, so moving it ends its current session pins.") with the destination Pool, and "Revoke" asks `Revoke {name}`:
-`Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
-created from here opens "Key created", the dialog the Keys section describes. Keepalive holds the switch "Keep prompt
-caches warm", the three ceilings and the return rate: a ceiling left off reads the break-even it resolves to,
-`Break-even: {range}`, one switched on past the break-even reads `Capped at the break-even, {range}`, the idle window
-reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the
-break-even, the window in effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit.
-Return rate by idle age lists the pool's ten buckets with the windows that returned out of those that reached it and a
-bar of the rate, or "No idle windows recorded yet". The ceilings are explained under
-[The four fields](keepalive.md#the-four-fields) and the buckets under
-[The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
+share, read on its 5-hour and its 7-day window. The readings are the Quota page's.", holds the Shed ahead of pace switch
+with its margin and, in the expert view, Select below utilization with its threshold, and closes on the "Member
+utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on the Quota page. The
+lower track reads each window's lead over pace, from 100 points behind to 100 ahead, with the shedding margin and the
+cool band under it." The bar draws a tick per member window on the used track and on the lead track, the latter around
+"on pace" with the margin as a line (hover `Shedding margin: {n} points`), the cool band "cool under here" and the
+legend "5-hour reading", "7-day reading" and "Shedding margin", a used-track tick's hover reading `{account}: {window}
+{used}` and a lead-track tick's `{account}: {window} {used} used, {elapsed} elapsed to its end at {time}, {lead}` (the
+end named where the pace runs to the subscription's end), and in the expert view the "Select-below threshold" handle,
+dragged or moved with the arrow keys. In the expert view, Load shedding closes on a "Preview" line, the round's dry run
+as the fields stand: "No round runs while shed ahead of pace is off." while the switch is off, `No member is ahead of
+pace by the margin: the closest is {account}, {lead} to its end at {time}.` while none is (the end named as in the hover
+above), and otherwise `{n} members run ahead of pace by the margin: {account} ({window}, {lead} to its end at {time})`
+followed by `A round there would move {n} sessions ({n} warm), {pct} of the hot members' recent burn together, in window
+share, to a cool sibling.`, or by `A round there would mark {n} sessions ({n} warm), {pct} of the hot members' recent
+burn together, in window share, but no sibling reads under the margin less 5 points, so the sessions would be marked and
+stay.`, the unit clause reading `, in dollars` for a burn in dollars and the together clause giving way to `of each
+member's recent burn on average` where the members' units differ. Until the cost model is read the line says so and
+counts no window-share pin. Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a menu of "Move
+to…" and "Revoke". "Move to…" opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends
+its current session pins.") with the destination Pool, and "Revoke" asks `Revoke {name}`: `Requests with {name} are
+rejected immediately. The key stays in this pool and its history stays in the ledger.` A key created from here opens
+"Key created", the dialog the Keys section describes. Keepalive holds the switch "Keep prompt caches warm", the three
+ceilings and the return rate: a ceiling left off reads the break-even it resolves to, `Break-even: {range}`, one
+switched on past the break-even reads `Capped at the break-even, {range}`, the idle window reads its cost as a share of
+one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the break-even, the window in
+effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit. Return rate by idle age
+lists the pool's ten buckets with the windows that returned out of those that reached it and a bar of the rate, or "No
+idle windows recorded yet". The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
+buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
 
@@ -294,9 +295,7 @@ and Server-side auto mode with Inherit, On or Off), Models (Model rules, with Po
 Replace pool rules, and List [1m] twins in the models listing), Sessions (Cache warming opt-out) and Capture (Capture
 request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto mode,
 Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
-bodies hold: "Bodies contain the prompts, file contents, and tool results of every session using this key, and a
-session in auto mode sends the machine's permission rules with their literal text, its working and home directories
-and its git remotes with every request. Only the admin secret can read them."
+bodies hold, the warning [Keys](routing.md#keys) quotes.
 
 ## Models
 
@@ -390,16 +389,19 @@ A request the ledger does not hold reads "Request not found" with "It may have a
 ![The Analytics view: the Traffic tab](assets/analytics-dark.png#only-dark)
 
 The sticky filter bar offers the range 1h, 24h, 7d, 30d or Custom (From and To, "End must be after start." while the
-pair is wrong), "Group by" with Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed or User agent,
-the multi-selects Key, Pool, Account and Model, "Client pattern" and "User agent pattern" in the Requests view's
-grammar, a "User agent groups" box with one pattern per line, where each pattern names a group and every other agent
-groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch
-"Include cache probes". The user agent grouping reads the agent's first product token, `claude-cli/2.1.269` for
-`claude-cli/2.1.269 (external, cli)`. Filtered to one session the view sums the request log instead of the hourly
-rollups and says so, over the first 10 000 requests of the range. The range, the grouping, every filter, the client
-groups, the probes switch, the burn grouping and the cost unit live in the page's address. The section bar under it
-shows one section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing
-reads "No traffic in this range." What each figure means is on [Statistics](statistics.md).
+pair is wrong), "Group by" with Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed or User agent, the
+multi-selects Key, Pool, Account and Model, "Client pattern" and "User agent pattern" in the Requests view's grammar, a
+"User agent groups" box with one pattern per line, where each pattern names a group and every other agent groups under
+`other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch "Include cache
+probes". The user agent grouping reads the agent's first product token, `claude-cli/2.1.269` for `claude-cli/2.1.269
+(external, cli)`. Filtered to one session the view sums the request log instead of the hourly rollups and says so, over
+the first 10,000 requests of the range. Under that filter the Cost split reads "Cost split is not available for a
+session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
+figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
+carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the client groups, the
+probes switch, the burn grouping and the cost unit live in the page's address. The section bar under it shows one
+section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No
+traffic in this range." What each figure means is on [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code, Failovers, Migration rewrites with Moves by reason, Requests by speed, Effort levels, and
@@ -436,8 +438,9 @@ Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost p
 chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k
 output). Under Window shares, which reads under the account grouping alone, the tiles read Window share, Per request
 and Per 1k output, and the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output. Every
-position draws Fast mode spend and the Cost split (Input, Cache read, Cache write, Output). The prices and the cost
-model behind the dollars and the shares are on [Pricing](statistics.md#pricing).
+position draws Fast mode spend and the Cost split (Input, Cache read, Cache write, Output). The prices behind the
+dollars are on [Pricing](statistics.md#pricing), and the cost model behind the shares on
+[Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
@@ -539,18 +542,18 @@ probe is priced are on [Pricing](statistics.md#pricing).
 "Appearance" ("Stored in this browser only.") sets the Theme, Light, Dark or System ("System follows the operating
 system preference."), and the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), the two browser
 preferences the shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and
-Subscription costs path (each as the path or "not configured", then `effective {date}` for its table), Storage path,
-and Admin secret as "configured" or "not configured", each path's hover naming the bootstrap key that sets it, and
-closes on "The values the configuration file sets are on the installation page, and `phoebis check-config` prints
-this router's."
+Subscription costs path (each as the path or "not configured", then `effective {date}` for its table, the last reading
+`{problem}` in the date's place while the cost model reports a problem), Storage path, and Admin secret as "configured"
+or "not configured", each path's hover naming the bootstrap key that sets it, and closes on "The values the
+configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
 Claude Code at the router, with "Copy snippet". The base URL carries the proxy listener's scheme (`https` where the
 listener terminates TLS) and the port it binds, on the placeholder host `router.example.com`, and the hint under the
-block reads `Inference is served on {address}, the address the proxy listener binds, so the base URL carries its scheme
-and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where
-a TLS proxy or a port mapping stands between Claude Code and it.` One definition per variable follows, with
+block reads `Inference is served on {proxy}, the address the proxy listener binds, so the base URL carries its scheme
+and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where a
+TLS proxy or a port mapping stands between Claude Code and it.` One definition per variable follows, with
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` defined although it is not in the block.
 [The environment block](client.md#the-environment-block) on The client explains each line. The view writes browser
 preferences alone and changes no router setting.
