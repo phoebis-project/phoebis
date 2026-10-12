@@ -3899,32 +3899,61 @@ pub fn moves_by_reason(
 /// bounded by a caller-independent constant rather than the range's size.
 const SESSION_BURN_LIMIT: usize = 20;
 
-/// `top_sessions_by_tokens`' statement, spelled once so the plan test explains the statement the read runs. A
-/// request is admitted within an hour of any attempt's start, so the request's own index carries the range. The
-/// index is named: the ledger keeps no planner statistics, and without them SQLite prices a scan of every attempt
-/// below this range search.
-const TOP_SESSIONS_BY_TOKENS: &str = "SELECT r.session_id FROM attempts a \
-     JOIN requests r INDEXED BY requests_received ON r.id = a.request_id \
-     WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
-     AND r.received_at >= ?1 - 3600000 AND r.received_at < ?2 \
-     GROUP BY r.session_id \
-     ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
-         + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
-         + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
-     LIMIT ?3";
+/// `top_sessions_by_tokens`' statement and its binds, spelled once so the plan test explains the statement the read
+/// runs. A request is admitted within an hour of any attempt's start, so the request's own index carries the range.
+/// The index is named: the ledger keeps no planner statistics, and without them SQLite prices a scan of every attempt
+/// below this range search. Named accounts rank by their own attempts alone, the attempts the series then prices.
+fn top_sessions_statement(
+    from: i64,
+    to: i64,
+    limit: usize,
+    accounts: &[String],
+) -> (String, Vec<rusqlite::types::Value>) {
+    let named = if accounts.is_empty() {
+        String::new()
+    } else {
+        let marks = (0..accounts.len())
+            .map(|i| format!("?{}", i + 4))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(" AND a.account_id IN ({marks})")
+    };
+    let sql = format!(
+        "SELECT r.session_id FROM attempts a \
+         JOIN requests r INDEXED BY requests_received ON r.id = a.request_id \
+         WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
+         AND r.received_at >= ?1 - 3600000 AND r.received_at < ?2{named} \
+         GROUP BY r.session_id \
+         ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
+             + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
+             + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
+         LIMIT ?3"
+    );
+    let mut bind = vec![
+        rusqlite::types::Value::Integer(from),
+        rusqlite::types::Value::Integer(to),
+        rusqlite::types::Value::Integer(limit as i64),
+    ];
+    bind.extend(
+        accounts
+            .iter()
+            .map(|account| rusqlite::types::Value::Text(account.clone())),
+    );
+    (sql, bind)
+}
 
-/// The `limit` sessions with the most tokens over `[from, to)`, ranked in SQL rather than in memory, so a
-/// caller never reads an attempt row belonging to a session it will not answer.
+/// The `limit` sessions with the most tokens over `[from, to)` on `accounts` (every account when empty), ranked in
+/// SQL rather than in memory, so a caller never reads an attempt row belonging to a session it will not answer.
 fn top_sessions_by_tokens(
     conn: &Connection,
     from: i64,
     to: i64,
     limit: usize,
+    accounts: &[String],
 ) -> Result<Vec<String>, LedgerError> {
-    let mut stmt = conn.prepare(TOP_SESSIONS_BY_TOKENS)?;
-    let rows = stmt.query_map(params![from, to, limit as i64], |row| {
-        row.get::<_, String>(0)
-    })?;
+    let (sql, bind) = top_sessions_statement(from, to, limit, accounts);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(bind), |row| row.get::<_, String>(0))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(LedgerError::from)
 }
@@ -4038,7 +4067,13 @@ pub fn session_burn_series(
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
     let shares = names_one_account(&filter.accounts);
     let (first, last) = bucket_range(filter)?;
-    let sessions = top_sessions_by_tokens(conn, first * 1_000, last * 1_000, SESSION_BURN_LIMIT)?;
+    let sessions = top_sessions_by_tokens(
+        conn,
+        first * 1_000,
+        last * 1_000,
+        SESSION_BURN_LIMIT,
+        &filter.accounts,
+    )?;
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
@@ -4140,15 +4175,11 @@ mod tests {
                     && step.contains("received_at<?")
             }) && !plan.iter().any(|step| step.starts_with("SCAN"))
         };
-        let top = plan_of(
-            TOP_SESSIONS_BY_TOKENS,
-            vec![
-                rusqlite::types::Value::Integer(0),
-                rusqlite::types::Value::Integer(3_600_000),
-                rusqlite::types::Value::Integer(20),
-            ],
-        );
-        assert!(ranged(&top), "{top:?}");
+        for accounts in [Vec::new(), vec!["a".to_string(), "b".to_string()]] {
+            let (sql, binds) = top_sessions_statement(0, 3_600_000, 20, &accounts);
+            let top = plan_of(&sql, binds);
+            assert!(ranged(&top), "{accounts:?}: {top:?}");
+        }
         let (sql, binds) =
             session_attempts_statement(0, 3_600_000, &["s1".to_string(), "s2".to_string()]);
         let attempts = plan_of(&sql, binds);

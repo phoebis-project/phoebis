@@ -4085,6 +4085,50 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
     );
 }
 
+/// A read naming one account ranks the sessions by that account's attempts alone, so the series lists the account's
+/// own busiest sessions even where twenty sessions of another account hold more tokens over the range.
+#[test]
+fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Each session carries a million tokens, and a tie ranks by session id, so b's twenty sort ahead of a's one.
+    for n in 0..20 {
+        plant_burn(
+            &db,
+            &format!("r-b-{n:02}"),
+            "b",
+            PRO,
+            "claude-opus-5-5",
+            &format!("s-b-{n:02}"),
+        );
+    }
+    plant_burn(&db, "r-a", "a", MAX_20X, "claude-opus-5-5", "s-z");
+    let tables = PlanTables::shipped();
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let filter = SeriesFilter {
+        from: hour * 1_000,
+        to: (hour + 3_600) * 1_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter))
+        .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["s-z"],
+        "account a's one session, and none of b's: {sessions:?}"
+    );
+    let point = point_at(&sessions[0].1, hour);
+    assert!(
+        point.uncached_tokens == 1_000_000 && point.five_hour_share.is_some(),
+        "its attempt priced under a's tier: {point:?}"
+    );
+}
+
 /// A cost model in round numbers for the share cases: one Fable input token weighs 10 units, `test_tier` holds 100
 /// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
 /// is half the 7-day window.
