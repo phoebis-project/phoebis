@@ -314,8 +314,9 @@ reaches none of the previous holder's sessions. Every body carries five fields, 
 `session_id`, `instance_id` and `sequence`, then the fields of its event, and a field an event does not take is refused
 rather than ignored, so a report the mod got wrong never reads as one it got right. `sequence` rises with every report
 of a session: the mod sends the clock in epoch milliseconds, or one more than the previous report's when that is
-higher. An agent's reports carry `request_generation` once the router has named a generation for that agent. Main's
-agent id is `main`.
+higher, so a session the mod registers again after a reload or a return to an earlier id never falls behind the
+sequence the router took last. An agent's reports carry `request_generation` once the router has named a generation
+for that agent. Main's agent id is `main`.
 
 | Event | Fields | What the router does |
 | --- | --- | --- |
@@ -339,7 +340,16 @@ A `200` carries an acknowledgment with `session_id`, `instance_id`, `sequence`, 
 `request_generation`: for an agent event the named agent's generation beside its `agent_id`, and for a session-level
 event, a `session_start`, a `heartbeat` or a `session_end`, main's generation, which the mod adopts for main. The
 acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for every agent the
-router holds for the session, main included, so the mod reconciles from the answer.
+router holds for the session, main included. The mod adopts every generation the answer names and reconciles that list
+with its own agents. An agent only the router holds is adopted when the client's own agent list reads it live, and
+released otherwise, and without that list the router's entry stays as it is. An agent the mod released in this run,
+which the client has not spawned or given a turn since, is not adopted again whatever the list reads, since that
+release ends the run the router holds, and the mod sends the release once more when none is still queued, so a router
+restored from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only
+the mod holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both
+ways, so a subagent the mod holds as parked stays released on the router until its next report starts it again with
+`agent_start`. An agent the answer names while the mod's release of it still waits in the queue stays unannounced, so
+the agent's next run starts it again with `agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code
@@ -375,14 +385,14 @@ The mod sends one request at a time. Reports queue in order, the next goes out w
 lands, and no hook waits for a request, so a stalled router never holds up a tool call or a prompt. A report that
 repeats what the queue already holds collapses into it: the queue keeps one activity per agent (a prompt over a
 presence), one heartbeat and the newest state per agent. The answer to a `session_start` or a `heartbeat` arms the next
-heartbeat at a third of the remaining lease, between 1 and 25 seconds, and no heartbeat goes out before a registration
-has been acknowledged. What each answer makes the mod do:
+heartbeat at a third of the remaining lease, between 1 and 25 seconds. No other answer moves it, and no heartbeat goes
+out before a registration has been acknowledged. What each answer makes the mod do:
 
 - A `2xx`: the report is done and the backoff starts over.
 - A transport failure, a `5xx`, a `session_limit`, or an `agent_limit` on a `session_start`: the report goes back to the
   head of the queue and the whole queue is retried after 1, 2, 4, 8 and 16 seconds, then every 30 seconds.
 - An `agent_limit` on an `agent_start`: the start goes back and that agent's reports wait behind it, retried along the
-  same backoff, while the heartbeats and the other agents' reports go on.
+  same backoff under the agent's own deadline, while the heartbeats and the other agents' reports go on.
 - A `401` or a `403`: the mod empties its queue and reports nothing more until the module loads again.
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report
@@ -390,7 +400,8 @@ has been acknowledged. What each answer makes the mod do:
 - `instance_conflict` naming the holding instance: the mod retries the registration once with `previous_instance_id`.
   A second conflict, or one that names no instance, stops reporting for that session id.
 - `instance_ended`, `stale_sequence` and `unknown_instance`: the report goes back behind one `session_start` with the
-  same instance.
+  same instance. A registration refused again with the same code waits along the same backoff before it goes out
+  again, rather than going out at once round after round.
 - `stale_request_generation` with a generation: the mod adopts it and sends the report once more, and drops it on a
   second refusal. Without a generation the mod drops the report and registers again.
 - `unknown_agent`: the report goes back with an `agent_start` right before it.
