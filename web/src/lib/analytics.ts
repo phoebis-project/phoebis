@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundingFilter, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct, fmtShare } from '@/lib/format';
 import { WINDOW_LABEL, windowKeyId } from '@/lib/windows';
@@ -166,20 +166,6 @@ export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, win
   return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
 }
 
-/**
- * The Cost section's unit position. Named apart from `CostUnit` in `web/src/lib/requests.ts` (a request's native
- * unit), since the test entry re-exports both modules and one name for two types would clash.
- */
-export type AnalyticsUnit = 'all' | 'equivalent' | 'share' | 'usd';
-/** The select's order: the default first, then the money, the shares and the shares' dollar equivalent. */
-export const COST_UNITS: readonly AnalyticsUnit[] = ['all', 'usd', 'share', 'equivalent'];
-export const UNIT_LABEL: Record<AnalyticsUnit, string> = { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' };
-/**
- * The funding side of a position: the second query's under `usd` and `equivalent` (the page's own reads serve under
- * `all` and `share`, since a share sums plan-funded rows alone whatever the filter) and the session fold's under
- * `usd`, `share` and `equivalent`.
- */
-export const UNIT_FUNDING: Record<AnalyticsUnit, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' };
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
 /**
  * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null

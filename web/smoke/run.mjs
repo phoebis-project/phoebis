@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -11246,9 +11246,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Traffic');
   }
   {
-    // The unit is one control in the heads of Cost, Cache and Cache warming, kept in the address beside the session.
+    // The unit is the console-wide setting the top bar's switch holds, so no section head draws a control for it and a
+    // choice writes nothing to the address.
     const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
-    const unitSelect = (page, section) => page.container.querySelector(`#${section} .analytics-section__head select[aria-label="Cost unit"]`);
+    const shellUnit = (page) => page.container.querySelector('.topbar select[aria-label="Unit"]');
     const changeSelect = async (page, select, value) => {
       if (select) {
         setSelect.call(select, value);
@@ -11256,26 +11257,30 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       }
       await page.settle(900);
     };
-    const chooseUnit = (page, value) => changeSelect(page, unitSelect(page, 'cost') ?? unitSelect(page, 'cache') ?? unitSelect(page, 'cache-warming'), value);
+    const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
     const groupPage = (page, value) => changeSelect(page, page.container.querySelector('.filters select.groupby-select'), value);
     const costMeta = () => m.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
-    await tab(m, 'Cost');
-    const select = unitSelect(m, 'cost');
-    results.push({
-      name: "/analytics the Cost section's Unit select offers four positions with All in dollars selected and no unit in the URL",
-      ok: select !== null && [...select.options].map((o) => o.textContent).join() === 'All in dollars,Billed dollars,Window shares,Dollar equivalent' && select.value === 'all' && m.location().search === '' && select.closest('.analytics-section__head') !== null,
-      missing: [select?.outerHTML.slice(0, 160) ?? 'no select', m.location().search],
-    });
-    const written = [];
-    for (const value of ['usd', 'share', 'equivalent']) {
-      await chooseUnit(m, value);
-      written.push([m.location().search, m.location().hash, unitSelect(m, 'cost')?.value]);
+    // Each head is read on its own tab, since a tab mounts its section alone, and a select under any label counts.
+    const headSelects = [];
+    for (const [label, id] of [['Cost', 'cost'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
+      await tab(m, label);
+      headSelects.push([id, m.container.querySelector(`#${id} .analytics-section__head`) !== null, m.container.querySelectorAll(`#${id} .analytics-section__head select`).length]);
     }
-    await chooseUnit(m, 'all');
-    written.push([m.location().search, m.location().hash, unitSelect(m, 'cost')?.value]);
+    await tab(m, 'Cost');
     results.push({
-      name: '/analytics choosing Billed dollars, Window shares and Dollar equivalent writes unit=usd, unit=share and unit=equivalent and keeps the hash',
-      ok: JSON.stringify(written) === JSON.stringify([['?unit=usd', '#cost', 'usd'], ['?unit=share', '#cost', 'share'], ['?unit=equivalent', '#cost', 'equivalent'], ['', '#cost', 'all']]),
+      name: '/analytics no section head draws a unit select, since the top bar carries the one switch',
+      ok: JSON.stringify(headSelects) === JSON.stringify([['cost', true, 0], ['cache', true, 0], ['cache-warming', true, 0]]) && shellUnit(m) !== null,
+      missing: [JSON.stringify(headSelects), shellUnit(m) === null ? 'no Unit select in the top bar' : ''],
+    });
+    const META = { all: /^\$[\d,.]+ in range, all requests$/, equivalent: /^\$[\d,.]+ in range, equivalent$/, share: /^shares per account$/, usd: /^\$[\d,.]+ in range, billed$/ };
+    const written = [];
+    for (const value of ['usd', 'share', 'equivalent', 'all']) {
+      await chooseUnit(m, value);
+      written.push([value, m.location().search, m.location().hash, shellUnit(m)?.value ?? 'no switch', localStorage.getItem('phoebis.unit'), costMeta()]);
+    }
+    results.push({
+      name: '/analytics choosing a position on the top bar writes nothing to the address, keeps the hash, stores the position and redraws the Cost section',
+      ok: written.every(([value, search, hash, shown, stored, meta]) => search === '' && hash === '#cost' && shown === value && stored === value && META[value].test(meta)),
       missing: written.map((w) => w.join(' ')),
     });
     // The two funded reads: none while Traffic shows, one series and one breakdown call per dollar position on Cost.
@@ -11318,12 +11323,31 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`all ${wholeUsd}`, `billed ${billedUsd}`, `equivalent ${equivalentUsd}`],
     });
     await tab(m, 'Traffic');
+    {
+      // A shared link lands on its position: the parameter is read into the setting once and dropped, every other key
+      // and the tab kept. A value the console does not know leaves the setting as it stood and drops as well.
+      localStorage.removeItem('phoebis.unit');
+      const landed = await mount('/analytics?by=account&unit=share#cost');
+      const known = [shellUnit(landed)?.value ?? 'no switch', landed.location().search, landed.location().hash, localStorage.getItem('phoebis.unit')];
+      landed.unmount();
+      localStorage.removeItem('phoebis.unit');
+      const bogus = await mount('/analytics?unit=bogus#cost');
+      const unknown = [shellUnit(bogus)?.value ?? 'no switch', bogus.location().search, bogus.location().hash, localStorage.getItem('phoebis.unit')];
+      bogus.unmount();
+      results.push({
+        name: '/analytics a ?unit=share link lands on Window shares and leaves the address without the parameter, and an unknown value drops alone',
+        ok: JSON.stringify(known) === JSON.stringify(['share', '?by=account', '#cost', 'share']) && JSON.stringify(unknown) === JSON.stringify(['native', '', '#cost', null]),
+        missing: [JSON.stringify(known), JSON.stringify(unknown)],
+      });
+      localStorage.removeItem('phoebis.unit');
+    }
 
     // jsdom lays nothing out, so a fresh page's chart containers read a browser's size and the charts draw.
     const measure = window.HTMLElement.prototype.getBoundingClientRect;
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
+    localStorage.removeItem('phoebis.unit');
     const shares = await mount('/analytics#cost');
     const cardIn = (t) => [...shares.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
     const legendIn = (t) => [...(cardIn(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
@@ -11393,11 +11417,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     await groupPage(shares, 'account');
     await tab(shares, 'Cache');
-    const cacheSelect = unitSelect(shares, 'cache');
+    const cacheUnit = shellUnit(shares)?.value;
     const cacheCard = cardIn('Write cost vs read cost');
     const cacheNoted = cacheCard?.textContent?.includes(SHARE_NOTE) ?? false;
     await tab(shares, 'Cache warming');
-    const warmingSelect = unitSelect(shares, 'cache-warming');
+    const warmingUnit = shellUnit(shares)?.value;
     const probeTile = () => {
       const t = [...shares.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       return [t?.querySelector('.stat__value')?.textContent?.trim(), t?.querySelector('.stat__note')?.textContent?.trim()];
@@ -11405,9 +11429,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const probeNoted = probeTile();
     const wasted = cardIn('Wasted probes')?.textContent?.includes('says the parked ceilings do. In dollars at list prices.') ?? false;
     results.push({
-      name: '/analytics the Unit select is drawn in the Cache and Cache warming headers too and the cache cost card reads the note under Window shares with no account named',
-      ok: cacheSelect?.value === 'share' && warmingSelect?.value === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
-      missing: [`cache select ${cacheSelect?.value}`, `warming select ${warmingSelect?.value}`, `cache note ${cacheNoted}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted blurb ${wasted}`],
+      name: '/analytics under Window shares with no account named the cache cost card and the Probe cost tile read the note on the Cache and Cache warming tabs',
+      ok: cacheUnit === 'share' && warmingUnit === 'share' && cacheNoted && JSON.stringify(probeNoted) === JSON.stringify(['-', SHARE_NOTE]) && wasted,
+      missing: [`unit on Cache ${cacheUnit}`, `unit on Cache warming ${warmingUnit}`, `cache note ${cacheNoted}`, `probe tile ${JSON.stringify(probeNoted)}`, `wasted blurb ${wasted}`],
     });
     // One account named, nightly, whose plan rows price every window: the cache card's legend reads its two 7-day
     // shares, the Probe cost tile its 7-day probe share over the other windows and the probe count, and the Cost
@@ -11603,6 +11627,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         return [...mixed, ...probeOnly];
       };
       const tileUnder = async (unit) => {
+        localStorage.removeItem('phoebis.unit');
         const page = await mount(`/analytics${unit ? `?unit=${unit}` : ''}#cache-warming`);
         await page.settle(900);
         const tile = [...page.container.querySelectorAll('#cache-warming .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
@@ -11622,6 +11647,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       delete api.getAnalyticsBreakdown;
     }
+    // The setting outlives a mount, so the checks after this block read a fresh browser's position.
+    localStorage.removeItem('phoebis.unit');
   }
   {
     // The story's incomplete desktop stream falls inside the day, so the legend and the desktop row both count it.
@@ -13218,7 +13245,8 @@ m.unmount();
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
 
   {
-    const name = '/analytics reads the group-by, range, probes switch, agent pattern and Account picker from the address, and a unit change keeps every key and the tab';
+    const name = '/analytics reads the group-by, range, probes switch, agent pattern and Account picker from the address, and a unit change on the top bar keeps every key and the tab and writes no unit';
+    localStorage.removeItem('phoebis.unit');
     const page = await mount('/analytics?by=account&range=7d&probes=1&agent=claude&accounts=primary#cost', { now: CLOCK_ORIGIN });
     const read = {
       account: [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Account'))?.textContent?.trim() ?? null,
@@ -13227,18 +13255,19 @@ m.unmount();
       probes: page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.getAttribute('aria-checked') ?? null,
       range: pressed(page),
     };
-    const unit = page.container.querySelector('select[aria-label="Cost unit"]');
-    if (!unit) controlMissing(name, 'Cost unit');
+    const unit = page.container.querySelector('.topbar select[aria-label="Unit"]');
+    if (!unit) controlMissing(name, 'Unit');
     else {
       await chooseIn(page, unit, 'usd');
-      const after = { hash: page.location().hash, query: query(page) };
+      const after = { hash: page.location().hash, query: query(page), unit: unit.value };
       results.push({
         name,
-        ok: JSON.stringify(read) === JSON.stringify({ account: 'Account (1)', agent: 'claude', groupBy: 'account', probes: 'true', range: '7d' }) && after.hash === '#cost' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude', by: 'account', probes: '1', range: '7d', unit: 'usd' }).sort()),
+        ok: JSON.stringify(read) === JSON.stringify({ account: 'Account (1)', agent: 'claude', groupBy: 'account', probes: 'true', range: '7d' }) && after.hash === '#cost' && after.unit === 'usd' && JSON.stringify(Object.entries(after.query).sort()) === JSON.stringify(Object.entries({ accounts: 'primary', agent: 'claude', by: 'account', probes: '1', range: '7d' }).sort()),
         missing: [JSON.stringify(read), JSON.stringify(after)],
       });
     }
     page.unmount();
+    localStorage.removeItem('phoebis.unit');
   }
   {
     // The day before the pinned origin, so the end stands under now and the reads carry it to the millisecond.
@@ -13347,18 +13376,20 @@ m.unmount();
     }
   }
   {
-    // The unit is a view control, so a change reads the funded series and breakdown alone: the series, the breakdowns,
+    // The unit is a view setting, so a change reads the funded series and breakdown alone: the series, the breakdowns,
     // the speed series, the placements and a session's fold read once, at the load, and stay.
-    const name = '/analytics a unit change on Cache reads the funded series and breakdown alone, and nothing in a session view';
+    const name = "/analytics a unit change on Cache from the top bar's switch reads the funded series and breakdown alone, and nothing in a session view";
     const READS = ['analyticsPlacements', 'getAnalyticsBreakdown', 'getAnalyticsSeries', 'listRequests'];
     const across = async (address) => {
+      localStorage.removeItem('phoebis.unit');
       const page = await mount(address, { now: CLOCK_ORIGIN });
-      const select = page.container.querySelector('#cache .analytics-section__head select[aria-label="Cost unit"]');
+      const select = page.container.querySelector('.topbar select[aria-label="Unit"]');
       const spies = READS.map((method) => [method, countCalls(method)]);
       if (select) await chooseIn(page, select, 'usd');
       for (const [, spy] of spies) spy.restore();
-      const read = { calls: spies.flatMap(([method, spy]) => spy.calls.map(([q]) => [method, q?.groupBy ?? null, q?.funding ?? null].join(' ').trim())), unit: query(page).unit ?? null };
+      const read = { calls: spies.flatMap(([method, spy]) => spy.calls.map(([q]) => [method, q?.groupBy ?? null, q?.funding ?? null].join(' ').trim())), set: select?.value ?? null, unit: query(page).unit ?? null };
       page.unmount();
+      localStorage.removeItem('phoebis.unit');
       return read;
     };
     if (first === undefined) results.push({ name, ok: false, missing: ['no desktop session in the default range'] });
@@ -13367,7 +13398,7 @@ m.unmount();
       const session = await across(`/analytics?session=${encodeURIComponent(first.sessionId)}#cache`);
       results.push({
         name,
-        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsSeries key billed'], unit: 'usd' }) && JSON.stringify(session) === JSON.stringify({ calls: [], unit: 'usd' }),
+        ok: JSON.stringify(unscoped) === JSON.stringify({ calls: ['getAnalyticsBreakdown key billed', 'getAnalyticsSeries key billed'], set: 'usd', unit: null }) && JSON.stringify(session) === JSON.stringify({ calls: [], set: 'usd', unit: null }),
         missing: [JSON.stringify(unscoped), JSON.stringify(session)],
       });
     }
@@ -15060,7 +15091,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -15153,6 +15184,92 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
 }
 m.unmount();
+
+// The unit switch: one select in the top bar sets the unit every view prices in, kept in this browser alone and
+// mirrored on the Settings page. On /settings two selects share the label, so every read names its host.
+{
+  localStorage.removeItem('phoebis.unit');
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  const choose = async (page, select, value) => {
+    if (select) {
+      setValue.call(select, value);
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    await page.settle(100);
+  };
+  const shellUnit = (page) => page.container.querySelector('.topbar select[aria-label="Unit"]');
+  const settingsUnit = (page) => page.container.querySelector('.settings select[aria-label="Unit"]');
+  const fresh = await mount('/');
+  const first = shellUnit(fresh);
+  const options = [...(first?.options ?? [])].map((o) => o.textContent);
+  const logout = fresh.container.querySelector('.topbar__right button[aria-label="Log out"]');
+  const before = first !== null && logout !== null && first.closest('.topbar__right') === logout.parentElement && (first.compareDocumentPosition(logout) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  results.push({
+    name: "the top bar's Unit select reads Native on a fresh browser and offers the five positions in order, before Log out",
+    ok: first?.value === 'native' && JSON.stringify(options) === JSON.stringify(['Native', 'All in dollars', 'Billed dollars', 'Window shares', 'Dollar equivalent']) && before && fresh.container.querySelectorAll('select[aria-label="Unit"]').length === 1,
+    missing: [first?.value ?? 'no Unit select in the top bar', JSON.stringify(options), `before Log out ${before}`],
+  });
+  await choose(fresh, first, 'share');
+  const stored = localStorage.getItem('phoebis.unit');
+  fresh.unmount();
+  const keys = await mount('/keys');
+  const onKeys = shellUnit(keys)?.value ?? null;
+  keys.unmount();
+  const settings = await mount('/settings');
+  const mirrored = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null];
+  await choose(settings, settingsUnit(settings), 'usd');
+  const moved = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null, localStorage.getItem('phoebis.unit')];
+  await choose(settings, shellUnit(settings), 'equivalent');
+  const back = [shellUnit(settings)?.value ?? null, settingsUnit(settings)?.value ?? null];
+  settings.unmount();
+  results.push({
+    name: 'a choice on the top bar persists under phoebis.unit to the next page, and the Settings page mirrors the switch both ways',
+    ok: stored === 'share' && onKeys === 'share' && JSON.stringify(mirrored) === JSON.stringify(['share', 'share']) && JSON.stringify(moved) === JSON.stringify(['usd', 'usd', 'usd']) && JSON.stringify(back) === JSON.stringify(['equivalent', 'equivalent']),
+    missing: [`stored ${stored}`, `on /keys ${onKeys}`, `mirrored ${JSON.stringify(mirrored)}`, `moved from Settings ${JSON.stringify(moved)}`, `moved from the top bar ${JSON.stringify(back)}`],
+  });
+  localStorage.setItem('phoebis.unit', 'bogus');
+  const bogus = await mount('/settings');
+  const unknown = [shellUnit(bogus)?.value ?? null, settingsUnit(bogus)?.value ?? null];
+  bogus.unmount();
+  results.push({ name: 'a stored unit the console does not know reads Native on the top bar and on the Settings page', ok: JSON.stringify(unknown) === JSON.stringify(['native', 'native']), missing: [JSON.stringify(unknown)] });
+  localStorage.removeItem('phoebis.unit');
+
+  const LEGEND = 'What the units mean';
+  const legendIn = async (host) => {
+    const page = await mount(host === '.topbar' ? '/' : '/settings');
+    const button = page.container.querySelector(`${host} button[aria-label="${LEGEND}"]`);
+    const dialog = () => page.container.querySelector(`${host} [role="dialog"][aria-label="${LEGEND}"]`);
+    const closed = dialog() === null;
+    button?.click();
+    await page.settle(50);
+    const text = (dialog()?.textContent ?? '').replace(/\s+/g, ' ');
+    const lines = [...(dialog()?.querySelectorAll('p') ?? [])].map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim());
+    const expanded = button?.getAttribute('aria-expanded') ?? null;
+    dialog()?.querySelector('p')?.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+    await page.settle(50);
+    const keptOnInside = dialog() !== null;
+    document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+    await page.settle(50);
+    const closedOnEscape = dialog() === null;
+    button?.click();
+    await page.settle(50);
+    page.container.querySelector('main.content')?.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+    await page.settle(50);
+    const closedOnOutside = dialog() === null;
+    page.unmount();
+    return { button: button !== null, closed, closedOnEscape, closedOnOutside, expanded, keptOnInside, lines, text };
+  };
+  const wanted = ['native', 'all', 'usd', 'share', 'equivalent'].map((p) => `${UNIT_LABEL[p]} ${UNIT_LEGEND[p]}`);
+  for (const [host, where] of [['.topbar', "beside the top bar's switch"], ['.settings', "beside the Settings page's Unit row"]]) {
+    const read = await legendIn(host);
+    const missing = [...Object.values(UNIT_LABEL), ...Object.values(UNIT_LEGEND), UNIT_LEGEND_NOTE].filter((t) => !read.text.includes(t));
+    results.push({
+      name: `the legend's button ${where} opens one line per position and the closing paragraph, and Escape or a click outside closes it`,
+      ok: read.button && read.closed && read.expanded === 'true' && JSON.stringify(read.lines) === JSON.stringify([...wanted, UNIT_LEGEND_NOTE]) && missing.length === 0 && read.keptOnInside && read.closedOnEscape && read.closedOnOutside,
+      missing: [`button ${read.button}`, `closed at first ${read.closed}`, `expanded ${read.expanded}`, `kept on a click inside ${read.keptOnInside}`, `Escape ${read.closedOnEscape}`, `outside ${read.closedOnOutside}`, ...missing, ...read.lines],
+    });
+  }
+}
 
 // Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
 {

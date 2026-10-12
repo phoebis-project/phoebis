@@ -175,6 +175,70 @@
   margin-left: auto;
 }
 
+/* `.input` sets `min-width: 0` further down at the same specificity, so the floor names the bar. */
+.topbar .unit-switch {
+  min-width: 150px;
+}
+
+.unit-legend__anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.unit-legend__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: background 100ms, border-color 100ms;
+}
+
+.unit-legend__button:hover,
+.unit-legend__button[aria-expanded='true'] {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+
+.unit-legend {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.unit-legend p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.unit-legend p + p {
+  margin-top: 6px;
+}
+
+.unit-legend b {
+  color: var(--ink);
+}
+
+/* The bar is a stacking context at the Analytics filter bar's z-index, and that bar sticks under it later in the page,
+   so the open legend clears it only while the bar stands one above. */
+.topbar:has(.unit-legend) {
+  z-index: 6;
+}
+
 .topbar__menu {
   display: none;
   padding: 6px;
@@ -1862,5 +1926,49 @@ textarea.input {
   .content {
     padding-right: 16px;
     padding-left: 16px;
+  }
+
+  .topbar .unit-switch {
+    min-width: 96px;
+  }
+}
+
+/* A phone's bar holds the switch beside the title, Log out and the theme switch and no more: the legend's button gives
+   way (the Settings page's Unit row keeps it), the controls close up, the switch takes a fixed compact width that
+   draws four of its five short labels whole, and the title yields the rest, since the open menu names the page too. */
+@media (max-width: 599px) {
+  .topbar {
+    gap: 8px;
+  }
+
+  .topbar__right {
+    gap: 6px;
+  }
+
+  .topbar__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar .unit-legend__anchor {
+    display: none;
+  }
+
+  .topbar .unit-switch {
+    width: 84px;
+    min-width: 0;
+    padding: 4px 20px 4px 8px;
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+  }
+
+  .topbar .select > svg {
+    right: 6px;
+  }
+
+  .topbar .segmented button {
+    padding: 4px 7px;
   }
 }

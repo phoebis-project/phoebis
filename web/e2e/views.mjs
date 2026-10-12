@@ -3165,48 +3165,99 @@ async function stickyStrip(theme) {
 }
 
 /**
- * The Unit select in the Cost, Cache and Cache warming heads: inside the head's box, below the tab strip's bottom and
- * inside the viewport at 1280 and 400 px, so the control a head carries beside its meta, the Cache section's long
- * one included, never slides under the strip or off the edge.
+ * The unit switch in the top bar at 1280 and 400 px: the Unit select inside the bar and the viewport, clear of Log
+ * out and the theme switch, and nothing scrolling the bar sideways. At 1280 px the legend's button sits inside the bar
+ * too, and its popover opens over the Analytics filter bar, which sticks under the top bar, with no point of it
+ * covered. At 400 px every option reads its short label and the legend's button gives way, since the bar has room for
+ * the switch alone beside the title, Log out and the theme switch.
  */
 async function unitControl(theme) {
+  const LONG = ['Native', 'All in dollars', 'Billed dollars', 'Window shares', 'Dollar equivalent'];
+  const SHORT = ['Native', 'All $', 'Billed $', 'Shares', 'Equivalent $'];
+  const LEGEND = 'What the units mean';
   try {
-    for (const [label, id] of [['Cost', 'cost'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
-      if (!(await tabTo(theme, label))) continue;
-      for (const width of [1280, 400]) {
-        await page.setViewportSize({ height: 800, width });
-        await settle();
-        const read = await page.evaluate((section) => {
-          const box = (el) => {
-            if (!el) return null;
-            const b = el.getBoundingClientRect();
-            return { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
-          };
-          const head = document.querySelector(`#${section} .analytics-section__head`);
-          return {
-            head: box(head),
-            select: box(head?.querySelector('select[aria-label="Cost unit"]')?.closest('.select')),
-            strip: Math.round(document.querySelector('.section-bar')?.getBoundingClientRect().bottom ?? NaN),
-            width: document.documentElement.clientWidth,
-          };
-        }, id);
-        measurements.push(`${theme} /analytics unit control on ${label} at ${width} px ${JSON.stringify(read)}`);
-        if (read.head === null || read.select === null) {
-          failures.push(`${theme} /analytics: at ${width} px the ${label} head draws no Unit select`);
-          continue;
-        }
-        const { head, select } = read;
-        if (select.left < head.left || select.right > head.right || select.top < head.top || select.bottom > head.bottom) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(select)} leaves the ${label} head ${JSON.stringify(head)}`);
-        if (Number.isNaN(read.strip) || select.top < read.strip) failures.push(`${theme} /analytics: at ${width} px on ${label} the Unit select's top ${select.top} sits above the tab strip's bottom ${read.strip}`);
-        if (select.left < 0 || select.right > read.width) failures.push(`${theme} /analytics: at ${width} px on ${label} the Unit select ${JSON.stringify(select)} leaves the ${read.width} px viewport`);
-      }
-      await page.setViewportSize({ height: 800, width: 1280 });
+    for (const width of [1280, 400]) {
+      await page.setViewportSize({ height: 800, width });
       await settle();
+      const read = await page.evaluate((legend) => {
+        // A box with no size is an element the layout does not draw.
+        const box = (el) => {
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return b.width === 0 && b.height === 0 ? null : { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+        };
+        const bar = document.querySelector('.topbar');
+        const right = bar?.querySelector('.topbar__right');
+        const select = right?.querySelector('select[aria-label="Unit"]');
+        return {
+          bar: box(bar),
+          legend: box(right?.querySelector(`button[aria-label="${legend}"]`)),
+          logout: box(right?.querySelector('button[aria-label="Log out"]')),
+          options: [...(select?.options ?? [])].map((o) => o.textContent),
+          scroll: bar ? [bar.scrollWidth, bar.clientWidth] : null,
+          select: box(select),
+          theme: box(right?.querySelector('.segmented[aria-label="Theme"]')),
+          width: document.documentElement.clientWidth,
+          wrapper: box(select?.closest('.select')),
+        };
+      }, LEGEND);
+      measurements.push(`${theme} /analytics unit switch at ${width} px ${JSON.stringify(read)}`);
+      if (read.bar === null || read.select === null || read.wrapper === null) {
+        failures.push(`${theme} /analytics: at ${width} px the top bar draws no Unit select`);
+        continue;
+      }
+      const inside = (b, outer) => b.left >= outer.left && b.right <= outer.right && b.top >= outer.top && b.bottom <= outer.bottom;
+      const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      const viewport = { bottom: 800, left: 0, right: read.width, top: 0 };
+      const drawn = [['the Unit select', read.select], ['its wrapper', read.wrapper], ...(width === 1280 ? [['the legend button', read.legend]] : [])];
+      for (const [name, b] of drawn) {
+        if (b === null) failures.push(`${theme} /analytics: at ${width} px the top bar draws no ${name}`);
+        else if (!inside(b, read.bar) || !inside(b, viewport)) failures.push(`${theme} /analytics: at ${width} px ${name} ${JSON.stringify(b)} leaves the bar ${JSON.stringify(read.bar)} or the ${read.width} px viewport`);
+      }
+      if (width === 400 && read.legend !== null) failures.push(`${theme} /analytics: at 400 px the legend button is drawn ${JSON.stringify(read.legend)}, where the bar has room for the switch alone`);
+      const neighbors = [['Log out', read.logout], ['the theme switch', read.theme]];
+      for (const [name, b] of drawn) for (const [other, o] of neighbors) if (b !== null && o !== null && overlaps(b, o)) failures.push(`${theme} /analytics: at ${width} px ${name} ${JSON.stringify(b)} overlaps ${other} ${JSON.stringify(o)}`);
+      if (read.select !== null && read.legend !== null && overlaps(read.wrapper, read.legend)) failures.push(`${theme} /analytics: at ${width} px the Unit select ${JSON.stringify(read.wrapper)} overlaps the legend button ${JSON.stringify(read.legend)}`);
+      if (read.scroll === null || read.scroll[0] !== read.scroll[1]) failures.push(`${theme} /analytics: at ${width} px the top bar scrolls sideways, ${JSON.stringify(read.scroll)} scroll and client width`);
+      const labels = width === 400 ? SHORT : LONG;
+      if (JSON.stringify(read.options) !== JSON.stringify(labels)) failures.push(`${theme} /analytics: at ${width} px the Unit select's options read ${JSON.stringify(read.options)} against ${JSON.stringify(labels)}`);
+      if (width !== 1280 || read.legend === null) continue;
+      await page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true }).click();
+      await settle();
+      const popover = await page.evaluate((legend) => {
+        const el = document.querySelector(`.topbar [role="dialog"][aria-label="${legend}"]`);
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        // Five points inside the popover: a point another element paints over answers that element.
+        const points = [
+          [b.left + 4, b.top + 4],
+          [b.right - 4, b.top + 4],
+          [b.left + b.width / 2, b.top + b.height / 2],
+          [b.left + 4, b.bottom - 4],
+          [b.right - 4, b.bottom - 4],
+        ];
+        const filters = document.querySelector('.filters--sticky')?.getBoundingClientRect();
+        return {
+          box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+          covered: points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).map(([x, y]) => [Math.round(x), Math.round(y), document.elementFromPoint(x, y)?.className ?? null]),
+          overFilters: filters !== undefined && b.bottom > filters.top && b.top < filters.bottom,
+        };
+      }, LEGEND);
+      measurements.push(`${theme} /analytics unit legend at 1280 px ${JSON.stringify(popover)}`);
+      if (popover === null) failures.push(`${theme} /analytics: at 1280 px the legend button opens no popover`);
+      else {
+        if (!popover.overFilters) failures.push(`${theme} /analytics: the legend popover ${JSON.stringify(popover.box)} does not reach the filter bar, so its stacking goes unmeasured`);
+        if (popover.covered.length > 0) failures.push(`${theme} /analytics: the legend popover is covered at ${JSON.stringify(popover.covered)}`);
+        if (!inside(popover.box, viewport)) failures.push(`${theme} /analytics: the legend popover ${JSON.stringify(popover.box)} leaves the ${read.width} px viewport`);
+      }
+      await page.keyboard.press('Escape');
+      await settle();
+      if (await page.locator(`.topbar [role="dialog"][aria-label="${LEGEND}"]`).count()) failures.push(`${theme} /analytics: Escape leaves the legend popover open`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
-    await tabTo(theme, 'Traffic');
+    await atRest();
   }
 }
 

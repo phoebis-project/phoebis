@@ -85,7 +85,6 @@ test('a value outside a choice reads as the default', () => {
   assert.equal(read(d.REQUESTS_CODEC, 'kind=bogus').kind, '');
   assert.equal(read(d.REQUESTS_CODEC, 'rows=7').rows, '25');
   assert.equal(read(d.ANALYTICS_CODEC, 'by=all').by, 'key');
-  assert.equal(read(d.ANALYTICS_CODEC, 'unit=euro').unit, 'all');
   assert.equal(read(d.ANALYTICS_CODEC, 'burn=pool').burn, 'account');
 });
 

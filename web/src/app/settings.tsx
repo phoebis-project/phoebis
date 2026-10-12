@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
+import { positionOf, type UnitPosition } from '@/lib/unit';
 
 export type ExpertChoice = 'off' | 'on';
 export type ThemeChoice = 'dark' | 'light' | 'system';
@@ -13,8 +14,11 @@ interface AppSettings {
   setExpertView: (on: boolean) => void;
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
+  setUnit: (u: UnitPosition) => void;
   theme: ThemeChoice;
   timeFormat: TimeFormat;
+  /** The unit every view prices a request in, kept in this browser alone. */
+  unit: UnitPosition;
 }
 
 const Ctx = createContext<AppSettings | null>(null);
@@ -27,6 +31,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const expertView = storedExpert === 'on';
   // The setters keep their identity across renders, so the context value changes with the settings alone.
   const setExpertView = useCallback((on: boolean) => storeExpert(on ? 'on' : 'off'), [storeExpert]);
+  const [storedUnit, storeUnit] = useLocalStorage<string>('phoebis.unit', 'native');
+  // Read through the positions: the hook hands back whatever string the browser holds under the key.
+  const unit = positionOf(storedUnit);
+  const setUnit = useCallback((u: UnitPosition) => storeUnit(u), [storeUnit]);
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);
@@ -50,8 +58,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AppSettings>(
-    () => ({ expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    [expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, storedFormat, theme],
+    () => ({ expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, setUnit, theme, timeFormat: storedFormat, unit }),
+    [expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, setUnit, storedFormat, theme, unit],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

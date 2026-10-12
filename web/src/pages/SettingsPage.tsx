@@ -1,11 +1,13 @@
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
+import { UnitLegend } from '@/components/shell/Shell';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
+import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
 
 const ENV_TERMS: { body: string; term: string }[] = [
   {
@@ -51,7 +53,7 @@ function SecretBadge({ configured }: { configured: boolean }) {
 
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
-  const { theme, setTheme, timeFormat, setTimeFormat } = useAppSettings();
+  const { theme, setTheme, timeFormat, setTimeFormat, unit, setUnit } = useAppSettings();
   const s = settings.data;
   const snippet = snippetFor(s?.listeners ?? null);
 
@@ -88,6 +90,23 @@ export function SettingsPage() {
               { value: '24h', label: '24h' },
             ]}
           />
+        </div>
+        <div className="setting-row">
+          <div>
+            <b>Unit</b>
+            <p className="muted">The unit every view prices a request in. Native reads a subscription request as 20x window equivalents and a billed request in dollars.</p>
+          </div>
+          {/* The legend sits beside the mirror too, since the top bar gives its button up at a phone's width. */}
+          <div className="row">
+            <Select aria-label="Unit" value={unit} onChange={(e) => setUnit(positionOf(e.target.value))}>
+              {UNIT_POSITIONS.map((p) => (
+                <option key={p} value={p}>
+                  {UNIT_LABEL[p]}
+                </option>
+              ))}
+            </Select>
+            <UnitLegend />
+          </div>
         </div>
       </Card>
 

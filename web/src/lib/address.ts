@@ -1,6 +1,5 @@
 import { REQUEST_KIND_VALUES } from '@/api/decode';
 import type { AnalyticsGroupBy, BurnGroup, KeyStatus, RequestKind } from '@/api/types';
-import { COST_UNITS } from './analytics';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -208,6 +207,7 @@ export interface AnalyticsAddress {
   probes: boolean;
   range: RangeValue;
   session: string;
+  /** A shared link's unit position, which the page reads once into the console-wide setting and drops. */
   unit: string;
 }
 
@@ -230,7 +230,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   models: list('models'),
   pools: list('pools'),
   probes: { kind: 'flag', name: 'probes' },
-  unit: { default: 'all', kind: 'choice', name: 'unit', values: COST_UNITS },
+  unit: text('unit'),
   range: { default: '24h', kind: 'range', presets: ANALYTICS_RANGES },
 });
 

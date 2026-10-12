@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
+import { useAppSettings } from '@/app/settings';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
@@ -18,7 +19,7 @@ import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
-import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, SHARE_NOTE, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -27,6 +28,7 @@ import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, 
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
+import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL } from '@/lib/windows';
 
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
@@ -78,14 +80,21 @@ const LATENCY_METRICS: { format: (v: number | null) => string; key: keyof Latenc
   { key: 'outputTps', label: 'Output tokens per second', unit: 'tok/s', format: (v) => (v === null ? '-' : `${v.toFixed(v >= 100 ? 0 : 1)} tok/s`) },
 ];
 
+/** The positions a dollar figure on this page reads under. */
+type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
+/**
+ * Native reads both sides of one answer with no funding filter, so its dollar figures are the whole's, as the dollar
+ * figures drawn under the shares are.
+ */
+const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
 /** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
-const UNIT_SUBSET: Record<Exclude<AnalyticsUnit, 'share'>, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
+const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
 /** The same in the Cost split's, the cache cost card's and the Probe cost tile's shorter form. */
-const UNIT_SPLIT: Record<Exclude<AnalyticsUnit, 'share'>, string> = { all: 'all requests', equivalent: "the subscription requests' equivalent", usd: 'billed' };
+const UNIT_SPLIT: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription requests' equivalent", usd: 'billed' };
 /** The Cost section's meta line per dollar position, after the dollars in range. */
-const UNIT_META: Record<Exclude<AnalyticsUnit, 'share'>, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
+const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
 /** The first Cost tile's label per dollar position. */
-const UNIT_TILE_LABEL: Record<Exclude<AnalyticsUnit, 'share'>, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
+const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
 const PER_REQUEST_SHARE_NOTE = 'of the 7-day window per plan-funded request';
 const PER_THOUSAND_SHARE_NOTE = 'of the 7-day window per 1k plan-funded output tokens';
 /** A share drawn bare, where the header or the legend already names the window. */
@@ -211,10 +220,19 @@ export function AnalyticsPage() {
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too. A session
   // without one reads unscoped.
   const sessionKey = a.session && a.key ? a.key : null;
-  // The unit is a view control of the three cost-bearing sections, kept in the address beside the session so a link
-  // or a reload lands on the position.
-  const unit = a.unit as AnalyticsUnit;
+  const { setUnit, unit } = useAppSettings();
+  const dollars = dollarsOf(unit);
   const funding = UNIT_FUNDING[unit];
+  // A shared link lands on its position, then the choice persists like any other: the parameter is read into the
+  // setting and dropped, so the address stays clean and one control owns the unit. The drop replaces the entry the
+  // router's usual way, since `update` flushes at once, which React cannot do inside an effect.
+  useEffect(() => {
+    if (a.unit === '') return;
+    const known = UNIT_POSITIONS.find((p) => p === a.unit);
+    if (known !== undefined) setUnit(known);
+    const search = ANALYTICS_CODEC.toParams({ ...a, unit: '' }).toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  }, [a, location.hash, location.pathname, navigate, setUnit]);
   // Keyed on the values: every address change reads new lists, and a unit change must not re-issue the reads the
   // filters key. A list value holds no comma, since the address splits on them.
   const accountList = a.accounts.join(',');
@@ -285,11 +303,6 @@ export function AnalyticsPage() {
     setSessionText(id);
     if (id === a.session) return;
     commit({ key: '', session: id });
-  };
-  /** The one writer for the unit: the default leaves the address clean, and every other parameter stays. */
-  const chooseUnit = (next: AnalyticsUnit) => {
-    if (next === unit) return;
-    update({ unit: next });
   };
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
@@ -471,7 +484,6 @@ export function AnalyticsPage() {
   const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? costBreakdown.error : null;
   const shareTiles = shareTilesOf(groupBy, oneAccount, oneGroup, costLoading);
   const probeTile = probeTileOf(unit, oneAccount, oneGroup, costTotals, costLoading, sessionId !== null);
-  const unitControl = <UnitSelect value={unit} onChange={chooseUnit} />;
   // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
@@ -711,7 +723,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cache' && (
-        <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`} controls={unitControl}>
+        <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
           <div className="grid-2">
             <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
@@ -752,7 +764,7 @@ export function AnalyticsPage() {
 
             <ChartCard
               title="Write cost vs read cost"
-              subtitle={unit === 'share' ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back" : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[unit]}`}
+              subtitle={unit === 'share' ? "Shares of the account's 7-day window per bucket, writing the cache and reading it back" : `USD per bucket spent writing the cache and reading it back, ${UNIT_SPLIT[dollars]}`}
               loading={costLoading}
               error={costError}
               empty={unit === 'share' && oneAccount === null ? SHARE_NOTE : undefined}
@@ -823,7 +835,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : unit === 'share' ? 'shares per account' : `${fmtUsd(costTotals.costUsd)} in range, ${UNIT_META[unit]}`} controls={unitControl}>
+        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : unit === 'share' ? 'shares per account' : `${fmtUsd(costTotals.costUsd)} in range, ${UNIT_META[dollars]}`}>
           <div className="tiles-row">
             {unit === 'share' ? (
               <>
@@ -833,7 +845,7 @@ export function AnalyticsPage() {
               </>
             ) : (
               <>
-                <Tile label={UNIT_TILE_LABEL[unit]} value={costLoading ? null : fmtUsd(costTotals.costUsd)} note={unit === 'all' ? 'at the effective price list' : UNIT_SUBSET[unit]} error={costError} />
+                <Tile label={UNIT_TILE_LABEL[dollars]} value={costLoading ? null : fmtUsd(costTotals.costUsd)} note={dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars]} error={costError} />
                 <Tile label="Cost per request" value={costLoading ? null : fmtUsd(costTotals.requests ? costTotals.costUsd / costTotals.requests : 0)} note={`${fmtInt(costTotals.requests)} requests`} error={costError} />
                 <Tile label="Cost per 1k output tokens" value={costLoading ? null : fmtUsd(costTotals.tokens.output ? (costTotals.costUsd / costTotals.tokens.output) * 1000 : 0)} note={`${fmtCompact(costTotals.tokens.output)} output tokens`} error={costError} />
               </>
@@ -844,7 +856,7 @@ export function AnalyticsPage() {
             <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={costLoading} error={costError} axis={axis} unit={unit} />
             {/* The split is a dollar figure in every position, so under shares it reads the whole, as under the
                 default. */}
-            <Card title="Cost split" subtitle={`By token kind, in dollars at the API price list, ${UNIT_SPLIT[unit === 'share' ? 'all' : unit]}`}>
+            <Card title="Cost split" subtitle={`By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
               {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
               {sessionId !== null ? (
                 <p className="muted">{SESSION_COST_NOTE}</p>
@@ -878,7 +890,7 @@ export function AnalyticsPage() {
           {sessionId === null && unit !== 'share' && (
             <BreakdownTable
               title={`Cost by ${groupLabel.toLowerCase()}`}
-              subtitle={`Totals for the selected range and filters, ${UNIT_SUBSET[unit]}`}
+              subtitle={`Totals for the selected range and filters, ${UNIT_SUBSET[dollars]}`}
               error={costError}
               loading={costLoading}
               groupLabel={groupLabel}
@@ -903,7 +915,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cache-warming' && (
-        <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE} controls={unitControl}>
+        <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
           <div className="tiles-row">
             <Tile label="Probe cost" value={probeTile.value} note={probeTile.note} error={costError} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
@@ -1017,22 +1029,6 @@ function Section({ id, title, meta, controls, shown = true, children }: { childr
   );
 }
 
-/** The Unit control the three cost-bearing sections share, the filter bar's Group by shape, one element serving each head. */
-function UnitSelect({ value, onChange }: { onChange: (next: AnalyticsUnit) => void; value: AnalyticsUnit }) {
-  return (
-    <label className="row">
-      <span className="muted">Unit</span>
-      <Select value={value} onChange={(e) => onChange(e.target.value as AnalyticsUnit)} aria-label="Cost unit" className="groupby-select">
-        {COST_UNITS.map((u) => (
-          <option key={u} value={u}>
-            {UNIT_LABEL[u]}
-          </option>
-        ))}
-      </Select>
-    </label>
-  );
-}
-
 type ShareTile = { note: string | undefined; value: string | null };
 /**
  * The three Cost tiles under "Window shares": the named account's 7-day share with its other windows in the note, and
@@ -1068,7 +1064,7 @@ function shareTilesOf(groupBy: GroupBy, oneAccount: string | null, group: Analyt
  * request rows, which measure no probe count, so `session` reads the count unmeasured on both paths even where the
  * fold holds no group at all (the named account's rows all billed, or a position that keeps no row).
  */
-function probeTileOf(unit: AnalyticsUnit, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean, session: boolean): { note: string; value: string | null } {
+function probeTileOf(unit: UnitPosition, oneAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, loading: boolean, session: boolean): { note: string; value: string | null } {
   if (unit === 'share') {
     if (oneAccount === null) return { note: SHARE_NOTE, value: loading ? null : '-' };
     const probes = session || group?.fromRequests ? UNAVAILABLE_NOTE : `${fmtInt(group === null ? 0 : probesOf(group))} probes`;
@@ -1079,7 +1075,7 @@ function probeTileOf(unit: AnalyticsUnit, oneAccount: string | null, group: Anal
     return { note: [...others, probes].join(', '), value: loading ? null : (sevenDay ?? '-') };
   }
   const unmeasured = session || totals.fromRequests === true;
-  return { note: unmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[unit]}`, value: loading ? null : unmeasured ? '-' : fmtUsd(totals.probeCostUsd) };
+  return { note: unmeasured ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes, ${UNIT_SPLIT[dollarsOf(unit)]}`, value: loading ? null : unmeasured ? '-' : fmtUsd(totals.probeCostUsd) };
 }
 
 /** The named account's cache share of its 7-day window on one side, read off its group, a dash where none is priced. */
@@ -1504,7 +1500,7 @@ function CostDonut({ cost }: { cost: CostSplit }) {
 
 const MAX_STACKED_GROUPS = 7;
 
-function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; unit: AnalyticsUnit }) {
+function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; unit: UnitPosition }) {
   const ink = useChartInk();
   const lines = useMemo(() => shareLines(points), [points]);
   const { keys, labels, data } = useMemo(() => {
@@ -1572,7 +1568,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, unit }:
     );
   }
   return (
-    <ChartCard title={title} subtitle={`USD per bucket, stacked, ${UNIT_SUBSET[unit]}`} loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k) }))}>
+    <ChartCard title={title} subtitle={`USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`} loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k) }))}>
       <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />

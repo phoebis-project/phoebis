@@ -42,6 +42,8 @@ export { costUnitOf } from '@/lib/requests';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
 export { keyWord, STEP_NAME } from '@/lib/routingLog';
+// The legend's words, so the shell's check reads the popover against the one source the console draws it from.
+export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE } from '@/lib/unit';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;

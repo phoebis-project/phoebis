@@ -31,6 +31,7 @@ export * from '@/lib/snippet';
 export * from '@/lib/stripFacts';
 export * from '@/lib/tokenBar';
 export * from '@/lib/trend';
+export * from '@/lib/unit';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';

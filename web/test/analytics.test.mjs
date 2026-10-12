@@ -525,16 +525,16 @@ test('FAILOVER_MOVE_REASONS names the three failover reasons and no reason the m
 /** A route-shaped account group, the captured one with the members a case sets. */
 const accountGroup = (over = {}) => ({ ...d.decodeAnalyticsGroup(fixture('analytics_breakdown_accounts').rows[0]), ...over });
 
-test("the unit reads the URL's position and falls to all", () => {
-  assert.deepEqual([...d.COST_UNITS], ['all', 'usd', 'share', 'equivalent'], "the select's order, the default first");
-  assert.deepEqual(d.UNIT_LABEL, { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' });
-  assert.deepEqual(d.UNIT_FUNDING, { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' });
-  // The page reads its unit through the address codec.
+test('the address carries a unit as text and a bare address none', () => {
+  // The page reads the parameter once into the console-wide setting and decides there what a value names.
   const unitIn = (search) => d.ANALYTICS_CODEC.fromParams(new URLSearchParams(search)).unit;
-  for (const unit of d.COST_UNITS) assert.equal(unitIn(`?unit=${unit}`), unit, unit);
-  assert.equal(unitIn('?unit=bogus'), 'all', 'a value the page does not know reads as the default');
-  assert.equal(unitIn(''), 'all', 'no parameter reads as the default');
-  assert.equal(unitIn('?session=s-1'), 'all', 'another parameter names no unit');
+  assert.equal(unitIn('?unit=share'), 'share');
+  assert.equal(unitIn('?unit=bogus'), 'bogus', 'a value the console does not know reads as sent');
+  assert.equal(unitIn(''), '', 'no parameter reads empty');
+  assert.equal(unitIn('?session=s-1'), '', 'another parameter names no unit');
+  const bare = d.ANALYTICS_CODEC.fromParams(new URLSearchParams(''));
+  assert.equal(d.ANALYTICS_CODEC.toParams({ ...bare, unit: '' }).has('unit'), false, 'a dropped unit leaves the address');
+  assert.equal(d.ANALYTICS_CODEC.toParams({ ...bare, unit: 'share' }).toString(), 'unit=share');
 });
 
 test("one account's shares read from the account filter under the account grouping alone", () => {
