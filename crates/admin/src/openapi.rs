@@ -463,8 +463,8 @@ pub(crate) struct BreakdownRow {
     /// The key's id under `group_by=key`. Absent for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
-    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time, which the
-    /// console prints in the viewer's zone. Absent for the key that holds the id now and for another dimension.
+    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. The console
+    /// prints it in the viewer's zone. Absent for the key that holds the id now and for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_created_at: Option<i64>,
     pub requests: u64,
