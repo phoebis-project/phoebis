@@ -438,14 +438,15 @@ A pool card that keeps caches warm reads the pool's three resolved ceilings in w
 `idle 1h · parked 44h · horizon 44h` for a plan pool on the one-hour entry, its 44.1-hour break-even floored to `44h`,
 and a range such as `44h to 71h` where the pool's combinations differ. The pool dialog's Keepalive group holds the
 switch and the three numbers. A ceiling left off reads the break-even it resolves to, `Break-even: 1d 20h` or
-`Break-even: 1d 20h to 2d 23h`, with what the break-even means on hover. Under `Max idle (s)` the group reads the idle
-window's cost as a share of one re-write, `Costs 2% of one re-write`, and while the field reads 0 or more than the
-break-even, the window in effect, `capped at the break-even, 46m`. The router resolves the figures for the saved pool
-(see [The four fields](#the-four-fields)), so an unsaved edit of the idle window moves only that note, and the dialog
-then names the share as the saved window's, `at the saved 1h 0m`, until the save. Below the fields, Return rate by idle
-age lists the pool's ten buckets (see [The return rate by idle age](#the-return-rate-by-idle-age)), each with the
-windows that returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet" before the
-first.
+`Break-even: 1d 20h to 2d 23h`, with what the break-even means on hover. Switched on past the break-even, the parked and
+scheduled ceilings each read the figure in effect under its field, `Capped at the break-even, 1d 20h`. Under
+`Max idle (s)` the group reads the idle window's cost as a share of one re-write, `Costs 2% of one re-write`, and while
+the field reads 0 or more than the break-even, the window in effect, `capped at the break-even, 46m`. The router
+resolves the figures for the saved pool (see [The four fields](#the-four-fields)), so an unsaved edit of the idle window
+moves only that note, and the dialog then names the share as the saved window's, `at the saved 1h 0m`, until the save.
+Below the fields, Return rate by idle age lists the pool's ten buckets (see
+[The return rate by idle age](#the-return-rate-by-idle-age)), each with the windows that returned out of those that
+reached it and a bar of the rate, or "No idle windows recorded yet" before the first.
 
 ![The Analytics view's Cache warming tab: probes by outcome, wasted probes, and kept-warm
 requests](assets/analytics-cache-warming-light.png#only-light)

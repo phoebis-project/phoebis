@@ -309,6 +309,9 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 ## The console's views
 
+Every filtered view keeps its filters in the page's address under one grammar: a preset range travels by its name and
+reads from the moment the page loads, and a custom span travels as its two instants, `from` and `to`.
+
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
@@ -436,20 +439,20 @@ lands at the top in the accent tint until the next read, a filter change keeps F
 it off, and the open drawer pauses it until it closes.
 
 The drawer opens on the answer's facts: the status, the outcome, the serving account and model, the answer's stop
-reason, tier and geography (global, us, or not available for a model that takes no geography), and the cache miss
-reason, with a Diagnostics row below it that names the cache diagnostics member's source: sent by the client, added by
-the router, or none. The phases follow as a waterfall from received to finished, each phase with its offset and a phase
-the ledger holds no instant for marked not measured, then the usage, opened by a bar of the token kinds in the Tokens
-chart's colors over the table, then the request's identity with the upstream request and message ids under it, its
-shape, the client hints and the captured bodies. The usage ends with the request's estimated cost in its native unit: a
-request a subscription window paid reads its share of the account's 5-hour, 7-day and model-week windows with the dollar
-equivalent after them, an overage, fast mode or API key request reads dollars with why, and a subscription request the
-cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and each row a
-"Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either
-side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the
-chosen set returns when it closes. The drawer lists the captured request and response bodies, each with Copy all,
-which copies the whole text, and an "Open wide" link. The wide view draws a body of any size pretty-printed and
-highlighted in a window of its lines, a streamed answer as its events with each `event:` line over its data.
+reason, geography (global, us, or not available for a model that takes no geography) and service tier, and the cache
+miss reason, with a Diagnostics row below it that names the cache diagnostics member's source: sent by the client, added
+by the router, or none. The phases follow as a waterfall from received to finished, each phase with its offset and a
+phase the ledger holds no instant for marked not measured, then the usage, opened by a bar of the token kinds in the
+Tokens chart's colors over the table, then the request's identity with the upstream request and message ids under it,
+its shape, the client hints and the captured bodies. The usage ends with the request's estimated cost in its native
+unit: a request a subscription window paid reads its share of the account's 5-hour, 7-day and model-week windows with
+the dollar equivalent after them, an overage, fast mode or API key request reads dollars with why, and a subscription
+request the cost model prices no share for reads the dollar equivalent alone. Its head carries a "Routing log" link and
+each row a "Routing" link beside "Details", both opening the [routing log](#routing-log) on that request with a quarter
+hour either side. While the drawer is open the table shows a compact set of columns (time, model, status and attempts),
+and the chosen set returns when it closes. The drawer lists the captured request and response bodies, each with
+Copy all, which copies the whole text, and an "Open wide" link. The wide view draws a body of any size pretty-printed
+and highlighted in a window of its lines, a streamed answer as its events with each `event:` line over its data.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -582,9 +585,10 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 | window spent | A response head or the poll read a quota window at its limit. |
 
 An account state change names who moved the state in the console's words: `credential refused` when the upstream refused
-the account's credential, `credit balance` when it named the credit balance, `refresh failed` when the token refresh
-failed for good, `by hand` for an operator's change, and `paired` for a pairing's confirm. A deleted account's last row
-reads `deleted`, as its new state and as who moved it.
+the account's credential, `credit balance` when it named the credit balance, `funding retried` when a retry on an
+account that needed funding succeeded, `refresh failed` when the token refresh failed for good, `by hand` for an
+operator's change, and `paired` for a pairing's confirm. A deleted account's last row reads `deleted`, as its new state
+and as who moved it.
 
 Other views open the log on what they show. A Requests row and its drawer open it on the request a quarter hour either
 side. The Sessions row menu's "View in routing log" opens the session's decisions an hour either side of its last
