@@ -14,14 +14,20 @@ const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, FilterCh
 const { chipsOf, emptyValue, KEYS_DIMENSIONS } = await import('./dist/api.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a 1280 by 800 window, an anchor's box from
-// its `data-rect` (left, top, width, height), and the popover's own size wherever its style puts it.
+// its `data-rect` (left, top, width, height), and the popover's own size wherever its style puts it. A chip line is
+// unmeasured (room for five) until a case gives it a width, and then each chip reads 100 px, the fold 60 and Clear
+// all 50.
 let boxSize = { height: 100, width: 200 };
+let lineWidth = 0;
 const rect = (left, top, width, height) => ({ bottom: top + height, height, left, right: left + width, top, width, x: left, y: top });
+const LINE_ITEMS = { 'chip--filter': 100, 'chip--more': 60, 'link-btn': 50 };
 window.HTMLElement.prototype.getBoundingClientRect = function () {
   if (this.classList.contains('popover')) return rect(parseFloat(this.style.left) || 0, parseFloat(this.style.top) || 0, boxSize.width, boxSize.height);
   if (this.dataset.rect) return rect(...this.dataset.rect.split(',').map(Number));
-  return rect(0, 0, 0, 0);
+  const item = lineWidth > 0 && this.parentElement?.classList.contains('chip-line') ? Object.keys(LINE_ITEMS).find((c) => this.classList.contains(c)) : undefined;
+  return item === undefined ? rect(0, 0, 0, 0) : rect(0, 0, LINE_ITEMS[item], 26);
 };
+Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return this.classList.contains('chip-line') ? lineWidth : 0; } });
 Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1280 });
 Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 800 });
 
@@ -30,6 +36,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
   boxSize = { height: 100, width: 200 };
+  lineWidth = 0;
 });
 
 const render = (node) => {
@@ -468,6 +475,41 @@ function expandedBar(last) {
   assert.equal(b.container.querySelector('.chip-line').className, 'chip-line is-expanded');
   return b;
 }
+
+/**
+ * Seven chips on a 550 px line, where four chips, the fold and Clear all fit, so the fold hides the fifth chip,
+ * `fifth`, and the line is expanded so the fifth can be clicked.
+ */
+function hiddenFifthBar(fifth) {
+  lineWidth = 550;
+  const dimensions = [...['a', 'b', 'c', 'd'].map(listOf), fifth, ...['f', 'g'].map(listOf)];
+  const options = { ...Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((f) => [f, XY])), kind: OPTIONS.kind };
+  const b = bar({ a: ['x'], b: ['x'], c: ['x'], d: ['x'], e: ['x'], f: ['x'], g: ['x'], kind: 'probe' }, { dimensions, options });
+  const words = () => [...b.container.querySelectorAll('.chip--filter')].map((el) => `${el.querySelector('.chip__word').textContent}${el.hidden ? ' hidden' : ''}`);
+  assert.deepEqual([words(), b.container.querySelector('.chip--more')?.textContent], [['a:', 'b:', 'c:', 'd:', `${fifth.word}: hidden`], '+3 more'], 'the measure hides the fifth chip');
+  click(b.container.querySelector('.chip--more'));
+  assert.equal(b.container.querySelector('.chip-line').className, 'chip-line is-expanded');
+  return { ...b, words };
+}
+
+test('a choice made from a chip the fold hides once the line collapses hands the focus to the fold chip, not the hidden body', () => {
+  const b = hiddenFifthBar(KIND);
+  const body = b.chipBody('kind');
+  click(body);
+  click([...box().querySelectorAll('[role="radio"]')].find((r) => r.textContent === 'Inference'));
+  assert.deepEqual([box(), b.writes.at(-1), b.words()[4]], [null, { kind: 'inference' }, 'kind: hidden'], 'the write collapses the line and the fold hides the chip again');
+  const more = b.container.querySelector('.chip--more');
+  assert.ok(document.activeElement === more && more.textContent === '+3 more', 'the fold chip takes the focus the hidden body held');
+});
+
+test('a list edited from a chip the fold hides once the line collapses moves the box to Add filter with the focus kept in it', () => {
+  const b = hiddenFifthBar(listOf('e'));
+  click(b.chipBody('e'));
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'y'));
+  assert.deepEqual([b.writes.at(-1), b.words()[4], box() !== null, box().contains(document.activeElement), b.button().getAttribute('aria-expanded')], [{ e: ['x', 'y'] }, 'e: hidden', true, true, 'true']);
+  press('Escape');
+  assert.ok(box() === null && document.activeElement === b.button(), 'Escape closes it onto Add filter');
+});
 
 test("a choice made from the expanded line's seventh chip folds the line and hands the focus to the fold chip that now holds it", () => {
   const b = expandedBar(KIND);

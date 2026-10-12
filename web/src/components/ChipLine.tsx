@@ -90,7 +90,10 @@ export function ChipLine({ addFilterRef, address, chips, onClearAll, onOpen, onR
     const was = before.current;
     before.current = chips;
     const at = document.activeElement;
-    if (at !== null && at !== document.body && at.isConnected) return;
+    // A chip body the fold hides can still hold the focus while the commit's effects run, since a browser blurs it
+    // later if at all, so a focus left on that body counts as dropped too.
+    const dropped = at === null || at === document.body || !at.isConnected || (at === focusedBody.current && at.closest('[hidden]') !== null);
+    if (!dropped) return;
     const gone = was.findIndex((c) => !chips.some((n) => n.field === c.field));
     const line = lineRef.current;
     if (gone < 0) {
