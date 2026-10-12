@@ -11647,7 +11647,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       delete api.getAnalyticsBreakdown;
     }
-    // The setting outlives a mount, so the checks after this block read a fresh browser's position.
+    // The setting outlives a mount and the shared page keeps its last choice, so the shared page goes back to native and
+    // the checks after this block read a fresh browser's position.
+    await chooseUnit(m, 'native');
     localStorage.removeItem('phoebis.unit');
   }
   {

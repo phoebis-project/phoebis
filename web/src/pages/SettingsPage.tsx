@@ -97,7 +97,7 @@ export function SettingsPage() {
             <p className="muted">The unit every view prices a request in. Native reads a subscription request as 20x window equivalents and a billed request in dollars.</p>
           </div>
           {/* The legend sits beside the mirror too, since the top bar gives its button up at a phone's width. */}
-          <div className="row">
+          <div className="unit-setting">
             <Select aria-label="Unit" value={unit} onChange={(e) => setUnit(positionOf(e.target.value))}>
               {UNIT_POSITIONS.map((p) => (
                 <option key={p} value={p}>

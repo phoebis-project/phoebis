@@ -3165,6 +3165,69 @@ async function stickyStrip(theme) {
 }
 
 /**
+ * The Settings page's Unit row at 1280 and 400 px, the one way to the legend on a phone, where the top bar gives its
+ * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width
+ * with no point of it covered and its lines in the legend's 12 px type, and Escape closes it.
+ */
+async function settingsUnitLegend(theme) {
+  const LEGEND = 'What the units mean';
+  try {
+    for (const width of [1280, 400]) {
+      const say = (what) => failures.push(`${theme} /settings: at ${width} px ${what}`);
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const box = (selector) =>
+        page.evaluate((sel) => {
+          const b = document.querySelector(sel)?.getBoundingClientRect();
+          return b === undefined || (b.width === 0 && b.height === 0) ? null : { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) };
+        }, selector);
+      const select = await box('.settings select[aria-label="Unit"]');
+      const button = await box(`.settings button[aria-label="${LEGEND}"]`);
+      measurements.push(`${theme} /settings unit row at ${width} px ${JSON.stringify({ button, select })}`);
+      if (select === null || button === null) {
+        say('the Unit row draws no select or no legend button');
+        continue;
+      }
+      const middle = (b) => (b.top + b.bottom) / 2;
+      if (Math.abs(middle(select) - middle(button)) > 2 || button.left < select.right) say(`the legend button ${JSON.stringify(button)} is not on the select's line to its right ${JSON.stringify(select)}`);
+      await page.locator('.settings').getByRole('button', { name: LEGEND, exact: true }).click();
+      await settle();
+      const popover = await page.evaluate((legend) => {
+        const el = document.querySelector(`.settings [role="dialog"][aria-label="${legend}"]`);
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        // A point another element paints over answers that element.
+        const points = [
+          [b.left + 4, b.top + 4],
+          [b.right - 4, b.top + 4],
+          [b.left + b.width / 2, Math.min(b.top + b.height / 2, window.innerHeight - 4)],
+        ];
+        return {
+          box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+          covered: points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).map(([x, y]) => [Math.round(x), Math.round(y)]),
+          sizes: [...new Set([...el.querySelectorAll('p')].map((line) => getComputedStyle(line).fontSize))],
+          width: document.documentElement.clientWidth,
+        };
+      }, LEGEND);
+      measurements.push(`${theme} /settings unit legend at ${width} px ${JSON.stringify(popover)}`);
+      if (popover === null) say('the legend button opens no popover');
+      else {
+        if (popover.box.left < 0 || popover.box.right > popover.width || popover.box.top < 0) say(`the legend popover ${JSON.stringify(popover.box)} leaves the ${popover.width} px viewport`);
+        if (popover.covered.length > 0) say(`the legend popover is covered at ${JSON.stringify(popover.covered)}`);
+        if (JSON.stringify(popover.sizes) !== '["12px"]') say(`the legend's lines draw at ${JSON.stringify(popover.sizes)}, not the legend's 12px`);
+      }
+      await page.keyboard.press('Escape');
+      await settle();
+      if (await page.locator(`.settings [role="dialog"][aria-label="${LEGEND}"]`).count()) say('Escape leaves the legend popover open');
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
+  }
+}
+
+/**
  * The top bar on every view at 1280 and 400 px: nothing scrolls it sideways and its last control ends inside its padding,
  * the page title reads whole on one line, and Log out is a text button at 1280 px and its icon alone at 400 px, named
  * by its label and its title for the reader who cannot see the glyph.
@@ -3236,7 +3299,8 @@ async function unitControl(theme) {
         const bar = document.querySelector('.topbar');
         const right = bar?.querySelector('.topbar__right');
         const select = right?.querySelector('select[aria-label="Unit"]');
-        // The labels are measured in the select's own font, against the box its padding leaves for the text.
+        // The labels are measured in the select's own font, against the box its padding leaves for the text. Canvas
+        // metrics and the layout round apart by up to a pixel, so the check allows one.
         const style = select ? getComputedStyle(select) : null;
         const pen = document.createElement('canvas').getContext('2d');
         if (pen && style) pen.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
@@ -3276,7 +3340,7 @@ async function unitControl(theme) {
       if (read.scroll === null || read.scroll[0] !== read.scroll[1]) failures.push(`${theme} /analytics: at ${width} px the top bar scrolls sideways, ${JSON.stringify(read.scroll)} scroll and client width`);
       const labels = width === 400 ? SHORT : LONG;
       if (JSON.stringify(read.options) !== JSON.stringify(labels)) failures.push(`${theme} /analytics: at ${width} px the Unit select's options read ${JSON.stringify(read.options)} against ${JSON.stringify(labels)}`);
-      if (read.labels === null || read.labels.widest > read.labels.room) failures.push(`${theme} /analytics: at ${width} px the Unit select's text box ${read.labels?.room} px is narrower than its widest label ${read.labels?.widest} px`);
+      if (read.labels === null || read.labels.widest > read.labels.room + 1) failures.push(`${theme} /analytics: at ${width} px the Unit select's text box ${read.labels?.room} px is narrower than its widest label ${read.labels?.widest} px`);
       if (width !== 1280 || read.legend === null) continue;
       await page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true }).click();
       await settle();
@@ -5936,7 +6000,10 @@ try {
         await unitControl(theme);
         if (mock) await accountsCardToggles(theme);
       }
-      if (view.path === '/settings') await settingsOrder(theme);
+      if (view.path === '/settings') {
+        await settingsOrder(theme);
+        await settingsUnitLegend(theme);
+      }
       if (view.path === '/accounts') {
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);

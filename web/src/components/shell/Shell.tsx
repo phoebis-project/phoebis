@@ -90,11 +90,11 @@ export function UnitLegend() {
       {open && (
         <div id={id} role="dialog" aria-label={LEGEND_LABEL} className="unit-legend">
           {UNIT_POSITIONS.map((p) => (
-            <p key={p}>
+            <p key={p} className="unit-legend__line">
               <b>{UNIT_LABEL[p]}</b> {UNIT_LEGEND[p]}
             </p>
           ))}
-          <p>{UNIT_LEGEND_NOTE}</p>
+          <p className="unit-legend__line">{UNIT_LEGEND_NOTE}</p>
         </div>
       )}
     </span>
