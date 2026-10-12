@@ -81,8 +81,15 @@ pub fn fold_user_agent(raw: &str) -> String {
     }
 }
 
-/// The speed an attempt's answer reported, else what `fold_speed` reads off the speed the request asked for.
-fn speed_word<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
+/// The speed an answered attempt's row files and prices under: the speed its answer reported, `STANDARD_SPEED` for an
+/// answer that reported none, whatever the request asked for, so the row prices at the cells the attempt was charged.
+fn answered_speed(a: &AttemptRecord) -> &str {
+    a.speed.as_deref().unwrap_or(STANDARD_SPEED)
+}
+
+/// The speed of a request no attempt answered: the serving attempt's reported speed, else what `fold_speed` reads off
+/// the speed the request asked for.
+fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
     a.and_then(|a| a.speed.as_deref())
         .unwrap_or_else(|| fold_speed(requested))
 }
@@ -174,9 +181,9 @@ pub struct RollupRow {
     /// The class the client named, `NO_CLASS` for a classless request and for a keepalive credit; a dimension,
     /// so it sits in the key.
     pub request_class: String,
-    /// The speed the row's attempts' answers reported. A request with no answered attempt files under its serving
-    /// attempt's, else `fast` when the request asked for it, else `STANDARD_SPEED`. A dimension, so it sits in the
-    /// key.
+    /// The speed the row's attempts' answers reported, `STANDARD_SPEED` for an answer that reported none, so the row
+    /// prices at the cells its attempts were charged. A request with no answered attempt files under its serving
+    /// attempt's, else `fast` when the request asked for it, else `STANDARD_SPEED`. A dimension, so it sits in the key.
     pub speed: String,
     /// Who paid for the row's attempts, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
     /// whatever its speed or overage flag; else `fast` when it was served fast, whose answer draws usage credits in
@@ -502,10 +509,7 @@ pub fn deltas_of(
     let table = prices.in_force(request.received_at);
     let model = request.canonical_model.as_str();
     let last = attempts.last();
-    // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
-    // refusal) still asked for fast: it files under that speed, while its funding reads the served answer, which
-    // spent nothing.
-    let speed_of = |a| speed_word(a, request.requested_speed.as_deref());
+
     // An attempt's funding whole, read off its own three facts, so the key tells billed spend from plan spend without
     // the registry. A request no attempt served files under `plan`.
     let funding_word = |a: Option<&AttemptRecord>| {
@@ -572,13 +576,20 @@ pub fn deltas_of(
     let mut placed = Vec::with_capacity(attempts.len());
     for a in attempts.iter().filter(|a| a.has_usage()) {
         placed.push((
-            delta_for(band_of(a), speed_of(Some(a)), funding_word(Some(a))),
+            delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
             a,
         ));
     }
+    // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
+    // refusal) still asked for fast: its counters file under that speed, while its funding reads the served answer,
+    // which spent nothing.
     let serving = match last.filter(|a| a.has_usage()) {
-        Some(a) => delta_for(band_of(a), speed_of(Some(a)), funding_word(Some(a))),
-        None => delta_for(STANDARD_BAND, speed_of(last), funding_word(last)),
+        Some(a) => delta_for(band_of(a), answered_speed(a), funding_word(Some(a))),
+        None => delta_for(
+            STANDARD_BAND,
+            unanswered_speed(last, request.requested_speed.as_deref()),
+            funding_word(last),
+        ),
     };
     for (index, a) in placed {
         let d = &mut deltas[index];
@@ -2977,6 +2988,76 @@ mod tests {
                     (1, 1, 1)
                 ),
             ]
+        );
+    }
+
+    /// An answer that reported no speed was served standard whatever the request asked for, so its row files and
+    /// prices at the standard cells, as the session burn prices the same attempt.
+    #[test]
+    fn an_answer_that_reported_no_speed_folds_and_prices_at_the_standard_cells_on_a_fast_request() {
+        const OPUS: &str = "claude-opus-5-5";
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let r = RequestRecord {
+            canonical_model: OPUS.into(),
+            requested_speed: Some("fast".into()),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let answered = AttemptRecord {
+            input_tokens: Some(1_000_000),
+            speed: None,
+            account_kind: "oauth".into(),
+            ..attempt(1, "a", None, None, None)
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &r, std::slice::from_ref(&answered), None, &prices())?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.speed.as_str(), row.funding.as_str(), row.input_tokens))
+                .collect::<Vec<_>>(),
+            [(STANDARD_SPEED, PLAN_FUNDING, 1_000_000)],
+            "the answer's own speed keys the row"
+        );
+        let row = &rows[0];
+        let key = crate::price::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: Band::of_rollup(&row.band),
+            funding: crate::plan::Funding::of_rollup(&row.funding),
+            kind: row.kind.as_str(),
+            tier: None,
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        let costs = crate::test_tables::subscription_costs();
+        let usd = crate::price::price_row(&prices(), &costs, &key, row.usage())
+            .usd
+            .expect("the test list carries the model")
+            .total();
+        let standard = prices().in_force(r.received_at).models[OPUS].standard.input;
+        let attempt_usd = prices()
+            .in_force(r.received_at)
+            .estimate(
+                OPUS,
+                Speed::of(answered.speed.as_deref()),
+                1_000_000,
+                0,
+                0,
+                0,
+                0,
+            )
+            .expect("the test list carries the model")
+            .0;
+        assert!(
+            (usd - standard).abs() < 1e-9 && (usd - attempt_usd).abs() < 1e-9,
+            "{usd} against the standard input cell {standard} and the attempt's own price {attempt_usd}"
         );
     }
 
