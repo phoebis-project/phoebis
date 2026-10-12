@@ -1066,7 +1066,7 @@ function storyRequests(): RequestLog[] {
       errorCode: 'stream_undecodable',
       id: 'req_5e2f7a19-b03',
       keyId: 'laptop',
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-4-6',
       outcome: 'failed',
       requestClass: 'main',
       session: CLIENT_SESSION_ID,

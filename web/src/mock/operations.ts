@@ -3,7 +3,7 @@ import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
-import { DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
+import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { MINUTE, NOW, ago, ahead } from './time';
@@ -60,7 +60,7 @@ const sessionSpec: {
   // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
 ];
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
