@@ -28,14 +28,6 @@ const PLAIN_ROUTES: &[&str] = &[
     "/admin/analytics/series",
     "/admin/attention",
     "/admin/dashboard",
-    "/admin/oauth/sessions",
-    "/admin/oauth/sessions/{id}",
-    "/admin/oauth/sessions/{id}/callback",
-    "/admin/oauth/sessions/{id}/confirm",
-    "/admin/pools",
-    "/admin/pools/{id}",
-    "/admin/pools/{id}/members",
-    "/admin/pools/{id}/traffic",
     "/admin/pricing",
     "/admin/requests",
     "/admin/requests/{id}",
@@ -106,6 +98,17 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("key_rotate", &[404, 409, 500, 503]),
     ("ledger_replay_parked", &[500, 503]),
     ("models_state", &[500, 503]),
+    ("pairing_start", &[400, 404, 409, 500]),
+    ("pairing_show", &[404]),
+    ("pairing_cancel", &[404, 409]),
+    ("pairing_callback", &[400, 404, 409, 502]),
+    ("pairing_confirm", &[404, 409, 500, 503]),
+    ("pools_list", &[500]),
+    ("pools_create", &[400, 404, 409, 500, 503]),
+    ("pool_patch", &[400, 404, 409, 500, 503]),
+    ("pool_delete", &[404, 409, 500, 503]),
+    ("pool_members_put", &[400, 404, 409, 500, 503]),
+    ("pool_traffic", &[400, 404, 500]),
 ];
 
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
@@ -124,11 +127,17 @@ const EXAMPLE_FILES: &[&str] = &[
     "replay",
     "replay_held",
     "models_state",
+    "pairing_started",
+    "pools",
+    "pool_traffic",
 ];
 
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
 /// names its parameter types declare.
-const QUERY_MODULES: &[(&str, &str)] = &[("accounts", include_str!("../src/accounts.rs"))];
+const QUERY_MODULES: &[(&str, &str)] = &[
+    ("accounts", include_str!("../src/accounts.rs")),
+    ("pools", include_str!("../src/pools.rs")),
+];
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/fixtures")

@@ -17,7 +17,9 @@ use phoebis_store::{
     SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
+use utoipa::ToSchema;
 
+use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
     double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
     store_failure, CreatedId,
@@ -28,16 +30,26 @@ use crate::AdminState;
 const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
-#[derive(serde::Deserialize)]
+/// One member. On a subscription member a budget bounds its metered spend, overage and fast answers.
+#[derive(serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct MemberInput {
+pub(crate) struct MemberInput {
     account_id: String,
+    /// Default `0`.
     #[serde(default)]
     priority: u32,
+    /// Above `0`, or absent for no cap.
     #[serde(default)]
     budget_daily_usd: Option<f64>,
+    /// Above `0`, or absent for no cap.
     #[serde(default)]
     budget_monthly_usd: Option<f64>,
+}
+
+/// The whole membership list.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct MembersInput {
+    pub members: Vec<MemberInput>,
 }
 
 /// Turns the wire members into store writes, refusing an account named twice and a non-positive budget before any
@@ -81,74 +93,185 @@ fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> 
         .collect()
 }
 
-#[derive(serde::Deserialize, Default)]
+/// The pool's fields. On a create `id` and `label` are required and every other field takes its default. On an edit
+/// any subset but `id`, and `members`, when present, replaces the member list in the same call, as `PUT
+/// /admin/pools/{id}/members` does: the settings and the members are written in one transaction, so a refused
+/// member list writes neither. An unknown field in the body is refused.
+#[derive(serde::Deserialize, Default, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct PoolInput {
+pub(crate) struct PoolInput {
+    /// `[a-z0-9][a-z0-9-]{0,63}`.
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
     label: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    /// `pace`, `priority`, or `round_robin`.
     #[serde(default)]
+    #[schema(example = "pace")]
     strategy: Option<String>,
+    /// `0` or at least `60`, default `3600`.
     #[serde(default)]
     affinity_ttl_seconds: Option<u64>,
+    /// `allow`, `never`, or `prefer_plan`, default `prefer_plan`.
     #[serde(default)]
+    #[schema(example = "allow")]
     overage_policy: Option<String>,
+    /// `0.0` to `1.0`, or null.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<f64>, nullable)]
     shed_ahead_of_pace: Option<Option<f64>>,
+    /// `0.0` to `1.0`, or null.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<f64>, nullable)]
     select_below_utilization: Option<Option<f64>>,
+    /// An ordered list of `{pattern, not}`, at most 256, each pattern checked as the routing page's model rules say.
     #[serde(default)]
     model_rules: Option<Vec<RuleInput>>,
+    /// A partial policy of the four fields, merged onto the pool's stored policy, which a create starts at the
+    /// defaults, bounded field by field and checked against `affinity_ttl_seconds`.
     #[serde(default)]
+    #[schema(value_type = Option<KeepalivePolicyInput>)]
     keepalive: Option<Value>,
+    /// A partial policy merged onto the pool's stored policy, which a create starts at the defaults: `enabled`
+    /// `false`, `inject_when_absent` `false`, and two rule sets, `plan` with `main` `1h` and `subagent` `1h`, and
+    /// `metered` with `main` `5m` and `subagent` `5m`. Each rule set merges one field at a time.
     #[serde(default)]
+    #[schema(value_type = Option<CacheTtlPolicyInput>)]
     cache_ttl: Option<Value>,
+    /// `true` or `false`, default `false`.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = bool)]
     cache_diagnostics: Option<Option<bool>>,
+    /// `true` or `false`, default `true`.
     #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = bool)]
     auto_mode_server: Option<Option<Value>>,
+    /// At most `stats.body_capture_max_hours`.
     #[serde(default)]
     body_capture_hours: Option<u32>,
+    /// A member list replaces the whole membership, so an absent budget clears it.
     #[serde(default)]
     members: Option<Vec<MemberInput>>,
+    /// Default `true`.
     #[serde(default)]
     prefer_subscription: Option<bool>,
+    /// `0.0` to `1.0`, default `0.5`.
     #[serde(default)]
     shed_share: Option<f64>,
+    /// `60` to `604800`, a week, default `600`.
     #[serde(default)]
     burn_window_seconds: Option<u64>,
+    /// `60` to `604800`, a week, default `900`.
     #[serde(default)]
     source_dwell_seconds: Option<u64>,
+    /// Default `true`.
     #[serde(default)]
     migrate_when_spent: Option<bool>,
+    /// `always`, `never`, or `when_needed`, default `when_needed`.
     #[serde(default)]
+    #[schema(example = "always")]
     warm_sessions: Option<String>,
+    /// `0` to `300`, default `60`.
     #[serde(default)]
     retry_in_place_seconds: Option<u64>,
+    /// At least `1`, default `16`.
     #[serde(default)]
     in_flight_cap: Option<u32>,
+    /// `0.0` to `1.0`, default `0.05`.
     #[serde(default)]
     pace_floor: Option<f64>,
+    /// `0` to `300`, default `30`.
     #[serde(default)]
     overage_move_grace_minutes: Option<u32>,
+    /// `0` to `10080`, a week, default `30`.
     #[serde(default)]
     wind_down_minutes: Option<u32>,
+    /// `always` or `when_cached`, default `always`.
     #[serde(default)]
+    #[schema(example = "always")]
     affinity_mode: Option<String>,
+    /// `by_cohort`, `by_strategy`, or `with_main`, default `by_strategy`.
     #[serde(default)]
+    #[schema(example = "by_cohort")]
     subagent_placement: Option<String>,
+    /// `by_strategy` or `by_warm_prefix`, default `by_strategy`.
     #[serde(default)]
+    #[schema(example = "by_strategy")]
     session_placement: Option<String>,
+    /// Default `20000`.
     #[serde(default)]
     min_shared_prefix_tokens: Option<u64>,
-    /// The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
-    /// its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
-    /// since there is no row to fence on.
+    /// Optional, the `revision` the row was read at, which the edit reads. A create accepts it and ignores it, since a
+    /// create has no row to fence on. The write lands only while the pool still carries the `updated_at` the route
+    /// read, or the `revision` the body sent here, so an edit that raced another write to the pool, a `PUT` of its
+    /// members included, is refused rather than landing over it. A pool deleted and created again under the same id
+    /// never answers a `revision` its predecessor did, so an edit read before the deletion answers `409` and writes
+    /// nothing.
+    // The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
+    // its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
+    // since there is no row to fence on.
     #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = u64)]
     expected_revision: Option<Value>,
+}
+
+/// The keepalive policy's four fields, each optional.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(ToSchema)]
+pub(crate) struct KeepalivePolicyInput {
+    #[schema(nullable = false)]
+    pub enabled: Option<bool>,
+    /// The idle window of the main conversation, 0 for the recipe's break-even.
+    #[schema(nullable = false)]
+    pub max_idle_seconds: Option<u64>,
+    /// `60` to `604800`, or null for the recipe's break-even.
+    pub max_parked_seconds: Option<u64>,
+    /// `60` to `604800`, or null for the recipe's break-even.
+    pub scheduled_horizon_seconds: Option<u64>,
+}
+
+/// The cache TTL policy's two flags and two rule sets, each optional.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(ToSchema)]
+pub(crate) struct CacheTtlPolicyInput {
+    #[schema(nullable = false)]
+    pub enabled: Option<bool>,
+    #[schema(nullable = false)]
+    pub inject_when_absent: Option<bool>,
+    pub metered: Option<TtlRulesInput>,
+    pub plan: Option<TtlRulesInput>,
+}
+
+/// One rule set's overrides.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(ToSchema)]
+pub(crate) struct TtlRulesInput {
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub main: Option<String>,
+    /// On canonical ids. An empty model id or a model listed twice is refused.
+    pub models: Option<Vec<ModelTtlInput>>,
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub subagent: Option<String>,
+}
+
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(ToSchema)]
+pub(crate) struct ModelTtlInput {
+    pub model: String,
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub main: String,
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub subagent: String,
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -485,6 +608,17 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     Ok(())
 }
 
+/// List the pools.
+#[utoipa::path(
+    get,
+    path = "/admin/pools",
+    operation_id = "pools_list",
+    tag = "Pools",
+    responses(
+        (status = 200, description = "The pools.", body = PoolList),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     let context = match pool_context(&state).await {
         Ok(context) => context,
@@ -494,9 +628,25 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     for row in &context.pools {
         out.push(pool_json_from(&state, &context, row).await);
     }
-    Json(json!({ "pools": out })).into_response()
+    Json(PoolList { pools: out }).into_response()
 }
 
+/// Create a pool.
+#[utoipa::path(
+    post,
+    path = "/admin/pools",
+    operation_id = "pools_create",
+    tag = "Pools",
+    request_body(content = PoolInput, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `shed_ahead_of_pace is between 0 and 1`\n- `select_below_utilization is between 0 and 1`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `shed_share is between 0 and 1`\n- `burn_window_seconds is at least 60`\n- `burn_window_seconds is at most 604800 (one week)`\n- `source_dwell_seconds is at least 60`\n- `source_dwell_seconds is at most 604800 (one week)`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `pace_floor is between 0 and 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "`account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "account {id} not found"})),
+        (status = 409, description = "- `a pool with this id exists`\n- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written", body = ErrorBody, example = json!({"error": "a pool with this id exists"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
     let Ok(input) = serde_json::from_slice::<PoolInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
@@ -584,6 +734,27 @@ async fn publish_created(state: &AdminState, row: &PoolRow) -> Response {
     }
 }
 
+/// Edit a pool.
+#[utoipa::path(
+    patch,
+    path = "/admin/pools/{id}",
+    operation_id = "pool_patch",
+    tag = "Pools",
+    params(("id" = String, Path, description = "The pool's id")),
+    request_body(content = PoolInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `shed_ahead_of_pace is between 0 and 1`\n- `select_below_utilization is between 0 and 1`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `shed_share is between 0 and 1`\n- `burn_window_seconds is at least 60`\n- `burn_window_seconds is at most 604800 (one week)`\n- `source_dwell_seconds is at least 60`\n- `source_dwell_seconds is at most 604800 (one week)`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `pace_floor is between 0 and 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "- `pool not found`\n- `account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool not found"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written\n- `the pool changed while it was being edited, so reload and try again`, which carries the `stale_edit` code",
+            headers(("x-phoebis-error-code" = String, description = "`stale_edit`: the row changed since it was read")),
+            body = ErrorBody, example = json!({"error": "account {id} is a member of pool {pool}"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn patch(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -653,6 +824,21 @@ pub(crate) async fn patch(
     }
 }
 
+/// Delete a pool.
+#[utoipa::path(
+    delete,
+    path = "/admin/pools/{id}",
+    operation_id = "pool_delete",
+    tag = "Pools",
+    params(("id" = String, Path, description = "The pool's id")),
+    responses(
+        (status = 204, description = "The pool is deleted."),
+        (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 409, description = "`pool still has keys`", body = ErrorBody, example = json!({"error": "pool still has keys"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn remove(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -668,16 +854,29 @@ pub(crate) async fn remove(
     }
 }
 
+/// Replace the pool's members.
+#[utoipa::path(
+    put,
+    path = "/admin/pools/{id}/members",
+    operation_id = "pool_members_put",
+    tag = "Pools",
+    params(("id" = String, Path, description = "The pool's id")),
+    request_body(content = MembersInput, description = "The same shape and validation as `members` on `POST /admin/pools`, replacing the whole membership list", content_type = "application/json"),
+    responses(
+        (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
+        (status = 400, description = "- `body must carry a members list`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must carry a members list"})),
+        (status = 404, description = "- `pool not found`\n- `account {id} not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 409, description = "- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`", body = ErrorBody, example = json!({"error": "account {id} is a member of pool {pool}"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn set_members(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        members: Vec<MemberInput>,
-    }
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<MembersInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a members list");
     };
     let mut row = match state.store.pool(&id) {
@@ -714,8 +913,155 @@ pub(crate) async fn set_members(
     }
 }
 
-/// One member row. Its own function, beside the pool's own `json!` call, so one row's worth of fields reads
-/// clearly on its own rather than nested inline inside the pool's larger literal.
+/// The pools, one row each.
+// `Pool` serializes alone, so the list does too and the test-only `PoolListTwin` carries the round trip.
+#[derive(serde::Serialize, ToSchema)]
+pub(crate) struct PoolList {
+    pub pools: Vec<Pool>,
+}
+
+/// A pool: the record every field of which the pool table names, its membership, its keys and its day.
+#[derive(serde::Serialize, ToSchema)]
+pub(crate) struct Pool {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
+    /// `pace`, `priority`, or `round_robin`.
+    #[schema(example = "pace")]
+    pub strategy: String,
+    pub prefer_subscription: bool,
+    pub affinity_ttl_seconds: u64,
+    /// `allow`, `never`, or `prefer_plan`.
+    #[schema(example = "allow")]
+    pub overage_policy: String,
+    /// `always` or `when_cached`.
+    #[schema(example = "always")]
+    pub affinity_mode: String,
+    /// `by_cohort`, `by_strategy`, or `with_main`.
+    #[schema(example = "by_cohort")]
+    pub subagent_placement: String,
+    /// `by_strategy` or `by_warm_prefix`.
+    #[schema(example = "by_strategy")]
+    pub session_placement: String,
+    pub min_shared_prefix_tokens: u64,
+    pub shed_ahead_of_pace: Option<f64>,
+    pub select_below_utilization: Option<f64>,
+    #[schema(value_type = Vec<crate::openapi::ModelRuleView>)]
+    pub model_rules: Vec<phoebis_store::ModelRule>,
+    /// The first of the shedding fields, with `burn_window_seconds`, `source_dwell_seconds`, `migrate_when_spent` and
+    /// `warm_sessions`.
+    pub shed_share: f64,
+    pub burn_window_seconds: u64,
+    pub source_dwell_seconds: u64,
+    pub migrate_when_spent: bool,
+    /// `always`, `never`, or `when_needed`.
+    #[schema(example = "always")]
+    pub warm_sessions: String,
+    /// The first of the failover fields, with `in_flight_cap`, `pace_floor`, `overage_move_grace_minutes` and
+    /// `wind_down_minutes`.
+    pub retry_in_place_seconds: u64,
+    pub in_flight_cap: u32,
+    pub pace_floor: f64,
+    pub overage_move_grace_minutes: u32,
+    pub wind_down_minutes: u32,
+    /// Counts every move by reason over the last hour, scoped to the pool's own accounts, while the console's pool
+    /// tile sums the five rule reasons alone (`drain`, `overage`, `return_to_plan`, `shed`, `spent`) and lists
+    /// the failover reasons in its title.
+    pub moves_per_hour: BTreeMap<String, f64>,
+    /// The policy's four fields, `enabled`, `max_idle_seconds`, `max_parked_seconds` and `scheduled_horizon_seconds`,
+    /// a ceiling left at the recipe's break-even answered as null.
+    #[schema(value_type = crate::openapi::KeepalivePolicyView)]
+    pub keepalive: KeepalivePolicy,
+    /// Null for a pool with no member, else `break_even_seconds`, `horizon_seconds`, `idle_seconds`, `idle_share` and
+    /// `parked_seconds`, each a `{min, max}` over the members' fundings, the main conversation's TTLs and the pool's
+    /// models. The documentation site's keepalive page describes them under its four fields.
+    #[schema(value_type = Option<crate::openapi::ResolvedCeilingsView>)]
+    pub keepalive_resolved: Option<phoebis_keepalive::ResolvedCeilings>,
+    /// The full cache TTL policy: `enabled`, `inject_when_absent`, and two rule sets, `plan` and `metered`, each with
+    /// `main`, `subagent`, and `models`.
+    #[schema(value_type = crate::openapi::CacheTtlPolicyView)]
+    pub cache_ttl: CacheTtlPolicy,
+    /// `true` or `false`.
+    pub cache_diagnostics: bool,
+    pub auto_mode_server: bool,
+    pub body_capture_hours: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// The row's edit token, which `PATCH /admin/pools/{id}` takes back as `expected_revision`.
+    pub revision: u64,
+    pub members: Vec<PoolMemberView>,
+    /// Filtered to this pool.
+    pub keys: Vec<PoolKey>,
+    /// `disabled`, `exhausted`, `degraded`, or `active`.
+    #[schema(example = "disabled")]
+    pub status: String,
+    pub requests_24h: u64,
+    pub cost_24h: f64,
+    /// The pins under the pool's keys.
+    pub active_pins: usize,
+    /// 25 hourly buckets from 24 hours before the current hour's start, the current partial hour last, whose
+    /// `requests` sum to `requests_24h`.
+    #[schema(value_type = Vec<crate::openapi::TrafficBucketView>)]
+    pub traffic_24h: Vec<phoebis_ledger::TrafficBucket>,
+}
+
+/// One member of a pool.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolMemberView {
+    pub account_id: String,
+    pub priority: u32,
+    /// `budget`, `cooldown`, `eligible`, `overage`, or `unavailable`.
+    #[schema(example = "budget")]
+    pub eligible: String,
+    /// The account's `oauth` or `api_key`.
+    #[schema(example = "oauth")]
+    pub kind: Option<String>,
+    /// Null for no budget.
+    pub budget_daily_usd: Option<f64>,
+    /// Null for no budget.
+    pub budget_monthly_usd: Option<f64>,
+    /// While a budget is reached, the end the member is held to, the latest end among the reached budgets. Null
+    /// otherwise.
+    pub budget_until: Option<i64>,
+    /// One per budgeted period the ledger has reported, empty until it has.
+    pub spends: Vec<SpendReport>,
+    /// The pins under the pool's keys on that member's account, one per agent and model.
+    pub active_pins: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SpendReport {
+    /// `day` or `month`.
+    #[schema(example = "day")]
+    pub period: String,
+    pub spent_usd: f64,
+    pub period_end: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolKey {
+    pub id: String,
+    pub label: String,
+    pub prefix: String,
+    pub enabled: bool,
+}
+
+/// A pool's traffic over the range, bucketed.
+#[derive(serde::Serialize, ToSchema)]
+pub(crate) struct PoolTraffic {
+    pub pool_id: String,
+    pub from: i64,
+    pub to: i64,
+    pub bucket_seconds: i64,
+    #[schema(value_type = Vec<crate::openapi::TrafficBucketView>)]
+    pub buckets: Vec<phoebis_ledger::TrafficBucket>,
+}
+
+/// One member row. Its own function, beside the pool's own struct literal, so one row's worth of fields reads
+/// clearly on its own rather than nested inline inside the pool's larger one.
 fn member_json(
     m: &PoolMember,
     accounts: &[phoebis_store::AccountRow],
@@ -723,23 +1069,32 @@ fn member_json(
     eligible: &str,
     now: i64,
     active_pins: usize,
-) -> Value {
+) -> PoolMemberView {
     let kind = accounts
         .iter()
         .find(|a| a.id == m.account_id)
-        .map(|a| crate::routes::kind_name(a.kind));
+        .map(|a| crate::routes::kind_name(a.kind).to_string());
     let rows = crate::routes::spend_rows(spends, &m.pool_id, &m.account_id);
-    let reports: Vec<Value> = rows
+    let reports: Vec<SpendReport> = rows
         .iter()
         .filter(|s| m.budget(s.period).is_some())
-        .map(|s| json!({ "period": s.period.as_str(), "spent_usd": s.spent_usd, "period_end": s.period_end }))
+        .map(|s| SpendReport {
+            period: s.period.as_str().to_string(),
+            spent_usd: s.spent_usd,
+            period_end: s.period_end,
+        })
         .collect();
-    json!({
-        "account_id": m.account_id, "priority": m.priority, "eligible": eligible, "kind": kind,
-        "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
-        "budget_until": phoebis_routing::budget_deadline(m, &rows, now), "spends": reports,
-        "active_pins": active_pins,
-    })
+    PoolMemberView {
+        account_id: m.account_id.clone(),
+        priority: m.priority,
+        eligible: eligible.to_string(),
+        kind,
+        budget_daily_usd: m.budget_daily_usd,
+        budget_monthly_usd: m.budget_monthly_usd,
+        budget_until: phoebis_routing::budget_deadline(m, &rows, now),
+        spends: reports,
+        active_pins,
+    }
 }
 
 /// What every pool row reads from the registry, the ledger and the router, fetched once per list call.
@@ -786,7 +1141,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
 }
 
 /// One pool over a context built for it alone, for the routes that answer a single pool.
-pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, StoreError> {
+pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Pool, StoreError> {
     let context = pool_context(state).await?;
     Ok(pool_json_from(state, &context, row).await)
 }
@@ -797,7 +1152,7 @@ pub(crate) async fn pool_json_from(
     state: &AdminState,
     context: &PoolContext,
     row: &PoolRow,
-) -> Value {
+) -> Pool {
     let mut members: Vec<PoolMember> = context
         .members
         .iter()
@@ -805,11 +1160,16 @@ pub(crate) async fn pool_json_from(
         .cloned()
         .collect();
     members.sort_by(|a, b| (a.priority, &a.account_id).cmp(&(b.priority, &b.account_id)));
-    let keys: Vec<Value> = context
+    let keys: Vec<PoolKey> = context
         .keys
         .iter()
         .filter(|k| k.pool_id == row.id)
-        .map(|k| json!({ "id": k.id, "label": k.label, "prefix": k.prefix, "enabled": k.enabled }))
+        .map(|k| PoolKey {
+            id: k.id.clone(),
+            label: k.label.clone(),
+            prefix: k.prefix.clone(),
+            enabled: k.enabled,
+        })
         .collect();
     let now = context.now;
     let hour = phoebis_ledger::hour_of(now);
@@ -841,10 +1201,7 @@ pub(crate) async fn pool_json_from(
             .unwrap_or_default()
     };
     let (cooldowns, overages, pins) = (&context.cooldowns, &context.overages, &context.pins);
-    let key_ids: Vec<String> = keys
-        .iter()
-        .map(|k| k["id"].as_str().unwrap_or_default().to_string())
-        .collect();
+    let key_ids: Vec<String> = keys.iter().map(|k| k.id.clone()).collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
     let accounts = &context.accounts;
     let spends = &context.spends;
@@ -903,41 +1260,94 @@ pub(crate) async fn pool_json_from(
         .keepalive
         .resolve_pool_ceilings(row, &member_accounts)
         .await;
-    json!({
-        "id": row.id, "label": row.label, "enabled": row.enabled,
-        "strategy": row.strategy.as_str(),
-        "prefer_subscription": row.prefer_subscription,
-        "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
-        "affinity_mode": row.affinity.mode.as_str(), "subagent_placement": row.affinity.subagent_placement.as_str(),
-        "session_placement": row.affinity.session_placement.as_str(), "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
-        "shed_ahead_of_pace": row.shed_ahead_of_pace, "select_below_utilization": row.select_below_utilization,
-        "model_rules": row.model_rules,
-        "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,
-        "source_dwell_seconds": row.shedding.source_dwell_seconds, "migrate_when_spent": row.shedding.migrate_when_spent,
-        "warm_sessions": row.shedding.warm_sessions.as_str(),
-        "retry_in_place_seconds": row.failover.retry_in_place_seconds, "in_flight_cap": row.failover.in_flight_cap,
-        "pace_floor": row.failover.pace_floor, "overage_move_grace_minutes": row.failover.overage_move_grace_minutes,
-        "wind_down_minutes": row.failover.wind_down_minutes,
-        "moves_per_hour": moves.iter().map(|(reason, count)| (reason.clone(), *count as f64)).collect::<std::collections::BTreeMap<_, _>>(),
-        "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
-        "keepalive_resolved": keepalive_resolved,
-        "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
-        "auto_mode_server": row.auto_mode_server,
-        "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
-        "revision": stamp_token(row.incarnation, row.updated_at),
-        "members": members.iter().map(|m| {
-            let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id).count();
-            member_json(m, accounts, spends, ineligible(m).unwrap_or("eligible"), now, active_pins)
-        }).collect::<Vec<_>>(),
-        "keys": keys,
-        "status": status,
-        "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),
-        "cost_24h": day.get(&row.id).map_or(0.0, |t| t.cost_usd),
-        "active_pins": active_pins,
-        "traffic_24h": traffic,
-    })
+    Pool {
+        id: row.id.clone(),
+        label: row.label.clone(),
+        enabled: row.enabled,
+        strategy: row.strategy.as_str().to_string(),
+        prefer_subscription: row.prefer_subscription,
+        affinity_ttl_seconds: row.affinity_ttl_seconds,
+        overage_policy: row.overage_policy.as_str().to_string(),
+        affinity_mode: row.affinity.mode.as_str().to_string(),
+        subagent_placement: row.affinity.subagent_placement.as_str().to_string(),
+        session_placement: row.affinity.session_placement.as_str().to_string(),
+        min_shared_prefix_tokens: row.affinity.min_shared_prefix_tokens,
+        shed_ahead_of_pace: row.shed_ahead_of_pace,
+        select_below_utilization: row.select_below_utilization,
+        model_rules: row.model_rules.clone(),
+        shed_share: row.shedding.shed_share,
+        burn_window_seconds: row.shedding.burn_window_seconds,
+        source_dwell_seconds: row.shedding.source_dwell_seconds,
+        migrate_when_spent: row.shedding.migrate_when_spent,
+        warm_sessions: row.shedding.warm_sessions.as_str().to_string(),
+        retry_in_place_seconds: row.failover.retry_in_place_seconds,
+        in_flight_cap: row.failover.in_flight_cap,
+        pace_floor: row.failover.pace_floor,
+        overage_move_grace_minutes: row.failover.overage_move_grace_minutes,
+        wind_down_minutes: row.failover.wind_down_minutes,
+        moves_per_hour: moves
+            .iter()
+            .map(|(reason, count)| (reason.clone(), *count as f64))
+            .collect(),
+        keepalive: KeepalivePolicy::from_json(&row.keepalive_json),
+        keepalive_resolved,
+        cache_ttl: CacheTtlPolicy::from_json(&row.cache_ttl_json),
+        cache_diagnostics: row.cache_diagnostics,
+        auto_mode_server: row.auto_mode_server,
+        body_capture_hours: row.body_capture_hours,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        revision: stamp_token(row.incarnation, row.updated_at),
+        members: members
+            .iter()
+            .map(|m| {
+                let active_pins = pins
+                    .iter()
+                    .filter(|p| key_ids.contains(&p.key_id) && p.account_id == m.account_id)
+                    .count();
+                member_json(
+                    m,
+                    accounts,
+                    spends,
+                    ineligible(m).unwrap_or("eligible"),
+                    now,
+                    active_pins,
+                )
+            })
+            .collect(),
+        keys,
+        status: status.to_string(),
+        requests_24h: day.get(&row.id).map_or(0, |t| t.requests),
+        cost_24h: day.get(&row.id).map_or(0.0, |t| t.cost_usd),
+        active_pins,
+        traffic_24h: traffic,
+    }
 }
 
+/// `GET /admin/pools/{id}/traffic`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct TrafficQuery {
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
+    pub range: Option<String>,
+}
+
+/// Read the pool's traffic buckets.
+#[utoipa::path(
+    get,
+    path = "/admin/pools/{id}/traffic",
+    operation_id = "pool_traffic",
+    tag = "Pools",
+    params(("id" = String, Path, description = "The pool's id"), TrafficQuery),
+    responses(
+        (status = 200, description = "The buckets over the range.", body = PoolTraffic),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+    ),
+)]
 pub(crate) async fn traffic(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -963,7 +1373,96 @@ pub(crate) async fn traffic(
     )
     .await
     {
-        Ok(buckets) => Json(json!({ "pool_id": id, "from": from, "to": to, "bucket_seconds": bucket, "buckets": buckets })).into_response(),
+        Ok(buckets) => Json(PoolTraffic {
+            pool_id: id,
+            from,
+            to,
+            bucket_seconds: bucket,
+            buckets,
+        })
+        .into_response(),
         Err(e) => crate::analytics::ledger_failure(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::openapi::round_trip::{round_trips, round_trips_each};
+    use crate::openapi::{
+        CacheTtlPolicyView, KeepalivePolicyView, ModelRuleView, ResolvedCeilingsView,
+        TrafficBucketView,
+    };
+    use std::collections::BTreeMap;
+
+    /// A pool with its five mirrored fields typed as the mirrors, so the whole row round trips.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PoolTwin {
+        id: String,
+        label: String,
+        enabled: bool,
+        strategy: String,
+        prefer_subscription: bool,
+        affinity_ttl_seconds: u64,
+        overage_policy: String,
+        affinity_mode: String,
+        subagent_placement: String,
+        session_placement: String,
+        min_shared_prefix_tokens: u64,
+        shed_ahead_of_pace: Option<f64>,
+        select_below_utilization: Option<f64>,
+        model_rules: Vec<ModelRuleView>,
+        shed_share: f64,
+        burn_window_seconds: u64,
+        source_dwell_seconds: u64,
+        migrate_when_spent: bool,
+        warm_sessions: String,
+        retry_in_place_seconds: u64,
+        in_flight_cap: u32,
+        pace_floor: f64,
+        overage_move_grace_minutes: u32,
+        wind_down_minutes: u32,
+        moves_per_hour: BTreeMap<String, f64>,
+        keepalive: KeepalivePolicyView,
+        keepalive_resolved: Option<ResolvedCeilingsView>,
+        cache_ttl: CacheTtlPolicyView,
+        cache_diagnostics: bool,
+        auto_mode_server: bool,
+        body_capture_hours: u32,
+        created_at: i64,
+        updated_at: i64,
+        revision: u64,
+        members: Vec<super::PoolMemberView>,
+        keys: Vec<super::PoolKey>,
+        status: String,
+        requests_24h: u64,
+        cost_24h: f64,
+        active_pins: usize,
+        traffic_24h: Vec<TrafficBucketView>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PoolListTwin {
+        pools: Vec<PoolTwin>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PoolTrafficTwin {
+        pool_id: String,
+        from: i64,
+        to: i64,
+        bucket_seconds: i64,
+        buckets: Vec<TrafficBucketView>,
+    }
+
+    #[test]
+    fn the_pool_fixtures_round_trip_through_their_declared_types_and_mirrors() {
+        round_trips::<PoolListTwin>("pools");
+        round_trips::<PoolTrafficTwin>("pool_traffic");
+        round_trips_each::<KeepalivePolicyView>("pools", &["pools", "*", "keepalive"]);
+        round_trips_each::<CacheTtlPolicyView>("pools", &["pools", "*", "cache_ttl"]);
+        round_trips_each::<TrafficBucketView>("pools", &["pools", "*", "traffic_24h", "*"]);
     }
 }

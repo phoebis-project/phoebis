@@ -14,7 +14,7 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, patch, post, put};
+use axum::routing::{any, get, post};
 use axum::{Extension, Json, Router};
 use phoebis_ledger::QuotaPoll;
 use phoebis_oauth::{
@@ -84,23 +84,14 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(keys::rotate))
         .routes(routes!(crate::ledger::replay_parked))
         .routes(routes!(models::state))
-        .route("/admin/oauth/sessions", post(pairing_start))
-        .route(
-            "/admin/oauth/sessions/{id}",
-            get(pairing_show).delete(pairing_cancel),
-        )
-        .route(
-            "/admin/oauth/sessions/{id}/callback",
-            post(pairing_callback),
-        )
-        .route("/admin/oauth/sessions/{id}/confirm", post(pairing_confirm))
-        .route("/admin/pools", get(pools::list).post(pools::create))
-        .route(
-            "/admin/pools/{id}",
-            patch(pools::patch).delete(pools::remove),
-        )
-        .route("/admin/pools/{id}/members", put(pools::set_members))
-        .route("/admin/pools/{id}/traffic", get(pools::traffic))
+        .routes(routes!(pairing_start))
+        .routes(routes!(pairing_show, pairing_cancel))
+        .routes(routes!(pairing_callback))
+        .routes(routes!(pairing_confirm))
+        .routes(routes!(pools::list, pools::create))
+        .routes(routes!(pools::patch, pools::remove))
+        .routes(routes!(pools::set_members))
+        .routes(routes!(pools::traffic))
         .route("/admin/pricing", get(pricing::show))
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
@@ -826,34 +817,124 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
     Json(Verify { ok, status }).into_response()
 }
 
+/// Exactly one of `account_id` or `new`, and the login kind.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct PairingStartInput {
+    /// An existing OAuth account: its first pairing, or a re-pair after Disconnect or a credential failure.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// `claude_ai`, the default, or `console`.
+    #[serde(default)]
+    #[schema(example = "claude_ai")]
+    pub login: Option<String>,
+    /// The router reserves the id for the session and writes the row at the confirm, so a session that is
+    /// cancelled, expires or fails leaves no account.
+    #[serde(default, rename = "new")]
+    pub new_account: Option<NewAccountInput>,
+}
+
+/// An account that does not exist yet.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct NewAccountInput {
+    /// `[a-z0-9][a-z0-9-]{0,63}`.
+    pub id: String,
+    /// At most 256 bytes.
+    pub label: String,
+}
+
+/// Either `url` alone, or `code` and `state` together.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct PairingCallbackInput {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    /// The whole callback URL the browser landed on.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// The pairing session the browser is sent to.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PairingStarted {
+    pub id: String,
+    pub authorization_url: String,
+    pub redirect_uri: String,
+    pub expires_at: i64,
+}
+
+/// A pairing session as its owner reads it.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PairingSessionView {
+    /// The reserved id for a session started with `new`.
+    pub account_id: String,
+    pub expires_at: i64,
+    pub id: String,
+    /// One of eight values: `cancelled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
+    /// `failed`, `pending`.
+    #[schema(example = "cancelled")]
+    pub status: String,
+}
+
+/// The exchange's result, once the token exchange and profile lookup succeed.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Exchanged {
+    /// `exchanged`.
+    #[schema(example = "exchanged")]
+    pub status: String,
+    pub pending: PendingIdentityView,
+}
+
+/// The identity the exchange answered, which the confirm commits.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingIdentityView {
+    pub account_uuid: String,
+    pub email: String,
+    pub organization_name: Option<String>,
+    pub organization_uuid: Option<String>,
+}
+
+/// The committed pairing.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Confirmed {
+    pub account_id: String,
+    /// `confirmed`.
+    #[schema(example = "confirmed")]
+    pub status: String,
+}
+
+/// Start a pairing session.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions",
+    operation_id = "pairing_start",
+    tag = "Pairing",
+    request_body(content = PairingStartInput, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The started session.", body = PairingStarted),
+        (status = 400, description = "- `a new account needs a label`\n- `body must carry an account_id or a new account`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `login must be claude_ai or console`\n- `only an OAuth account is paired this way`", body = ErrorBody, example = json!({"error": "a new account needs a label"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 409, description = "- `a pairing session is already in progress for this account`: another admin session's pairing stands, or the account's pairing is being confirmed. A start by the admin session that owns the standing pairing replaces it, and the old link stops working.\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "a pairing session is already in progress for this account"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
 async fn pairing_start(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
     body: Bytes,
 ) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        #[serde(default)]
-        account_id: Option<String>,
-        #[serde(default)]
-        login: Option<String>,
-        /// A row that does not exist yet: the confirm writes it with the credential, so a pairing nobody confirms
-        /// leaves no row.
-        #[serde(default, rename = "new")]
-        new_account: Option<NewAccountInput>,
-    }
-    #[derive(serde::Deserialize)]
-    struct NewAccountInput {
-        id: String,
-        label: String,
-    }
     let malformed = || {
         failure(
             StatusCode::BAD_REQUEST,
             "body must carry an account_id or a new account",
         )
     };
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<PairingStartInput>(&body) else {
         return malformed();
     };
     let (account_id, new_account) = match (input.account_id, input.new_account) {
@@ -957,12 +1038,12 @@ async fn pairing_start(
     );
     let mut response = (
         StatusCode::CREATED,
-        Json(json!({
-            "id": session.id,
-            "authorization_url": url,
-            "redirect_uri": redirect_uri,
-            "expires_at": session.deadline,
-        })),
+        Json(PairingStarted {
+            id: session.id.clone(),
+            authorization_url: url,
+            redirect_uri,
+            expires_at: session.deadline,
+        }),
     )
         .into_response();
     response
@@ -971,6 +1052,18 @@ async fn pairing_start(
     response
 }
 
+/// Read a pairing session.
+#[utoipa::path(
+    get,
+    path = "/admin/oauth/sessions/{id}",
+    operation_id = "pairing_show",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 200, description = "The session and its status.", body = PairingSessionView),
+        (status = 404, description = "`pairing session not found`, including for a session id that exists but belongs to a different caller's session: an unguessable handle answers the same as one that never existed.", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+    ),
+)]
 async fn pairing_show(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -979,15 +1072,29 @@ async fn pairing_show(
     let Some(session) = state.pairing.get(&id, &caller.session_id, (state.clock)()) else {
         return failure(StatusCode::NOT_FOUND, "pairing session not found");
     };
-    Json(json!({
-        "account_id": session.account_id,
-        "expires_at": session.deadline,
-        "id": session.id,
-        "status": reported_status(&session),
-    }))
+    let status = reported_status(&session).to_string();
+    Json(PairingSessionView {
+        account_id: session.account_id,
+        expires_at: session.deadline,
+        id: session.id,
+        status,
+    })
     .into_response()
 }
 
+/// Cancel a pairing session.
+#[utoipa::path(
+    delete,
+    path = "/admin/oauth/sessions/{id}",
+    operation_id = "pairing_cancel",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 204, description = "The session is cancelled."),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+    ),
+)]
 async fn pairing_cancel(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -1003,18 +1110,28 @@ async fn pairing_cancel(
     }
 }
 
+/// Deliver the upstream's callback.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions/{id}/callback",
+    operation_id = "pairing_callback",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    request_body(content = PairingCallbackInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The identity the upstream answered.", body = Exchanged),
+        (status = 400, description = "- `body must carry the callback url, or a code and a state`\n- `callback does not match the registered redirect`\n- `invalid callback: <detail>`\n- `state does not match the pairing session`", body = ErrorBody, example = json!({"error": "body must carry the callback url, or a code and a state"})),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session did not accept the callback`\n- `the pairing session was closed while the code was being exchanged`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        (status = 502, description = "The upstream's detail, never the token itself, when the exchange is rejected.", body = ErrorBody, example = json!({"error": "<the upstream's detail>"})),
+    ),
+)]
 async fn pairing_callback(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        code: Option<String>,
-        state: Option<String>,
-        url: Option<String>,
-    }
     let now = (state.clock)();
     let malformed = || {
         failure(
@@ -1022,7 +1139,7 @@ async fn pairing_callback(
             "body must carry the callback url, or a code and a state",
         )
     };
-    let Ok(input) = serde_json::from_slice::<Input>(&body) else {
+    let Ok(input) = serde_json::from_slice::<PairingCallbackInput>(&body) else {
         return malformed();
     };
     let callback = match (input.url, input.code, input.state) {
@@ -1073,23 +1190,44 @@ async fn pairing_callback(
             "the pairing session was closed while the code was being exchanged",
         );
     }
-    Json(json!({
-        "status": "exchanged",
-        "pending": {
-            "account_uuid": identity.account_uuid,
-            "email": identity.email,
-            "organization_name": identity.organization_name,
-            "organization_uuid": identity.organization_uuid,
+    Json(Exchanged {
+        status: "exchanged".into(),
+        pending: PendingIdentityView {
+            account_uuid: identity.account_uuid,
+            email: identity.email,
+            organization_name: identity.organization_name,
+            organization_uuid: identity.organization_uuid,
         },
-    }))
+    })
     .into_response()
 }
 
-/// Commits a pairing. An existing row passes four checks that all have to hold at once. A row the start
-/// reserved with `new` is written by the one create, which the store refuses when another slot holds the
-/// identity or a create took the id meanwhile. Every one of them refuses rather than repairs, and every
-/// refusal drops the pending bundle, so no path through here leaves a credential behind that a later call
-/// could commit.
+/// Confirm the pairing into a credential.
+///
+/// The answer comes once the account's credential is committed, its state set to `ready`, its usage cache
+/// invalidated, and its cached catalog evicted, fetched again on the next read. The answer does not wait for the usage
+/// endpoint: the confirm reads it right after answering, records the first sample and hands it to the router, so the
+/// account's windows show within seconds. For a session started with `new`, the account row is created `ready` with
+/// its identity, its credential and its profile in one write, and the mutation log names the created account.
+#[utoipa::path(
+    post,
+    path = "/admin/oauth/sessions/{id}/confirm",
+    operation_id = "pairing_confirm",
+    tag = "Pairing",
+    params(("id" = String, Path, description = "The pairing session's id")),
+    responses(
+        (status = 200, description = "The account and the confirmed status.", body = Confirmed),
+        (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
+// Commits a pairing. An existing row passes four checks that all have to hold at once. A row the start
+// reserved with `new` is written by the one create, which the store refuses when another slot holds the
+// identity or a create took the id meanwhile. Every one of them refuses rather than repairs, and every
+// refusal drops the pending bundle, so no path through here leaves a credential behind that a later call
+// could commit.
 async fn pairing_confirm(
     State(state): State<Arc<AdminState>>,
     Extension(caller): Extension<Caller>,
@@ -1301,7 +1439,11 @@ async fn pairing_confirm(
                 }
             });
             state.ledger.track(handle);
-            Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
+            Json(Confirmed {
+                account_id: row.id.clone(),
+                status: "confirmed".into(),
+            })
+            .into_response()
         }
     };
     if created {
@@ -2419,6 +2561,7 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{same_authority, spend_rows};
+    use crate::openapi::round_trip::round_trips;
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
 
@@ -2500,5 +2643,10 @@ mod tests {
             spend_rows(&spends, "other", "a").is_empty(),
             "the same account under another pool reads none"
         );
+    }
+
+    #[test]
+    fn the_pairing_start_fixture_round_trips_through_its_declared_type() {
+        round_trips::<super::PairingStarted>("pairing_started");
     }
 }

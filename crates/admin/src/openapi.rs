@@ -222,6 +222,87 @@ pub(crate) struct ModelRuleView {
     pub not: bool,
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeepalivePolicyView {
+    pub enabled: bool,
+    /// The idle window of the main conversation. 0 resolves to the recipe's break-even, as does any value above
+    /// it.
+    pub max_idle_seconds: u64,
+    /// How long a park on a background command or a subagent is probed. Null is the recipe's break-even.
+    pub max_parked_seconds: Option<u64>,
+    /// A park on a scheduled wakeup is probed while the wake is at most this far away. Null is the recipe's
+    /// break-even.
+    pub scheduled_horizon_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolvedCeilingsView {
+    pub break_even_seconds: RangeView,
+    pub horizon_seconds: RangeView,
+    pub idle_seconds: RangeView,
+    pub idle_share: RangeView,
+    pub parked_seconds: RangeView,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RangeView {
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CacheTtlPolicyView {
+    pub enabled: bool,
+    /// Whether the rewrite adds a top-level `cache_control` to a body that carries no marker.
+    pub inject_when_absent: bool,
+    /// The rules while a write costs money: an API key account, or a subscription account in overage.
+    pub metered: TtlRulesView,
+    pub plan: TtlRulesView,
+}
+
+/// One rule set: the TTL by branch, with per-model overrides.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TtlRulesView {
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub main: String,
+    /// Per-model overrides on the canonical model id. A model absent here takes `main` and `subagent`.
+    pub models: Vec<ModelTtlView>,
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub subagent: String,
+}
+
+// No captured pool carries a per-model override, so the round trip never reaches this type: its fields are held to
+// the relay crate's `ModelTtl` by reading the two side by side.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ModelTtlView {
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub main: String,
+    pub model: String,
+    /// `5m` or `1h`.
+    #[schema(example = "5m")]
+    pub subagent: String,
+}
+
+/// One bucket of a pool's traffic.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TrafficBucketView {
+    pub at: i64,
+    pub requests: u64,
+    pub failed: u64,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
 macro_rules! fixture {
     ($name:literal, $status:literal) => {
         (
@@ -250,6 +331,9 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("replay", "200"),
     fixture!("replay_held", "503"),
     fixture!("models_state", "200"),
+    fixture!("pairing_started", "201"),
+    fixture!("pools", "200"),
+    fixture!("pool_traffic", "200"),
 ];
 
 /// The bodies the fixtures capture for one answer, each with its file stem.
