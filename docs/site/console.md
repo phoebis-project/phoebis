@@ -68,7 +68,7 @@ tier the model does not size, or has no capacity for on the window, is named und
 subscription account the card reads "No subscription accounts" and "A subscription account reports the window this
 card draws.", and with none sized "No listed account's tier is sized for the 5-hour window." (or 7-day). Each account
 keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
-cycling past eight accounts, and an account the registry no longer lists draws muted.
+cycling past eight accounts, and an account the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the email, "Overage active"
 while requests bill as extra usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last
@@ -107,14 +107,14 @@ endpoint and how it answered, with the whole message and the backoff on hover, a
 endpoint now. A card that shows an error, whose last poll failed, or that is backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
-the Weekly mode, `three days` in the 5-hour mode), "Previous period" and "Next period" buttons, the mode switch Weekly
-or 5-hour, an "Account" axis and a now marker. Each lane carries the chips "5-hour limit", "7-day limit" and "Fable
-7-day limit", each with its share left and its reset on hover, and one bar per window, the current bar filling from
-the window's start to its used share, so a fill past the now line is ahead of pace and one short of it behind. An
-account marked canceled with a saved end shows the end on its lane: no window opens after it, and the window that
-spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends, and the note
-"Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the instant it
-resets. Lanes ending together compete for the same days."
+the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode
+switch Weekly or 5-hour, an "Account" axis and a now marker. Each lane carries the chips "5-hour limit", "7-day
+limit" and "Fable 7-day limit", each with its share left and its reset on hover, and one bar per window, the current
+bar filling from the window's start to its used share, so a fill past the now line is ahead of pace and one short of
+it behind. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and the
+window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends,
+and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
+instant it resets. Lanes ending together compete for the same days."
 
 ## Accounts
 
@@ -130,10 +130,11 @@ account yet" with "Add account" before the first account, "No accounts match" wi
 filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an account
 moves between them is on [Pairing an account](pairing.md).
 
-The detail opens on the account's label with "Edit label", its email and its badges, "Overage active", "Routing
-paused" and the cooldown badge, with `Overage since {ago}` under them while a sample reports the overage's start. An
-account whose refresh token was rejected carries the callout "Routing is off for this account. The refresh token was
-rejected ({error}). Re-pair to restore it." The actions, each behind a confirm dialog:
+The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
+the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
+since {ago}` under them while a sample reports the overage's start. An account whose refresh token was rejected
+carries the callout "Routing is off for this account. The refresh token was rejected ({error}). Re-pair to restore
+it." The actions, with the dialog each opens:
 
 | Button | Dialog | What it does |
 | --- | --- | --- |
@@ -170,17 +171,17 @@ upstream lists no models."
 
 "Add account" opens the dialog of that name under "Subscription logins share your Claude.ai quota. API keys bill per
 token against a Console workspace.": the "Account type" (OAuth login or API key), Label ("Short name used in pools and
-logs."), the Id field, the "API key" field for an API-key account, and "Start pairing" or "Add API key". For a
-subscription account the dialog says "Pairing opens the Claude.ai login in your browser and asks you to paste the
-address it lands on. The router stores the refresh token encrypted and renews the access token on its own." The
-pairing dialog, `Pair {label}` or `Re-pair {label}`, runs two steps. "Log in and paste the address" explains itself,
-"Open the authorization link, sign in to Claude.ai, and approve the router. The browser then lands on a callback
-address that will not load, since nothing listens on that port. Paste the URL from the address bar, or the code
-alone.", with the link beside "Copy" and "Open in browser", the field "Paste the URL your browser landed on, or the
-code", `Registered redirect: {uri}`, the session's expiry and Submit. "Confirm" reads "Confirm the identity below to
-store the refresh token for this account." over the Email and Organization the upstream reported, and Confirm stores
-it. The toasts read "API key added" and `Paired {email}`. The flow, the states and the `curl` form are on
-[Pairing an account](pairing.md).
+logs."), the id the label derives as `Id: {id}` with a "customize" link that opens the Id field, the "API key" field
+for an API-key account, and "Start pairing" or "Add API key". For a subscription account the dialog says "Pairing
+opens the Claude.ai login in your browser and asks you to paste the address it lands on. The router stores the refresh
+token encrypted and renews the access token on its own." The pairing dialog, `Pair {label}` or `Re-pair {label}`, runs
+two steps. "Log in and paste the address" explains itself, "Open the authorization link, sign in to Claude.ai, and
+approve the router. The browser then lands on a callback address that will not load, since nothing listens on that
+port. Paste the URL from the address bar, or the code alone.", with the link beside "Copy" and "Open in browser", the
+field "Paste the URL your browser landed on, or the code", `Registered redirect: {uri}`, the session's expiry and
+Submit. "Confirm" reads "Confirm the identity below to store the refresh token for this account." over the Email and
+Organization the upstream reported, and Confirm stores it. The toasts read "API key added" and `Paired {email}`. The
+flow, the states and the `curl` form are on [Pairing an account](pairing.md).
 
 ## Pools
 
@@ -189,7 +190,7 @@ it. The toasts read "API key added" and `Paired {email}`. The flow, the states a
 
 The view opens on "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per
 session, and fail over when a member hits a rate limit." and "Create pool", then the tiles Pools, Accounts in pools,
-Keys, Requests, 24h and Cost, 24h. Every field's meaning is on [Pools, keys and routing](routing.md#pools).
+Keys, "Requests, 24h" and "Cost, 24h". Every field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link
 ("No keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete".
@@ -205,8 +206,10 @@ pool prefers subscription accounts), Account, Standing and Pins. Standing reads 
 lands on, `eligible`, `after plan quota` for a member in overage ranked after the plan-funded ones, `at the Pace floor`
 or `winding down {left}` (on hover `Winding down to the plan's end at {time}`) for a member that serves only as the
 last resort, and for a member passed over `cooldown {left}` (on hover `In a cooldown that ends {time}`), `overage until
-{time}`, `at budget` or `at budget until {time}` with the spend against the budget, `in overage` and `not available`.
-The caption notes "A request for a Fable model is placed on the Fable window instead, which this card does not draw."
+{time}` (`overage` where the reset is unknown), `at budget` or `at budget until {time}` with the spend against the
+budget, and `unavailable` with the account's status on hover. The caption names the strategy, `Pace`, `Priority, then
+random` or `Round robin`, with `subscription accounts first` appended where the pool prefers subscription accounts,
+and its hover notes "A request for a Fable model is placed on the Fable window instead, which this card does not draw."
 Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in the last 24h", and the facts
 Members, Keys, Requests 24h, Cost 24h, Active pins and Moves in the last hour, whose figure opens the routing log on
 the pool's moved decisions and whose hover lists the moves by reason. "Delete" asks `Delete pool {name}`: "Deletes the
@@ -257,7 +260,7 @@ bar of the rate, or "No idle windows recorded yet". The ceilings are explained u
 The view opens on the tiles Keys, Active, Lifetime requests and Lifetime cost, and the card "Lifetime cost by key"
 ("Relative spend across all keys"), a bar per key. The table's toolbar offers "Search keys", the status filter All
 statuses, Active, Disabled, Expired or Revoked, the pool filter "All pools", and "Create key". The columns are Name,
-Prefix, Pool, Models, Usage, 7d, Expiry and Status, and each row ends in its menu. Under the name a row notes the
+Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the
 capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and
 "keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with
 "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status
@@ -276,10 +279,10 @@ groups Key (Name, Pool, Notes), Access (Enabled on an existing key, Expiry,
 and Server-side auto mode with Inherit, On or Off), Models (Model rules, with Pool rules as Extend pool rules or
 Replace pool rules, and List [1m] twins in the models listing), Sessions (Cache warming opt-out) and Capture (Capture
 request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto mode,
-Pool rules and List [1m] twins show in the expert view. The Capture group warns what the bodies hold: "Bodies contain
-the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the
-machine's permission rules with their literal text, its working and home directories and its git remotes with every
-request. Only the admin secret can read them."
+Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
+bodies hold: "Bodies contain the prompts, file contents, and tool results of every session using this key, and a
+session in auto mode sends the machine's permission rules with their literal text, its working and home directories
+and its git remotes with every request. Only the admin secret can read them."
 
 ## Models
 
@@ -294,11 +297,11 @@ dated snapshot." The card `Processed rules for {key}`, subtitled "Extends the po
 shows [1m] twins" (or "Replaces", or "no [1m] twins"), lists the processed rules as Level, Rule (Allow or Deny), Pattern
 and Cooling, the last naming the accounts cooling for a model the rule matches. Without a key it reads "No keys: a
 key's processed rules show here once one exists.", and without rules "No rules: every model the pool's accounts serve
-is allowed." Then one "Cooling down" block per model lists the accounts cooling for it with Reason, Until and Clear,
-which asks "Clear cooldown" with the sentence the Accounts view uses, or the block reads "Nothing cooling down". The
-button "View rejections and permits in the routing log" opens the [routing log](#routing-log) on the model rejected
-and model permitted rows of the last 24 hours. The rule grammar and the levels are on
-[Model rules](routing.md#model-rules).
+is allowed." Then one block per model, titled by the model's short name, lists the accounts cooling for it as Account,
+Scope, Reason and Until with a Clear button per row, which asks "Clear cooldown" with the sentence the Accounts view
+uses, or one "Cooling down" block reads "Nothing cooling down" while nothing cools. The button "View rejections and
+permits in the routing log" opens the [routing log](#routing-log) on the model rejected and model permitted rows of
+the last 24 hours. The rule grammar and the levels are on [Model rules](routing.md#model-rules).
 
 ## Requests
 
@@ -311,12 +314,12 @@ literally (`_` and `%` are characters). The range offers Last hour, Last 6 hours
 "Custom range" with two instants. The multi-selects Keys, Pools, Accounts and Models follow, then "Client pattern" and
 "User agent pattern", which take a pattern (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for
 one, a backslash quoting either, and a value with no wildcard matching in full), then Status, Outcome, Cache miss
-reason, Agent type, Turn origin, Effort, Request class and Speed, the Kind select (Any kind, Inference, Count tokens,
-Probe), the "Held only" switch, the "Follow" switch, Refresh and the Columns control. The account filter keeps the
+reason, Agent type, Turn origin, Effort and Request class, the Kind select (Any kind, Inference, Count tokens, Probe),
+Speed, the "Held only" switch, the "Follow" switch, Refresh and the Columns control. The account filter keeps the
 requests whose serving attempt ran on the account, so a request that failed over lists under the account that answered
 it. Each multi-select opens with a Select all row, and the search and the two pattern fields apply 400 milliseconds
 after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in
-the page's address, so a reload or a shared link keeps them, and "Reset filters" clears them.
+the page's address, so a reload or a shared link keeps them, and "Reset" clears them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and
@@ -325,10 +328,10 @@ with the whole id on hover. The client column reads the class the router derived
 (`claude-code/<entrypoint>` or `other`), whole on hover, with the agent type beneath it on a subagent's
 turn.
 Status reads the code with the outcome
-word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`) and
-a `held {time}` badge for a request that waited for a slot while every account was at its cap. One row is one client
-request however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, and
-nothing for a request of one attempt. Cost reads window shares for a request a subscription window paid, each with its
+word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One
+row is one client request however many attempts it took: Attempts reads `2 attempts` with the trail of account and
+status on hover, nothing for a request of one attempt, and a `held {time}` badge for a request that waited for a slot
+while every account was at its cap. Cost reads window shares for a request a subscription window paid, each with its
 window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), and dollars for an overage, fast
 mode or API-key request. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
 holds the requests up to the moment you opened it so paging does not shift, and Refresh brings it up to now. An empty
@@ -351,20 +354,21 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   "added by the router" or none.
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
-- Usage: Input (uncached), Cache read, Cache write, 5m, Cache write, 1h, Output, thinking, Output, plain, Server tool
-  calls and Estimated cost in the request's native unit, a subscription request's shares with their dollar equivalent.
+- Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
+  Server tool calls and Estimated cost in the request's native unit, a subscription request's shares with their dollar
+  equivalent.
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
-- Request shape: Effort (the level the upstream applies), Thinking, Max tokens, Tools, system blocks, messages,
-  Context edits, Temperature, Speed, service tier and Auto mode, "not sent" where absent.
+- Request shape: Effort (the level the upstream applies), Thinking, Max tokens, "Tools, system blocks, messages",
+  Context edits, Temperature, "Speed, service tier" and Auto mode, "not sent" where absent.
 - Client hints: Agent type, Compaction, Context compacted, Turn origin and Tool time before this turn.
 - Captured bodies: the request and the response, each with Copy all and "Open wide", which draws a body of any size
   pretty-printed in a window of its lines and a streamed answer as its events, or "Not captured for this key. Enable
   body capture on the key to record the exchange." or "Bodies for this request have aged out of retention." What
   capture stores and for how long is on [Body capture](statistics.md#body-capture).
 
-A request the ledger no longer holds reads "Request not found" with "It may have aged out of the ledger."
+A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger."
 
 ## Analytics
 
@@ -390,7 +394,7 @@ rate, Failovers, Search and Fetch.
 
 Burn has its own grouping, Account, Key, Session or Request class, under "Burn groups by account, key, session or
 request class alone. The plan shares read under Account, since shares of different accounts' windows do not add." It
-draws Tokens per minute, Spend per minute (dollars alone, a subscription account's among them for its fast-mode and
+draws Spend per minute (dollars alone, a subscription account's among them for its fast-mode and
 overage answers) and, grouped by account, Plan per hour, the share of each subscription account's 5-hour window solid
 and of its 7-day window dashed, with the peak band's hours shaded behind the 5-hour lines and a note whose "Cost
 reference" link opens the dialog on Tiers and peak band. It closes on Member budgets, Pool, Account, Spent, Budget and
@@ -414,14 +418,14 @@ Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share
 count in Misses by reason but the expired column links to the Requests view on those requests with the page's filters
 carried over, and a count the Requests view cannot list exactly stays plain with the reason on hover.
 
-Cost carries the "Unit" control with four positions, All in dollars (the default), Billed dollars, Window shares and
-Dollar equivalent, kept in the address as `unit`. Under a dollar unit it draws the tiles Estimated cost, Billed dollars
-or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a
-table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output). Under Window shares, which
-reads under the account grouping alone, the tiles read Window share, Per request and Per 1k output, and the table Plan
-requests, 5-hour, 7-day, the model week, Per request and Per 1k output. Every position draws Fast mode spend and the
-Cost split (Input, Cache read, Cache write, Output). The prices and the cost model behind the dollars and the shares
-are on [Pricing](statistics.md#pricing).
+Cost shares the "Unit" control with Cache and Cache warming: four positions, All in dollars (the default), Billed
+dollars, Window shares and Dollar equivalent, kept in the address as `unit`. Under a dollar unit Cost draws the tiles
+Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the
+chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k
+output). Under Window shares, which reads under the account grouping alone, the tiles read Window share, Per request
+and Per 1k output, and the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output. Every
+position draws Fast mode spend and the Cost split (Input, Cache read, Cache write, Output). The prices and the cost
+model behind the dollars and the shares are on [Pricing](statistics.md#pricing).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
@@ -435,9 +439,9 @@ Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Wind
 windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per
 bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection", each account's
 hover adding its Pace score, the remaining share over the hours from the sample's instant to the window's reset. The
-table Accounts in range lists Peak 5h, Peak 7d, Peak 7d, extra usage, Time in overage, Time in cooldown, Pins created,
-Migrated in and Migrated out. The section keeps reading the rollups under a session filter, since they carry no
-session, and its subtitle says so.
+table Accounts in range lists Peak 5h, Peak 7d, "Peak 7d, extra usage", Time in overage, Time in cooldown, Pins
+created, Migrated in and Migrated out. The section keeps reading the rollups under a session filter, since they carry
+no session, and its subtitle says so.
 
 ## Sessions
 
@@ -449,7 +453,7 @@ cache-warming recipe." with the disclosure "How pins and recipes work", whose pa
 are, and a "Cost reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of {max}`, the
 engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, less the subagents the mod released while
 their session lives, which draw no line and keep their slot until the session leaves, named on hover), Retained
-(`{n} MiB of {max} MiB`, "prompts kept for probes"), Cache probes, 24h (a bar by outcome and `{n} ok ({pct}), {n}
+(`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}), {n}
 migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to prevent")
 and "Bus gaps" ("times the keepalive engine missed bus events"). A tile whose read failed draws a dash with the reason
 on hover, and Try again under the tiles reads them again. The view reads its sessions every 15 seconds and its tiles
@@ -525,9 +529,10 @@ probe is priced are on [Pricing](statistics.md#pricing).
 "Appearance" ("Stored in this browser only.") sets the Theme, Light, Dark or System ("System follows the operating
 system preference."), and the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), the two browser
 preferences the shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and
-Subscription costs path (each with its table's effective date, or "not configured"), Storage path, and Admin secret as
-"configured" or "not configured", each path's hover naming the bootstrap key that sets it, and closes on "The values
-the configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
+Subscription costs path (each as the path or "not configured", then `effective {date}` for its table), Storage path,
+and Admin secret as "configured" or "not configured", each path's hover naming the bootstrap key that sets it, and
+closes on "The values the configuration file sets are on the installation page, and `phoebis check-config` prints
+this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
