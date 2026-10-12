@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/breakdown?range=24h&group_by=key",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "group_by": "key",
     "rows": [
       {
@@ -360,10 +360,10 @@
         "plan_output_tokens": null
       },
       {
-        "key": "desktop@940000",
-        "label": "desktop (deleted, created 1970-01-01 00:15 UTC)",
+        "key": "desktop@1791720940000",
+        "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
         "key_id": "desktop",
-        "key_created_at": 940000,
+        "key_created_at": 1791720940000,
         "requests": 1,
         "succeeded": 1,
         "rate_limited": 0,

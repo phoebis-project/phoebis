@@ -35,11 +35,13 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{
-    funding_of, price_shares, Capacity, DefinedBy, Funding, ModelWindow, Override, Peak, PerWindow,
-    PlanTables, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
+    funding_of, price_shares, Capacity, CostRevisions, DefinedBy, Funding, ModelWindow, Override,
+    Peak, PerWindow, PlanTables, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit,
+    WindowShares,
 };
 pub use pricing::{
-    price_attempts, prompt_tokens, LongContext, ModelPrice, ModelRow, PriceTable, Pricing, Speed,
+    effective_instant, price_attempts, prompt_tokens, LongContext, ModelPrice, ModelRow,
+    PriceRevisions, PriceTable, Pricing, Speed,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};

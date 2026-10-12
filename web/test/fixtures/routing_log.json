@@ -1,11 +1,11 @@
 {
-  "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+  "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
   "body": {
     "rows": [
       {
         "type": "event",
         "id": 37,
-        "at": 1060000,
+        "at": 1791721060000,
         "kind": "router_started",
         "account_id": null,
         "key_id": null,
@@ -22,7 +22,7 @@
           "shedding_rounds_stale": 1,
           "windows_loaded": 2,
           "affinity_entries_loaded": 5,
-          "down_since": 1000000,
+          "down_since": 1791721000000,
           "holds_lost": true
         }
       },
@@ -32,7 +32,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "placed",
         "probe": false,
         "key_id": "desktop",
@@ -88,7 +88,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": 1,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "placed",
         "probe": false,
         "key_id": "desktop",
@@ -147,7 +147,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "renewed",
         "probe": false,
         "key_id": "desktop",
@@ -194,7 +194,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "refused",
         "probe": false,
         "key_id": "retired",
@@ -245,7 +245,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "renewed",
         "probe": true,
         "key_id": "desktop",
@@ -292,7 +292,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "moved",
         "probe": false,
         "key_id": "desktop",
@@ -347,7 +347,7 @@
         "seq": 2,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "placed",
         "probe": false,
         "key_id": "desktop",
@@ -399,7 +399,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "held",
         "probe": false,
         "key_id": "desktop",
@@ -455,7 +455,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "exhausted",
         "probe": false,
         "key_id": "desktop",
@@ -473,7 +473,7 @@
         "fact": [
           {
             "key": "retry",
-            "value": 1600000,
+            "value": 1791721600000,
             "unit": "time",
             "entity": null
           }
@@ -489,7 +489,7 @@
         "hold": null,
         "exhaustion": {
           "kind": "timed",
-          "deadline": 1600000,
+          "deadline": 1791721600000,
           "window": "five_hour",
           "reason": null,
           "obstacle": null
@@ -505,7 +505,7 @@
         "seq": 3,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "exhausted",
         "probe": false,
         "key_id": "desktop",
@@ -567,7 +567,7 @@
         "seq": 2,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "held",
         "probe": false,
         "key_id": "desktop",
@@ -623,7 +623,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "held",
         "probe": false,
         "key_id": "desktop",
@@ -679,7 +679,7 @@
         "seq": 2,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "placed",
         "probe": false,
         "key_id": "desktop",
@@ -727,7 +727,7 @@
         "seq": 1,
         "attempt": 1,
         "attempt_count": null,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "placed",
         "probe": false,
         "key_id": "desktop",
@@ -780,7 +780,7 @@
       {
         "type": "event",
         "id": 21,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "cooldown_set",
         "account_id": "direct",
         "key_id": null,
@@ -792,7 +792,7 @@
         "actor": null,
         "detail": {
           "scope": "account",
-          "until": 1600000,
+          "until": 1791721600000,
           "reason": "rate_limited",
           "window": "five_hour",
           "source_request_id": "r-move"
@@ -801,7 +801,7 @@
       {
         "type": "event",
         "id": 20,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "cooldown_set",
         "account_id": "business",
         "key_id": null,
@@ -813,7 +813,7 @@
         "actor": null,
         "detail": {
           "scope": "account",
-          "until": 1600000,
+          "until": 1791721600000,
           "reason": "rate_limited",
           "window": "five_hour",
           "source_request_id": "r-move"
@@ -822,7 +822,7 @@
       {
         "type": "event",
         "id": 19,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_released",
         "account_id": "business",
         "key_id": "desktop",
@@ -839,7 +839,7 @@
       {
         "type": "event",
         "id": 18,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "cooldown_cleared",
         "account_id": "business",
         "key_id": null,
@@ -857,7 +857,7 @@
       {
         "type": "event",
         "id": 17,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "fast_credits_changed",
         "account_id": "business",
         "key_id": null,
@@ -876,13 +876,13 @@
           },
           "blocked_before": null,
           "blocked_after": "out_of_credits",
-          "observed_at": 1000000
+          "observed_at": 1791721000000
         }
       },
       {
         "type": "event",
         "id": 16,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "overage_ended",
         "account_id": "business",
         "key_id": null,
@@ -893,13 +893,13 @@
         "request_id": null,
         "actor": null,
         "detail": {
-          "since": 940000
+          "since": 1791720940000
         }
       },
       {
         "type": "event",
         "id": 14,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_migrated",
         "account_id": "direct",
         "key_id": "desktop",
@@ -919,7 +919,7 @@
       {
         "type": "event",
         "id": 13,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "window_spent",
         "account_id": "business",
         "key_id": null,
@@ -932,7 +932,7 @@
         "detail": {
           "window": "five_hour",
           "utilization": 1.0,
-          "reset": 4600000,
+          "reset": 1791724600000,
           "source": "head",
           "source_request_id": "r-probe"
         }
@@ -940,7 +940,7 @@
       {
         "type": "event",
         "id": 12,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_created",
         "account_id": "business",
         "key_id": "desktop",
@@ -958,7 +958,7 @@
       {
         "type": "event",
         "id": 11,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_created",
         "account_id": "business",
         "key_id": "desktop",
@@ -976,7 +976,7 @@
       {
         "type": "event",
         "id": 10,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_created",
         "account_id": "business",
         "key_id": "desktop",
@@ -994,7 +994,7 @@
       {
         "type": "event",
         "id": 9,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "cooldown_set",
         "account_id": "business",
         "key_id": null,
@@ -1006,7 +1006,7 @@
         "actor": null,
         "detail": {
           "scope": "model:claude-haiku-4-5-20251001",
-          "until": 2800000,
+          "until": 1791722800000,
           "reason": "model_rejected",
           "window": "model_rejection",
           "source_request_id": null
@@ -1015,7 +1015,7 @@
       {
         "type": "event",
         "id": 4,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "pin_created",
         "account_id": "business",
         "key_id": "desktop",
@@ -1033,7 +1033,7 @@
       {
         "type": "event",
         "id": 3,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "account_state_changed",
         "account_id": "business",
         "key_id": null,
@@ -1053,7 +1053,7 @@
       {
         "type": "event",
         "id": 2,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "registry_changed",
         "account_id": null,
         "key_id": null,
@@ -1087,7 +1087,7 @@
       {
         "type": "event",
         "id": 1,
-        "at": 1000000,
+        "at": 1791721000000,
         "kind": "registry_changed",
         "account_id": null,
         "key_id": null,
@@ -1139,7 +1139,7 @@
       {
         "type": "event",
         "id": 15,
-        "at": 940000,
+        "at": 1791720940000,
         "kind": "overage_started",
         "account_id": "business",
         "key_id": null,
@@ -1154,7 +1154,7 @@
       {
         "type": "event",
         "id": 36,
-        "at": -1580000,
+        "at": 1791718420000,
         "kind": "registry_changed",
         "account_id": null,
         "key_id": null,
@@ -1178,7 +1178,7 @@
       {
         "type": "event",
         "id": 35,
-        "at": -1640000,
+        "at": 1791718360000,
         "kind": "refresh_uncertain",
         "account_id": "business",
         "key_id": null,
@@ -1196,7 +1196,7 @@
       {
         "type": "event",
         "id": 34,
-        "at": -1700000,
+        "at": 1791718300000,
         "kind": "refresh_failed",
         "account_id": "business",
         "key_id": null,
@@ -1214,7 +1214,7 @@
       {
         "type": "event",
         "id": 33,
-        "at": -1760000,
+        "at": 1791718240000,
         "kind": "refresh_succeeded",
         "account_id": "business",
         "key_id": null,
@@ -1225,15 +1225,15 @@
         "request_id": null,
         "actor": null,
         "detail": {
-          "until": 4600000,
-          "access_expires_at": 4600000,
+          "until": 1791724600000,
+          "access_expires_at": 1791724600000,
           "refresh_expires_at": null
         }
       },
       {
         "type": "event",
         "id": 32,
-        "at": -1820000,
+        "at": 1791718180000,
         "kind": "account_state_changed",
         "account_id": "business",
         "key_id": null,
@@ -1253,7 +1253,7 @@
       {
         "type": "event",
         "id": 31,
-        "at": -1880000,
+        "at": 1791718120000,
         "kind": "ledger_gap",
         "account_id": null,
         "key_id": null,
@@ -1271,7 +1271,7 @@
       {
         "type": "event",
         "id": 30,
-        "at": -1940000,
+        "at": 1791718060000,
         "kind": "budget_period_ended",
         "account_id": "business",
         "key_id": null,
@@ -1284,13 +1284,13 @@
         "detail": {
           "period": "day",
           "previous_spent_usd": 4.2,
-          "period_start": -1940000
+          "period_start": 1791718060000
         }
       },
       {
         "type": "event",
         "id": 29,
-        "at": -2000000,
+        "at": 1791718000000,
         "kind": "budget_reached",
         "account_id": "business",
         "key_id": null,
@@ -1304,14 +1304,14 @@
           "period": "month",
           "budget_usd": 30.0,
           "spent_usd": 30.4,
-          "period_end": 87400000,
+          "period_end": 1791807400000,
           "source_request_id": "r-failover"
         }
       },
       {
         "type": "event",
         "id": 28,
-        "at": -2060000,
+        "at": 1791717940000,
         "kind": "catalog_changed",
         "account_id": "business",
         "key_id": null,
@@ -1334,7 +1334,7 @@
       {
         "type": "event",
         "id": 27,
-        "at": -2120000,
+        "at": 1791717880000,
         "kind": "poll_backoff_ended",
         "account_id": "business",
         "key_id": null,
@@ -1347,13 +1347,13 @@
         "detail": {
           "duration_ms": 120000,
           "attempts": 2,
-          "resumed_at": -2120000
+          "resumed_at": 1791717880000
         }
       },
       {
         "type": "event",
         "id": 26,
-        "at": -2240000,
+        "at": 1791717760000,
         "kind": "poll_backoff_started",
         "account_id": "business",
         "key_id": null,
@@ -1367,14 +1367,14 @@
           "reason": "429",
           "endpoint": "usage",
           "attempts": 1,
-          "next_attempt_at": -2180000,
-          "last_clean_poll_at": -2300000
+          "next_attempt_at": 1791717820000,
+          "last_clean_poll_at": 1791717700000
         }
       },
       {
         "type": "event",
         "id": 25,
-        "at": -2300000,
+        "at": 1791717700000,
         "kind": "window_reset",
         "account_id": "business",
         "key_id": null,
@@ -1387,15 +1387,15 @@
         "detail": {
           "window": "seven_day",
           "utilization_before": 0.83,
-          "reset_at": -2300000,
-          "next_reset": 602500000,
+          "reset_at": 1791717700000,
+          "next_reset": 1792322500000,
           "observed": "sample"
         }
       },
       {
         "type": "event",
         "id": 24,
-        "at": -2360000,
+        "at": 1791717640000,
         "kind": "wind_down_started",
         "account_id": "business",
         "key_id": null,
@@ -1406,7 +1406,7 @@
         "request_id": null,
         "actor": null,
         "detail": {
-          "ends_at": 87400000,
+          "ends_at": 1791807400000,
           "wind_down_minutes": 1440,
           "end_source": "cancelled"
         }
@@ -1414,7 +1414,7 @@
       {
         "type": "event",
         "id": 23,
-        "at": -2420000,
+        "at": 1791717580000,
         "kind": "warm_prefix_expired",
         "account_id": "direct",
         "key_id": "desktop",
@@ -1441,7 +1441,7 @@
       {
         "type": "event",
         "id": 22,
-        "at": -2480000,
+        "at": 1791717520000,
         "kind": "shedding_round",
         "account_id": "business",
         "key_id": "desktop",
@@ -1487,14 +1487,14 @@
             }
           ],
           "dwell_seconds": 900,
-          "dwell_until": -1580000,
+          "dwell_until": 1791718420000,
           "persisted": true
         }
       },
       {
         "type": "event",
         "id": 8,
-        "at": -2599650,
+        "at": 1791717400350,
         "kind": "model_permitted",
         "account_id": "direct",
         "key_id": "desktop",
@@ -1517,7 +1517,7 @@
       {
         "type": "event",
         "id": 7,
-        "at": -2599700,
+        "at": 1791717400300,
         "kind": "model_rejected",
         "account_id": "business",
         "key_id": "desktop",
@@ -1537,7 +1537,7 @@
       {
         "type": "event",
         "id": 6,
-        "at": -2599800,
+        "at": 1791717400200,
         "kind": "pin_expired",
         "account_id": "business",
         "key_id": "desktop",
@@ -1558,7 +1558,7 @@
       {
         "type": "event",
         "id": 5,
-        "at": -2599900,
+        "at": 1791717400100,
         "kind": "pin_migrated",
         "account_id": "business",
         "key_id": "desktop",

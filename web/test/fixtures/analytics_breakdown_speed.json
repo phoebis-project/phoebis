@@ -1,8 +1,8 @@
 {
   "route": "GET /admin/analytics/breakdown?range=24h&group_by=speed",
   "body": {
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "group_by": "speed",
     "rows": [
       {

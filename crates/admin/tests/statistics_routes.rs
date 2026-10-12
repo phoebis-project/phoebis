@@ -119,7 +119,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
     );
-    let shipped = phoebis_ledger::PriceTable::shipped();
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let shipped = revisions.in_force(common::NOW);
     let prices = &settings["api_prices"];
     assert_eq!(
         (&prices["source"], &prices["effective"]),
@@ -143,23 +144,23 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         "in the file's order"
     );
     let loaded = phoebis_ledger::PlanTables::shipped();
+    let cost_model = loaded.revisions.in_force(common::NOW);
     let costs = &settings["subscription_costs"];
     assert_eq!(
         (&costs["source"], &costs["effective"]),
         (
             &serde_json::json!(loaded.source),
-            &serde_json::json!(loaded.costs.effective)
+            &serde_json::json!(cost_model.effective)
         )
     );
     assert_eq!(
         costs["content"],
-        serde_json::to_value(&loaded.costs).unwrap(),
+        serde_json::to_value(cost_model).unwrap(),
         "the echo answers the cost model the harness loaded, key for key"
     );
     assert_eq!(
         keys_in_order(&costs["content"]["model_weight"]),
-        loaded
-            .costs
+        cost_model
             .model_weight
             .keys()
             .map(String::as_str)
@@ -174,7 +175,12 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     assert_eq!(
         pricing,
-        serde_json::to_value(phoebis_admin::table_envelopes(&shipped, &loaded)).unwrap(),
+        serde_json::to_value(phoebis_admin::table_envelopes(
+            &revisions,
+            &loaded,
+            common::NOW
+        ))
+        .unwrap(),
         "the price route answers both envelopes the settings echo carries"
     );
     assert!(
@@ -204,7 +210,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (
             &serde_json::json!({"path": null, "source": "shipped", "effective": shipped.effective}),
-            &serde_json::json!({"path": null, "source": "shipped", "effective": loaded.costs.effective})
+            &serde_json::json!({"path": null, "source": "shipped", "effective": cost_model.effective})
         ),
         "the harness configures neither path, so both tables are the shipped ones: {system}"
     );
@@ -657,7 +663,8 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
     // Picked by what they carry, so the test survives a price update that moves fast mode to another model.
-    let shipped = phoebis_ledger::PriceTable::shipped();
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let shipped = revisions.in_force(common::NOW);
     let (fast_model, fast_row) = shipped
         .models
         .iter()
@@ -731,8 +738,9 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
 async fn the_price_routes_answer_the_long_context_set_beside_the_standard_cells() {
     // Served from the test table so a row with the block is there whatever the shipped table lists, and read from
     // that table key for key.
-    let table = phoebis_ledger::test_tables::api_prices();
-    let parts = common::admin_parts_full_priced(table.clone()).await;
+    let revisions = phoebis_ledger::test_tables::api_prices();
+    let parts = common::admin_parts_full_priced(revisions.clone()).await;
+    let table = revisions.in_force(common::NOW);
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
@@ -1388,7 +1396,8 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         .cloned()
         .unwrap();
     // A million tokens at the fast cell's price per million read that price in dollars.
-    let fast_input = phoebis_ledger::PriceTable::shipped()
+    let fast_input = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(common::NOW)
         .price_at("claude-opus-5", phoebis_ledger::Speed::Fast, 1_000_000)
         .unwrap()
         .input;
@@ -2568,7 +2577,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     );
     assert_eq!(
         member["period_end"].as_i64(),
-        Some(2_678_400_000),
+        Some(common::month_end()),
         "the period end is the calendar month's own boundary at the fixture's clock"
     );
 }
@@ -3150,7 +3159,10 @@ async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names
     // past `now`, the instant the store stamped the pool and the key with, so their registry rows stay off it.
     let page = wait_json(
         &parts.app,
-        "/admin/routing-log?from=1970-01-01T00:16:40.001Z&to=1010000",
+        &format!(
+            "/admin/routing-log?from=2026-10-11T12:16:40.001Z&to={}",
+            now + 10_000
+        ),
         &cookie,
         |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
     )

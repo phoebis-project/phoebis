@@ -1341,9 +1341,9 @@ async fn refresh_member_spends(
             rows: Some(Vec::new()),
         };
     }
-    let table = pricing.current();
+    let revisions = pricing.revisions();
     let rows = db
-        .read(move |conn| member_spends(conn, &members, now, &table))
+        .read(move |conn| member_spends(conn, &members, now, revisions.in_force(now)))
         .await;
     match rows {
         Ok(rows) => {
@@ -1517,7 +1517,8 @@ async fn land_acknowledging(
                         attempts,
                         bodies,
                     } => {
-                        let table = pricing.current();
+                        let table =
+                            Arc::new(pricing.revisions().in_force(request.received_at).clone());
                         let mut attempts = attempts.to_vec();
                         price_attempts(
                             &table,
@@ -1680,6 +1681,7 @@ async fn run_purge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pricing::PriceRevisions;
     use phoebis_store::AccountKind;
 
     /// A ledger whose channel holds one record and has no writer draining it.
@@ -1774,7 +1776,7 @@ mod tests {
     async fn a_failed_spend_refresh_keeps_the_previous_boundary_armed() {
         let router = budgeted_router();
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+        let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
         let event_poll = Duration::from_secs(5);
 
         let first =
@@ -1817,7 +1819,7 @@ mod tests {
     async fn a_failed_spend_refresh_past_its_deadline_retries_at_the_poll_cadence() {
         let router = budgeted_router();
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+        let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
         let event_poll = Duration::from_secs(5);
 
         db.write(|c| {
@@ -1897,9 +1899,7 @@ mod tests {
             output: 1_000_000.0,
         };
         let table = PriceTable {
-            version: "test".into(),
-            effective: "test".into(),
-            source: "test".into(),
+            effective: "2026-01-01".into(),
             models: [(
                 "m".to_string(),
                 crate::pricing::ModelRow {
@@ -1912,7 +1912,9 @@ mod tests {
         };
         let spends = Spends {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
-            pricing: Arc::new(Pricing::new(table)),
+            pricing: Arc::new(Pricing::new(
+                PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
+            )),
             router,
             stats: Arc::new(LedgerStats::default()),
             metrics: Arc::new(Metrics::new()),

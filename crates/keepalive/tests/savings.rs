@@ -51,7 +51,8 @@ fn priced_body() -> String {
 /// The cells `model` prices at for an answer served at `speed` on a prompt under any threshold, in the table the
 /// rig prices through.
 fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::ModelPrice {
-    phoebis_ledger::PriceTable::shipped()
+    phoebis_ledger::PriceRevisions::shipped()
+        .in_force(NOW)
         .price_at(model, speed, 0)
         .expect("the rig's table prices the model")
         .clone()
@@ -2287,7 +2288,10 @@ async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_pr
 /// The standing answer's 2,000 cached tokens read back at the dearest cache read of the table the rig prices
 /// through: what a probe on a model the table does not list costs.
 fn dearest_read_2000() -> f64 {
-    let dearest = phoebis_ledger::PriceTable::shipped().rate_table().fallback;
+    let dearest = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(NOW)
+        .rate_table()
+        .fallback;
     2_000.0 * dearest.cache_read.expect("the fallback prices every type")
 }
 

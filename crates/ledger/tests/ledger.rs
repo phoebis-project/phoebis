@@ -17,7 +17,7 @@ use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
     BudgetedMember, CacheMapWrite, DecisionRow, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PriceTable, Record, Replayed, RequestFilter, RequestRecord,
+    LiveKeys, ParkedSummary, PriceRevisions, Record, Replayed, RequestFilter, RequestRecord,
     RollupFilter, RollupSelect, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
@@ -1960,7 +1960,7 @@ async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     let gauges = phoebis_ledger::gather(
         &h.router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(NOW),
         NOW,
         60_000,
         None,
@@ -3819,7 +3819,8 @@ fn a_second_message_stop_chunk_keeps_the_first_chunks_stream_end() {
 
 #[test]
 fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
-    let table = phoebis_ledger::PriceTable::shipped();
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let table = revisions.in_force(NOW);
     let attempt = |attempt: u32, speed: Option<&str>| AttemptRecord {
         request_id: "r1".into(),
         attempt,
@@ -3830,7 +3831,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
     };
     let mut attempts = vec![attempt(1, Some("fast")), attempt(2, None)];
     let unknown = std::sync::atomic::AtomicU64::new(0);
-    let split = phoebis_ledger::price_attempts(&table, "claude-opus-5-5", &mut attempts, &unknown);
+    let split = phoebis_ledger::price_attempts(table, "claude-opus-5-5", &mut attempts, &unknown);
     let priced = |a: &AttemptRecord| (a.estimated_usd, a.input_usd, a.output_usd);
     // Opus 5.5 lists $8 input and $40 output per million at the fast cells, $4 and $20 at the standard ones.
     assert_eq!(
@@ -3849,7 +3850,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
             attempts[0].pricing_version.as_deref(),
             unknown.load(Ordering::SeqCst)
         ),
-        (Some("2026-10-08"), 0)
+        (Some(table.effective.as_str()), 0)
     );
 }
 
@@ -4126,7 +4127,7 @@ fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
                 c,
                 &[budgeted(BudgetPeriod::Day), budgeted(BudgetPeriod::Month)],
                 now,
-                &PriceTable::shipped(),
+                PriceRevisions::shipped().in_force(now),
             )
         })
         .unwrap();
@@ -4264,7 +4265,7 @@ fn member_spends_sums_the_metered_rows_alone_when_asked() {
                     metered_only,
                 }],
                 ms(2026, 1, 15, 12, 0),
-                &PriceTable::shipped(),
+                PriceRevisions::shipped().in_force(ms(2026, 1, 15, 12, 0)),
             )
         })
         .unwrap()[0]
@@ -5185,7 +5186,7 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
     assert_eq!(parked_rows(&h).await, 0, "a full disk parks nothing");
     let gauges = phoebis_ledger::gather(
         &h.router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(NOW),
         NOW,
         60_000,
         None,
@@ -7170,7 +7171,8 @@ fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
 #[test]
 fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_selects() {
     // The test table's Haiku 5.5 row, per million: input 1 and output 5 up to 1,000 prompt tokens, 5 and 25 over.
-    let table = phoebis_ledger::test_tables::api_prices();
+    let revisions = phoebis_ledger::test_tables::api_prices();
+    let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
     let db = LedgerDb::open_in_memory().unwrap();
     let attempt = |attempt: u32, input: u64| AttemptRecord {
         request_id: "r1".into(),
@@ -7184,7 +7186,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     };
     let mut attempts = vec![attempt(1, 1_000), attempt(2, 1_001)];
     let unknown = std::sync::atomic::AtomicU64::new(0);
-    let split = phoebis_ledger::price_attempts(&table, "claude-haiku-5-5", &mut attempts, &unknown);
+    let split = phoebis_ledger::price_attempts(table, "claude-haiku-5-5", &mut attempts, &unknown);
     let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-12);
     assert!(
         close(attempts[0].input_usd, 1_000e-6) && close(attempts[0].output_usd, 500e-6),

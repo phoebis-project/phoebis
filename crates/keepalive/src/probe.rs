@@ -185,7 +185,7 @@ fn settled_unit(
     usage: ProbeUsage,
     at: i64,
 ) -> SavingsUnit {
-    let unit = settlement_unit(default_unit, tables, tier, canonical_model);
+    let unit = settlement_unit(default_unit, tables, tier, canonical_model, at);
     if unit == SavingsUnit::WindowShare
         && probe_cost(unit, table, tables, tier, canonical_model, usage, at).is_none()
     {
@@ -194,7 +194,7 @@ fn settled_unit(
         tracing::debug!(
             account,
             model = canonical_model,
-            unpriced = unpriced_reason(tables, canonical_model),
+            unpriced = unpriced_reason(tables, canonical_model, at),
             "a probe the cost model cannot price on the window share settles in dollars"
         );
         return SavingsUnit::Usd;
@@ -306,11 +306,12 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         }
     };
     let now = engine.now();
-    let table = engine.parts.pricing.current();
+    let revisions = engine.parts.pricing.revisions();
+    let table = revisions.in_force(now);
     let tables = engine.parts.tables.clone();
     let (record, applied) = {
         let mut inner = engine.lock();
-        let record = inner.probe_record(&job, &exchange, &table);
+        let record = inner.probe_record(&job, &exchange, table);
         // The serving account's kind decides the unit this probe's cost settles in. It rides the relay's answer, so
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
@@ -344,7 +345,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             .and_then(|s| s.tier);
         let unit = settled_unit(
             default_unit,
-            &table,
+            table,
             &tables,
             tier.as_deref(),
             &record.account,
@@ -961,6 +962,7 @@ mod tests {
 
     use crate::config::KeepaliveTiming;
     use crate::engine::{Agent, Session};
+    use phoebis_ledger::PriceRevisions;
 
     use super::*;
 
@@ -1066,7 +1068,8 @@ mod tests {
                 }
             }
             let exchange = held_answer();
-            let record = inner.probe_record(&job, &exchange, &PriceTable::shipped());
+            let record =
+                inner.probe_record(&job, &exchange, PriceRevisions::shipped().in_force(2_000));
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
             let applied = inner.apply_probe(&job, exchange, &record, None, 2_000);
             assert_eq!(applied, Applied::Orphaned, "{orphaned_by}");
@@ -1305,9 +1308,7 @@ mod tests {
     /// back to dollars rather than naming a share nothing can price.
     fn table_pricing_an_unlisted_model() -> PriceTable {
         PriceTable {
-            version: "test".into(),
             effective: "test".into(),
-            source: "test".into(),
             models: [(
                 "unlisted-model".to_string(),
                 phoebis_ledger::ModelRow {
@@ -1370,15 +1371,21 @@ mod tests {
     // units, and the band holds 0.5 of it.
     #[test]
     fn a_plan_funded_probe_on_a_listed_model_settles_in_five_hour_share() {
-        let table = phoebis_ledger::test_tables::api_prices();
-        let tables = phoebis_ledger::test_tables::subscription_costs();
+        let revisions = phoebis_ledger::test_tables::api_prices();
+        let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
+        // The first cost entry alone, so the September instant below reads its figures.
+        let tables = PlanTables {
+            revisions: phoebis_ledger::test_tables::first_entry_costs(),
+            path: None,
+            source: "test".to_string(),
+        };
         let one_input = ProbeUsage {
             input: 1,
             ..ProbeUsage::default()
         };
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
+            table,
             &tables,
             MAX_20X,
             "o",
@@ -1390,7 +1397,7 @@ mod tests {
         let share = |at: i64| {
             probe_cost(
                 unit,
-                &table,
+                table,
                 &tables,
                 MAX_20X,
                 "claude-opus-5-5",
@@ -1413,11 +1420,12 @@ mod tests {
 
     #[test]
     fn a_plan_funded_probe_on_an_account_without_a_tier_settles_in_dollars() {
-        let table = PriceTable::shipped();
+        let revisions = PriceRevisions::shipped();
+        let table = revisions.in_force(OFF_BAND);
         let tables = PlanTables::shipped();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
+            table,
             &tables,
             None,
             "o",
@@ -1433,24 +1441,25 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
-        // The test table leaves Opus 5 without a weight; the test price table lists it.
-        let table = phoebis_ledger::test_tables::api_prices();
+    fn a_plan_funded_probe_on_a_model_of_no_weighted_tier_settles_in_dollars() {
+        // The test table places Mystery 2 in a tier with no weighted model, so nothing weighs it.
+        let revisions = phoebis_ledger::test_tables::api_prices();
+        let table = revisions.in_force(OFF_BAND);
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
+            table,
             &tables,
             MAX_20X,
             "o",
-            "claude-opus-5",
+            "claude-mystery-2",
             million_input(),
             OFF_BAND,
         );
         assert_eq!(
             unit,
             SavingsUnit::Usd,
-            "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
+            "Mystery 2 has no weight to read, so the share is unpriced and the dollar unit governs"
         );
     }
 

@@ -17,7 +17,7 @@ use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
-    PriceTable, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
+    PriceRevisions, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_profile::{
@@ -47,8 +47,26 @@ pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 /// The key stored on the API-key account, which the verify test expects to see on the wire.
 pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 
-/// Unix milliseconds every clock in these tests reports, so no deadline moves under a test.
-pub const NOW: i64 = 1_000_000;
+/// Unix milliseconds every clock in these tests reports, so no deadline moves under a test: 2026-10-11 12:16:40 UTC,
+/// inside the latest revision of both shipped price files, so the routes read the shipped tables in force and hold
+/// no pending revision. It sits off the hour boundary, so a 24-hour range touches 25 hour buckets and a seed an hour
+/// back lands in the hour before the clock's own.
+pub const NOW: i64 = 1_791_721_000_000;
+
+/// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
+pub fn month_end() -> i64 {
+    let first = jiff::Timestamp::from_millisecond(NOW)
+        .expect("the rig's clock is a timestamp")
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .first_of_month();
+    first
+        .checked_add(jiff::Span::new().months(1))
+        .and_then(|next| next.to_zoned(jiff::tz::TimeZone::UTC))
+        .expect("the next month's first midnight exists in UTC")
+        .timestamp()
+        .as_millisecond()
+}
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 
@@ -133,12 +151,12 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 }
 
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
-pub async fn admin_parts_full_priced(prices: PriceTable) -> Full {
+pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
     full_from(build_app(None, ACCOUNT_UUID, false, None, None, Some(prices), None).await)
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
-pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceTable) -> Full {
+pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevisions) -> Full {
     full_from(
         build_app(
             None,
@@ -717,7 +735,7 @@ async fn build_app(
     tls: bool,
     store: Option<Arc<Store>>,
     accounting: Option<AccountingSource>,
-    prices: Option<PriceTable>,
+    prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
@@ -843,7 +861,7 @@ async fn build_app(
     ));
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceTable::shipped)));
+    let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceRevisions::shipped)));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),

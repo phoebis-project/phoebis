@@ -11,7 +11,7 @@ use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
 };
-use phoebis_ledger::{Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
+use phoebis_ledger::{Ledger, LedgerConfig, LedgerDb, Metrics, PriceRevisions, Pricing};
 use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
@@ -108,7 +108,7 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let ledger = phoebis_ledger::spawn(
         db.clone(),
-        Arc::new(Pricing::new(PriceTable::shipped())),
+        Arc::new(Pricing::new(PriceRevisions::shipped())),
         store.clone(),
         &bus,
         router.clone(),

@@ -7,11 +7,12 @@ use phoebis_ledger::{
     burn_series_over, delta_of, fold_account, fold_event, fold_keepalive, hour_ceil, hour_of,
     key_request_totals, list_requests, member_spends, moves_by_reason, placements, price_shares,
     read_account_rollups, read_rollups, rewrite_series, run_retention_blocking, series,
-    series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, FundingFilter,
-    GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
-    PlanTables, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect,
-    SeriesFilter, SharePricing, Speed, SubscriptionCosts, Tiers, WindowShares, BILLED_FUNDING,
-    FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions, EventRecord,
+    FundingFilter, GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys,
+    ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord,
+    RollupFilter, RollupRow, RollupSelect, SeriesFilter, SharePricing, Speed, Tiers, WindowShares,
+    BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING,
+    UNATTRIBUTED,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1422,12 +1423,13 @@ async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
             ..ShareRow::default()
         },
     );
-    // A Fable id the cost model gives no weight: the week applies to it and nothing prices it.
+    // An id whose tier the cost model does not place, so nothing prices it, and which names the Fable week, so the
+    // week applies to it.
     plant_share(
         &db,
         ShareRow {
             id: "r-fable-unweighted",
-            model: "claude-fable-9-9",
+            model: "claude-mystery-fable-1",
             ..ShareRow::default()
         },
     );
@@ -2270,7 +2272,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    // The shipped model has no weight for Opus 5, so its standard row leaves the bucket unpriced on both windows.
+    // The shipped model places Mystery 2 in no tier, so its standard row leaves the bucket unpriced on both windows.
     let row = |model: &str, speed: &str, estimated_usd: f64| RollupRow {
         input_tokens: 1_000,
         estimated_usd,
@@ -2294,7 +2296,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
             },
         )
     };
-    let unpriced = row("claude-opus-5", "standard", 0.0);
+    let unpriced = row("claude-mystery-2", "standard", 0.0);
     let fast = row("claude-opus-5-5", "fast", 0.25);
     for rows in [[unpriced.clone(), fast.clone()], [fast, unpriced]] {
         let point = burn_series_over(&rows, &tables, &tiers, &filter)
@@ -2460,17 +2462,11 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
             FAST_FUNDING,
         )
     };
+    let share =
+        |model: &str| tables.share_at(FIVE_HOUR, MAX_20X, model, usage(1_000, 100), 3_600_000);
     assert!(
-        tables
-            .share_at(
-                FIVE_HOUR,
-                MAX_20X,
-                "claude-opus-4-8",
-                PinUsage::default(),
-                3_600_000
-            )
-            .is_none(),
-        "the model has no weight"
+        share("claude-opus-4-8").is_some() && share("claude-opus-4-8") == share("claude-opus-5-5"),
+        "the model has no weight of its own and prices at Opus 5.5's, the latest weighted model of its tier"
     );
     let point = burn_series_over(&[row], &tables, &tiers, &filter)
         .unwrap()
@@ -2488,8 +2484,16 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
 /// share by the band at the row's hour, as it weighs the 5-hour share, with no change to the analytics.
 #[test]
 fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
-    let mut tables = phoebis_ledger::test_tables::subscription_costs();
-    tables.costs.peak.capacity_factor.seven_day = 0.5;
+    let banded_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
+        "capacity_factor: {five_hour: 0.5, seven_day: 1}",
+        "capacity_factor: {five_hour: 0.5, seven_day: 0.5}",
+        1,
+    );
+    let tables = PlanTables {
+        revisions: CostRevisions::from_yaml(&banded_week).expect("the banded week parses"),
+        path: None,
+        source: "test".to_string(),
+    };
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
     let filter = SeriesFilter {
         from: WEEKDAY_PEAK - 3_600_000,
@@ -2874,9 +2878,9 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
 fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
 ) {
     let db = LedgerDb::open_in_memory().unwrap();
-    // The same hour on Max 20x: a million input tokens of a model the table prices and a million Opus 5 tokens it
-    // leaves unmeasured; a partial sum would read as the hour's share. The rollups read in model order, so Opus 5
-    // comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
+    // The same hour on Max 20x: a million input tokens of a model the table prices and a million Mystery 2 tokens of
+    // a tier it does not place, and a partial sum would read as the hour's share. The rollups read in model order, so
+    // Mystery 2 comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
     for (account, priced) in [("a", "claude-opus-5-5"), ("b", "claude-fable-5-1")] {
         plant_in_the_off_band_hour(
             &db,
@@ -2889,7 +2893,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
             &db,
             &format!("{account}-unpriced"),
             account,
-            "claude-opus-5",
+            "claude-mystery-2",
             Some(1_000_000),
         );
         let point = off_band_point_on_max_20x(&db, account);
@@ -2901,9 +2905,34 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
                 point.usd
             ),
             (None, None, 2_000_000, 0.0),
-            "{priced} beside Opus 5"
+            "{priced} beside Mystery 2"
         );
     }
+    // Opus 5 has no weight of its own and prices at Opus 5.5's, so a bucket of the two is priced whole: the share is
+    // the sum of two Opus 5.5 rows.
+    plant_in_the_off_band_hour(&db, "c-opus-5-5", "c", "claude-opus-5-5", Some(1_000_000));
+    plant_in_the_off_band_hour(&db, "c-opus-5", "c", "claude-opus-5", Some(1_000_000));
+    let point = off_band_point_on_max_20x(&db, "c");
+    let opus = |window| {
+        share_of(
+            &PlanTables::shipped(),
+            window,
+            MAX_20X,
+            "claude-opus-5-5",
+            usage(1_000_000, 0),
+            WEEKDAY_OFF_PEAK,
+        )
+    };
+    assert!(
+        point
+            .five_hour_share
+            .is_some_and(|share| (share - 2.0 * opus(FIVE_HOUR)).abs() < 1e-12)
+            && point
+                .seven_day_share
+                .is_some_and(|share| (share - 2.0 * opus(SEVEN_DAY)).abs() < 1e-12),
+        "Opus 5.5 beside Opus 5: {point:?}"
+    );
+    assert_eq!(point.tokens, 2_000_000);
 }
 
 #[test]
@@ -2939,9 +2968,11 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
 }
 
 #[test]
-fn a_row_on_a_model_without_a_weight_prices_no_share_and_its_tokens_still_count() {
+fn a_row_on_a_model_without_a_weight_prices_a_share_at_its_tiers_latest_weight_and_its_tokens_count(
+) {
     let db = LedgerDb::open_in_memory().unwrap();
-    // The shipped model has no weight for Opus 5, so a million of its input tokens price on neither window.
+    // The shipped model has no weight for Opus 5, so a million of its input tokens price on both windows at the
+    // weight of the latest weighted model of its tier.
     db.insert_request(
         &RequestRecord {
             id: "r-opus-5".into(),
@@ -2984,15 +3015,28 @@ fn a_row_on_a_model_without_a_weight_prices_no_share_and_its_tokens_still_count(
         .into_iter()
         .find(|p| p.at == hour)
         .expect("the planted hour");
+    let costs = tables.revisions.in_force(WEEKDAY_OFF_PEAK);
+    let (weight, fallback) = costs
+        .weight_or_fallback("claude-opus-5", FIVE_HOUR)
+        .expect("Opus 5 prices through its tier");
+    assert!(fallback, "the weight is its tier's, not its own");
+    let capacity = &costs.capacity[MAX_20X];
+    let share = |window_capacity: Option<f64>| {
+        1_000_000.0 * weight * costs.type_multiplier.input / window_capacity.unwrap()
+    };
+    assert!(
+        point
+            .five_hour_share
+            .is_some_and(|got| (got - share(capacity.five_hour)).abs() < 1e-12)
+            && point
+                .seven_day_share
+                .is_some_and(|got| (got - share(capacity.seven_day)).abs() < 1e-12),
+        "a known tier prices the model at its tier's weight: {point:?}"
+    );
     assert_eq!(
-        (
-            point.five_hour_share,
-            point.seven_day_share,
-            point.uncached_tokens,
-            point.usd
-        ),
-        (None, None, 1_000_000, 0.0),
-        "a known tier prices nothing for a model without a weight, and the tokens still count"
+        (point.uncached_tokens, point.usd),
+        (1_000_000, 0.0),
+        "and the tokens still count"
     );
 }
 
@@ -3159,32 +3203,38 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
 /// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
 /// is half the 7-day window.
 const SHARE_COSTS: &str = "\
-effective: 2026-01-01
-unit:
-  defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
-  units_per_window: 100
-capacity:
-  test_tier:   {five_hour: 100, seven_day: 1000}
-  narrow_tier: {five_hour: 100, seven_day: null}
-peak:
-  zone: America/Los_Angeles
-  weekdays: true
-  from_hour: 5
-  to_hour: 11
-  capacity_factor: {five_hour: 0.5, seven_day: 1}
-type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
-model_weight:
-  claude-fable-5-1: 10
-  claude-sonnet-5-5: 1
-  claude-haiku-4-5: 0.5
-model_windows:
-  seven_day_fable: {of: seven_day, capacity_factor: 0.5}
-overrides: {}
+revisions:
+  - effective: 2026-01-01
+    unit:
+      defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      test_tier:   {five_hour: 100, seven_day: 1000}
+      narrow_tier: {five_hour: 100, seven_day: null}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-fable-5-1: 10
+      claude-sonnet-5-5: 1
+      claude-haiku-4-5: 0.5
+    model_windows:
+      seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-fable-5-1: fable
+      claude-sonnet-5-5: sonnet
+      claude-haiku-4-5: haiku
 ";
 
 fn share_tables() -> PlanTables {
     PlanTables {
-        costs: SubscriptionCosts::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
+        revisions: CostRevisions::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
         path: None,
         source: "test".to_string(),
     }
@@ -3635,9 +3685,7 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
         long_context: None,
     };
     PriceTable {
-        version: "test".into(),
-        effective: "test".into(),
-        source: "test".into(),
+        effective: "2026-01-01".into(),
         models: [(model.to_string(), row)].into_iter().collect(),
     }
 }
@@ -3659,9 +3707,7 @@ fn priced_table_distinct(model: &str) -> PriceTable {
         long_context: None,
     };
     PriceTable {
-        version: "test".into(),
-        effective: "test".into(),
-        source: "test".into(),
+        effective: "2026-01-01".into(),
         models: [(model.to_string(), row)].into_iter().collect(),
     }
 }
@@ -3785,7 +3831,7 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
                 c,
                 &[budgeted("p", "a", BudgetPeriod::Day)],
                 now,
-                &PriceTable::shipped(),
+                PriceRevisions::shipped().in_force(now),
             )
         })
         .unwrap();
@@ -4710,11 +4756,12 @@ fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_r
     };
     // The test table's Sonnet 5.5 input is 3 per million: a million tokens re-price at 3, the Haiku 5.5 row at 7
     // as booked.
-    let table = phoebis_ledger::test_tables::api_prices();
+    let revisions = phoebis_ledger::test_tables::api_prices();
+    let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
     assert!(
-        (spend(&table) - (7.0 + 3.0)).abs() < 1e-9,
+        (spend(table) - (7.0 + 3.0)).abs() < 1e-9,
         "{}",
-        spend(&table)
+        spend(table)
     );
     // A table in force that doubles Sonnet 5.5's input and Haiku 5.5's standard and long-context input moves the
     // plain group and leaves the one priced by prompt length at its booked dollars.
@@ -4730,10 +4777,11 @@ fn a_members_spend_reads_a_long_context_groups_booked_dollars_and_reprices_the_r
         assert_eq!(text.matches(cell).count(), 1, "{cell}");
         text = text.replacen(cell, doubled, 1);
     }
-    let doubled = PriceTable::from_yaml(&text, "test").unwrap();
+    let revisions = PriceRevisions::from_yaml(&text, "test").unwrap();
+    let doubled = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
     assert!(
-        (spend(&doubled) - (7.0 + 6.0)).abs() < 1e-9,
+        (spend(doubled) - (7.0 + 6.0)).abs() < 1e-9,
         "the booked 7 stays beside the plain group's doubled 6: {}",
-        spend(&doubled)
+        spend(doubled)
     );
 }

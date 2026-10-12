@@ -4,10 +4,10 @@
     "requests": [
       {
         "id": "r-placed",
-        "at": 970000,
-        "finished_at": 970900,
+        "at": 1791720970000,
+        "finished_at": 1791720970900,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -70,13 +70,13 @@
         "cost_usd": 0.0036,
         "cost_shares": null,
         "phases": {
-          "received_at": 970000,
-          "selected_at": 970000,
-          "written_at": 970030,
-          "head_at": 970120,
-          "first_content_at": 970300,
-          "stream_end_at": 970850,
-          "finished_at": 970900
+          "received_at": 1791720970000,
+          "selected_at": 1791720970000,
+          "written_at": 1791720970030,
+          "head_at": 1791720970120,
+          "first_content_at": 1791720970300,
+          "stream_end_at": 1791720970850,
+          "finished_at": 1791720970900
         },
         "attempts": [
           {
@@ -87,7 +87,7 @@
             "upstream_status": 200,
             "upstream_request_id": "req_r-placed_1",
             "upstream_message_id": "msg_r-placed_1",
-            "started_at": 970000,
+            "started_at": 1791720970000,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -99,7 +99,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 4570000
+                "resets_at": 1791724570000
               }
             ],
             "overage_in_use": null,
@@ -129,10 +129,10 @@
       },
       {
         "id": "r-captured",
-        "at": 940000,
-        "finished_at": 940900,
+        "at": 1791720940000,
+        "finished_at": 1791720940900,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -198,13 +198,13 @@
           "seven_day": 2.9375e-6
         },
         "phases": {
-          "received_at": 940000,
-          "selected_at": 940000,
-          "written_at": 940030,
-          "head_at": 940120,
-          "first_content_at": 940300,
-          "stream_end_at": 940850,
-          "finished_at": 940900
+          "received_at": 1791720940000,
+          "selected_at": 1791720940000,
+          "written_at": 1791720940030,
+          "head_at": 1791720940120,
+          "first_content_at": 1791720940300,
+          "stream_end_at": 1791720940850,
+          "finished_at": 1791720940900
         },
         "attempts": [
           {
@@ -215,7 +215,7 @@
             "upstream_status": 200,
             "upstream_request_id": "req_r-captured_1",
             "upstream_message_id": "msg_r-captured_1",
-            "started_at": 940000,
+            "started_at": 1791720940000,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -227,7 +227,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 4540000
+                "resets_at": 1791724540000
               }
             ],
             "overage_in_use": null,
@@ -251,10 +251,10 @@
       },
       {
         "id": "r-failed",
-        "at": 880000,
-        "finished_at": 880900,
+        "at": 1791720880000,
+        "finished_at": 1791720880900,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -320,13 +320,13 @@
           "seven_day": 2.9375e-6
         },
         "phases": {
-          "received_at": 880000,
-          "selected_at": 880000,
-          "written_at": 880030,
-          "head_at": 880120,
-          "first_content_at": 880300,
-          "stream_end_at": 880850,
-          "finished_at": 880900
+          "received_at": 1791720880000,
+          "selected_at": 1791720880000,
+          "written_at": 1791720880030,
+          "head_at": 1791720880120,
+          "first_content_at": 1791720880300,
+          "stream_end_at": 1791720880850,
+          "finished_at": 1791720880900
         },
         "attempts": [
           {
@@ -337,7 +337,7 @@
             "upstream_status": 502,
             "upstream_request_id": "req_r-failed_1",
             "upstream_message_id": null,
-            "started_at": 880000,
+            "started_at": 1791720880000,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -349,7 +349,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 4480000
+                "resets_at": 1791724480000
               }
             ],
             "overage_in_use": null,
@@ -373,10 +373,10 @@
       },
       {
         "id": "r-incomplete",
-        "at": -2599400,
-        "finished_at": -2598500,
+        "at": 1791717400600,
+        "finished_at": 1791717401500,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -446,13 +446,13 @@
           "seven_day": 2.9375e-6
         },
         "phases": {
-          "received_at": -2599400,
-          "selected_at": -2599400,
-          "written_at": -2599370,
-          "head_at": -2599280,
-          "first_content_at": -2599100,
-          "stream_end_at": -2598550,
-          "finished_at": -2598500
+          "received_at": 1791717400600,
+          "selected_at": 1791717400600,
+          "written_at": 1791717400630,
+          "head_at": 1791717400720,
+          "first_content_at": 1791717400900,
+          "stream_end_at": 1791717401450,
+          "finished_at": 1791717401500
         },
         "attempts": [
           {
@@ -463,7 +463,7 @@
             "upstream_status": 200,
             "upstream_request_id": "req_r-incomplete_1",
             "upstream_message_id": "msg_r-incomplete_1",
-            "started_at": -2599400,
+            "started_at": 1791717400600,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -475,7 +475,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000600
+                "resets_at": 1791721000600
               }
             ],
             "overage_in_use": null,
@@ -499,10 +499,10 @@
       },
       {
         "id": "r-earlier-holder",
-        "at": -2599500,
-        "finished_at": -2598600,
+        "at": 1791717400500,
+        "finished_at": 1791717401400,
         "key_id": "desktop",
-        "key_generation": 940000,
+        "key_generation": 1791720940000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s0",
@@ -568,13 +568,13 @@
           "seven_day": 2.9375e-6
         },
         "phases": {
-          "received_at": -2599500,
-          "selected_at": -2599500,
-          "written_at": -2599470,
-          "head_at": -2599380,
-          "first_content_at": -2599200,
-          "stream_end_at": -2598650,
-          "finished_at": -2598600
+          "received_at": 1791717400500,
+          "selected_at": 1791717400500,
+          "written_at": 1791717400530,
+          "head_at": 1791717400620,
+          "first_content_at": 1791717400800,
+          "stream_end_at": 1791717401350,
+          "finished_at": 1791717401400
         },
         "attempts": [
           {
@@ -585,7 +585,7 @@
             "upstream_status": 200,
             "upstream_request_id": "req_r-earlier-holder_1",
             "upstream_message_id": "msg_r-earlier-holder_1",
-            "started_at": -2599500,
+            "started_at": 1791717400500,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -597,7 +597,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000500
+                "resets_at": 1791721000500
               }
             ],
             "overage_in_use": null,
@@ -621,10 +621,10 @@
       },
       {
         "id": "r-failover",
-        "at": -2600000,
-        "finished_at": -2599100,
+        "at": 1791717400000,
+        "finished_at": 1791717400900,
         "key_id": "desktop",
-        "key_generation": 1000000,
+        "key_generation": 1791721000000,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -687,13 +687,13 @@
         "cost_usd": 0.0071,
         "cost_shares": null,
         "phases": {
-          "received_at": -2600000,
-          "selected_at": -2600000,
-          "written_at": -2599570,
-          "head_at": -2599480,
-          "first_content_at": -2599300,
-          "stream_end_at": -2599150,
-          "finished_at": -2599100
+          "received_at": 1791717400000,
+          "selected_at": 1791717400000,
+          "written_at": 1791717400430,
+          "head_at": 1791717400520,
+          "first_content_at": 1791717400700,
+          "stream_end_at": 1791717400850,
+          "finished_at": 1791717400900
         },
         "attempts": [
           {
@@ -704,7 +704,7 @@
             "upstream_status": 429,
             "upstream_request_id": "req_r-failover_1",
             "upstream_message_id": null,
-            "started_at": -2600000,
+            "started_at": 1791717400000,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -713,13 +713,13 @@
             "client_drift": null,
             "cooldown_set": {
               "reason": "account",
-              "until": 2800000
+              "until": 1791722800000
             },
             "windows": [
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000000
+                "resets_at": 1791721000000
               }
             ],
             "overage_in_use": null,
@@ -763,7 +763,7 @@
             "upstream_status": 200,
             "upstream_request_id": "req_r-failover_2",
             "upstream_message_id": "msg_r-failover_2",
-            "started_at": -2599600,
+            "started_at": 1791717400400,
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
@@ -775,7 +775,7 @@
               {
                 "id": "five_hour",
                 "utilization": 0.4,
-                "resets_at": 1000400
+                "resets_at": 1791721000400
               }
             ],
             "overage_in_use": null,

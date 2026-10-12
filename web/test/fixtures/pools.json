@@ -80,9 +80,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1000000,
-        "updated_at": 1000000,
-        "revision": 4398047511104,
+        "created_at": 1791721000000,
+        "updated_at": 1791721000000,
+        "revision": 6189767511104,
         "members": [
           {
             "account_id": "business",
@@ -95,8 +95,8 @@
             "spends": [
               {
                 "period": "month",
-                "spent_usd": 0.0,
-                "period_end": 2678400000
+                "spent_usd": 0.00355,
+                "period_end": 1793491200000
               }
             ],
             "active_pins": 1
@@ -113,7 +113,7 @@
               {
                 "period": "month",
                 "spent_usd": 0.0036,
-                "period_end": 2678400000
+                "period_end": 1793491200000
               }
             ],
             "active_pins": 0
@@ -123,7 +123,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "GqVtcpx9",
+            "prefix": "8GvMBC1L",
             "enabled": true
           }
         ],
@@ -133,175 +133,175 @@
         "active_pins": 1,
         "traffic_24h": [
           {
-            "at": -86400000,
+            "at": 1791633600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -82800000,
+            "at": 1791637200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -79200000,
+            "at": 1791640800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -75600000,
+            "at": 1791644400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -72000000,
+            "at": 1791648000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -68400000,
+            "at": 1791651600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -64800000,
+            "at": 1791655200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -61200000,
+            "at": 1791658800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -57600000,
+            "at": 1791662400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -54000000,
+            "at": 1791666000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -50400000,
+            "at": 1791669600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -46800000,
+            "at": 1791673200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -43200000,
+            "at": 1791676800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -39600000,
+            "at": 1791680400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -36000000,
+            "at": 1791684000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -32400000,
+            "at": 1791687600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -28800000,
+            "at": 1791691200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -25200000,
+            "at": 1791694800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -21600000,
+            "at": 1791698400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -18000000,
+            "at": 1791702000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -14400000,
+            "at": 1791705600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -10800000,
+            "at": 1791709200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -7200000,
+            "at": 1791712800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
             "cost_usd": 0.0
           },
           {
-            "at": -3600000,
+            "at": 1791716400000,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
             "cost_usd": 0.0142
           },
           {
-            "at": 0,
+            "at": 1791720000000,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,

@@ -2978,10 +2978,14 @@ fn price_usage(point: &mut BurnPoint, tier: Option<&str>, tables: &PlanTables, r
             // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at,
             // so the zero rests on the tier alone.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
-                if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
+                if tables.tier_factor(tier, FIVE_HOUR, row.at).is_some()
+                    && !point.five_hour_unpriced
+                {
                     point.five_hour_share.get_or_insert(0.0);
                 }
-                if tables.tier_factor(tier, SEVEN_DAY).is_some() && !point.seven_day_unpriced {
+                if tables.tier_factor(tier, SEVEN_DAY, row.at).is_some()
+                    && !point.seven_day_unpriced
+                {
                     point.seven_day_share.get_or_insert(0.0);
                 }
             }

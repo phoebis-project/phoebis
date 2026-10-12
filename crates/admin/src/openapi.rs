@@ -360,6 +360,10 @@ pub(crate) struct SubscriptionCostsView {
     pub model_weight: BTreeMap<String, Option<f64>>,
     pub model_windows: BTreeMap<String, ModelWindowView>,
     pub overrides: BTreeMap<String, OverrideView>,
+    /// The model tiers in display order.
+    pub tier_order: Vec<String>,
+    /// Undated model id to the name of its model tier in `tier_order`.
+    pub model_tier: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

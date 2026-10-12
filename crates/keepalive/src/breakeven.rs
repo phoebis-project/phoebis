@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use phoebis_ledger::{PlanTables, PriceTable};
+use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, LongContextRates, Rates, FIVE_HOUR};
@@ -59,8 +59,8 @@ pub fn break_even_ms(
     Some((exact + 1e-6).floor().max(0.0) as i64)
 }
 
-/// The factors for `canonical_model` under `funding`, at the fast cells when `fast`. Plan funding reads
-/// `tables.rate_table(FIVE_HOUR).rows`, and a model the cost model leaves unweighted or names nowhere reads its type
+/// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
+/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, and a model the cost model leaves unweighted or names nowhere reads its type
 /// multipliers, the model's own override where it has one. A token costs the model's weight times the type's
 /// multiplier, so the weight cancels from read over write and every plan recipe breaks even alike. Dollars read
 /// `pricing.rate_table().rows`, or `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits
@@ -74,8 +74,9 @@ pub fn factors_for(
     canonical_model: &str,
     fast: bool,
     prompt_tokens: u64,
+    at: i64,
 ) -> BreakEvenFactors {
-    FactorRows::of(pricing, tables).factors(funding, canonical_model, fast, prompt_tokens)
+    FactorRows::of(pricing, tables, at).factors(funding, canonical_model, fast, prompt_tokens)
 }
 
 /// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
@@ -98,21 +99,21 @@ pub(crate) struct FactorRows {
 }
 
 impl FactorRows {
-    pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
+    pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables, at: i64) -> FactorRows {
         let dollar_table = pricing.rate_table();
         let fast_table = pricing.fast_rate_table();
         let (dollars, dollars_long) = (dollar_table.rows, dollar_table.long_context);
         let (fast, fast_long) = (fast_table.rows, fast_table.long_context);
         let tightest_fast = tightest(fast.values().filter_map(BreakEvenFactors::of));
         let tightest = tightest(dollars.values().filter_map(BreakEvenFactors::of));
-        let shared = &tables.costs.type_multiplier;
+        let costs = tables.revisions.in_force(at);
+        let shared = &costs.type_multiplier;
         let plan_multipliers = BreakEvenFactors {
             read: shared.cache_read,
             write_5m: shared.cache_write_5m,
             write_1h: shared.cache_write_1h,
         };
-        let plan_overrides = tables
-            .costs
+        let plan_overrides = costs
             .overrides
             .iter()
             .filter_map(|(model, row)| {
@@ -132,7 +133,7 @@ impl FactorRows {
             fast,
             dollars_long,
             fast_long,
-            plan: tables.rate_table(FIVE_HOUR).rows,
+            plan: tables.rate_table(FIVE_HOUR, at).rows,
             plan_multipliers,
             plan_overrides,
             tightest,
@@ -193,11 +194,12 @@ impl FactorRows {
 
 /// The shipped price table's tightest row at the recipe's speed: what a recipe's ceilings fall back to when the tables
 /// in force give no break-even, since an operator's price file with no usable row must not leave a parked session
-/// probed until the session expires.
-pub(crate) fn shipped_tightest(fast: bool) -> BreakEvenFactors {
+/// probed until the session expires. The revision in force at the first call's `now` holds for the process, as the
+/// tables built at start do, so a pending revision takes effect at the next start.
+pub(crate) fn shipped_tightest(fast: bool, now: i64) -> BreakEvenFactors {
     static STANDARD: OnceLock<BreakEvenFactors> = OnceLock::new();
     static FAST: OnceLock<BreakEvenFactors> = OnceLock::new();
-    let shipped = PriceTable::shipped;
+    let shipped = || PriceRevisions::shipped().in_force(now).clone();
     if fast {
         *FAST.get_or_init(|| {
             tightest(
@@ -329,6 +331,7 @@ pub struct ResolvedCeilings {
 /// which is what a request on it runs under, so a deny entry naming the dated id drops the row. Rules that allow none
 /// of them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
 /// `ceilings_for` does. `None` with no funding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
     cache_ttl: &CacheTtlPolicy,
@@ -337,6 +340,7 @@ pub(crate) fn resolve_pool(
     rows: &FactorRows,
     dated: &HashMap<String, String>,
     timing: &KeepaliveTiming,
+    now: i64,
 ) -> Option<ResolvedCeilings> {
     let processed = process(&[], RulesMode::Extend, rules);
     let named = cache_ttl
@@ -385,7 +389,7 @@ pub(crate) fn resolve_pool(
             };
             for ttl in ttls {
                 let Some(ceilings) = resolve(policy, factors, ttl, timing)
-                    .or_else(|| resolve(policy, shipped_tightest(false), ttl, timing))
+                    .or_else(|| resolve(policy, shipped_tightest(false, now), ttl, timing))
                 else {
                     continue;
                 };

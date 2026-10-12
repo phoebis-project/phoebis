@@ -2241,7 +2241,7 @@ async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
             spends[0]["period"].as_str(),
             spends[0]["period_end"].as_i64(),
         ),
-        (Some(1), Some("month"), Some(2_678_400_000)),
+        (Some(1), Some("month"), Some(common::month_end())),
         "one report for the one budget, its end the calendar month's own boundary at the fixture's clock"
     );
     let patched = json(
@@ -2613,7 +2613,7 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
     );
     assert_eq!(
         spent["pools"][0]["members"][0]["budget_until"].as_i64(),
-        Some(2_678_400_000),
+        Some(common::month_end()),
         "the member is held to the end of the month whose budget it reached"
     );
     // Also in overage, under a policy that would otherwise read it as the obstacle: the selector checks

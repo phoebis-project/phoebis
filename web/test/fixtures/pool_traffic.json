@@ -2,180 +2,180 @@
   "route": "GET /admin/pools/main/traffic?range=24h",
   "body": {
     "pool_id": "main",
-    "from": -85400000,
-    "to": 1000000,
+    "from": 1791634600000,
+    "to": 1791721000000,
     "bucket_seconds": 3600,
     "buckets": [
       {
-        "at": -86400000,
+        "at": 1791633600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -82800000,
+        "at": 1791637200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -79200000,
+        "at": 1791640800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -75600000,
+        "at": 1791644400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -72000000,
+        "at": 1791648000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -68400000,
+        "at": 1791651600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -64800000,
+        "at": 1791655200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -61200000,
+        "at": 1791658800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -57600000,
+        "at": 1791662400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -54000000,
+        "at": 1791666000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -50400000,
+        "at": 1791669600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -46800000,
+        "at": 1791673200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -43200000,
+        "at": 1791676800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -39600000,
+        "at": 1791680400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -36000000,
+        "at": 1791684000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -32400000,
+        "at": 1791687600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -28800000,
+        "at": 1791691200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -25200000,
+        "at": 1791694800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -21600000,
+        "at": 1791698400000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -18000000,
+        "at": 1791702000000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -14400000,
+        "at": 1791705600000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -10800000,
+        "at": 1791709200000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -7200000,
+        "at": 1791712800000,
         "requests": 0,
         "failed": 0,
         "tokens": 0,
         "cost_usd": 0.0
       },
       {
-        "at": -3600000,
+        "at": 1791716400000,
         "requests": 3,
         "failed": 1,
         "tokens": 5400,
         "cost_usd": 0.0142
       },
       {
-        "at": 0,
+        "at": 1791720000000,
         "requests": 3,
         "failed": 1,
         "tokens": 5400,

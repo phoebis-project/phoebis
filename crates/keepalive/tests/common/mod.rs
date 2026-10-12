@@ -24,7 +24,7 @@ use phoebis_keepalive::{
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
-    PriceTable, Pricing, Record, RequestRecord,
+    PriceRevisions, Pricing, Record, RequestRecord,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
@@ -76,7 +76,7 @@ pub struct Rig {
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
     /// The spec's price table, kept so `restart` builds its engine with what this one was built with.
-    pub pricing: PriceTable,
+    pub pricing: PriceRevisions,
     pub sequence: u64,
     /// The registry file of a rig built `on_disk`, which a restart test opens beside the store.
     pub store_path: Option<PathBuf>,
@@ -127,7 +127,7 @@ pub struct RigSpec {
     pub pool: PoolSpec,
     /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text, and a
     /// case on a row priced by prompt length hands in the test table.
-    pub pricing: PriceTable,
+    pub pricing: PriceRevisions,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
@@ -151,7 +151,7 @@ impl Default for RigSpec {
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
-            pricing: PriceTable::shipped(),
+            pricing: PriceRevisions::shipped(),
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
@@ -766,7 +766,8 @@ where
 /// live rate, to price at `usd` dollars, so a spend this test wants is a row the ledger's own rollups carry
 /// rather than a number the test invented.
 pub fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
-    let rate = PriceTable::shipped()
+    let rate = PriceRevisions::shipped()
+        .in_force(now)
         .price("claude-sonnet-5")
         .expect("the shipped table prices claude-sonnet-5")
         .input;

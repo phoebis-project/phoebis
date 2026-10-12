@@ -73,13 +73,15 @@ fn typed(usage: ProbeUsage) -> PinUsage {
     }
 }
 
-/// `row` when the model has no weight on the 5-hour window, else `tier`: the only two reasons left, since the loader
-/// refuses an anchor tier without a capacity on either window and a weighted model prices every type.
-pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'static str {
+/// `row` when the model has no weight on the 5-hour window in the cost model in force at `at`, else `tier`: the only
+/// two reasons left, since the loader refuses an anchor tier without a capacity on either window and a weighted model
+/// prices every type.
+pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str, at: i64) -> &'static str {
     if !tables.priced(
         FIVE_HOUR,
-        &tables.costs.unit.defined_by.tier,
+        &tables.revisions.in_force(at).unit.defined_by.tier,
         canonical_model,
+        at,
     ) {
         "row"
     } else {
@@ -87,15 +89,16 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'s
     }
 }
 
-/// The unit a probe settles in: `default_unit`, unless that is the window share and the model cannot price the
-/// account's tier and model on the 5-hour window (no weight, or no capacity), in which case dollars.
+/// The unit a probe settles in: `default_unit`, unless that is the window share and the cost model in force at `at`
+/// cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which case dollars.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
     tier: Option<&str>,
     canonical_model: &str,
+    at: i64,
 ) -> SavingsUnit {
-    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, tier, canonical_model));
+    let priced = tier.is_some_and(|tier| tables.priced(FIVE_HOUR, tier, canonical_model, at));
     if default_unit == SavingsUnit::WindowShare && !priced {
         SavingsUnit::Usd
     } else {
@@ -261,7 +264,8 @@ mod tests {
     /// so a probe answer that carries only the aggregate costs what the same answer with the split costs.
     #[test]
     fn an_aggregate_only_cache_write_costs_a_five_minute_write() {
-        let table = PriceTable::shipped();
+        let revisions = phoebis_ledger::PriceRevisions::shipped();
+        let table = revisions.in_force(0);
         let tables = PlanTables::shipped();
         let split = ProbeUsage {
             write: 2_000,
@@ -275,7 +279,7 @@ mod tests {
         let cost = |usage| {
             probe_cost(
                 SavingsUnit::Usd,
-                &table,
+                table,
                 &tables,
                 None,
                 "claude-sonnet-5",
@@ -289,14 +293,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
-        // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9.
+    fn an_unpriced_probe_reads_row_for_a_model_of_no_weighted_tier_and_tier_otherwise() {
+        // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9, so both price at Opus 5.5's
+        // weight, and places Mystery 2 in a tier with no weighted model.
         let tables = phoebis_ledger::test_tables::subscription_costs();
-        assert_eq!(unpriced_reason(&tables, "claude-opus-5"), "row");
-        assert_eq!(unpriced_reason(&tables, "claude-opus-9"), "row");
-        assert_eq!(unpriced_reason(&tables, "claude-opus-5-5"), "tier");
+        let at = phoebis_ledger::test_tables::JANUARY_2026;
+        assert_eq!(unpriced_reason(&tables, "claude-mystery-2", at), "row");
+        for model in ["claude-opus-5", "claude-opus-9", "claude-opus-5-5"] {
+            assert_eq!(unpriced_reason(&tables, model, at), "tier", "{model}");
+        }
         assert_eq!(
-            unpriced_reason(&tables, "claude-opus-5-5-20260401"),
+            unpriced_reason(&tables, "claude-opus-5-5-20260401", at),
             "tier",
             "a dated id reads its undated weight"
         );

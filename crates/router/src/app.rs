@@ -189,10 +189,13 @@ pub async fn run_until(
                 )
             })?,
     );
+    let revisions = pricing.revisions();
+    let started = clock();
+    let prices = revisions.in_force(started);
     let router_task = phoebis_routing::spawn(
         store.clone(),
         clock.clone(),
-        router_config(&pricing.current(), tables.clone(), &config.routing),
+        router_config(prices, tables.clone(), &config.routing, started),
     )?;
     let bus = Bus::new();
     let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
@@ -201,7 +204,7 @@ pub async fn run_until(
             config.stats.ledger_path.display()
         )
     })?);
-    tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %pricing.current().version, "ledger opened");
+    tracing::info!(ledger = %config.stats.ledger_path.display(), pricing = %prices.effective, "ledger opened");
     // Rows from before the rollup key carried a generation are stamped with each live key's own, once; the
     // ledger task must not write before this, or a fresh row could collide with a stamped one. An id that had
     // a holder before this one starts at its own creation, so the earlier holder's rows stay unstamped.
@@ -713,28 +716,29 @@ pub async fn run_until(
 }
 
 /// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier and its band,
-/// and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's window a completed
-/// request consumed, priced through the model on the account's tier. All are fixed for the life of the process.
+/// and for dollars `prices`, the revision of the table `Pricing::load` chose that is in force at the start `now`, and
+/// the share of an account's window a completed request consumed, priced through the model on the account's tier.
+/// The burn rates and the measured windows are read at `now` and fixed for the life of the process, so a pending
+/// revision takes effect at the next start.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
     routing: &RoutingConfig,
+    now: i64,
 ) -> phoebis_routing::RouterConfig {
     let band = tables.clone();
     let measured = tables.clone();
     phoebis_routing::RouterConfig {
-        band: phoebis_routing::BandWeight::new(move |window, at| {
-            band.costs.band_factor(window, at)
-        }),
+        band: phoebis_routing::BandWeight::new(move |window, at| band.band_factor(window, at)),
         rates: phoebis_routing::BurnRates {
             dollars: prices.rate_table(),
-            five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
+            five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR, now),
             fast: prices.fast_rate_table(),
         },
         share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
             tables.share_at(window, tier, model, usage, at)
         })
-        .with_measured(move |window| measured.measured(window)),
+        .with_measured(move |window| measured.measured(window, now)),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
         // Released once the ledger's mirror subscribed and the start row is recorded, below.
         hold_first_purge: true,
@@ -956,13 +960,17 @@ fn init_tracing() {
 mod tests {
     use super::*;
 
+    /// Monday 2026-09-21 at 14:00 UTC: the start the tests build the router's tables at.
+    const START: i64 = 1_789_999_200_000;
+
     #[test]
     fn the_router_config_prices_a_windows_share_through_the_shipped_plan_tables() {
         let tables = phoebis_ledger::PlanTables::shipped();
         let config = router_config(
-            &phoebis_ledger::PriceTable::shipped(),
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
             Arc::new(tables.clone()),
             &RoutingConfig::default(),
+            START,
         );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
@@ -1027,11 +1035,15 @@ mod tests {
             "a tier the model does not size prices at no share"
         );
         assert_eq!(
-            config
-                .share
-                .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5", usage, at),
+            config.share.price(
+                phoebis_routing::FIVE_HOUR,
+                tier,
+                "claude-mystery-2",
+                usage,
+                at
+            ),
             None,
-            "the shipped model has no weight for Opus 5"
+            "the shipped model places Mystery 2 in no tier, so nothing weighs it"
         );
     }
 
@@ -1040,9 +1052,10 @@ mod tests {
     ) {
         let config = |routing: &RoutingConfig| {
             router_config(
-                &phoebis_ledger::PriceTable::shipped(),
+                phoebis_ledger::PriceRevisions::shipped().in_force(START),
                 Arc::new(phoebis_ledger::PlanTables::shipped()),
                 routing,
+                START,
             )
             .funding_retry
         };
@@ -1064,12 +1077,22 @@ mod tests {
     /// share through the completion the router hands the model, with no change to the router.
     #[test]
     fn the_router_config_weighs_a_banded_week_by_the_band_at_the_completion() {
-        let mut tables = phoebis_ledger::PlanTables::shipped();
-        tables.costs.peak.capacity_factor.seven_day = 0.5;
+        let banded_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
+            "capacity_factor: {five_hour: 0.5, seven_day: 1}",
+            "capacity_factor: {five_hour: 0.5, seven_day: 0.5}",
+            1,
+        );
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&banded_week)
+                .expect("the banded week parses"),
+            path: None,
+            source: "test".to_string(),
+        };
         let config = router_config(
-            &phoebis_ledger::PriceTable::shipped(),
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
             Arc::new(tables.clone()),
             &RoutingConfig::default(),
+            START,
         );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
@@ -1111,9 +1134,15 @@ mod tests {
     #[test]
     fn the_router_config_prices_the_burn_through_the_cost_models_five_hour_rates_and_the_price_table(
     ) {
-        let prices = phoebis_ledger::PriceTable::shipped();
+        let revisions = phoebis_ledger::PriceRevisions::shipped();
+        let prices = revisions.in_force(START);
         let tables = phoebis_ledger::PlanTables::shipped();
-        let config = router_config(&prices, Arc::new(tables.clone()), &RoutingConfig::default());
+        let config = router_config(
+            prices,
+            Arc::new(tables.clone()),
+            &RoutingConfig::default(),
+            START,
+        );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
             cache_read: 10_000,
@@ -1224,22 +1253,24 @@ mod tests {
 
     /// One row with a `fast` block and one without, so the fast table's rule shows on a table of the test's own.
     const FAST_AND_PLAIN: &str = "\
-effective: 2026-01-01
-models:
-  claude-fast-1:
-    {input: 2, cache_write_5m: 3, cache_write_1h: 4, cache_read: 1, output: 10,
-     fast: {input: 12, cache_write_5m: 15, cache_write_1h: 24, cache_read: 6, output: 60}}
-  claude-plain-1: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-fast-1:
+        {input: 2, cache_write_5m: 3, cache_write_1h: 4, cache_read: 1, output: 10,
+         fast: {input: 12, cache_write_5m: 15, cache_write_1h: 24, cache_read: 6, output: 60}}
+      claude-plain-1: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
 ";
 
     #[test]
     fn the_router_configs_fast_table_reads_a_rows_fast_cells_and_a_row_without_them_its_standard_cells(
     ) {
-        let prices = phoebis_ledger::PriceTable::from_yaml(FAST_AND_PLAIN, "test").unwrap();
+        let prices = phoebis_ledger::PriceRevisions::from_yaml(FAST_AND_PLAIN, "test").unwrap();
         let config = router_config(
-            &prices,
+            prices.in_force(START),
             Arc::new(phoebis_ledger::PlanTables::shipped()),
             &RoutingConfig::default(),
+            START,
         );
         let per_token =
             |[input, write_5m, write_1h, read, output]: [f64; 5]| phoebis_routing::Rates {
@@ -1289,17 +1320,17 @@ models:
     #[test]
     fn the_burn_rates_the_router_installs_carry_a_row_per_weighted_model_on_both_windows() {
         let tables = phoebis_ledger::PlanTables::shipped();
-        let anchor = &tables.costs.unit.defined_by.tier;
+        let costs = tables.revisions.in_force(START);
+        let anchor = &costs.unit.defined_by.tier;
         for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
-            let rates = tables.rate_table(window);
+            let rates = tables.rate_table(window, START);
             let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
             rows.sort_unstable();
-            let mut weighted: Vec<&str> = tables
-                .costs
+            let mut weighted: Vec<&str> = costs
                 .model_weight
                 .keys()
                 .map(String::as_str)
-                .filter(|model| tables.priced(window, anchor, model))
+                .filter(|model| tables.priced(window, anchor, model, START))
                 .collect();
             weighted.sort_unstable();
             assert!(

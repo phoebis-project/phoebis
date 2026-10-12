@@ -10,7 +10,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
-    AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceTable,
+    AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceRevisions,
     Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges,
 };
 use tower::ServiceExt;
@@ -25,7 +25,8 @@ fn series_of(text: &str) -> BTreeSet<String> {
 #[test]
 fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
     let metrics = Metrics::new();
-    let table = PriceTable::shipped();
+    let revisions = PriceRevisions::shipped();
+    let table = revisions.in_force(0);
     for i in 0..10_000u32 {
         let model = format!("vendor/model-{i}");
         let request = RequestRecord {
@@ -55,7 +56,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
             ttfb_ms: request.ttfb_ms,
             ..Default::default()
         };
-        metrics.observe_request(&table, &request, &[attempt]);
+        metrics.observe_request(table, &request, &[attempt]);
     }
     let priced = RequestRecord {
         id: "p".into(),
@@ -71,7 +72,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
         ..Default::default()
     };
     metrics.observe_request(
-        &table,
+        table,
         &priced,
         &[AttemptRecord {
             request_id: "p".into(),
@@ -121,7 +122,8 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
 #[test]
 fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
     let metrics = Metrics::new();
-    let table = PriceTable::shipped();
+    let revisions = PriceRevisions::shipped();
+    let table = revisions.in_force(0);
     let observe = |ttfb_ms: i64| {
         let request = RequestRecord {
             id: "r".into(),
@@ -138,7 +140,7 @@ fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
             ..Default::default()
         };
         metrics.observe_request(
-            &table,
+            table,
             &request,
             &[AttemptRecord {
                 request_id: "r".into(),
@@ -329,7 +331,7 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
         .await;
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(1_000),
         1_000,
         60_000,
         None,
@@ -397,7 +399,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
     .unwrap();
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(1_000),
         1_000,
         60_000,
         None,
@@ -468,7 +470,7 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
         .await;
     let gauges = phoebis_ledger::gather(
         &router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(2_000),
         2_000,
         60_000,
         None,
@@ -549,7 +551,7 @@ async fn the_pin_gauge_reads_the_routing_loops_count_per_pool() {
     );
     let gauges = phoebis_ledger::gather(
         &h.router,
-        &PriceTable::shipped(),
+        PriceRevisions::shipped().in_force(0),
         0,
         60_000,
         None,
@@ -709,7 +711,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         let app = phoebis_ledger::metrics_router(
             Arc::new(Metrics::new()),
             router.clone(),
-            Arc::new(Pricing::new(PriceTable::shipped())),
+            Arc::new(Pricing::new(PriceRevisions::shipped())),
             phoebis_bus::Bus::new(),
             Arc::new(|| 1_000),
             Duration::from_secs(60),

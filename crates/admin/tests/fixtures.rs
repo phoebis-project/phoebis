@@ -1173,8 +1173,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "GET /admin/keepalive/overview",
         json(response).await,
     );
-    // The web's arithmetic tests work their figures out by hand from the test tables' round numbers, so they read
-    // the two envelopes as the settings echo carries them, rendered from the same loader the Rust tests use.
+    // The web's arithmetic tests work their figures out by hand from the round numbers of the test tables' first
+    // entry, so they read the two envelopes in force inside it, as the settings echo carries them, rendered from the
+    // same loader the Rust tests use.
     hold(
         &planted,
         "test_tables",
@@ -1182,6 +1183,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         serde_json::to_value(phoebis_admin::table_envelopes(
             &phoebis_ledger::test_tables::api_prices(),
             &phoebis_ledger::test_tables::subscription_costs(),
+            phoebis_ledger::test_tables::JANUARY_2026,
         ))
         .unwrap(),
     );

@@ -2198,10 +2198,11 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     )
     .unwrap();
-    std::fs::write(dir.path().join("api_prices.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
+    std::fs::write(dir.path().join("api_prices.yaml"), "revisions:\n  - effective: 2026-10-01\n    models:\n      claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
+    // The cost fixture's first entry alone, so the router's wall clock reads it in force.
     std::fs::write(
         dir.path().join("subscription_costs.yaml"),
-        phoebis_ledger::test_tables::SUBSCRIPTION_COSTS,
+        phoebis_ledger::test_tables::first_entry_costs_text(),
     )
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
@@ -2721,12 +2722,14 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         pin.burn_banded
     );
     let prompt = usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
-    let dollars = phoebis_ledger::PriceTable::shipped()
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let prices = revisions.in_force(jiff::Timestamp::now().as_millisecond());
+    let dollars = prices
         .rate_table()
         .price("claude-opus-5", usage, prompt)
         .unwrap();
     assert!(
-        (phoebis_ledger::PriceTable::shipped()
+        (prices
             .rate_table()
             .price_burn("claude-opus-5", &pin.burn, pin.last_input_tokens)
             .unwrap()

@@ -1,7 +1,8 @@
-//! List prices per million tokens, the estimate every attempt is stamped with. Every estimate is an estimate:
-//! tier and batch modifiers are not known here, and subscription quota is the rate-limit windows, never this
-//! number.
+//! The API price file as a list of revisions keyed by the date each takes effect, and the list prices per million
+//! tokens of one revision, the estimate every attempt is stamped with. Every estimate is an estimate: tier and batch
+//! modifiers are not known here, and subscription quota is the rate-limit windows, never this number.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -62,18 +63,150 @@ pub struct LongContext {
     pub cells: ModelPrice,
 }
 
+/// One revision of the price file: the date it takes effect and the table of that date.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PriceTable {
-    pub version: String,
     pub effective: String,
-    pub source: String,
     pub models: IndexMap<String, ModelRow>,
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PriceFile {
-    effective: String,
-    models: IndexMap<String, ModelRow>,
+    revisions: Vec<PriceTable>,
+}
+
+/// The file's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a
+/// binary search, and the file's source (`shipped`, `file` or `test`). Serializes as the file's one key.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PriceRevisions {
+    revisions: Vec<PriceTable>,
+    #[serde(skip)]
+    instants: Vec<i64>,
+    #[serde(skip)]
+    pub source: String,
+}
+
+// `new` refuses an empty list, so a list never reads empty.
+#[allow(clippy::len_without_is_empty)]
+impl PriceRevisions {
+    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants.
+    pub fn new(revisions: Vec<PriceTable>, source: &str) -> Result<PriceRevisions, LedgerError> {
+        let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
+        let instants = sorted_instants(&dates).map_err(LedgerError::Yaml)?;
+        let (instants, revisions) = by_instant(instants, revisions);
+        Ok(PriceRevisions {
+            revisions,
+            instants,
+            source: source.into(),
+        })
+    }
+
+    /// Refuses a cell that is not a finite non-negative number, and a `long_context.over` that is zero, each under
+    /// the entry's date: a negative or `NaN` price makes every estimate negative or `NaN`, which a budget then never
+    /// trips on, and a zero threshold would price every prompt at the long-context cells.
+    pub fn from_yaml(text: &str, source: &str) -> Result<PriceRevisions, LedgerError> {
+        // The typed map reads a key as its text and keeps the last of two equal keys, so the untyped pass runs
+        // first and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors
+        // keep their line and column.
+        crate::keys::untagged_string_keys(text).map_err(LedgerError::Yaml)?;
+        let file: PriceFile =
+            serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
+        for table in &file.revisions {
+            table
+                .check()
+                .map_err(|e| LedgerError::Yaml(format!("revision {}: {e}", table.effective)))?;
+        }
+        PriceRevisions::new(file.revisions, source)
+    }
+
+    pub fn shipped() -> PriceRevisions {
+        PriceRevisions::from_yaml(SHIPPED_API_PRICES, "shipped")
+            .expect("the shipped price file parses")
+    }
+
+    /// The last entry whose instant is at or before `at_ms`, else the first.
+    pub fn in_force(&self, at_ms: i64) -> &PriceTable {
+        &self.revisions[in_force_index(&self.instants, at_ms)]
+    }
+
+    pub fn latest(&self) -> &PriceTable {
+        &self.revisions[self.revisions.len() - 1]
+    }
+
+    /// The first entry dated after `now_ms`, held until its instant.
+    pub fn pending(&self, now_ms: i64) -> Option<&PriceTable> {
+        self.revisions.get(pending_index(&self.instants, now_ms))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PriceTable> {
+        self.revisions.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.revisions.len()
+    }
+}
+
+/// 00:00:00 UTC of a `YYYY-MM-DD` date in Unix milliseconds, `None` for any other text (through jiff's civil date).
+pub fn effective_instant(date: &str) -> Option<i64> {
+    // The shape first, since jiff's parser also reads other forms of a date (a basic `YYYYMMDD`, a date-time) that
+    // the files never write.
+    let shaped = date.len() == 10
+        && date.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 => b == b'-',
+            _ => b.is_ascii_digit(),
+        });
+    if !shaped {
+        return None;
+    }
+    let day: jiff::civil::Date = date.parse().ok()?;
+    let midnight = day.to_zoned(jiff::tz::TimeZone::UTC).ok()?;
+    Some(midnight.timestamp().as_millisecond())
+}
+
+/// The instant of each entry's date, in the file's order: refuses an empty list, a date not in `YYYY-MM-DD` form and
+/// two entries dated the same, with the messages both revision files share.
+pub(crate) fn sorted_instants(dates: &[&str]) -> Result<Vec<i64>, String> {
+    if dates.is_empty() {
+        return Err("revisions: at least one entry".to_string());
+    }
+    let mut seen = HashSet::new();
+    dates
+        .iter()
+        .enumerate()
+        .map(|(i, date)| {
+            let instant = effective_instant(date).ok_or_else(|| {
+                format!("revisions[{i}].effective: a date in YYYY-MM-DD form, not `{date}`")
+            })?;
+            if !seen.insert(instant) {
+                return Err(format!("revisions: two entries dated {date}"));
+            }
+            Ok(instant)
+        })
+        .collect()
+}
+
+/// The entries paired with their instants and sorted by them, since the dates carry the order and the file's own is
+/// not refused.
+pub(crate) fn by_instant<T>(instants: Vec<i64>, entries: Vec<T>) -> (Vec<i64>, Vec<T>) {
+    let mut pairs: Vec<(i64, T)> = instants.into_iter().zip(entries).collect();
+    pairs.sort_by_key(|(instant, _)| *instant);
+    pairs.into_iter().unzip()
+}
+
+/// The index of the last instant at or before `at_ms`, else 0: an instant before the first entry reads the first,
+/// since a blank history is worse than the earliest known table.
+pub(crate) fn in_force_index(instants: &[i64], at_ms: i64) -> usize {
+    instants
+        .partition_point(|instant| *instant <= at_ms)
+        .saturating_sub(1)
+}
+
+/// The index of the first instant after `now_ms`, the list's length when none is.
+pub(crate) fn pending_index(instants: &[i64], now_ms: i64) -> usize {
+    instants.partition_point(|instant| *instant <= now_ms)
 }
 
 fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
@@ -94,22 +227,9 @@ pub fn prompt_tokens(input: u64, cache_read: u64, write_5m: u64, write_1h: u64) 
 }
 
 impl PriceTable {
-    pub fn shipped() -> PriceTable {
-        PriceTable::from_yaml(SHIPPED_API_PRICES, "shipped")
-            .expect("the shipped price table parses")
-    }
-
-    /// Refuses a cell that is not a finite non-negative number, and a `long_context.over` that is zero: a negative
-    /// or `NaN` price makes every estimate negative or `NaN`, which a budget then never trips on, and a zero
-    /// threshold would price every prompt at the long-context cells.
-    pub fn from_yaml(text: &str, source: &str) -> Result<PriceTable, LedgerError> {
-        // The typed map reads a key as its text and keeps the last of two equal keys, so the untyped pass runs
-        // first and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors
-        // keep their line and column.
-        crate::keys::untagged_string_keys(text).map_err(LedgerError::Yaml)?;
-        let file: PriceFile =
-            serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
-        for (model, row) in &file.models {
+    /// The cell rules `PriceRevisions::from_yaml` holds each entry to.
+    fn check(&self) -> Result<(), String> {
+        for (model, row) in &self.models {
             let blocks = [
                 ("", Some(&row.standard)),
                 ("fast.", row.fast.as_ref()),
@@ -125,25 +245,20 @@ impl PriceTable {
                     ("output", p.output),
                 ];
                 if let Some((cell, _)) = named.iter().find(|(_, v)| !v.is_finite() || *v < 0.0) {
-                    return Err(LedgerError::Yaml(format!(
+                    return Err(format!(
                         "model {model}, cell {prefix}{cell} must be a finite non-negative number"
-                    )));
+                    ));
                 }
             }
             // A zero would price every prompt at the long-context cells, which is a table that should carry them
             // as its standard ones. Serde already refuses a negative or fractional count before this runs.
             if row.long_context.as_ref().is_some_and(|l| l.over == 0) {
-                return Err(LedgerError::Yaml(format!(
+                return Err(format!(
                     "model {model}, cell long_context.over must be a whole number of tokens above zero"
-                )));
+                ));
             }
         }
-        Ok(PriceTable {
-            version: file.effective.clone(),
-            effective: file.effective,
-            source: source.into(),
-            models: file.models,
-        })
+        Ok(())
     }
 
     /// The row for the id, else the row for the id with a trailing `-YYYYMMDD` removed, with the key it sits
@@ -299,33 +414,33 @@ pub(crate) fn read_override(path: &Path) -> Result<Option<String>, LedgerError> 
 }
 
 pub struct Pricing {
-    table: Arc<PriceTable>,
+    revisions: Arc<PriceRevisions>,
     unknown: AtomicU64,
 }
 
 impl Pricing {
-    pub fn new(table: PriceTable) -> Pricing {
+    pub fn new(revisions: PriceRevisions) -> Pricing {
         Pricing {
-            table: Arc::new(table),
+            revisions: Arc::new(revisions),
             unknown: AtomicU64::new(0),
         }
     }
 
-    /// The operator's file when one is at the path, the shipped table when nothing is (`NotFound`), and the I/O
-    /// error for any other failure to read it.
+    /// The operator's file when one is at the path, the shipped file when nothing is (`NotFound`), and the I/O
+    /// error for any other failure to read it. The operator's file replaces the whole list.
     pub fn load(override_path: Option<&Path>) -> Result<Pricing, LedgerError> {
         let text = match override_path {
             Some(path) => read_override(path)?,
             None => None,
         };
         Ok(Pricing::new(match text {
-            Some(text) => PriceTable::from_yaml(&text, "file")?,
-            None => PriceTable::shipped(),
+            Some(text) => PriceRevisions::from_yaml(&text, "file")?,
+            None => PriceRevisions::shipped(),
         }))
     }
 
-    pub fn current(&self) -> Arc<PriceTable> {
-        self.table.clone()
+    pub fn revisions(&self) -> Arc<PriceRevisions> {
+        self.revisions.clone()
     }
 
     pub fn unknown_models(&self) -> u64 {
@@ -360,7 +475,7 @@ pub fn price_attempts(
         ) {
             Some((usd, split)) => {
                 a.estimated_usd = Some(usd);
-                a.pricing_version = Some(table.version.clone());
+                a.pricing_version = Some(table.effective.clone());
                 a.input_usd = Some(split.input_usd);
                 a.cache_read_usd = Some(split.cache_read_usd);
                 a.cache_write_usd = Some(split.cache_write_usd);
@@ -391,21 +506,40 @@ pub fn price_attempts(
 mod tests {
     use super::*;
     use crate::record::AttemptRecord;
+    use crate::test_tables::JANUARY_2026;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// The refusal `from_yaml` answers for a file whose one model carries `standard` and, when given, `fast` cells
-    /// and a `long_context` block.
+    /// The refusal `from_yaml` answers for a file whose one revision's one model carries `standard` and, when given,
+    /// `fast` cells and a `long_context` block.
     fn refusal(standard: &str, fast: Option<&str>, long_context: Option<&str>) -> String {
         let fast = fast.map(|f| format!(", fast: {{{f}}}")).unwrap_or_default();
         let long_context = long_context
             .map(|l| format!(", long_context: {{{l}}}"))
             .unwrap_or_default();
-        PriceTable::from_yaml(
-            &format!("effective: 2026-10-04\nmodels:\n  m: {{{standard}{fast}{long_context}}}\n"),
+        PriceRevisions::from_yaml(
+            &format!(
+                "revisions:\n  - effective: 2026-10-04\n    models:\n      m: {{{standard}{fast}{long_context}}}\n"
+            ),
             "file",
         )
         .unwrap_err()
         .to_string()
+    }
+
+    /// A list of one-model revisions, one per date, in the order given.
+    fn dated(dates: &[&str]) -> String {
+        let entries: String = dates
+            .iter()
+            .map(|date| format!("  - effective: {date}\n    models:\n      m: {{{CELLS}}}\n"))
+            .collect();
+        format!("revisions:\n{entries}")
+    }
+
+    fn refused(text: &str) -> String {
+        match PriceRevisions::from_yaml(text, "file") {
+            Err(error) => error.to_string(),
+            Ok(revisions) => panic!("loads: {revisions:?}"),
+        }
     }
 
     const CELLS: &str = "input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1";
@@ -415,7 +549,7 @@ mod tests {
     fn a_negative_price_cell_is_refused_naming_the_model_and_the_cell() {
         assert_eq!(
             refusal(&CELLS.replace("input: 1", "input: -1"), None, None),
-            "pricing table: model m, cell input must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell input must be a finite non-negative number"
         );
     }
 
@@ -423,7 +557,7 @@ mod tests {
     fn a_nan_price_cell_is_refused_naming_the_model_and_the_cell() {
         assert_eq!(
             refusal(&CELLS.replace("output: 1", "output: .nan"), None, None),
-            "pricing table: model m, cell output must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell output must be a finite non-negative number"
         );
     }
 
@@ -435,7 +569,7 @@ mod tests {
                 None,
                 None
             ),
-            "pricing table: model m, cell cache_read must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell cache_read must be a finite non-negative number"
         );
     }
 
@@ -448,7 +582,7 @@ mod tests {
                 Some(&CELLS.replace("cache_write_1h: 1", "cache_write_1h: -.inf")),
                 None,
             ),
-            "pricing table: model m, cell fast.cache_write_1h must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell fast.cache_write_1h must be a finite non-negative number"
         );
     }
 
@@ -458,7 +592,7 @@ mod tests {
         let block = format!("over: 1000, {}", CELLS.replace("input: 1", "input: -1"));
         assert_eq!(
             refusal(CELLS, None, Some(&block)),
-            "pricing table: model m, cell long_context.input must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell long_context.input must be a finite non-negative number"
         );
     }
 
@@ -468,7 +602,7 @@ mod tests {
     fn a_zero_threshold_is_refused_naming_long_context_over() {
         assert_eq!(
             refusal(CELLS, None, Some(&format!("over: 0, {CELLS}"))),
-            "pricing table: model m, cell long_context.over must be a whole number of tokens above zero"
+            "pricing table: revision 2026-10-04: model m, cell long_context.over must be a whole number of tokens above zero"
         );
     }
 
@@ -504,13 +638,13 @@ mod tests {
     #[test]
     fn a_repeated_model_key_is_refused_by_name() {
         let text = crate::test_tables::API_PRICES.replacen(
-            "  claude-sonnet-5-5:",
-            "  claude-haiku-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}\n  \
+            "      claude-sonnet-5-5:",
+            "      claude-haiku-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}\n      \
              claude-sonnet-5-5:",
             1,
         );
         assert_ne!(text, crate::test_tables::API_PRICES);
-        match PriceTable::from_yaml(&text, "file") {
+        match PriceRevisions::from_yaml(&text, "file") {
             Err(error) => {
                 let message = error.to_string();
                 assert!(
@@ -518,14 +652,14 @@ mod tests {
                     "{message}"
                 );
             }
-            Ok(table) => panic!("a repeated model key loads: {:?}", table.models),
+            Ok(revisions) => panic!("a repeated model key loads: {revisions:?}"),
         }
     }
 
-    /// The test table with one more row, tagged with `!price`, after its last.
+    /// The test file with one more row, tagged with `!price`, after the last row of its last revision.
     fn with_tagged_row(model: &str) -> String {
         format!(
-            "{}  !price {model}: {{input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, \
+            "{}      !price {model}: {{input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, \
              output: 10}}\n",
             crate::test_tables::API_PRICES
         )
@@ -534,7 +668,7 @@ mod tests {
     /// The typed map reads a tagged key as its plain text, so a tagged repeat would load as the model's price.
     #[test]
     fn a_tagged_repeat_of_a_model_key_is_refused_by_name() {
-        match PriceTable::from_yaml(&with_tagged_row("claude-haiku-4-5"), "file") {
+        match PriceRevisions::from_yaml(&with_tagged_row("claude-haiku-4-5"), "file") {
             Err(error) => {
                 let message = error.to_string();
                 assert!(
@@ -544,26 +678,127 @@ mod tests {
                     "{message}"
                 );
             }
-            Ok(table) => panic!("a tagged repeat loads: {:?}", table.models),
+            Ok(revisions) => panic!("a tagged repeat loads: {revisions:?}"),
         }
     }
 
     #[test]
     fn a_tagged_model_key_is_refused_by_name() {
-        match PriceTable::from_yaml(&with_tagged_row("claude-sonnet-4"), "file") {
+        match PriceRevisions::from_yaml(&with_tagged_row("claude-sonnet-4"), "file") {
             Err(error) => assert_eq!(
                 error.to_string(),
-                "pricing table: models.!price claude-sonnet-4: a key is an untagged string"
+                "pricing table: revisions[1].models.!price claude-sonnet-4: a key is an untagged string"
             ),
-            Ok(table) => panic!("a tagged key loads: {:?}", table.models),
+            Ok(revisions) => panic!("a tagged key loads: {revisions:?}"),
         }
     }
 
     #[test]
+    fn an_empty_list_is_refused() {
+        assert_eq!(
+            refused("revisions: []\n"),
+            "pricing table: revisions: at least one entry"
+        );
+    }
+
+    /// Two tables in force from one instant leave no rule for which one prices it.
+    #[test]
+    fn two_entries_dated_the_same_day_are_refused_naming_the_date() {
+        assert_eq!(
+            refused(&dated(&["2026-10-04", "2026-01-01", "2026-10-04"])),
+            "pricing table: revisions: two entries dated 2026-10-04"
+        );
+    }
+
+    /// jiff's parser reads other forms of a date too, so the shape is held to `YYYY-MM-DD` before the calendar.
+    #[test]
+    fn a_date_not_in_yyyy_mm_dd_form_is_refused_naming_its_index_and_its_text() {
+        for (date, written) in [
+            ("20261004", "\"20261004\""),
+            ("2026-1-4", "2026-1-4"),
+            ("2026-10-04T00:00", "2026-10-04T00:00"),
+            ("October", "October"),
+            ("2026-02-30", "2026-02-30"),
+        ] {
+            assert_eq!(effective_instant(date), None, "{date}");
+            assert_eq!(
+                refused(&dated(&["2026-01-01", written])),
+                format!(
+                    "pricing table: revisions[1].effective: a date in YYYY-MM-DD form, not `{date}`"
+                ),
+            );
+        }
+        assert_eq!(effective_instant("2026-02-01"), Some(1_769_904_000_000));
+    }
+
+    /// The dates carry the order, so the file's own is not refused.
+    #[test]
+    fn a_file_listing_a_later_date_first_loads_sorted_ascending() {
+        let revisions =
+            PriceRevisions::from_yaml(&dated(&["2026-02-01", "2026-01-01"]), "file").unwrap();
+        let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
+        assert_eq!(dates, ["2026-01-01", "2026-02-01"]);
+        assert_eq!(revisions.latest().effective, "2026-02-01");
+    }
+
+    /// A provider announces a price change ahead, so a future entry loads and waits for its date.
+    #[test]
+    fn a_future_entry_loads_and_is_held_until_its_date() {
+        let revisions =
+            PriceRevisions::from_yaml(&dated(&["2026-01-01", "2099-01-01"]), "file").unwrap();
+        assert_eq!(revisions.in_force(JANUARY_2026).effective, "2026-01-01");
+        assert_eq!(
+            revisions
+                .pending(JANUARY_2026)
+                .map(|r| r.effective.as_str()),
+            Some("2099-01-01")
+        );
+        let in_2099 = effective_instant("2099-01-01").unwrap();
+        assert_eq!(revisions.in_force(in_2099).effective, "2099-01-01");
+        assert_eq!(revisions.pending(in_2099), None);
+    }
+
+    /// An entry is in force from 00:00 UTC of its date, and an instant before the first entry reads the first.
+    #[test]
+    fn an_entry_is_in_force_from_midnight_utc_of_its_date_and_before_the_first_the_first_reads() {
+        let revisions = crate::test_tables::api_prices();
+        let february = 1_769_904_000_000;
+        assert_eq!(revisions.in_force(february).effective, "2026-02-01");
+        assert_eq!(revisions.in_force(february - 1).effective, "2026-01-01");
+        let new_year_2025 = effective_instant("2025-01-01").unwrap();
+        assert_eq!(revisions.in_force(new_year_2025).effective, "2026-01-01");
+        assert_eq!(revisions.pending(february), None);
+        assert_eq!(
+            revisions
+                .pending(february - 1)
+                .map(|r| r.effective.as_str()),
+            Some("2026-02-01")
+        );
+    }
+
+    #[test]
+    fn a_second_top_level_key_is_refused_by_serde() {
+        let message = refused(&format!("{}source: x\n", dated(&["2026-01-01"])));
+        assert!(
+            message.starts_with("pricing table: ") && message.contains("unknown field `source`"),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn the_shipped_table_parses_and_every_cell_is_a_finite_price_at_or_above_zero() {
-        let table = PriceTable::shipped();
-        assert_eq!(table.source, "shipped");
-        assert!(!table.models.is_empty());
+        let revisions = PriceRevisions::shipped();
+        assert_eq!(revisions.source, "shipped");
+        assert!(revisions.len() >= 1);
+        let instants: Vec<i64> = revisions
+            .iter()
+            .map(|table| effective_instant(&table.effective).unwrap())
+            .collect();
+        assert!(
+            instants.windows(2).all(|pair| pair[0] < pair[1]),
+            "the dates ascend"
+        );
+        let costs = crate::CostRevisions::shipped();
         let finite = |p: &ModelPrice| {
             [
                 p.input,
@@ -575,32 +810,38 @@ mod tests {
             .iter()
             .all(|c| c.is_finite() && *c >= 0.0)
         };
-        for (model, row) in &table.models {
-            assert!(finite(&row.standard), "{model}: {:?}", row.standard);
-            assert!(
-                row.fast.as_ref().is_none_or(finite),
-                "{model}: {:?}",
-                row.fast
-            );
-            assert!(
-                row.long_context
-                    .as_ref()
-                    .is_none_or(|l| l.over > 0 && finite(&l.cells)),
-                "{model}: {:?}",
-                row.long_context
+        for table in revisions.iter() {
+            assert!(!table.models.is_empty(), "{}", table.effective);
+            for (model, row) in &table.models {
+                assert!(finite(&row.standard), "{model}: {:?}", row.standard);
+                assert!(
+                    row.fast.as_ref().is_none_or(finite),
+                    "{model}: {:?}",
+                    row.fast
+                );
+                assert!(
+                    row.long_context
+                        .as_ref()
+                        .is_none_or(|l| l.over > 0 && finite(&l.cells)),
+                    "{model}: {:?}",
+                    row.long_context
+                );
+            }
+            let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
+            assert_eq!(
+                models,
+                costs.latest().model_order(&models),
+                "the rows of {} keep the model order",
+                table.effective
             );
         }
-        let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
-        assert!(
-            crate::test_tables::in_family_order(&models),
-            "the rows keep the family order: {models:?}"
-        );
     }
 
     // The test table's Sonnet 5.5 row: input 3, cache read 0.3, 5-minute write 3.75, output 15 per million.
     #[test]
     fn an_estimate_is_the_list_price_per_million_tokens_of_each_type() {
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let (usd, split) = table
             .estimate(
                 "claude-sonnet-5-5",
@@ -635,7 +876,8 @@ mod tests {
     #[test]
     fn a_fast_answer_prices_at_the_fast_cells_and_a_model_without_them_at_the_standard_cells() {
         // The test table's Opus 5.5 input is 10 per million standard and 20 fast; Sonnet 5.5 has no fast cells.
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let input = |model: &str, speed: Speed| {
             table
                 .estimate(model, speed, 1_000_000, 0, 0, 0, 0)
@@ -689,7 +931,8 @@ mod tests {
     #[test]
     fn price_at_selects_the_fast_cells_then_the_long_context_cells_then_the_standard_ones() {
         // The test table's Haiku 5.5 row: input 1 up to 1,000 prompt tokens and 5 over them, no fast cells.
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let input = |speed, prompt| {
             table
                 .price_at("claude-haiku-5-5", speed, prompt)
@@ -720,13 +963,16 @@ mod tests {
             "a row without the block prices a prompt of any length at its standard cells"
         );
         // A row the test writes with both blocks: the fast cells win whatever the prompt.
-        let both = PriceTable::from_yaml(
-            "effective: 2026-01-01\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1, \
+        let both = PriceRevisions::from_yaml(
+            "revisions:\n  - effective: 2026-01-01\n    models:\n      m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+             cache_read: 1, output: 1, \
              fast: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}, \
              long_context: {over: 10, input: 3, cache_write_5m: 3, cache_write_1h: 3, cache_read: 3, output: 3}}\n",
             "test",
         )
-        .unwrap();
+        .unwrap()
+        .latest()
+        .clone();
         assert_eq!(both.price_at("m", Speed::Fast, 11).unwrap().input, 2.0);
         assert_eq!(both.price_at("m", Speed::Standard, 11).unwrap().input, 3.0);
         assert_eq!(both.price_at("m", Speed::Standard, 10).unwrap().input, 1.0);
@@ -752,7 +998,8 @@ mod tests {
     fn an_estimate_prices_every_count_at_the_set_the_prompt_selects() {
         // The test table's Haiku 5.5 row, per million: 1, 1.25, 2, 0.1 and 5 up to 1,000 prompt tokens, and 5,
         // 6.25, 10, 0.5 and 25 over them. The prompt is the four input-side counts together, 250 each here.
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let at = |input| {
             table
                 .estimate(
@@ -791,7 +1038,8 @@ mod tests {
 
     #[test]
     fn a_serialized_row_carries_long_context_only_when_the_file_did() {
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let haiku = serde_json::to_value(&table.models["claude-haiku-5-5"]).unwrap();
         assert_eq!(haiku["long_context"]["over"], 1_000);
         assert_eq!(haiku["long_context"]["output"], 25.0);
@@ -806,7 +1054,9 @@ mod tests {
         // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku 4.5's input at 1; Haiku 5.5's
         // input at 1 up to 1,000 prompt tokens and 5 over them, with no fast cells; Opus 5.5 the dearest row, at
         // 10 input and 50 output, its fast input at 20.
-        let rates = crate::test_tables::api_prices().rate_table();
+        let rates = crate::test_tables::api_prices()
+            .in_force(JANUARY_2026)
+            .rate_table();
         let one = |pick: fn(&mut phoebis_routing::PinUsage)| {
             let mut usage = phoebis_routing::PinUsage::default();
             pick(&mut usage);
@@ -839,7 +1089,9 @@ mod tests {
             Some(5.0 / 1_000_000.0),
             "one token more at the long-context cells"
         );
-        let fast = crate::test_tables::api_prices().fast_rate_table();
+        let fast = crate::test_tables::api_prices()
+            .in_force(JANUARY_2026)
+            .fast_rate_table();
         assert_eq!(
             fast.price("claude-haiku-5-5", one(|u| u.input = 1), 1_001),
             Some(5.0 / 1_000_000.0),
@@ -895,9 +1147,7 @@ mod tests {
             },
         );
         let table = PriceTable {
-            version: "test".into(),
-            effective: "test".into(),
-            source: "test".into(),
+            effective: "2026-01-01".into(),
             models,
         };
         assert_eq!(
@@ -930,9 +1180,7 @@ mod tests {
             long_context: None,
         };
         let table = PriceTable {
-            version: "test".into(),
-            effective: "test".into(),
-            source: "test".into(),
+            effective: "2026-01-01".into(),
             models: IndexMap::from([
                 ("claude-haiku-4-5-20251001".to_string(), price.clone()),
                 ("claude-sonnet-4-5".to_string(), price),
@@ -954,7 +1202,8 @@ mod tests {
 
     #[test]
     fn attempts_are_stamped_with_the_version_and_an_unknown_model_is_counted_once() {
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         // The test table's Haiku 4.5 row: input 1 and output 5 per million.
         let want = (1_000.0 * 1.0 + 100.0 * 5.0) / 1_000_000.0;
         let unknown = AtomicU64::new(0);
@@ -970,7 +1219,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let split = price_attempts(&table, "claude-haiku-4-5-20251001", &mut attempts, &unknown);
+        let split = price_attempts(table, "claude-haiku-4-5-20251001", &mut attempts, &unknown);
         assert_eq!(
             (
                 attempts[0].estimated_usd,
@@ -982,7 +1231,7 @@ mod tests {
         assert!((attempts[1].estimated_usd.unwrap() - want).abs() < 1e-12);
         assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-01-01"));
         assert!((split.total() - want).abs() < 1e-12);
-        let split = price_attempts(&table, "gpt-5", &mut attempts, &unknown);
+        let split = price_attempts(table, "gpt-5", &mut attempts, &unknown);
         assert_eq!(
             (
                 attempts[1].estimated_usd,
@@ -996,7 +1245,8 @@ mod tests {
     /// An attempt whose answer named no cache counts prices its prompt as its input alone.
     #[test]
     fn an_attempts_missing_counts_read_as_zero_in_its_prompt_length() {
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         let unknown = AtomicU64::new(0);
         let attempt = |input| AttemptRecord {
             attempt: 1,
@@ -1005,8 +1255,8 @@ mod tests {
         };
         let mut under = vec![attempt(1_000)];
         let mut over = vec![attempt(1_001)];
-        price_attempts(&table, "claude-haiku-5-5", &mut under, &unknown);
-        price_attempts(&table, "claude-haiku-5-5", &mut over, &unknown);
+        price_attempts(table, "claude-haiku-5-5", &mut under, &unknown);
+        price_attempts(table, "claude-haiku-5-5", &mut over, &unknown);
         assert!(
             (under[0].input_usd.unwrap() - 1_000e-6).abs() < 1e-12,
             "{:?}",
@@ -1025,21 +1275,22 @@ mod tests {
         assert_eq!(
             Pricing::load(Some(&dir.path().join("missing.yaml")))
                 .unwrap()
-                .current()
+                .revisions()
                 .source,
             "shipped"
         );
         let path = dir.path().join("api_prices.yaml");
-        std::fs::write(&path, "effective: 2026-10-01\nmodels:\n  claude-sonnet-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}\n").unwrap();
-        let from_file = Pricing::load(Some(&path)).unwrap().current();
-        assert_eq!(
-            (
-                from_file.source.as_str(),
-                from_file.version.as_str(),
-                from_file.models.len()
-            ),
-            ("file", "2026-10-01", 1)
-        );
+        std::fs::write(&path, "revisions:\n  - effective: 2026-10-01\n    models:\n      claude-sonnet-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}\n").unwrap();
+        let from_file = Pricing::load(Some(&path)).unwrap().revisions();
+        assert_eq!((from_file.source.as_str(), from_file.len()), ("file", 1));
+        for at in [0, JANUARY_2026, i64::MAX] {
+            let table = from_file.in_force(at);
+            assert_eq!(
+                (table.effective.as_str(), table.models.len()),
+                ("2026-10-01", 1),
+                "one entry prices every instant: {at}"
+            );
+        }
     }
 
     /// Only a path with nothing at it falls back: any other failure to read the operator's file refuses the start,
@@ -1069,7 +1320,8 @@ mod tests {
     /// A dated id reads its undated row, so it answers as that row does.
     #[test]
     fn a_model_is_priced_by_prompt_length_when_its_row_carries_the_block() {
-        let table = crate::test_tables::api_prices();
+        let revisions = crate::test_tables::api_prices();
+        let table = revisions.in_force(JANUARY_2026);
         assert!(table.priced_by_prompt_length("claude-haiku-5-5"));
         assert!(table.priced_by_prompt_length("claude-haiku-5-5-20260101"));
         assert!(!table.priced_by_prompt_length("claude-sonnet-5-5"));

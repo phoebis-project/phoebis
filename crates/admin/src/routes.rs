@@ -1615,7 +1615,8 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         .into_iter()
         .map(|(kind, n)| (kind.to_string(), n))
         .collect::<indexmap::IndexMap<String, u64>>();
-    let prices = state.pricing.current();
+    let revisions = state.pricing.revisions();
+    let prices = revisions.in_force(now);
     Json(System {
         version: env!("CARGO_PKG_VERSION").into(),
         profile: state.profile.name.to_string(),
@@ -1667,13 +1668,13 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         pricing: PricingSources {
             api_prices: PricingSource {
                 path: state.settings.api_prices_path.clone(),
-                source: prices.source.clone(),
+                source: revisions.source.clone(),
                 effective: prices.effective.clone(),
             },
             subscription_costs: PricingSource {
                 path: state.settings.subscription_costs_path.clone(),
                 source: state.tables.source.clone(),
-                effective: state.tables.costs.effective.clone(),
+                effective: state.tables.revisions.in_force(now).effective.clone(),
             },
         },
         gaps: gaps.iter().map(crate::requests::event_json).collect(),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{ModelRow, PlanTables, PriceTable, SubscriptionCosts};
+use phoebis_ledger::{ModelRow, PlanTables, PriceRevisions, SubscriptionCosts};
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -74,21 +74,24 @@ pub struct PriceTableContent {
 #[schema(value_type = crate::openapi::SubscriptionCostsView)]
 pub struct SubscriptionCostsContent(pub SubscriptionCosts);
 
-/// The two tables' envelopes, as the price route answers them and the settings echo carries them.
-pub fn table_envelopes(prices: &PriceTable, tables: &PlanTables) -> Envelopes {
+/// The two tables' envelopes, each the revision in force at `now`, as the price route answers them and the settings
+/// echo carries them.
+pub fn table_envelopes(prices: &PriceRevisions, tables: &PlanTables, now: i64) -> Envelopes {
+    let table = prices.in_force(now);
+    let costs = tables.revisions.in_force(now);
     Envelopes {
         api_prices: Envelope {
-            effective: prices.effective.clone(),
+            effective: table.effective.clone(),
             source: prices.source.clone(),
             content: PriceTableContent {
-                effective: prices.effective.clone(),
-                models: prices.models.clone(),
+                effective: table.effective.clone(),
+                models: table.models.clone(),
             },
         },
         subscription_costs: Envelope {
-            effective: tables.costs.effective.clone(),
+            effective: costs.effective.clone(),
             source: tables.source.clone(),
-            content: SubscriptionCostsContent(tables.costs.clone()),
+            content: SubscriptionCostsContent(costs.clone()),
         },
     }
 }
@@ -104,7 +107,12 @@ pub fn table_envelopes(prices: &PriceTable, tables: &PlanTables) -> Envelopes {
     ),
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
-    Json(table_envelopes(&state.pricing.current(), &state.tables)).into_response()
+    Json(table_envelopes(
+        &state.pricing.revisions(),
+        &state.tables,
+        (state.clock)(),
+    ))
+    .into_response()
 }
 
 #[cfg(test)]

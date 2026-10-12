@@ -10,7 +10,7 @@ use std::time::Duration;
 use common::*;
 use phoebis_keepalive::{AgentState, Event, KeepalivePolicy, KeepaliveTiming, Reason};
 use phoebis_ledger::{
-    hour_of, read_rollups, PlanTables, PriceTable, RollupSelect, SubscriptionCosts,
+    hour_of, read_rollups, CostRevisions, PlanTables, PriceRevisions, RollupSelect,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -20,46 +20,52 @@ const TIER: &str = "default_claude_max_20x";
 /// The rig's model at the Sonnet shape: a read of 0.1 against writes of 1.25 and 2.0, so the break-even in dollars
 /// is 2,760,000 ms (46 min) on a five-minute entry and 61,560,000 ms (17.1 h) on a one-hour one.
 const PRICES: &str = r#"
-effective: 2026-01-01
-models:
-  claude-sonnet-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2.0, cache_read: 0.1, output: 5}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-sonnet-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2.0, cache_read: 0.1, output: 5}
 "#;
 
 /// The same model on the plan: a read of 0.025 against both writes of 1.25, so the break-even is 11,760,000 ms
 /// (3 h 16 min) on a five-minute entry and 158,760,000 ms (44.1 h) on a one-hour one.
 const COSTS: &str = r#"
-effective: 2026-01-01
-unit:
-  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-  units_per_window: 100
-capacity:
-  default_claude_max_20x: {five_hour: 100, seven_day: 1000}
-peak:
-  zone: America/Los_Angeles
-  weekdays: true
-  from_hour: 5
-  to_hour: 11
-  capacity_factor: {five_hour: 0.5, seven_day: 1}
-type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
-model_weight:
-  claude-sonnet-4-5: 1
-model_windows: {}
-overrides: {}
+revisions:
+  - effective: 2026-01-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.025, cache_write_1h: 1.25, cache_write_5m: 1.25, input: 1, output: 5}
+    model_weight:
+      claude-sonnet-4-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-4-5: sonnet
 "#;
 
 /// The same model with fast cells that are no multiple of its standard ones: a read of 0.4 against a five-minute write
 /// of 2.5, so a fast recipe's break-even in dollars is 1,260,000 ms (21 min) on a five-minute entry where the
 /// standard cells give 46 min.
 const PRICES_WITH_FAST: &str = r#"
-effective: 2026-01-01
-models:
-  claude-sonnet-4-5:
-    input: 1
-    cache_write_5m: 1.25
-    cache_write_1h: 2.0
-    cache_read: 0.1
-    output: 5
-    fast: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 10}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-sonnet-4-5:
+        input: 1
+        cache_write_5m: 1.25
+        cache_write_1h: 2.0
+        cache_read: 0.1
+        output: 5
+        fast: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4.0, cache_read: 0.4, output: 10}
 "#;
 
 /// The production leads and jitters, so each figure below is the one the console shows. The parity cases of the
@@ -89,7 +95,7 @@ fn policy(edit: impl FnOnce(&mut KeepalivePolicy)) -> KeepalivePolicy {
 
 fn tables() -> PlanTables {
     PlanTables {
-        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        revisions: CostRevisions::from_yaml(COSTS).unwrap(),
         path: None,
         source: "test".to_string(),
     }
@@ -100,7 +106,7 @@ fn dollars(policy: KeepalivePolicy) -> RigSpec {
     RigSpec {
         accounts: vec![api_key("a", A, 0)],
         policy,
-        pricing: PriceTable::from_yaml(PRICES, "test").unwrap(),
+        pricing: PriceRevisions::from_yaml(PRICES, "test").unwrap(),
         tables: tables(),
         timing: timing(),
         ..RigSpec::default()
@@ -971,7 +977,11 @@ async fn a_busy_main_past_the_window_ends_with_idle_limit() {
 #[tokio::test]
 async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row() {
     let mut r = rig(RigSpec {
-        pricing: PriceTable::from_yaml("effective: 2026-01-01\nmodels: {}\n", "test").unwrap(),
+        pricing: PriceRevisions::from_yaml(
+            "revisions:\n  - effective: 2026-01-01\n    models: {}\n",
+            "test",
+        )
+        .unwrap(),
         ..dollars(policy(|_| {}))
     })
     .await;
@@ -1037,7 +1047,7 @@ fn fast_body() -> String {
 #[tokio::test]
 async fn a_fast_recipes_ceilings_read_the_fast_cells() {
     let mut r = rig(RigSpec {
-        pricing: PriceTable::from_yaml(PRICES_WITH_FAST, "test").unwrap(),
+        pricing: PriceRevisions::from_yaml(PRICES_WITH_FAST, "test").unwrap(),
         ..plan(policy(|p| p.max_idle_seconds = 0))
     })
     .await;

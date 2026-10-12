@@ -130,6 +130,22 @@
               "seven_day": 1.0
             }
           }
+        },
+        "tier_order": [
+          "fable",
+          "opus",
+          "sonnet",
+          "haiku",
+          "mystery"
+        ],
+        "model_tier": {
+          "claude-fable-5-1": "fable",
+          "claude-opus-5-5": "opus",
+          "claude-opus-5": "opus",
+          "claude-opus-4-8": "opus",
+          "claude-sonnet-5-5": "sonnet",
+          "claude-haiku-4-5": "haiku",
+          "claude-mystery-2": "mystery"
         }
       }
     }

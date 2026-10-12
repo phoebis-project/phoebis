@@ -227,7 +227,8 @@ fn the_summary_names_the_routing_keys() {
     // Neither default path has a file under the test's working directory, so both tables are the shipped ones. The
     // price line compares with the table it loads; the cost model's counts are proven over hand-counted tables
     // below, so its line here is held to its shape.
-    let prices = phoebis_ledger::PriceTable::shipped();
+    let revisions = phoebis_ledger::PriceRevisions::shipped();
+    let prices = revisions.in_force(jiff::Timestamp::now().as_millisecond());
     let api_prices = format!(
         "api prices: built in (effective {}, {} models), since ./api_prices.yaml was not found",
         prices.effective,
@@ -273,51 +274,60 @@ fn the_summary_names_the_routing_keys() {
 }
 
 const COUNTED_PRICES: &str = "\
-effective: 2026-02-01
-models:
-  claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
-  claude-haiku-4-5:
-    input: 1
-    cache_write_5m: 1.25
-    cache_write_1h: 2
-    cache_read: 0.1
-    output: 5
-    long_context:
-      over: 1000
-      input: 5
-      cache_write_5m: 6.25
-      cache_write_1h: 10
-      cache_read: 0.5
-      output: 25
+revisions:
+  - effective: 2026-02-01
+    models:
+      claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+      claude-haiku-4-5:
+        input: 1
+        cache_write_5m: 1.25
+        cache_write_1h: 2
+        cache_read: 0.1
+        output: 5
+        long_context:
+          over: 1000
+          input: 5
+          cache_write_5m: 6.25
+          cache_write_1h: 10
+          cache_read: 0.5
+          output: 25
 ";
 
 const COUNTED_COSTS: &str = "\
-effective: 2026-03-01
-unit:
-  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
-  units_per_window: 100
-capacity:
-  default_claude_ai:         {five_hour: 5, seven_day: 50}
-  default_claude_enterprise: {five_hour: null, seven_day: null}
-  default_claude_max_20x:    {five_hour: 100, seven_day: 1000}
-  default_claude_team:       {five_hour: 10, seven_day: null}
-peak:
-  zone: America/Los_Angeles
-  weekdays: true
-  from_hour: 5
-  to_hour: 11
-  capacity_factor: {five_hour: 0.5, seven_day: 1}
-type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
-model_weight:
-  claude-opus-5-5: 2
-  claude-opus-5: null
-  claude-sonnet-5-5: 1
-  claude-sonnet-5: null
-  claude-haiku-4-5: 0.5
-model_windows: {}
-overrides:
-  claude-sonnet-5: {weight_by_window: {seven_day: 1}}
-  claude-haiku-4-5: {weight_by_window: {seven_day: 1}}
+revisions:
+  - effective: 2026-03-01
+    unit:
+      defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      default_claude_ai:         {five_hour: 5, seven_day: 50}
+      default_claude_enterprise: {five_hour: null, seven_day: null}
+      default_claude_max_20x:    {five_hour: 100, seven_day: 1000}
+      default_claude_team:       {five_hour: 10, seven_day: null}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-opus-5-5: 2
+      claude-opus-5: null
+      claude-sonnet-5-5: 1
+      claude-sonnet-5: null
+      claude-haiku-4-5: 0.5
+    model_windows: {}
+    overrides:
+      claude-sonnet-5: {weight_by_window: {seven_day: 1}}
+      claude-haiku-4-5: {weight_by_window: {seven_day: 1}}
+    tier_order: [opus, sonnet, haiku]
+    model_tier:
+      claude-opus-5-5: opus
+      claude-opus-5: opus
+      claude-sonnet-5-5: sonnet
+      claude-sonnet-5: sonnet
+      claude-haiku-4-5: haiku
 ";
 
 /// Two tables written for this count: two price rows dated 2026-02-01, the Haiku 4.5 row priced by prompt length,
@@ -377,8 +387,8 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     let prices = dir.path().join("api_prices.yaml");
     std::fs::write(
         &prices,
-        "effective: 2026-10-04\nmodels:\n  m: {input: -1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
-         output: 1}\n",
+        "revisions:\n  - effective: 2026-10-04\n    models:\n      m: {input: -1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1}\n",
     )
     .unwrap();
     let config = config_file(
@@ -396,7 +406,9 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
         printed(&out)
     );
     assert!(
-        stderr.contains("pricing table: model m, cell input must be a finite non-negative number"),
+        stderr.contains(
+            "pricing table: revision 2026-10-04: model m, cell input must be a finite non-negative number"
+        ),
         "{}",
         printed(&out)
     );
@@ -410,9 +422,9 @@ fn a_price_file_with_a_bad_long_context_cell_fails_check_config_naming_the_model
     let prices = dir.path().join("api_prices.yaml");
     std::fs::write(
         &prices,
-        "effective: 2026-10-04\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
-         output: 1, long_context: {over: 1000, input: -1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
-         output: 1}}\n",
+        "revisions:\n  - effective: 2026-10-04\n    models:\n      m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1, long_context: {over: 1000, input: -1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1}}\n",
     )
     .unwrap();
     let config = config_file(
@@ -431,7 +443,7 @@ fn a_price_file_with_a_bad_long_context_cell_fails_check_config_naming_the_model
     );
     assert!(
         stderr.contains(
-            "pricing table: model m, cell long_context.input must be a finite non-negative number"
+            "pricing table: revision 2026-10-04: model m, cell long_context.input must be a finite non-negative number"
         ),
         "{}",
         printed(&out)
@@ -446,9 +458,9 @@ fn a_price_file_with_a_zero_threshold_fails_check_config_naming_long_context_ove
     let prices = dir.path().join("api_prices.yaml");
     std::fs::write(
         &prices,
-        "effective: 2026-10-04\nmodels:\n  m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
-         output: 1, long_context: {over: 0, input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
-         output: 1}}\n",
+        "revisions:\n  - effective: 2026-10-04\n    models:\n      m: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1, long_context: {over: 0, input: 1, cache_write_5m: 1, cache_write_1h: 1, \
+         cache_read: 1, output: 1}}\n",
     )
     .unwrap();
     let config = config_file(
@@ -467,7 +479,8 @@ fn a_price_file_with_a_zero_threshold_fails_check_config_naming_long_context_ove
     );
     assert!(
         stderr.contains(
-            "pricing table: model m, cell long_context.over must be a whole number of tokens above zero"
+            "pricing table: revision 2026-10-04: model m, cell long_context.over must be a whole number of tokens above \
+             zero"
         ),
         "{}",
         printed(&out)
@@ -505,9 +518,9 @@ fn a_cost_model_with_a_capacity_at_zero_fails_check_config_naming_the_key() {
         printed(&out)
     );
     assert!(
-        stderr
-            .lines()
-            .any(|line| line.contains("plan table: capacity.default_claude_max_20x.five_hour")),
+        stderr.lines().any(|line| line.contains(
+            "plan table: revision 2026-01-01: capacity.default_claude_max_20x.five_hour"
+        )),
         "{}",
         printed(&out)
     );

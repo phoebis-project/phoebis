@@ -15,7 +15,7 @@ use phoebis_attention::{
     BACKOFF_ATTENTION_AFTER_MS,
 };
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{AttemptRecord, Metrics, PriceTable, Pricing, Record, RequestRecord};
+use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
     AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
@@ -922,7 +922,7 @@ async fn scrape(rig: &Rig, attention: &Arc<Attention>) -> (u16, String) {
     let app = phoebis_ledger::metrics_router(
         Arc::new(Metrics::new()),
         rig.router.clone(),
-        Arc::new(Pricing::new(PriceTable::shipped())),
+        Arc::new(Pricing::new(PriceRevisions::shipped())),
         rig.bus.clone(),
         rig.clock(),
         Duration::from_secs(60),

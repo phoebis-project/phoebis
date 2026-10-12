@@ -14,7 +14,7 @@
       "organization_uuid": "00000000-0000-4000-8000-000000000002"
     },
     "credential": {
-      "access_expires_at": 4600000,
+      "access_expires_at": 1791724600000,
       "refresh_expires_at": null,
       "generation": 1,
       "last_refresh_at": null,
@@ -26,10 +26,10 @@
     "cooldowns": [
       {
         "scope": "model:claude-haiku-4-5-20251001",
-        "until": 2800000,
+        "until": 1791722800000,
         "reason": "model_rejected",
         "window": "model_rejection",
-        "set_at": 1000000
+        "set_at": 1791721000000
       }
     ],
     "overage": null,
@@ -47,44 +47,44 @@
       "since": 1773482400000,
       "trial_ends_at": null,
       "ends_at": null,
-      "derived_ends_at": 1159200000
+      "derived_ends_at": 1791972000000
     },
     "windows": [
       {
         "id": "five_hour",
         "utilization": 0.62,
-        "resets_at": 4600000,
-        "observed_at": 900000
+        "resets_at": 1791724600000,
+        "observed_at": 1791720900000
       },
       {
         "id": "seven_day",
         "utilization": 0.41,
-        "resets_at": 87400000,
-        "observed_at": 900000
+        "resets_at": 1791807400000,
+        "observed_at": 1791720900000
       },
       {
         "id": "seven_day_fable",
         "utilization": 0.12,
-        "resets_at": 87400000,
-        "observed_at": 900000
+        "resets_at": 1791807400000,
+        "observed_at": 1791720900000
       },
       {
         "id": "seven_day_opus",
         "utilization": 0.03,
-        "resets_at": 87400000,
-        "observed_at": 900000
+        "resets_at": 1791807400000,
+        "observed_at": 1791720900000
       }
     ],
     "fast_lane": {
       "input": {
         "utilization": 0.42,
-        "resets_at": 1030000,
-        "observed_at": 995000
+        "resets_at": 1791721030000,
+        "observed_at": 1791720995000
       },
       "output": {
         "utilization": 0.08,
-        "resets_at": 1030000,
-        "observed_at": 995000
+        "resets_at": 1791721030000,
+        "observed_at": 1791720995000
       }
     },
     "extra_usage": {
@@ -95,7 +95,7 @@
       "monthly_limit": 5000,
       "used_credits": 1234,
       "utilization": 0.25,
-      "observed_at": 900000
+      "observed_at": 1791720900000
     },
     "pool": {
       "pool_id": "main",
@@ -108,12 +108,12 @@
     },
     "usage": {
       "error": null,
-      "fetched_at": 1000000,
+      "fetched_at": 1791721000000,
       "held_until": null,
       "poll": {
         "backoff_since": null,
-        "last_attempt_at": 1000000,
-        "last_clean_at": 1000000,
+        "last_attempt_at": 1791721000000,
+        "last_clean_at": 1791721000000,
         "last_error": null,
         "last_outcome": "clean",
         "next_attempt_at": null,

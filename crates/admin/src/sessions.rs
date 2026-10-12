@@ -186,10 +186,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it, or
     // the share of the account's own 5-hour window through the model's anchor rates over its tier's capacity
     // ratio. Each account's tier is read once per request.
-    let prices = state.pricing.current();
+    let revisions = state.pricing.revisions();
+    let prices = revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),
-        five_hour: state.tables.rate_table(FIVE_HOUR),
+        five_hour: state.tables.rate_table(FIVE_HOUR, now),
         fast: prices.fast_rate_table(),
     };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
@@ -252,7 +253,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
                 // A tier the model does not size, or a model it has no weight for, prices nothing, so the figure
                 // reads null rather than a guess.
-                tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))
+                tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR, now))
                     .and_then(|factor| {
                         rates
                             .price_pin(BurnUnit::WindowShare, &p, &fast)
@@ -408,9 +409,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     ),
 )]
 pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
-    let table = state.pricing.current();
+    let revisions = state.pricing.revisions();
+    let table = revisions.in_force((state.clock)());
     Json(SessionCosts {
-        version: table.version.clone(),
+        version: table.effective.clone(),
         effective: table.effective.clone(),
         models: table
             .models

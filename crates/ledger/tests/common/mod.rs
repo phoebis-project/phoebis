@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::Request;
 use fake_upstream::FakeUpstream;
 use phoebis_bus::Bus;
-use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
+use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb, Metrics, PriceRevisions, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
@@ -278,7 +278,7 @@ pub async fn harness_on(
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(PriceRevisions::shipped()));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn(
         db.clone(),

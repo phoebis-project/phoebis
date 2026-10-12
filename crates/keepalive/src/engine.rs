@@ -1130,7 +1130,9 @@ impl Engine {
                 fundings.push(funding);
             }
         }
-        let rows = FactorRows::of(&self.parts.pricing.current(), &self.parts.tables);
+        let now = self.now();
+        let revisions = self.parts.pricing.revisions();
+        let rows = FactorRows::of(revisions.in_force(now), &self.parts.tables, now);
         let undated: Vec<String> = rows
             .dollar_models()
             .filter(|model| listing::undated(model).is_none())
@@ -1157,6 +1159,7 @@ impl Engine {
             &rows,
             &dated,
             &self.parts.timing,
+            now,
         )
     }
 
@@ -2674,7 +2677,8 @@ impl Engine {
         let view = self.router_view(now, retained_models).await;
         // Built once for the whole tick, outside the lock, so every recipe's ceilings read the same prices and no
         // recipe rebuilds a table's rows.
-        let rows = FactorRows::of(&self.parts.pricing.current(), &self.parts.tables);
+        let revisions = self.parts.pricing.revisions();
+        let rows = FactorRows::of(revisions.in_force(now), &self.parts.tables, now);
         let (jobs, lapsed) = {
             let mut inner = self.lock();
             if inner.closed {
@@ -2758,7 +2762,7 @@ impl Engine {
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
-                    let ceilings = ceilings_for(agent, &view, &rows, &self.parts.timing);
+                    let ceilings = ceilings_for(agent, &view, &rows, &self.parts.timing, now);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -3114,6 +3118,7 @@ pub(crate) fn ceilings_for(
     view: &RouterView,
     rows: &FactorRows,
     timing: &KeepaliveTiming,
+    now: i64,
 ) -> Ceilings {
     let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
     let funding = match agent
@@ -3136,7 +3141,7 @@ pub(crate) fn ceilings_for(
         ttl_ms,
         timing,
     )
-    .or_else(|| resolve(&agent.policy, shipped_tightest(fast), ttl_ms, timing))
+    .or_else(|| resolve(&agent.policy, shipped_tightest(fast, now), ttl_ms, timing))
     .unwrap_or(Ceilings {
         idle_ms: 0,
         parked_ms: 0,
@@ -3432,29 +3437,30 @@ mod tests {
     /// fixture's body is under a hundred bytes, and its 2,000 tokens put it over the threshold.
     #[test]
     fn a_recipes_ceilings_read_the_price_set_its_prompt_tokens_select() {
-        let pricing = phoebis_ledger::PriceTable::from_yaml(
+        let pricing = phoebis_ledger::PriceRevisions::from_yaml(
             r#"
-effective: 2026-01-01
-models:
-  claude-opus-5-5:
-    input: 4
-    cache_write_5m: 1.25
-    cache_write_1h: 2
-    cache_read: 0.1
-    output: 20
-    long_context: {over: 1000, input: 8, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 40}
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-opus-5-5:
+        input: 4
+        cache_write_5m: 1.25
+        cache_write_1h: 2
+        cache_read: 0.1
+        output: 20
+        long_context: {over: 1000, input: 8, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 40}
 "#,
             "test",
         )
         .unwrap();
-        let rows = FactorRows::of(&pricing, &PlanTables::shipped());
+        let rows = FactorRows::of(pricing.latest(), &PlanTables::shipped(), 0);
         let timing = KeepaliveTiming::default();
         let mut agent = Agent::new("main", "k", 1, 0, timing);
         agent.account = Some("a".into());
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(false));
         let break_even =
-            |agent: &Agent| ceilings_for(agent, &pool_view(false), &rows, &timing).break_even_ms;
+            |agent: &Agent| ceilings_for(agent, &pool_view(false), &rows, &timing, 0).break_even_ms;
         assert_eq!(
             break_even(&agent),
             960_000,

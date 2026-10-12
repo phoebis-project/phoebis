@@ -900,7 +900,7 @@ pub(crate) async fn bodies(
 mod tests {
     use super::*;
     use crate::openapi::round_trip::{fixture, round_trips};
-    use phoebis_ledger::{PlanTables, RequestRecord, SubscriptionCosts, Tiers};
+    use phoebis_ledger::{CostRevisions, PlanTables, RequestRecord, Tiers};
     use serde_json::json;
 
     /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
@@ -913,33 +913,39 @@ mod tests {
     /// 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week is half
     /// the 7-day window.
     const SHARE_COSTS: &str = "\
-effective: 2026-01-01
-unit:
-  defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
-  units_per_window: 100
-capacity:
-  test_tier:   {five_hour: 100, seven_day: 1000}
-  narrow_tier: {five_hour: 100, seven_day: null}
-peak:
-  zone: America/Los_Angeles
-  weekdays: true
-  from_hour: 5
-  to_hour: 11
-  capacity_factor: {five_hour: 0.5, seven_day: 1}
-type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
-model_weight:
-  claude-fable-5-1: 10
-  claude-sonnet-5-5: 1
-  claude-haiku-4-5: 0.5
-model_windows:
-  seven_day_fable: {of: seven_day, capacity_factor: 0.5}
-overrides: {}
+revisions:
+  - effective: 2026-01-01
+    unit:
+      defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
+      units_per_window: 100
+    capacity:
+      test_tier:   {five_hour: 100, seven_day: 1000}
+      narrow_tier: {five_hour: 100, seven_day: null}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-fable-5-1: 10
+      claude-sonnet-5-5: 1
+      claude-haiku-4-5: 0.5
+    model_windows:
+      seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-fable-5-1: fable
+      claude-sonnet-5-5: sonnet
+      claude-haiku-4-5: haiku
 ";
 
     fn shares_of(tiers: &[(&str, Option<&str>)]) -> ShareContext {
         ShareContext::of(
             PlanTables {
-                costs: SubscriptionCosts::from_yaml(SHARE_COSTS)
+                revisions: CostRevisions::from_yaml(SHARE_COSTS)
                     .expect("the share cost model parses"),
                 path: None,
                 source: "test".to_string(),

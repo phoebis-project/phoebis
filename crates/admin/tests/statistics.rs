@@ -51,7 +51,7 @@ fn attempt(id: &str, account: &str, status: u16) -> AttemptRecord {
         attempt: 1,
         account_id: account.into(),
         account_kind: "oauth".into(),
-        started_at: 1,
+        started_at: common::NOW,
         upstream_status: Some(status),
         outcome: if status == 200 {
             "succeeded"

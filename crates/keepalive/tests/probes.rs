@@ -1931,7 +1931,8 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let (cost, _) = phoebis_ledger::PriceTable::shipped()
+    let (cost, _) = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(r.now())
         .estimate(FAST_PRICED, speed, 0, 2_000, 0, 0, 0)
         .expect("a priced model");
     (r, cost)
@@ -1943,7 +1944,8 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 #[tokio::test]
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
-    let (standard, _) = phoebis_ledger::PriceTable::shipped()
+    let (standard, _) = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(r.now())
         .estimate(
             FAST_PRICED,
             phoebis_ledger::Speed::Standard,
@@ -1985,11 +1987,14 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let captured = Captured::default();
     let _guard = captured.install();
     // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
-    let mut tables = phoebis_ledger::PlanTables::shipped();
-    tables
-        .costs
+    let mut weighted = phoebis_ledger::CostRevisions::shipped().latest().clone();
+    weighted
         .model_weight
         .insert("claude-sonnet-4-5".to_string(), Some(1.0));
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::new(vec![weighted]).unwrap(),
+        ..phoebis_ledger::PlanTables::shipped()
+    };
     let mut r = rig(RigSpec {
         on_disk: true,
         tables,

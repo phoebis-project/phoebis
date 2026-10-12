@@ -103,10 +103,10 @@
       }
     },
     "subscription_costs": {
-      "effective": "2026-10-11",
+      "effective": "2026-10-05",
       "source": "shipped",
       "content": {
-        "effective": "2026-10-11",
+        "effective": "2026-10-05",
         "unit": {
           "defined_by": {
             "band": "out_of_band",
@@ -160,7 +160,29 @@
             "of": "seven_day"
           }
         },
-        "overrides": {}
+        "overrides": {},
+        "tier_order": [
+          "fable",
+          "opus",
+          "sonnet",
+          "haiku"
+        ],
+        "model_tier": {
+          "claude-fable-5-1": "fable",
+          "claude-fable-5": "fable",
+          "claude-opus-5-5": "opus",
+          "claude-opus-5": "opus",
+          "claude-opus-4-8": "opus",
+          "claude-opus-4-7": "opus",
+          "claude-opus-4-6": "opus",
+          "claude-opus-4-5": "opus",
+          "claude-sonnet-5-5": "sonnet",
+          "claude-sonnet-5": "sonnet",
+          "claude-sonnet-4-6": "sonnet",
+          "claude-sonnet-4-5": "sonnet",
+          "claude-haiku-5-5": "haiku",
+          "claude-haiku-4-5": "haiku"
+        }
       }
     }
   }

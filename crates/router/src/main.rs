@@ -121,11 +121,13 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or_else(|| "the built-in table".to_string())
                     )
                 })?;
-            let prices = pricing.current();
+            let now = jiff::Timestamp::now().as_millisecond();
+            let revisions = pricing.revisions();
+            let prices = revisions.in_force(now);
             println!(
                 "api prices: {}",
                 table_line(
-                    &prices.source,
+                    &revisions.source,
                     &prices.effective,
                     config.stats.api_prices_path.as_deref(),
                     format!("{} models", prices.models.len())
@@ -144,7 +146,7 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or_else(|| "the built-in model".to_string())
                     )
                 })?;
-            let costs = &tables.costs;
+            let costs = tables.revisions.in_force(now);
             let weighted = costs.weighted_model_count();
             let sized = costs.sized_tier_count();
             println!(

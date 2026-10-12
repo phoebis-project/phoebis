@@ -2752,12 +2752,12 @@ fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
 /// The pool `main` over `business` (subscription, Max 20x) and `direct` (api_key) behind key `desktop`, seeded
 /// through one harness with `pins` and handed to a second one: the router task loads its pins at spawn.
 async fn sessions_harness_with(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
-    sessions_harness_priced(phoebis_ledger::PriceTable::shipped(), pins).await
+    sessions_harness_priced(phoebis_ledger::PriceRevisions::shipped(), pins).await
 }
 
 /// `sessions_harness_with` pricing dollars through `prices` rather than the shipped table.
 async fn sessions_harness_priced(
-    prices: phoebis_ledger::PriceTable,
+    prices: phoebis_ledger::PriceRevisions,
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     use common::{generation, login, post};
@@ -2835,7 +2835,8 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         )
         .unwrap()
         * 3_600.0;
-    let opus_5_input = phoebis_ledger::PriceTable::shipped()
+    let opus_5_input = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(now)
         .price("claude-opus-5")
         .unwrap()
         .input;
@@ -2853,7 +2854,8 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         (burn, unit)
     );
     // The shipped table lists Opus 5.5, so its dollar reading is that row's own rate, read as the route reads it.
-    let s1_usd_per_hour = phoebis_ledger::PriceTable::shipped()
+    let s1_usd_per_hour = phoebis_ledger::PriceRevisions::shipped()
+        .in_force(now)
         .rate_table()
         .price_burn(
             "claude-opus-5-5",
@@ -2942,15 +2944,17 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     let now = common::NOW;
     // One Haiku 5.5 row with both blocks in round numbers: the standard cells at 1, the fast cells at 2 and the
     // long-context cells at 5 over 1,000 prompt tokens.
-    let table = phoebis_ledger::PriceTable::from_yaml(
-        "effective: 2026-01-01\nmodels:\n  claude-haiku-5-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, \
-         cache_read: 1, output: 1, fast: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}, \
+    let revisions = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-haiku-5-5: {input: 1, cache_write_5m: 1, \
+         cache_write_1h: 1, cache_read: 1, output: 1, \
+         fast: {input: 2, cache_write_5m: 2, cache_write_1h: 2, cache_read: 2, output: 2}, \
          long_context: {over: 1000, input: 5, cache_write_5m: 5, cache_write_1h: 5, cache_read: 5, output: 5}}\n",
         "test",
     )
     .unwrap();
     let input = |speed, prompt| {
-        table
+        revisions
+            .in_force(now)
             .price_at("claude-haiku-5-5", speed, prompt)
             .unwrap()
             .input
@@ -2958,7 +2962,7 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     // Three api_key pins burning 100 input tokens a second: `s-at` with its last prompt at the threshold,
     // `s-over` one token over it, and `s-fast` over it, which then answers a fast turn and a standard turn below
     // the threshold through the router. Its copies were never folded, so nothing decays at those turns.
-    let parts = sessions_harness_priced(table.clone(), |generation| {
+    let parts = sessions_harness_priced(revisions.clone(), |generation| {
         let haiku = |session: &str, last_input_tokens: u64| phoebis_store::PinRow {
             model: "claude-haiku-5-5".into(),
             last_input_tokens,

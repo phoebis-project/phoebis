@@ -1,8 +1,10 @@
-//! The subscription cost model, shipped beside the price table and read like it. A token costs a model weight times
-//! a type multiplier in units on every window; a window holds a capacity in units per tier; the peak band is a
-//! capacity factor per window, read at a request's completion; a model week is sized against the 7-day window. A
-//! model or a tier left out, or set to `null`, prices nothing.
+//! The subscription cost model, shipped beside the price file and read like it: a list of revisions keyed by the date
+//! each takes effect. A token costs a model weight times a type multiplier in units on every window, a window holds a
+//! capacity in units per tier, the peak band is a capacity factor per window read at a request's completion, and a
+//! model week is sized against the 7-day window. A model without a weight reads the latest weighted model of its model
+//! tier, and a model of no weighted model tier, or a tier left out or set to `null`, prices nothing.
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -177,9 +179,9 @@ pub struct Override {
     pub weight_by_window: Option<IndexMap<String, f64>>,
 }
 
-/// The file as loaded, key for key and in the file's order; serializes back to the same keys. `from_yaml` is the one
-/// loader that resolves the peak band's zone and checks the rules: a model deserialized any other way never covers the
-/// band and is unchecked.
+/// One revision of the file as loaded, key for key and in the file's order, and serializes back to the same keys.
+/// `CostRevisions::from_yaml` is the one loader that resolves the peak band's zone and checks the rules: a model
+/// deserialized any other way never covers the band and is unchecked.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionCosts {
@@ -193,6 +195,16 @@ pub struct SubscriptionCosts {
     pub model_weight: IndexMap<String, Option<f64>>,
     pub model_windows: IndexMap<String, ModelWindow>,
     pub overrides: IndexMap<String, Override>,
+    /// The model tiers in display order, the shipped value `[fable, opus, sonnet, haiku]`.
+    pub tier_order: Vec<String>,
+    /// Undated model id to a name of `tier_order`, naming every model either shipped file lists.
+    pub model_tier: IndexMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CostFile {
+    revisions: Vec<SubscriptionCosts>,
 }
 
 /// The tier's row as the profile stored it, then with its `default_` prefix taken off or put on, since only one
@@ -247,24 +259,16 @@ fn factor_rule(path: &str, factor: f64) -> Result<(), LedgerError> {
 }
 
 impl SubscriptionCosts {
-    pub fn shipped() -> SubscriptionCosts {
-        SubscriptionCosts::from_yaml(SHIPPED_SUBSCRIPTION_COSTS)
-            .expect("the shipped subscription cost model parses")
-    }
-
-    /// Refuses with `LedgerError::Plan` naming the key and the rule: the untyped pass's refusals (a parse error, a
-    /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), a zone the bundled
-    /// database lacks, then each value rule in the file's order.
-    pub fn from_yaml(text: &str) -> Result<SubscriptionCosts, LedgerError> {
-        // The typed maps read a key as its text and keep the last of two equal keys, so the untyped pass runs first
-        // and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors keep
-        // their line and column.
-        crate::keys::untagged_string_keys(text).map_err(refuse)?;
-        let mut costs: SubscriptionCosts =
-            serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
-        costs.peak.resolve()?;
-        costs.validate()?;
-        Ok(costs)
+    /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
+    fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
+        let checked = self.peak.resolve().and_then(|()| self.validate());
+        match checked {
+            Ok(()) => Ok(self),
+            Err(LedgerError::Plan(message)) => {
+                Err(refuse(format!("revision {}: {message}", self.effective)))
+            }
+            Err(other) => Err(other),
+        }
     }
 
     fn validate(&self) -> Result<(), LedgerError> {
@@ -392,7 +396,101 @@ impl SubscriptionCosts {
                 weight_rule(&path, *weight)?;
             }
         }
+        let tiers: HashSet<&str> = self.tier_order.iter().map(String::as_str).collect();
+        if tiers.is_empty() || tiers.len() != self.tier_order.len() {
+            return Err(refuse(
+                "tier_order: a list of distinct tier names".to_string(),
+            ));
+        }
+        for (model, tier) in &self.model_tier {
+            undated_key("model_tier", model)?;
+            if !tiers.contains(tier.as_str()) {
+                return Err(refuse(format!(
+                    "model_tier.{model}: {tier} is not in tier_order"
+                )));
+            }
+        }
+        // Every weighted model has a tier, so the fallback never guesses one for a model the file lists.
+        for model in self.model_weight.keys().chain(self.overrides.keys()) {
+            if !self.model_tier.contains_key(model) {
+                return Err(refuse(format!("model_tier: no tier for {model}")));
+            }
+        }
         Ok(())
+    }
+
+    /// The `model_tier` entry for the id, else for its undated base, else the `tier_order` name that is the first
+    /// segment of the undated id after `claude-`, else `None`.
+    pub fn tier_of(&self, canonical_model: &str) -> Option<&str> {
+        if let Some(tier) =
+            phoebis_routing::listing::row_for(canonical_model, |k| self.model_tier.get(k))
+        {
+            return Some(tier.as_str());
+        }
+        // A model can serve traffic before a release lists it, so its id names the tier until one does.
+        let named = undated_id(canonical_model)
+            .strip_prefix("claude-")?
+            .split('-')
+            .next()?;
+        self.tier_order
+            .iter()
+            .find(|tier| *tier == named)
+            .map(String::as_str)
+    }
+
+    /// By the tier's position in `tier_order` (no tier last), then version descending (the numeric segments after
+    /// the tier name, compared from the left), then by id. The file's own order is not consulted.
+    pub fn model_order(&self, ids: &[&str]) -> Vec<String> {
+        let mut keyed: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                let position = self
+                    .tier_of(id)
+                    .and_then(|tier| self.tier_order.iter().position(|t| t == tier))
+                    .unwrap_or(self.tier_order.len());
+                (position, Reverse(version_of(id)), id.to_string())
+            })
+            .collect();
+        keyed.sort();
+        keyed.into_iter().map(|(_, _, id)| id).collect()
+    }
+
+    /// The first model of `model_order` over the `model_weight` keys with a weight whose `tier_of` is `tier`.
+    pub fn latest_weighted(&self, tier: &str) -> Option<&str> {
+        let weighted: Vec<&str> = self
+            .model_weight
+            .iter()
+            .filter(|(model, weight)| weight.is_some() && self.tier_of(model) == Some(tier))
+            .map(|(model, _)| model.as_str())
+            .collect();
+        let first = self.model_order(&weighted).into_iter().next()?;
+        self.model_weight
+            .get_key_value(&first)
+            .map(|(model, _)| model.as_str())
+    }
+
+    /// `(weight, false)` from the model's own weight on `window` (its override row first, then its `model_weight`),
+    /// else `(weight, true)` from the base `model_weight` entry of `latest_weighted` of its tier, never from the
+    /// donor's override row, else `None`. An override row applies to the model it names alone.
+    pub fn weight_or_fallback(&self, canonical_model: &str, window: &str) -> Option<(f64, bool)> {
+        if let Some(weight) = self.weight(canonical_model, window) {
+            return Some((weight, false));
+        }
+        let donor = self.latest_weighted(self.tier_of(canonical_model)?)?;
+        let weight = (*self.model_weight.get(donor)?)?;
+        Some((weight, true))
+    }
+
+    /// The `model_tier` entries that `weighted_model_count` does not count (an override's window weight counts as a
+    /// weight) and whose tier has a weighted model: what `check-config` prints beside the weighted count.
+    pub fn by_tier_count(&self) -> usize {
+        let weighted = self.weighted_models();
+        self.model_tier
+            .iter()
+            .filter(|(model, tier)| {
+                !weighted.contains(model.as_str()) && self.latest_weighted(tier).is_some()
+            })
+            .count()
     }
 
     /// The shared window `window` prices on and the model-week divisor: the two shared windows price on themselves;
@@ -467,7 +565,7 @@ impl SubscriptionCosts {
         at: i64,
     ) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
-        let weight = self.weight(canonical_model, window)?;
+        let (weight, _) = self.weight_or_fallback(canonical_model, window)?;
         let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
         let [cache_read, write_1h, write_5m, input, output] = self.multipliers(canonical_model);
         let units = usage.input as f64 * weight * input
@@ -557,7 +655,7 @@ impl SubscriptionCosts {
         let Some((priced, _)) = self.priced_window(window) else {
             return false;
         };
-        self.weight(canonical_model, window).is_some()
+        self.weight_or_fallback(canonical_model, window).is_some()
             && tier_row(&self.capacity, tier).is_some_and(|row| row.on(priced).is_some())
     }
 
@@ -565,18 +663,21 @@ impl SubscriptionCosts {
     /// that weighs the model on a window of its own, which prices there even under a null shared weight. The count
     /// sits on the model, beside `weight`, so what `check-config` prints follows the rule the pricers read.
     pub fn weighted_model_count(&self) -> usize {
+        self.weighted_models().len()
+    }
+
+    fn weighted_models(&self) -> HashSet<&str> {
         self.model_weight
             .iter()
             .filter(|(_, weight)| weight.is_some_and(|w| w > 0.0))
-            .map(|(model, _)| model)
+            .map(|(model, _)| model.as_str())
             .chain(
                 self.overrides
                     .iter()
                     .filter(|(_, o)| o.weight_by_window.as_ref().is_some_and(|w| !w.is_empty()))
-                    .map(|(model, _)| model),
+                    .map(|(model, _)| model.as_str()),
             )
-            .collect::<HashSet<_>>()
-            .len()
+            .collect()
     }
 
     /// The tiers with a capacity on either window; a listed tier null on both prices nothing. The count sits on the
@@ -589,11 +690,93 @@ impl SubscriptionCosts {
     }
 }
 
+/// The undated id, the id itself when it carries no date.
+fn undated_id(canonical_model: &str) -> &str {
+    phoebis_routing::listing::undated(canonical_model).unwrap_or(canonical_model)
+}
+
+/// The numeric segments of the undated id after its name segment (`claude-opus-4-8` reads `[4, 8]`).
+fn version_of(canonical_model: &str) -> Vec<u32> {
+    let rest = undated_id(canonical_model);
+    let rest = rest.strip_prefix("claude-").unwrap_or(rest);
+    let (_, version) = rest.split_once('-').unwrap_or((rest, ""));
+    version.split('-').filter_map(|p| p.parse().ok()).collect()
+}
+
+/// The cost model's revisions sorted ascending by instant, with the instants precomputed at load so `in_force` is a
+/// binary search. Serializes as the file's one key.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CostRevisions {
+    revisions: Vec<SubscriptionCosts>,
+    #[serde(skip)]
+    instants: Vec<i64>,
+}
+
+// `new` refuses an empty list, so a list never reads empty.
+#[allow(clippy::len_without_is_empty)]
+impl CostRevisions {
+    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants.
+    pub fn new(revisions: Vec<SubscriptionCosts>) -> Result<CostRevisions, LedgerError> {
+        let dates: Vec<&str> = revisions.iter().map(|r| r.effective.as_str()).collect();
+        let instants = crate::pricing::sorted_instants(&dates).map_err(refuse)?;
+        let (instants, revisions) = crate::pricing::by_instant(instants, revisions);
+        Ok(CostRevisions {
+            revisions,
+            instants,
+        })
+    }
+
+    /// Refuses with `LedgerError::Plan` naming the key and the rule: the untyped pass's refusals (a parse error, a
+    /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), then per entry
+    /// under its date a zone the bundled database lacks and each value rule in the file's order, then the list's.
+    pub fn from_yaml(text: &str) -> Result<CostRevisions, LedgerError> {
+        // The typed maps read a key as its text and keep the last of two equal keys, so the untyped pass runs first
+        // and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors keep
+        // their line and column.
+        crate::keys::untagged_string_keys(text).map_err(refuse)?;
+        let file: CostFile = serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
+        let revisions = file
+            .revisions
+            .into_iter()
+            .map(SubscriptionCosts::resolved)
+            .collect::<Result<Vec<_>, _>>()?;
+        CostRevisions::new(revisions)
+    }
+
+    pub fn shipped() -> CostRevisions {
+        CostRevisions::from_yaml(SHIPPED_SUBSCRIPTION_COSTS)
+            .expect("the shipped subscription cost model parses")
+    }
+
+    /// The last entry whose instant is at or before `at_ms`, else the first.
+    pub fn in_force(&self, at_ms: i64) -> &SubscriptionCosts {
+        &self.revisions[crate::pricing::in_force_index(&self.instants, at_ms)]
+    }
+
+    pub fn latest(&self) -> &SubscriptionCosts {
+        &self.revisions[self.revisions.len() - 1]
+    }
+
+    /// The first entry dated after `now_ms`, held until its instant.
+    pub fn pending(&self, now_ms: i64) -> Option<&SubscriptionCosts> {
+        self.revisions
+            .get(crate::pricing::pending_index(&self.instants, now_ms))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &SubscriptionCosts> {
+        self.revisions.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.revisions.len()
+    }
+}
+
 /// The model every plan-side pricer holds, with where it came from: `source` reads `shipped`, `file` or `test`,
-/// and `path` the configured path, `None` when none is.
+/// and `path` the configured path, `None` when none is. Every accessor reads the revision in force at `at`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanTables {
-    pub costs: SubscriptionCosts,
+    pub revisions: CostRevisions,
     pub path: Option<PathBuf>,
     pub source: String,
 }
@@ -601,7 +784,7 @@ pub struct PlanTables {
 impl PlanTables {
     pub fn shipped() -> PlanTables {
         PlanTables {
-            costs: SubscriptionCosts::shipped(),
+            revisions: CostRevisions::shipped(),
             path: None,
             source: "shipped".to_string(),
         }
@@ -617,12 +800,12 @@ impl PlanTables {
         let path = override_path.map(Path::to_path_buf);
         Ok(match text {
             Some(text) => PlanTables {
-                costs: SubscriptionCosts::from_yaml(&text)?,
+                revisions: CostRevisions::from_yaml(&text)?,
                 path,
                 source: "file".to_string(),
             },
             None => PlanTables {
-                costs: SubscriptionCosts::shipped(),
+                revisions: CostRevisions::shipped(),
                 path,
                 source: "shipped".to_string(),
             },
@@ -637,28 +820,43 @@ impl PlanTables {
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        self.costs
+        self.revisions
+            .in_force(at)
             .share_at(window, tier, canonical_model, usage, at)
     }
 
     pub fn band_factor(&self, window: &str, at: i64) -> f64 {
-        self.costs.band_factor(window, at)
+        self.revisions.in_force(at).band_factor(window, at)
     }
 
-    pub fn rate_table(&self, window: &str) -> RateTable {
-        self.costs.rate_table(window)
+    pub fn rate_table(&self, window: &str, at: i64) -> RateTable {
+        self.revisions.in_force(at).rate_table(window)
     }
 
-    pub fn tier_factor(&self, tier: &str, window: &str) -> Option<f64> {
-        self.costs.tier_factor(tier, window)
+    pub fn tier_factor(&self, tier: &str, window: &str, at: i64) -> Option<f64> {
+        self.revisions.in_force(at).tier_factor(tier, window)
     }
 
-    pub fn measured(&self, window: &str) -> bool {
-        self.costs.measured(window)
+    pub fn measured(&self, window: &str, at: i64) -> bool {
+        self.revisions.in_force(at).measured(window)
     }
 
-    pub fn priced(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
-        self.costs.priced(window, tier, canonical_model)
+    pub fn priced(&self, window: &str, tier: &str, canonical_model: &str, at: i64) -> bool {
+        self.revisions
+            .in_force(at)
+            .priced(window, tier, canonical_model)
+    }
+
+    pub fn tier_of(&self, canonical_model: &str, at: i64) -> Option<&str> {
+        self.revisions.in_force(at).tier_of(canonical_model)
+    }
+
+    pub fn latest_weighted(&self, tier: &str, at: i64) -> Option<&str> {
+        self.revisions.in_force(at).latest_weighted(tier)
+    }
+
+    pub fn model_order(&self, ids: &[&str], at: i64) -> Vec<String> {
+        self.revisions.in_force(at).model_order(ids)
     }
 }
 
