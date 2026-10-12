@@ -174,8 +174,8 @@ impl PriceRevisions {
     }
 
     /// The dearest listed standard cell of each type in the revision in force at `at_ms` (what `rate_table().fallback`
-    /// computes on one table), for a probe row on a model the revision lacks: the keepalive's `probe_dollars` charges
-    /// such a probe at these cells, and a zero would read a probe that consumed quota as free.
+    /// computes on one table), for a probe row on a model the revision lacks: a zero would read a probe that consumed
+    /// quota as free.
     pub fn fallback_rates(&self, at_ms: i64) -> phoebis_routing::Rates {
         self.in_force(at_ms).rate_table().fallback
     }
@@ -405,9 +405,11 @@ impl PriceTable {
                 ))
             })
             .collect();
+        // The dearest-cell fallback already covers an unlisted id, so dollars carry no model tier rows.
         phoebis_routing::RateTable {
             rows,
             long_context,
+            tiers: std::collections::HashMap::new(),
             fallback,
         }
     }
@@ -427,6 +429,7 @@ impl PriceTable {
         phoebis_routing::RateTable {
             rows: self.per_token_rows(|row| row.fast.as_ref().unwrap_or(&row.standard)),
             long_context,
+            tiers: dollars.tiers,
             fallback: dollars.fallback,
         }
     }

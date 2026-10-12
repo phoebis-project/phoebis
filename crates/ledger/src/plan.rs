@@ -422,7 +422,7 @@ impl SubscriptionCosts {
     }
 
     /// The `model_tier` entry for the id, else for its undated base, else the `tier_order` name that is the first
-    /// segment of the undated id after `claude-`, else `None`.
+    /// segment of the undated id after `claude-` (`listing::tier_segment`), else `None`.
     pub fn tier_of(&self, canonical_model: &str) -> Option<&str> {
         if let Some(tier) =
             phoebis_routing::listing::row_for(canonical_model, |k| self.model_tier.get(k))
@@ -430,10 +430,7 @@ impl SubscriptionCosts {
             return Some(tier.as_str());
         }
         // A model can serve traffic before a release lists it, so its id names the tier until one does.
-        let named = undated_id(canonical_model)
-            .strip_prefix("claude-")?
-            .split('-')
-            .next()?;
+        let named = phoebis_routing::listing::tier_segment(canonical_model)?;
         self.tier_order
             .iter()
             .find(|tier| *tier == named)
@@ -606,10 +603,12 @@ impl SubscriptionCosts {
     /// per `model_weight` key with a weight on the window, and one per `model_tier` entry without a weight whose
     /// model tier has a weighted model, at the base weight of that model tier's `latest_weighted`: the estimate is the
     /// same model tier's measured weight, so a pin on an unweighted model ranks by it rather than last, as the console
-    /// prices it.
+    /// prices it. A `tiers` row per model tier with a weighted model, at the same base weight and the shared
+    /// multipliers, prices an id no file lists by the model tier its id names, as `tier_of` reads it.
     pub fn rate_table(&self, window: &str) -> RateTable {
         // An estimate is the model tier's measured weight, the one `share_at` charges the model at, so a shed it
-        // orders is one the meter books. A model no row names takes no rate, and its pin ranks last.
+        // orders is one the meter books. A model neither a row nor a model tier row names takes no rate, and its
+        // pin ranks last.
         let fallback = Rates {
             input: None,
             cache_read: None,
@@ -621,6 +620,7 @@ impl SubscriptionCosts {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
+                tiers: HashMap::new(),
                 fallback,
             };
         };
@@ -628,6 +628,7 @@ impl SubscriptionCosts {
             return RateTable {
                 rows: HashMap::new(),
                 long_context: HashMap::new(),
+                tiers: HashMap::new(),
                 fallback,
             };
         };
@@ -636,27 +637,46 @@ impl SubscriptionCosts {
             .keys()
             .chain(self.model_tier.keys())
             .collect();
+        let rates_at = |weight: f64, [cache_read, write_1h, write_5m, input, output]: [f64; 5]| {
+            let rate = |multiplier: f64| Some(weight * multiplier / capacity / divisor);
+            Rates {
+                input: rate(input),
+                cache_read: rate(cache_read),
+                write_5m: rate(write_5m),
+                write_1h: rate(write_1h),
+                output: rate(output),
+            }
+        };
         let rows = models
             .into_iter()
             .filter_map(|model| {
                 let (weight, _) = self.weight_or_fallback(model, window)?;
-                let [cache_read, write_1h, write_5m, input, output] = self.multipliers(model);
-                let rate = |multiplier: f64| Some(weight * multiplier / capacity / divisor);
-                Some((
-                    model.clone(),
-                    Rates {
-                        input: rate(input),
-                        cache_read: rate(cache_read),
-                        write_5m: rate(write_5m),
-                        write_1h: rate(write_1h),
-                        output: rate(output),
-                    },
-                ))
+                Some((model.clone(), rates_at(weight, self.multipliers(model))))
+            })
+            .collect();
+        // An id no file lists has no override row, since every override names a listed model, so it reads the
+        // shared multipliers and the donor's base weight, as `weight_or_fallback` does.
+        let shared = &self.type_multiplier;
+        let shared = [
+            shared.cache_read,
+            shared.cache_write_1h,
+            shared.cache_write_5m,
+            shared.input,
+            shared.output,
+        ];
+        let tiers = self
+            .tier_order
+            .iter()
+            .filter_map(|tier| {
+                let donor = self.latest_weighted(tier)?;
+                let weight = (*self.model_weight.get(donor)?)?;
+                Some((tier.clone(), rates_at(weight, shared)))
             })
             .collect();
         RateTable {
             rows,
             long_context: HashMap::new(),
+            tiers,
             fallback,
         }
     }

@@ -59,10 +59,11 @@ pub fn break_even_ms(
 }
 
 /// The factors for `canonical_model` under `funding`, at the fast cells when `fast`, on the cost model in force at
-/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, a model without a weight of its own at its model
-/// tier's estimate there, and a model of no weighted model tier reads its type multipliers, the model's own override
-/// where it has one. A token costs the model's weight times the type's multiplier, so the weight cancels from read
-/// over write and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, or
+/// `at`. Plan funding reads `tables.rate_table(FIVE_HOUR, at).rows`, a listed model without a weight of its own at
+/// its model tier's estimate there. Any other model reads its type multipliers, the model's own override where it has
+/// one: an id no file lists, which the share prices at its named model tier's estimate and the shared multipliers,
+/// breaks even at that same ratio. A token costs the model's weight times the type's multiplier, so the weight cancels
+/// from read over write and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, or
 /// `pricing.fast_rate_table().rows` for a fast recipe, whose probes draw usage credits at the fast cells, at a row's
 /// long-context rates when `prompt_tokens` is above their threshold, the set a probe's cost reads on the same prompt,
 /// and a model the price table prices nowhere takes the tightest row of that table (the smallest break-even among the

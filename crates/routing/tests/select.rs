@@ -10087,6 +10087,7 @@ fn input_prices(rows: &[(&str, Option<f64>)]) -> RateTable {
             .map(|(model, input)| (model.to_string(), only_input(*input)))
             .collect(),
         long_context: HashMap::new(),
+        tiers: HashMap::new(),
         fallback: only_input(Some(0.0)),
     }
 }

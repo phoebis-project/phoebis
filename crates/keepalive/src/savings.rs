@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
+use phoebis_ledger::{KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::AccountKind;
 
@@ -11,49 +11,17 @@ use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
-/// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
-/// inside the price). `None` on the share side alone, for a model the subscription cost model gives no weight, its own
-/// or its model tier's latest, or an account tier it has no capacity for on the window.
+/// A probe's estimated cost as the share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for
+/// a model the subscription cost model gives no weight, its own or its model tier's latest, or an account tier it has
+/// no capacity for on the window. A probe's dollars are its own request row's counts, which the ledger prices.
 pub(crate) fn probe_cost(
-    unit: SavingsUnit,
-    table: &PriceTable,
     tables: &PlanTables,
     tier: Option<&str>,
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
 ) -> Option<f64> {
-    match unit {
-        SavingsUnit::Usd => Some(probe_dollars(table, canonical_model, usage)),
-        SavingsUnit::WindowShare => {
-            tables.share_at(FIVE_HOUR, tier?, canonical_model, typed(usage), at)
-        }
-    }
-}
-
-/// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
-/// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
-/// dollar burn and the ledger prices such a probe's row at: a zero would book a probe that consumed quota as free.
-pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
-    let typed = typed(usage);
-    if let Some((total, _)) = table.estimate(
-        canonical_model,
-        usage.speed.unwrap_or(Speed::Standard),
-        typed.input,
-        typed.cache_read,
-        typed.write_5m,
-        typed.write_1h,
-        typed.output,
-    ) {
-        return total;
-    }
-    let dearest = table.rate_table().fallback;
-    let at = |tokens: u64, rate: Option<f64>| tokens as f64 * rate.unwrap_or(0.0);
-    at(typed.input, dearest.input)
-        + at(typed.cache_read, dearest.cache_read)
-        + at(typed.write_5m, dearest.write_5m)
-        + at(typed.write_1h, dearest.write_1h)
-        + at(typed.output, dearest.output)
+    tables.share_at(FIVE_HOUR, tier?, canonical_model, typed(usage), at)
 }
 
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
@@ -274,8 +242,6 @@ mod tests {
     /// so a probe answer that carries only the aggregate costs what the same answer with the split costs.
     #[test]
     fn an_aggregate_only_cache_write_costs_a_five_minute_write() {
-        let revisions = phoebis_ledger::PriceRevisions::shipped();
-        let table = revisions.in_force(0);
         let tables = PlanTables::shipped();
         let split = ProbeUsage {
             write: 2_000,
@@ -286,12 +252,11 @@ mod tests {
             write: 2_000,
             ..ProbeUsage::default()
         };
+        assert_eq!(typed(aggregate), typed(split));
         let cost = |usage| {
             probe_cost(
-                SavingsUnit::Usd,
-                table,
                 &tables,
-                None,
+                Some("default_claude_max_20x"),
                 "claude-sonnet-5",
                 usage,
                 0,

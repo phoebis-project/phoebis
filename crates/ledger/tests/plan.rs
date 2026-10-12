@@ -760,6 +760,43 @@ fn the_rate_table_carries_a_row_per_weighted_model_and_per_unweighted_model_of_a
     assert!(first().rate_table("one_hour").rows.is_empty());
 }
 
+// An id no file lists prices through the model tier its id names: Opus 9 at the opus model tier's latest weighted
+// model, Opus 5.5 at 2, with the shared multipliers, the share the meter charges it. Mystery 9's model tier has no
+// weighted model and GPT 5 names no model tier, so neither has a rate.
+#[test]
+fn an_unlisted_id_naming_a_weighted_tier_rates_at_its_latest_weight_as_the_meter_charges_it() {
+    let costs = first();
+    let rates = costs.rate_table(FIVE_HOUR);
+    assert_eq!(rates.rows.get("claude-opus-9"), None, "no file lists it");
+    let usage = PinUsage {
+        input: 1_000,
+        cache_read: 10_000,
+        write_5m: 100,
+        write_1h: 200,
+        output: 500,
+    };
+    for model in ["claude-opus-9", "claude-opus-9-20270101"] {
+        let rated = rates
+            .price(model, usage, 0)
+            .unwrap_or_else(|| panic!("{model}: no rate"));
+        let charged = costs
+            .share_at(FIVE_HOUR, MAX_20X, model, usage, OUT_OF_BAND)
+            .expect("the meter charges it");
+        assert!(close(rated, charged), "{model}: {rated} against {charged}");
+    }
+    assert!(
+        all_close(
+            per_type(rates.rates_for("claude-opus-9", 0)),
+            per_type(rates.rows[OPUS])
+        ),
+        "at Opus 5.5's base weight: {:?}",
+        rates.rates_for("claude-opus-9", 0)
+    );
+    for model in ["claude-mystery-9", "gpt-5"] {
+        assert_eq!(per_type(rates.rates_for(model, 0)), [None; 5], "{model}");
+    }
+}
+
 /// The test table with the first `from` replaced by `to`, refused: the `Plan` message. Both revisions carry most
 /// keys, so an edit of one lands in the first and the refusal names it.
 fn refused(from: &str, to: &str) -> String {

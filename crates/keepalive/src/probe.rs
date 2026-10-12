@@ -185,7 +185,6 @@ pub(crate) enum Applied {
 #[allow(clippy::too_many_arguments)]
 fn settled_unit(
     default_unit: SavingsUnit,
-    table: &PriceTable,
     tables: &PlanTables,
     tier: Option<&str>,
     account: &str,
@@ -195,7 +194,7 @@ fn settled_unit(
 ) -> SavingsUnit {
     let unit = settlement_unit(default_unit, tables, tier, canonical_model, at);
     if unit == SavingsUnit::WindowShare
-        && probe_cost(unit, table, tables, tier, canonical_model, usage, at).is_none()
+        && probe_cost(tables, tier, canonical_model, usage, at).is_none()
     {
         // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
         // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
@@ -354,7 +353,6 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         record.tier = tier.clone();
         let unit = settled_unit(
             default_unit,
-            table,
             &tables,
             tier.as_deref(),
             &record.account,
@@ -1335,30 +1333,6 @@ mod tests {
         );
     }
 
-    /// A table pricing a model the shipped cost model has no weight for, so `settled_unit` must fall all the way
-    /// back to dollars rather than naming a share nothing can price.
-    fn table_pricing_an_unlisted_model() -> PriceTable {
-        PriceTable {
-            effective: "test".into(),
-            models: [(
-                "unlisted-model".to_string(),
-                phoebis_ledger::ModelRow {
-                    standard: phoebis_ledger::ModelPrice {
-                        input: 2.0,
-                        cache_write_5m: 2.5,
-                        cache_write_1h: 4.0,
-                        cache_read: 0.2,
-                        output: 10.0,
-                    },
-                    fast: None,
-                    long_context: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        }
-    }
-
     const MAX_20X: Option<&str> = Some("default_claude_max_20x");
     /// 1970-01-01 00:00 UTC, a Wednesday afternoon in the band's zone and outside its hours.
     const OFF_BAND: i64 = 0;
@@ -1374,7 +1348,6 @@ mod tests {
 
     #[test]
     fn a_plan_funded_probe_on_an_unlisted_model_settles_in_dollars() {
-        let table = table_pricing_an_unlisted_model();
         let tables = PlanTables::shipped();
         let usage = ProbeUsage {
             write: 2_000,
@@ -1383,7 +1356,6 @@ mod tests {
         };
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            &table,
             &tables,
             MAX_20X,
             "o",
@@ -1402,8 +1374,6 @@ mod tests {
     // units, and the band holds 0.5 of it.
     #[test]
     fn a_plan_funded_probe_on_a_listed_model_settles_in_five_hour_share() {
-        let revisions = phoebis_ledger::test_tables::api_prices();
-        let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
         // The first cost entry alone, so the September instant below reads its figures.
         let tables = PlanTables {
             revisions: phoebis_ledger::test_tables::first_entry_costs(),
@@ -1416,7 +1386,6 @@ mod tests {
         };
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            table,
             &tables,
             MAX_20X,
             "o",
@@ -1425,18 +1394,8 @@ mod tests {
             OFF_BAND,
         );
         assert_eq!(unit, SavingsUnit::WindowShare);
-        let share = |at: i64| {
-            probe_cost(
-                unit,
-                table,
-                &tables,
-                MAX_20X,
-                "claude-opus-5-5",
-                one_input,
-                at,
-            )
-            .unwrap()
-        };
+        let share =
+            |at: i64| probe_cost(&tables, MAX_20X, "claude-opus-5-5", one_input, at).unwrap();
         let cost = share(OFF_BAND);
         assert!(
             (cost - 2.0 / 100.0).abs() < 1e-12,
@@ -1451,12 +1410,9 @@ mod tests {
 
     #[test]
     fn a_plan_funded_probe_on_an_account_without_a_tier_settles_in_dollars() {
-        let revisions = PriceRevisions::shipped();
-        let table = revisions.in_force(OFF_BAND);
         let tables = PlanTables::shipped();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            table,
             &tables,
             None,
             "o",
@@ -1474,12 +1430,9 @@ mod tests {
     #[test]
     fn a_plan_funded_probe_on_a_model_of_no_weighted_tier_settles_in_dollars() {
         // The test table places Mystery 2 in a tier with no weighted model, so nothing weighs it.
-        let revisions = phoebis_ledger::test_tables::api_prices();
-        let table = revisions.in_force(OFF_BAND);
         let tables = phoebis_ledger::test_tables::subscription_costs();
         let unit = settled_unit(
             SavingsUnit::WindowShare,
-            table,
             &tables,
             MAX_20X,
             "o",
