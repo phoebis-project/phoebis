@@ -59,8 +59,7 @@ sudo systemctl daemon-reload
 `init` creates the key file at `0600` in one open, so no moment exists in which the key is readable by anyone else, and
 the environment file at `0600` with the secret it generated. `--owner phoebis` hands the key file and the data
 directory to that user, and the bootstrap file and the environment file stay root's, since systemd reads the
-environment file as root. The key seals every credential in `router.sqlite`, so it stays out of any backup that carries
-the database. A proxy listener that serves the LAN takes `--proxy-listen` on the `init` line, as
+environment file as root. A proxy listener that serves the LAN takes `--proxy-listen` on the `init` line, as
 [The proxy listener on the LAN](second-machine.md#the-proxy-listener-on-the-lan) says.
 
 `deploy/phoebis.service` runs the process as the `phoebis` user from `/var/lib/phoebis` with
@@ -71,14 +70,17 @@ the database. A proxy listener that serves the LAN takes `--proxy-listen` on the
 meter's current measurement and a release updates it, and a copy there would shadow every later release's constants
 until it was copied again.
 
-A router that already runs from a file in your home directory moves under the unit after the block's `install` and
-`useradd` lines and without its `init` line, since `init` refuses every file that exists: stop the router, move the
-bootstrap file to `/etc/phoebis/config.yaml`, the key file to `/etc/phoebis/storage.key` and the data directory's
-contents to `/var/lib/phoebis`, give the key file and the data directory to `phoebis`, and edit the five path keys
-`init` wrote absolute (`storage.encryption_key_file`, `storage.path`, `stats.ledger_path`, `stats.api_prices_path` and
-`stats.subscription_costs_path`) to those places, since `ProtectHome=true` keeps the service out of `/home`. The
-registry opens under the key that sealed it wherever the file names it, and the environment file is
-`deploy/phoebis.env.example` with the secret you export today in place of its placeholder, at `0600` owned by root.
+A router that already runs from a file in your home directory moves under the unit after every line of the block but
+`init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
+creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
+`/etc/phoebis/storage.key` and the data directory's contents into `/var/lib/phoebis`, give the key file and that
+directory to `phoebis`, and edit the five path keys `init` wrote absolute to those places, since `ProtectHome=true`
+keeps the service out of `/home`: `storage.encryption_key_file: /etc/phoebis/storage.key`,
+`storage.path: /var/lib/phoebis/router.sqlite`, `stats.ledger_path: /var/lib/phoebis/ledger.sqlite`,
+`stats.api_prices_path: /etc/phoebis/api_prices.yaml` and
+`stats.subscription_costs_path: /etc/phoebis/subscription_costs.yaml`. The registry opens under the key that sealed it
+wherever the file names it, and the environment file is `deploy/phoebis.env.example` with the secret you export today
+in place of its placeholder, at `0600` owned by root.
 
 Then validate the file before enabling the service:
 
@@ -88,9 +90,10 @@ sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-con
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints
 `warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file
-is optional for it. The service and `phoebis health` refuse an unset secret, and every command refuses a secret of
-another shape with the line [Environment variables](#environment-variables) gives. Once the check is clean,
-`sudo systemctl enable --now phoebis`.
+is optional for it. The service and `phoebis health` refuse an unset secret, and the start, `check-config`, `health`,
+`status` and `tls reload` refuse a secret of another shape with the line
+[Environment variables](#environment-variables) gives. Once the check is clean, the owner warnings for the key file and
+the data directory aside, since root runs it and `phoebis` owns them, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -161,7 +164,7 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
-| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary: exit 0 once the accounts are marked. |
+| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary: exit 0 once the accounts are marked ([The storage key](operations.md#the-storage-key)). |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
@@ -242,7 +245,7 @@ The container image runs `health` as its health check every 30 seconds ([the con
 
 `init` writes a first installation and refuses to touch anything that exists. It writes, in this order, the storage key
 file (64 hex characters and a newline, created at `0600` in one open), the environment file when `--env-file` names one
-(`0600`, `<NAME>=<secret>` and `RUST_LOG=info`), and the bootstrap file at `--config` (`0644`). It creates the data
+(`0600`, `{name}={secret}` and `RUST_LOG=info`), and the bootstrap file at `--config` (`0644`). It creates the data
 directory and every missing parent of those paths at `0700`. It opens no database, so the first start creates both and
 seals the key canary. The bootstrap file is [the example](#the-bootstrap-file) with the two listeners,
 `admin.secret_env`, the key file, both databases under the data directory, `stats.api_prices_path` (`api_prices.yaml`
@@ -272,12 +275,10 @@ bootstrap file, all to the user and its primary group, so the service can traver
 its owner. The bootstrap file, the environment file and a parent created only for the environment file stay the
 caller's, since systemd reads the environment file as root.
 
-A pair is the operator's own. Under the service unit it lives under `/etc/phoebis`, the certificate at `0644` and the
-key at `0640 root:phoebis`, and in the container shape it is mounted read-only beside the configuration, the key at
-`0400` owned by uid 65532. Its leaf names every host name and address the clients dial. The start reads the pair once,
-as [TLS on the listeners](#tls-on-the-listeners) says.
+A pair is the operator's own, kept at the modes [TLS on the listeners](#tls-on-the-listeners) gives, and its leaf names
+every host name and address the clients dial.
 
-Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
+Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET={secret}` under the default name, and the secret is
 printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
 that only its owner reads. A bare redirect under the usual umask leaves the secret readable by others. `--env-file`
 writes that line beside `RUST_LOG=info` to the file it names, at `0600`. Everything else goes to stderr. On a terminal
@@ -285,7 +286,7 @@ writes that line beside `RUST_LOG=info` to the file it names, at `0600`. Everyth
 what the flags did not give, in this order: the proxy address, the admin address, and for each that leaves loopback with
 no pair, `files` and then the two paths, or `none` for plain HTTP, the default. An empty answer takes the default shown
 in brackets, and an address that does not parse is asked again. Then it prints one line per path written with its mode
-and owner, where the secret went, and the next command, `phoebis check-config --config <path>`.
+and owner, where the secret went, and the next command, `phoebis check-config --config {path}`.
 
 `init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
 already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
@@ -324,11 +325,10 @@ connection per call, and share five flags:
 | `--url URL` | from `admin.listen` and `admin.tls` | The admin listener's base, `http://` or `https://` and a host. |
 
 `--url` defaults to the scheme `admin.tls` gives and the address of `admin.listen`, on the loopback of its family when
-the listener is bound on every interface, as `health` reaches the proxy. `--ca` names the CA to trust in place of the
-system roots, for a listener whose pair a private CA signed. With `--url` and `--secret-env` both given the file is not
-read, so the binary reads a router on another machine: `status` then has no proxy listener to probe, prints `proxy: not
-probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without both, the
-file at `--config` must load. Every account, pool and key is created and edited in the console.
+the listener is bound on every interface, as `health` reaches the proxy. With `--url` and `--secret-env` both given the
+file is not read, so the binary reads a router on another machine: `status` then has no proxy listener to probe, prints
+`proxy: not probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without
+both, the file at `--config` must load. Every account, pool and key is created and edited in the console.
 
 `backup` copies the registry and the ledger into the directory `--to` names, each through SQLite's online backup API as
 one consistent snapshot while the router serves or while it is stopped, writes `manifest.json` last and leaves the key
@@ -558,7 +558,7 @@ Refused with:
 
 The block holds these four keys and nothing else: a key it does not list is refused at start and by `check-config` as an
 unknown field, named in the error. How a cooldown and the failover use the timings is on
-[Pools, keys and routing](routing.md).
+[Cooldowns and failover](routing.md#cooldowns-and-failover).
 
 ### sessions
 
@@ -693,15 +693,8 @@ through `--ca`.
 
 The start reads the pair once, before it binds a port, and a renewal puts new files at both paths and asks the running
 router to re-read every listener's pair with `phoebis tls reload`, as [Upgrades and renewals](operations.md#upgrades)
-walks it.
-The dashboard raises `certificate_expiring` and `certificate_reload_failed` for a listener's pair, which
+walks it. The dashboard raises `certificate_expiring` and `certificate_reload_failed` for a listener's pair, which
 [Conditions and gauges](statistics.md#conditions-and-gauges) describes.
-
-`check-config` and the start refuse a `tls` value that is not the mapping with:
-
-- `proxy.tls: must be a mapping with cert_file and key_file`, under `the configuration is not valid YAML`, for a word
-  in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one of the
-  two
 
 `check-config` reads the pair the way the start does, and both refuse it with one line naming the key and the path:
 
@@ -714,10 +707,8 @@ The dashboard raises `certificate_expiring` and `certificate_reload_failed` for 
 - `proxy.tls.cert_file {path}: not valid before {date}`
 - `proxy.tls: {error}` for a pair the TLS library refuses for another reason, with its own text
 
-The admin listener's lines carry `admin.tls` in place of `proxy.tls`. A leaf within 30 days of its end earns
-`warning: proxy.tls.cert_file {path} expires in {n} days ({date})` from `check-config` and the start, which serve it.
-The start logs `serving TLS` for each listener that terminates TLS, with its leaf's names and `not_after`, and the
-`listening` line names each listener's scheme.
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
+that terminates TLS, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
 
 The scheme in a caller's URL has to match the listener. A plain-HTTP request to a listener that terminates TLS ends at
 the handshake with no HTTP answer, and the router logs it at debug only. An `https://` URL against a plain listener
