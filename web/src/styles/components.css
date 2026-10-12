@@ -851,6 +851,89 @@ textarea.input {
   color: var(--critical-ink);
 }
 
+/* The box every filter opener hangs under: the menu list's ground, border, radius and shadow, placed by the component. */
+.popover {
+  z-index: 30;
+  min-width: 220px;
+  padding: 4px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.popover:focus {
+  outline: none;
+}
+
+.popover__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+/* The back button starts the head, where the margin it keeps from text elsewhere would only push the title in. */
+.popover__head .icon-btn {
+  margin-left: 0;
+}
+
+.popover__title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.popover__foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+/* A long value in a row would widen the box past a reading width, so the box stops here and the value gives way. */
+.add-filter {
+  max-width: 360px;
+}
+
+.add-filter__search {
+  margin-bottom: 4px;
+}
+
+.add-filter__row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.add-filter__row:hover,
+.add-filter__row:focus-visible {
+  background: var(--surface-2);
+}
+
+.add-filter__row[aria-disabled='true'] {
+  color: var(--ink-3);
+}
+
+.add-filter__label {
+  flex: none;
+}
+
+.add-filter__value {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Pattern editor: one bordered row per rule, the inherited rows after them in the muted ink */
 .pattern-editor {
   display: flex;

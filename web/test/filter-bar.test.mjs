@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as d from './dist/api.js';
+
+const list = (over = {}) => ({ field: 'accounts', group: 'Routing', kind: 'list', label: 'Account', word: 'account', ...over });
+const ACCOUNTS = [
+  { label: 'primary', value: 'acc_1' },
+  { label: 'nightly', value: 'acc_2' },
+  { label: 'backup', value: 'acc_3' },
+  { label: 'spare', value: 'acc_4' },
+];
+
+test('a list chip prints up to three option labels then +N, every label in its title, and a value with no option as itself', () => {
+  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2'], ACCOUNTS), { text: 'account: primary, nightly', title: 'primary, nightly' });
+  assert.deepEqual(d.chipText(list(), ['acc_1', 'acc_2', 'acc_3', 'acc_4'], ACCOUNTS), { text: 'account: primary, nightly, backup +1', title: 'primary, nightly, backup, spare' });
+  assert.deepEqual(d.chipText(list({ field: 'keys', label: 'Key', word: 'key' }), ['laptop@3'], []), { text: 'key: laptop@3', title: 'laptop@3' }, 'an earlier holder no option names prints itself');
+});
+
+test('a pattern chip prints the pattern, an id chip its first eight characters and an ellipsis with the whole id in the title', () => {
+  const pattern = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
+  assert.deepEqual(d.chipText(pattern, 'claude-cli/2.1.*'), { text: 'user agent: claude-cli/2.1.*', title: 'claude-cli/2.1.*' });
+  const id = { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' };
+  const whole = 'd7167642-3f1a-4c2e-9b8d-5e6f7a8b9c0d';
+  assert.equal(whole.length, 36);
+  assert.deepEqual(d.chipText(id, whole), { text: 'session: d7167642…', title: whole });
+});
+
+test('a choice chip prints its option label, a flag its word alone, and a choice at its default draws no chip', () => {
+  const kind = { anyLabel: 'Any kind', field: 'kind', group: 'Request', kind: 'choice', label: 'Kind', word: 'kind' };
+  assert.deepEqual(d.chipText(kind, 'inference', [{ label: 'Inference', value: 'inference' }]), { text: 'kind: Inference', title: 'Inference' });
+  const held = { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' };
+  assert.deepEqual(d.chipText(held, true), { text: 'held only', title: 'held only' });
+  const status = d.KEYS_DIMENSIONS.find((x) => x.field === 'status');
+  const options = { status: [{ label: 'Disabled', value: 'disabled' }] };
+  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: [], search: '', status: 'all' }, options), [], 'the Keys status at all draws no chip');
+  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: [], search: '', status: 'disabled' }, options), [{ field: 'status', label: 'status', mono: false, text: 'status: Disabled', title: 'Disabled' }]);
+  assert.deepEqual([d.hasValue(status, 'all'), d.hasValue(status, 'disabled'), d.hasValue(kind, ''), d.hasValue(held, false), d.hasValue(list(), [])], [false, true, false, false, false]);
+});
+
+test('the status chip prints the codes alone, with the labels in its title', () => {
+  const options = { statuses: [{ label: '429 Rate limited', value: '429' }, { label: '500 Server error', value: '500' }] };
+  const [chip] = d.chipsOf(d.REQUESTS_DIMENSIONS, { statuses: ['429', '500'] }, options);
+  assert.deepEqual(chip, { field: 'statuses', label: 'status', mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error' });
+});
+
+test("the chips stand in the dimension list's order whatever the filters' key order", () => {
+  const filters = { speeds: ['fast'], accounts: ['acc_1'], held: true, client: 'claude-code*', statuses: ['429'] };
+  const chips = d.chipsOf(d.REQUESTS_DIMENSIONS, filters, { accounts: ACCOUNTS });
+  assert.deepEqual(chips.map((c) => c.text), ['account: primary', 'held only', 'status: 429', 'client: claude-code*', 'speed: fast']);
+  assert.deepEqual(chips.map((c) => [c.label, c.mono]), [['account', false], ['held only', false], ['status', false], ['client', true], ['speed', true]]);
+});
+
+test('the fold keeps five chips at most, fewer when they do not fit, one when none fits, and names the folded words', () => {
+  const chips = ['account', 'key', 'model', 'pool', 'status', 'effort', 'speed'].map((word) => ({ field: word, label: word, mono: false, text: `${word}: x`, title: 'x' }));
+  const five = d.foldChips(chips, () => true);
+  assert.deepEqual([five.shown.length, five.folded.map((c) => c.label), five.title], [5, ['effort', 'speed'], 'Folded: effort, speed']);
+  const two = d.foldChips(chips, (count) => count <= 2);
+  assert.deepEqual([two.shown.map((c) => c.label), two.folded.length, two.title], [['account', 'key'], 5, 'Folded: model, pool, status, effort, speed']);
+  const one = d.foldChips(chips, () => false);
+  assert.deepEqual([one.shown.map((c) => c.label), one.folded.length], [['account'], 6]);
+  const all = d.foldChips(chips.slice(0, 3), () => true);
+  assert.deepEqual([all.shown.length, all.folded.length, all.title], [3, 0, '']);
+});
+
+test('each dimension list names keys of its codec, and every codec key but the exempt ones has a dimension', () => {
+  const views = [
+    ['requests', d.REQUESTS_DIMENSIONS, d.REQUESTS_CODEC],
+    ['routingLog', d.ROUTING_LOG_DIMENSIONS, d.ROUTING_LOG_CODEC],
+    ['analytics', d.ANALYTICS_DIMENSIONS, d.ANALYTICS_CODEC],
+    ['keys', d.KEYS_DIMENSIONS, d.KEYS_CODEC],
+  ];
+  for (const [view, dimensions, codec] of views) {
+    const keys = Object.keys(codec.fromParams(new URLSearchParams()));
+    const fields = dimensions.map((x) => x.field);
+    assert.deepEqual(fields.filter((f) => !keys.includes(f)), [], `${view}: every dimension names a codec key`);
+    assert.deepEqual(keys.filter((k) => !fields.includes(k) && !d.NOT_DIMENSIONS[view].includes(k)), [], `${view}: every codec key outside the exempt ones has a dimension`);
+    assert.equal(new Set(fields).size, fields.length, `${view}: no key has two dimensions`);
+  }
+});
+
+test("the lists are alphabetical inside each group, the groups in the view's order, and the Routing log leads with its kinds", () => {
+  const groups = (dimensions) => [...new Set(dimensions.map((x) => x.group))];
+  assert.deepEqual(groups(d.REQUESTS_DIMENSIONS), ['Routing', 'Outcome', 'Request']);
+  assert.deepEqual(groups(d.ROUTING_LOG_DIMENSIONS), ['Kinds', 'Routing', 'Subject']);
+  assert.deepEqual(groups(d.ANALYTICS_DIMENSIONS), ['Routing', 'Request', 'Subject']);
+  assert.deepEqual(groups(d.KEYS_DIMENSIONS), ['Keys']);
+  for (const dimensions of [d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS, d.ANALYTICS_DIMENSIONS, d.KEYS_DIMENSIONS]) {
+    for (const group of groups(dimensions)) {
+      const labels = dimensions.filter((x) => x.group === group).map((x) => x.label);
+      assert.deepEqual(labels, [...labels].sort((a, b) => a.localeCompare(b)), `${group} is alphabetical`);
+    }
+  }
+  const words = Object.fromEntries(d.ANALYTICS_DIMENSIONS.map((x) => [x.field, x.word]));
+  assert.deepEqual([words.class, words.probes, words.agent], ['client', 'include probes', 'user agent'], 'the Analytics client pattern reads client over its class key');
+  assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
+});

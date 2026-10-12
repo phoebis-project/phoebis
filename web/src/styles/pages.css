@@ -112,6 +112,85 @@
   min-height: 26px;
 }
 
+/* The bar's chip line: one line, never wrapping, under the controls' row. */
+.chip-line {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The fold reads each chip at its own width, which a chip shrunk to fit the line would hide. */
+.chip-line > * {
+  flex: none;
+}
+
+/* After "+N more" every chip stands, so the line wraps as it must. */
+.chip-line.is-expanded {
+  flex-wrap: wrap;
+}
+
+.chip-line .link-btn {
+  font-size: 12.5px;
+}
+
+.chip--filter {
+  max-width: 240px;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* An author display beats the hidden attribute's UA rule, so a chip the fold hides says so again here. */
+.chip--filter[hidden] {
+  display: none;
+}
+
+/* Two classes, so the body outranks `.chip--removable button` (one class and a type), which styles the x alone. */
+.chip--filter .chip__body {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 0 3px 9px;
+  color: var(--ink);
+  line-height: 18px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.chip--filter .chip__body:hover {
+  background: none;
+}
+
+/* The values give way to a narrow chip, so the word keeps one line rather than wrapping beside them. */
+.chip--filter .chip__word {
+  flex: none;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* The ellipsis draws on the values span, never on the inline-flex body. */
+.chip--filter .chip__values {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The pill clips at its round end, so the x stands as far in from it as the body's text stands from the start. */
+.chip--filter .chip__remove {
+  margin-right: 8px;
+}
+
+/* The pill clips what passes its edge, so a focused button's ring draws inside it. */
+.chip--filter button:focus-visible {
+  outline-offset: -2px;
+}
+
+.chip--more {
+  border-style: dashed;
+}
+
 .link-btn {
   padding: 0 4px;
   color: var(--accent-ink);
