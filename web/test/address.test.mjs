@@ -17,7 +17,7 @@ const FILLED = {
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], client: 'claude-code/*', efforts: ['high', 'low'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', speeds: ['fast', 'standard'], statuses: ['200', '429'], turnOrigins: ['agent', 'user'] },
-  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('3h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
+  ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60' },
   SESSIONS_CODEC: {},
 };
 
@@ -43,7 +43,7 @@ test('a list splits on commas and joins back, empty entries dropped', () => {
 });
 
 test('a preset travels by its name, nothing for the default, and a custom span as its two instants after every filter', () => {
-  assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('3h') }), 'range=3h');
+  assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('6h') }), 'range=6h');
   assert.equal(write(d.ROUTING_LOG_CODEC, { ...read(d.ROUTING_LOG_CODEC, ''), range: preset('1h') }), '');
   assert.equal(write(d.REQUESTS_CODEC, { ...read(d.REQUESTS_CODEC, ''), range: preset('24h') }), '');
   const params = d.ROUTING_LOG_CODEC.toParams({ ...FILLED.ROUTING_LOG_CODEC, range: CUSTOM });
@@ -97,15 +97,18 @@ test('an unknown key is absent after a round trip', () => {
 test("addressWindow reads a preset from now and a custom span as its own instants, apart from the quota helper's windowOf", () => {
   const now = Date.parse('2026-10-10T16:30:00Z');
   assert.equal(typeof d.windowOf, 'function');
-  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, 'range=3h').range, d.ROUTING_LOG_RANGES, '1h', now), { from: now - 3 * 3_600_000, to: now });
-  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, '').range, d.ROUTING_LOG_RANGES, '1h', now), { from: now - 3_600_000, to: now });
-  assert.deepEqual(d.addressWindow(CUSTOM, d.ROUTING_LOG_RANGES, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });
+  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, 'range=6h').range, d.RANGE_PRESETS, '1h', now), { from: now - 6 * 3_600_000, to: now });
+  assert.deepEqual(d.addressWindow(read(d.ROUTING_LOG_CODEC, '').range, d.RANGE_PRESETS, '1h', now), { from: now - 3_600_000, to: now });
+  assert.deepEqual(d.addressWindow(CUSTOM, d.RANGE_PRESETS, '1h', now), { from: Date.parse(FROM), to: Date.parse(TO) });
 });
 
-test('the preset tables carry each view\'s presets by name, label and width', () => {
-  const names = (table) => table.map((r) => r.name);
-  assert.deepEqual(names(d.REQUEST_RANGES), ['1h', '6h', '24h']);
-  assert.deepEqual(names(d.ROUTING_LOG_RANGES), ['1h', '3h', '6h', '24h']);
-  assert.deepEqual(names(d.ANALYTICS_RANGES), ['1h', '24h', '7d', '30d']);
-  assert.deepEqual(d.REQUEST_RANGES[0], { label: 'Last hour', ms: 3_600_000, name: '1h' });
+test('the one preset table carries the five presets by name, label and width, and each codec keeps its default', () => {
+  assert.deepEqual(d.RANGE_PRESETS.map((r) => r.name), ['1h', '6h', '24h', '7d', '30d']);
+  assert.deepEqual(d.RANGE_PRESETS[0], { label: 'Last hour', ms: 3_600_000, name: '1h' });
+  assert.deepEqual(d.RANGE_PRESETS[4], { label: 'Last 30 days', ms: 2_592_000_000, name: '30d' });
+  assert.equal(read(d.REQUESTS_CODEC, '').range.preset, '24h');
+  assert.equal(read(d.ROUTING_LOG_CODEC, '').range.preset, '1h');
+  assert.equal(read(d.ANALYTICS_CODEC, '').range.preset, '24h');
+  // A name the table does not hold reads as the view's default.
+  assert.equal(read(d.ROUTING_LOG_CODEC, 'range=3h').range.preset, '1h');
 });

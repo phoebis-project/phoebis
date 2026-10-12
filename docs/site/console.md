@@ -323,16 +323,19 @@ the last 24 hours. The rule grammar and the levels are on [Model rules](routing.
 
 The filter bar opens on "Search id, session, key, account, model, error, message id", which matches the request id,
 the session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
-literally (`_` and `%` are characters). The range offers Last hour, Last 6 hours, Last 24 hours (the default) or
-"Custom range" with two instants. The multi-selects Keys, Pools, Accounts and Models follow, then "Client pattern" and
-"User agent pattern", which take a pattern (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for
-one, a backslash quoting either, and a value with no wildcard matching in full), then Status, Outcome, Cache miss
-reason, Agent type, Turn origin, Effort and Request class, the Kind select (Any kind, Inference, Count tokens, Probe),
-Speed, the "Held only" switch, the "Follow" switch, Refresh and the Columns control. The account filter keeps the
-requests whose serving attempt ran on the account, so a request that failed over lists under the account that answered
-it. Each multi-select opens with a Select all row, and the search and the two pattern fields apply 400 milliseconds
-after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in
-the page's address, so a reload or a shared link keeps them, and "Reset" clears them.
+literally (`_` and `%` are characters). The range offers Last hour, Last 6 hours, Last 24 hours (the default), Last 7
+days, Last 30 days or Custom range with From and To, drawn as the pills 1h, 6h, 24h, 7d, 30d and Custom. Custom opens
+From and To in a popover on the window the table shows, where "End must be after start." holds Apply off while the pair
+is wrong and an end past now reads as now, and once applied the pill prints the span ("13:00 to 14:30", the date before
+each time across days). The multi-selects Keys, Pools, Accounts and Models follow, then "Client pattern" and "User agent
+pattern", which take a pattern (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash
+quoting either, and a value with no wildcard matching in full), then Status, Outcome, Cache miss reason, Agent type,
+Turn origin, Effort and Request class, the Kind select (Any kind, Inference, Count tokens, Probe), Speed, the "Held
+only" switch, the "Follow" switch, Refresh and the Columns control. The account filter keeps the requests whose serving
+attempt ran on the account, so a request that failed over lists under the account that answered it. Each multi-select
+opens with a Select all row, and the search and the two pattern fields apply 400 milliseconds after the last keystroke,
+on Enter, or when the field loses focus. Every filter, the range and the page size live in the page's address, so a
+reload or a shared link keeps them, and "Reset" clears them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and
@@ -388,20 +391,21 @@ A request the ledger does not hold reads "Request not found" with "It may have a
 ![The Analytics view: the Traffic tab](assets/analytics-light.png#only-light)
 ![The Analytics view: the Traffic tab](assets/analytics-dark.png#only-dark)
 
-The sticky filter bar offers the range 1h, 24h, 7d, 30d or Custom (From and To, "End must be after start." while the
-pair is wrong), "Group by" with Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed or User agent, the
-multi-selects Key, Pool, Account and Model, "Client pattern" and "User agent pattern" in the Requests view's grammar, a
-"User agent groups" box with one pattern per line, where each pattern names a group and every other agent groups under
-`other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch "Include cache
-probes". The user agent grouping reads the agent's first product token, `claude-cli/2.1.269` for `claude-cli/2.1.269
-(external, cli)`. Filtered to one session the view sums the request log instead of the hourly rollups and says so, over
-the first 10,000 requests of the range. Under that filter the Cost split reads "Cost split is not available for a
-session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
-figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
-carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the client groups, the
-probes switch, the burn grouping and the cost unit live in the page's address. The section bar under it shows one
-section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No
-traffic in this range." What each figure means is on [Statistics](statistics.md).
+The sticky filter bar offers the range Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days
+or Custom range with From and To, the pills and the popover as on the Requests view, "Group by" with Account, Client,
+Key, Effort, Kind, Model, Pool, Request class, Speed or User agent, the multi-selects Key, Pool, Account and Model,
+"Client pattern" and "User agent pattern" in the Requests view's grammar, a "User agent groups" box with one pattern per
+line, where each pattern names a group and every other agent groups under `other` (`claude-cli/2.1.*` and
+`claude-cli/2.0.*` as two groups), a "Session" id filter, and the switch "Include cache probes". The user agent grouping
+reads the agent's first product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`. Filtered to one
+session the view sums the request log instead of the hourly rollups and says so, over the first 10,000 requests of the
+range. Under that filter the Cost split reads "Cost split is not available for a session view.", the Write cost vs read
+cost legend reads a dash for each cost, and Cache warming reads "Cache warming figures are not available for a session
+view." with "not in the request log" under its probe tiles, since a request row carries one cost total and no probe or
+kept-warm fact. The range, the grouping, every filter, the client groups, the probes switch, the burn grouping and the
+cost unit live in the page's address. The section bar under it shows one section at a time, Traffic, Burn, Latency,
+Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in this range." What each figure
+means is on [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code, Failovers, Migration rewrites with Moves by reason, Requests by speed, Effort levels, and
@@ -568,18 +572,18 @@ open, and every link into the log opens it whatever the mode. It is one stream o
 that explain them, newest first, 25 rows a page with First, Previous and Next. The rules a decision follows are on
 [Pools, keys and routing](routing.md).
 
-The filter bar reads the range (Last hour by default, Last 3 hours, Last 6 hours, Last 24 hours or "Custom range" with
-From and To), "Kinds" (the decision kinds, then the events, with "Probe decisions (hidden by default)" and "Warm prefix
-expired (hidden by default)" last in their groups, the button reading "Kinds (2 hidden)" until another set is chosen),
-Keys, Pools, Accounts, Models, "Session id" (a prefix matches) and "Request id", the "Follow" switch, which reads
-"polling every 5 s, the range ends now" while on, and Refresh. Every filter lives in the page's address (a preset range
-by its name, a custom range as `from` and `to`, two UTC instants, the lists as comma lists), so a filtered view is a
-link and Back returns to the view before it. A request filter opens a line above the table that counts the request's
-decisions and events and offers three widenings, "this session" (an hour either side), "this account" (a quarter hour
-either side) and "this minute", and any other narrowing draws the same line with what the rows are narrowed to. Follow
-behaves as on the Requests view, up to eight pages a read and the line "More rows arrived than Follow could fetch.
-Reload to read them." past them. An empty range reads "No decisions or events in this range." with "Widen the range or
-clear a filter."
+The filter bar reads the range (Last hour by default, Last 6 hours, Last 24 hours, Last 7 days, Last 30 days or Custom
+range with From and To, the pills and the popover as on the Requests view), "Kinds" (the decision kinds, then the
+events, with "Probe decisions (hidden by default)" and "Warm prefix expired (hidden by default)" last in their groups,
+the button reading "Kinds (2 hidden)" until another set is chosen), Keys, Pools, Accounts, Models, "Session id" (a
+prefix matches) and "Request id", the "Follow" switch, which reads "polling every 5 s, the range ends now" while on, and
+Refresh. Every filter lives in the page's address (a preset range by its name as in `range=6h`, a custom range as `from`
+and `to`, two UTC instants, the lists as comma lists), so a filtered view is a link and Back returns to the view before
+it. A request filter opens a line above the table that counts the request's decisions and events and offers three
+widenings, "this session" (an hour either side), "this account" (a quarter hour either side) and "this minute", and any
+other narrowing draws the same line with what the rows are narrowed to. Follow behaves as on the Requests view, up to
+eight pages a read and the line "More rows arrived than Follow could fetch. Reload to read them." past them. An empty
+range reads "No decisions or events in this range." with "Widen the range or clear a filter."
 
 A row reads Time (a decision's request beneath it as a link to the request's drawer), Kind (a decision in a filled
 badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), Session (the first eight characters

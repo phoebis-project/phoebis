@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import { iso, windowId } from '@/api/decode';
+import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -16,20 +16,20 @@ import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { RangeControl } from '@/components/RangeControl';
 import { SectionBar } from '@/components/SectionBar';
-import { addressWindow, ANALYTICS_CODEC, ANALYTICS_RANGES, type AnalyticsAddress } from '@/lib/address';
+import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { CONVERSATION_CLASSES, COST_UNITS, MAX_BURN_LINES, SHARE_NOTE, UNIT_FUNDING, UNIT_LABEL, foldBurn, isolatedSlots, moveLabel, niceAxisTop, oneAccountOf, own, placementCells, placementRungLabel, readBurn, sampledWindows, shareLines, shareRow, sizedAccounts, slotUnpriced, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type AnalyticsUnit, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
-import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { WINDOW_LABEL } from '@/lib/windows';
 
-type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
 /** The four dimensions both the analytics query and the request log filter on. */
@@ -181,12 +181,6 @@ export function AnalyticsPage() {
   const [generation, setGeneration] = useState(0);
   // Every filter lives in the address, so a link or a reload lands on the same view.
   const { filters: a, update } = useQueryFilters(ANALYTICS_CODEC);
-  const range = a.range.preset as Range;
-  // The custom inputs edit a draft of the address's pair, kept while it does not end after it starts, which the
-  // address would read as the preset.
-  const pair = `${a.range.from} ${a.range.to}`;
-  const [draft, setDraft] = useState<{ for: string; from: string; to: string } | null>(null);
-  const custom = draft !== null && draft.for === pair ? draft : { from: toLocalInput(Date.parse(a.range.from)), to: toLocalInput(Date.parse(a.range.to)) };
   const groupBy = a.by as GroupBy;
   const userAgentPattern = a.agent;
   const classPattern = a.class;
@@ -244,25 +238,6 @@ export function AnalyticsPage() {
   const commitClass = (next: string) => commit({ class: next });
   const commitAgent = (next: string) => commit({ agent: next });
   const commitGroups = (next: string) => commit({ groups: next });
-  // Custom opens on the three days up to now, so the choice holds.
-  const changeRange = (next: Range) => {
-    if (next === range) return;
-    const at = clock.now();
-    commit({ range: next === 'custom' ? { from: iso(at - 3 * 24 * HOUR), preset: 'custom', to: iso(at) } : { from: '', preset: next, to: '' } }, at);
-  };
-  // An edit is the minute the operator typed. The other bound is the one an earlier edit left in the draft, else the
-  // address's instant, kept to the millisecond.
-  const changeBound = (bound: 'from' | 'to', local: string) => {
-    const at = Date.parse(local);
-    const kept = (side: 'from' | 'to') => (custom[side] === toLocalInput(Date.parse(a.range[side])) ? Date.parse(a.range[side]) : Date.parse(custom[side]));
-    const next = bound === 'from' ? { from: at, to: kept('to') } : { from: kept('from'), to: at };
-    if (Number.isNaN(next.from) || Number.isNaN(next.to) || next.to <= next.from) {
-      setDraft(bound === 'from' ? { ...custom, for: pair, from: local } : { ...custom, for: pair, to: local });
-      return;
-    }
-    setDraft(null);
-    commit({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
-  };
   const changeGroupBy = (next: GroupBy) => commit({ by: next });
   const changeFilter = (dim: QueryDim, next: string[]) => {
     const patch: Partial<AnalyticsAddress> = {};
@@ -294,10 +269,9 @@ export function AnalyticsPage() {
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const span = useMemo(() => {
-    const { from, to } = addressWindow(a.range, ANALYTICS_RANGES, '24h', now);
+    const { from, to } = addressWindow(a.range, RANGE_PRESETS, '24h', now);
     return { fromMs: from, toMs: Math.min(to, now) };
   }, [a.range, now]);
-  const draftInvalid = draft !== null && draft.for === pair;
   const fromIso = new Date(span.fromMs).toISOString();
   const toIso = new Date(span.toMs).toISOString();
   const sessionId = filters.sessionId[0] ?? null;
@@ -485,21 +459,7 @@ export function AnalyticsPage() {
   return (
     <div className="stack">
       <div className="filters filters--sticky" ref={filtersRef}>
-        <Segmented<Range>
-          ariaLabel="Range"
-          title={`Window ends ${fmtAbsolute(toIso)}`}
-          value={range}
-          onChange={changeRange}
-          options={[...ANALYTICS_RANGES.map((r) => ({ value: r.name, label: r.label })), { value: 'custom', label: 'Custom' }]}
-        />
-        {range === 'custom' && (
-          <span className="filters__range">
-            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeBound('from', e.target.value)} aria-label="From" />
-            <span className="muted">to</span>
-            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeBound('to', e.target.value)} aria-label="To" />
-            {draftInvalid && <span className="pairing__expired">End must be after start.</span>}
-          </span>
-        )}
+        <RangeControl now={clock.now} onChange={(next) => commit({ range: next })} value={a.range} window={{ from: span.fromMs, to: span.toMs }} />
         {!log.stale && log.data?.partial && <span className="secondary">Partial: the first {fmtInt(SESSION_PAGE_LIMIT * SESSION_PAGE_SIZE)} requests of the range</span>}
         <span className="filters__sep" aria-hidden />
         <label className="row">

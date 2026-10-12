@@ -3141,6 +3141,35 @@ async function pagerControls(theme, path) {
 }
 
 /**
+ * The range control at rest on the request log's bar: the group 32 px with its six pills 28 px on one top, the group
+ * against the Refresh button on height and against the search field on height and top, and the Custom pill's width at
+ * rest recorded, the base its span grows from. The bar wraps its controls, which puts Refresh rows below the range,
+ * so the field beside the group on its row holds the top.
+ */
+async function rangePills(theme) {
+  const read = await page.evaluate(() => {
+    const box = (el) => (el ? { height: Math.round(el.getBoundingClientRect().height), top: Math.round(el.getBoundingClientRect().top) } : null);
+    const group = document.querySelector('.segmented[aria-label="Range"]');
+    const pills = [...(group?.querySelectorAll('button') ?? [])];
+    const refresh = [...document.querySelectorAll('.filters .btn')].find((b) => b.textContent?.trim() === 'Refresh');
+    return {
+      custom: pills.length > 0 ? Math.round(pills[pills.length - 1].getBoundingClientRect().width * 10) / 10 : null,
+      group: box(group),
+      pills: pills.map((b) => ({ ...box(b), text: b.textContent?.trim() ?? '' })),
+      refresh: box(refresh),
+      search: box(document.querySelector('.filters input.filters__search')),
+    };
+  });
+  measurements.push(`${theme} /requests range pills ${JSON.stringify(read)}`);
+  const say = (what) => failures.push(`${theme} /requests: the range control's ${what}`);
+  if (read.group?.height !== 32) say(`group is ${read.group?.height} px, not 32`);
+  if (read.pills.length !== 6 || read.pills.some((p) => p.height !== 28)) say(`pills measure ${JSON.stringify(read.pills)}, not six of 28 px`);
+  if (new Set(read.pills.map((p) => p.top)).size > 1) say(`pills stand at ${JSON.stringify(read.pills.map((p) => p.top))}, not one top`);
+  failures.push(...compare(read.group, read.refresh, ['height'], `${theme} /requests: the range group against Refresh`));
+  failures.push(...compare(read.group, read.search, ['height', 'top'], `${theme} /requests: the range group against the search field`));
+}
+
+/**
  * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
  * same trigger box, type and border, on the same row of the bar or at the start of the next one.
  */
@@ -3575,8 +3604,9 @@ async function requestDrawerCompact(theme) {
 
 /**
  * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
- * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
- * a detail follows. The mock pass runs it on a load of its own, and it leaves the Analytics page on its Traffic tab.
+ * the linked range, pressed as the Custom pill printing its span, and the first row's drawer reads the link's reason
+ * on its Cache row, whose first span is the label a detail follows. The mock pass runs it on a load of its own, and it
+ * leaves the Analytics page on its Traffic tab.
  */
 async function reasonLink(theme) {
   const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
@@ -3602,7 +3632,11 @@ async function reasonLink(theme) {
       say(`${link.href} lists no request`);
       return;
     }
-    const range = await page.evaluate(() => document.querySelector('select[aria-label="Date range"]')?.selectedOptions[0]?.textContent ?? null);
+    const range = await page.evaluate(() => {
+      const pills = [...document.querySelectorAll('.segmented[aria-label="Range"] button')];
+      const pressed = pills.find((b) => b.getAttribute('aria-pressed') === 'true');
+      return pressed ? { custom: pressed === pills[pills.length - 1], text: pressed.textContent?.trim() ?? '' } : null;
+    });
     await page.locator('.requests__table tbody tr').first().click();
     await advance(LOAD_MS);
     try {
@@ -3613,7 +3647,7 @@ async function reasonLink(theme) {
     }
     const cache = await page.evaluate(() => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache')?.querySelector('dd span')?.textContent ?? null);
     measurements.push(`${theme} /analytics reasons panel link ${JSON.stringify({ cache, href: link.href, label: link.label, range })}`);
-    if (!range?.startsWith('Custom range')) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one`);
+    if (!range?.custom) say(`${link.href} reads the range ${JSON.stringify(range)}, not the linked one on the Custom pill`);
     if (cache !== link.label) say(`the first row's drawer reads the reason ${JSON.stringify(cache)} under the "${link.label}" link`);
   } finally {
     await page.goto(`${base}/analytics`);
@@ -6002,6 +6036,7 @@ try {
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
+      if (view.path === '/requests') await rangePills(theme);
       if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);

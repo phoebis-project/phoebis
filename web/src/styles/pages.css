@@ -4154,16 +4154,13 @@
   white-space: normal;
 }
 
-.filters__range {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.filters__range .input {
-  width: auto;
-  padding: 5px 8px;
-  font-size: 12.5px;
+/* The Custom range popover's fields keep the head's and the foot's 8 px inset, so they line up with its title and its
+   buttons. */
+.range-control__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 8px;
 }
 
 .filters__sep {

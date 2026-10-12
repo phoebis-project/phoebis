@@ -7,14 +7,15 @@ import { type Paging, useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
+import { RangeControl } from '@/components/RangeControl';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { addressWindow, REQUEST_RANGES, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { addressWindow, RANGE_PRESETS, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
@@ -22,7 +23,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { FOLLOW_OVERRUN } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
@@ -220,23 +221,12 @@ export function RequestsPage() {
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
-  const span = useMemo(() => addressWindow(filters.range, REQUEST_RANGES, '24h', loadedAt), [filters.range, loadedAt]);
+  const span = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '24h', loadedAt), [filters.range, loadedAt]);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
     () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(pagedTo ?? span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, span, pagedTo],
   );
-  // Custom starts from the window the list shows, so the choice holds.
-  const chooseRange = (value: string) => update({ range: value === 'custom' ? { from: iso(span.from), preset: 'custom', to: iso(span.to) } : { from: '', preset: value, to: '' } });
-  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
-  // preset.
-  const setBound = (bound: 'from' | 'to', local: string) => {
-    const ms = Date.parse(local);
-    if (Number.isNaN(ms)) return;
-    const next = bound === 'from' ? { from: ms, to: span.to } : { from: span.from, to: Math.min(ms, clock.now()) };
-    if (next.from >= next.to) return;
-    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
-  };
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, so the poll waits for it to close.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
@@ -271,22 +261,7 @@ export function RequestsPage() {
       <div className="stack">
         <div className="filters">
           <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
-          <Select value={filters.range.preset} onChange={(e) => chooseRange(e.target.value)} aria-label="Date range">
-            {REQUEST_RANGES.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.label}
-              </option>
-            ))}
-            <option value="custom" title={custom ? `${filters.range.from} to ${filters.range.to}` : undefined}>
-              Custom range
-            </option>
-          </Select>
-          {custom && (
-            <>
-              <Input type="datetime-local" aria-label="From" value={toLocalInput(span.from)} onChange={(e) => setBound('from', e.target.value)} />
-              <Input type="datetime-local" aria-label="To" value={toLocalInput(span.to)} onChange={(e) => setBound('to', e.target.value)} />
-            </>
-          )}
+          <RangeControl now={clock.now} onChange={(range) => update({ range })} value={filters.range} window={span} />
           <MultiSelect
             label="Keys"
             options={keyOptions(keys.data, filters.keys)}

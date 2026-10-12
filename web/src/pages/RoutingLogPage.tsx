@@ -6,13 +6,14 @@ import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, Routin
 import { type Paging, useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
+import { RangeControl } from '@/components/RangeControl';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
-import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
-import { addressWindow, type LogFilters, ROUTING_LOG_CODEC, ROUTING_LOG_RANGES } from '@/lib/address';
+import { Badge, Button, Card, EmptyState, ErrorState, Input, Skeleton, Toggle, useDescription } from '@/components/ui/primitives';
+import { addressWindow, type LogFilters, RANGE_PRESETS, ROUTING_LOG_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { FOLLOW_OVERRUN } from '@/lib/follow';
-import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtTime, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
 import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, compareRows, entityHref, eventTone, factsOf, formatFact, identityOf, logHref } from '@/lib/routingLog';
 
@@ -76,13 +77,12 @@ export function RoutingLogPage() {
   // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from.
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  const [customOpen, setCustomOpen] = useState(false);
   const [follow, setFollow] = useState(false);
   const session = useCommittedText(filters.session, (next) => update({ session: next.trim() }));
   const request = useCommittedText(filters.request, (next) => update({ request: next.trim() }));
 
   // A preset ends where the list was loaded, and a custom span reads its own instants.
-  const range = useMemo(() => addressWindow(filters.range, ROUTING_LOG_RANGES, '1h', loadedAt), [filters.range, loadedAt]);
+  const range = useMemo(() => addressWindow(filters.range, RANGE_PRESETS, '1h', loadedAt), [filters.range, loadedAt]);
   const query = useMemo<RoutingLogQuery>(
     () => ({ accountIds: filters.accounts, cursor, from: iso(range.from), keyIds: filters.keys, kinds: filters.kinds.length ? filters.kinds : undefined, limit: PAGE_SIZE, models: filters.models, poolIds: filters.pools, request: filters.request || undefined, session: filters.session || undefined, to: iso(pagedTo ?? range.to) }),
     [filters, range, cursor, pagedTo],
@@ -103,21 +103,6 @@ export function RoutingLogPage() {
     stale: log.stale,
   });
 
-  const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
-  // Custom starts from the window the list shows, so the choice holds.
-  const chooseRange = (value: string) => {
-    setCustomOpen(value === 'custom');
-    update({ range: value === 'custom' ? { from: iso(range.from), preset: 'custom', to: iso(range.to) } : { from: '', preset: value, to: '' } });
-  };
-  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
-  // preset.
-  const setBound = (bound: 'from' | 'to', local: string) => {
-    const ms = Date.parse(local);
-    if (Number.isNaN(ms)) return;
-    const next = bound === 'from' ? { from: ms, to: range.to } : { from: range.from, to: Math.min(ms, clock.now()) };
-    if (next.from >= next.to) return;
-    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
-  };
   // A preset is read again from now, and a custom span as it stands.
   const refresh = () => {
     setPaging({ for: address, stack: [] });
@@ -125,31 +110,15 @@ export function RoutingLogPage() {
     setLoadedAt(clock.now());
     log.reload();
   };
-  const clear = () => {
-    setCustomOpen(false);
-    replace(DEFAULTS);
-  };
+  const clear = () => replace(DEFAULTS);
 
   const now = clock.now();
-  const narrowed = filters.session !== '' || filters.accounts.length > 0 || filters.pools.length > 0 || filters.keys.length > 0 || filters.models.length > 0 || filters.kinds.length > 0 || rangeValue === 'custom';
+  const narrowed = filters.session !== '' || filters.accounts.length > 0 || filters.pools.length > 0 || filters.keys.length > 0 || filters.models.length > 0 || filters.kinds.length > 0 || filters.range.preset === 'custom';
 
   return (
     <div className="routing-log stack">
       <div className="filters">
-        <Select value={rangeValue} onChange={(e) => chooseRange(e.target.value)} aria-label="Range">
-          {ROUTING_LOG_RANGES.map((r) => (
-            <option key={r.name} value={r.name}>
-              {r.label}
-            </option>
-          ))}
-          <option value="custom">Custom range</option>
-        </Select>
-        {rangeValue === 'custom' && (
-          <>
-            <Input type="datetime-local" aria-label="From" value={toLocalInput(range.from)} onChange={(e) => setBound('from', e.target.value)} />
-            <Input type="datetime-local" aria-label="To" value={toLocalInput(range.to)} onChange={(e) => setBound('to', e.target.value)} />
-          </>
-        )}
+        <RangeControl now={clock.now} onChange={(next) => update({ range: next })} value={filters.range} window={range} />
         <MultiSelect
           label="Kinds"
           options={KIND_OPTIONS}

@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, spanText, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -6742,6 +6742,32 @@ await readsAgain('/keys', 'listKeys');
 // fails the run rather than leaving the check to read a page nothing narrowed.
 const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labeled ${label}`] });
 
+// The range control's pills, and its Custom popover, which a portal draws at the end of the body, so a check reads the
+// popover off the document rather than the page's container.
+const rangePills = (page) => [...page.container.querySelectorAll('.segmented[aria-label="Range"] button')];
+const rangePill = (page, name) => rangePills(page).find((b) => b.textContent?.trim() === name);
+const pressedRange = (page) => page.container.querySelector('.segmented[aria-label="Range"] button[aria-pressed="true"]');
+/** Whether the pressed pill is the group's last, the Custom one, whose words are the span while one stands. */
+const customPressed = (page) => pressedRange(page) !== null && pressedRange(page) === rangePills(page).at(-1);
+const rangeBox = () => document.querySelector('.popover');
+const rangeFields = () => ['From', 'To'].map((label) => rangeBox()?.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
+const rangeButton = (text) => [...(rangeBox()?.querySelectorAll('.popover__foot button') ?? [])].find((b) => b.textContent?.trim() === text);
+const rangeLine = () => [...(rangeBox()?.querySelectorAll('span.secondary') ?? [])].map((e) => e.textContent?.trim()).join();
+const typeRangeField = (label, text) => {
+  const input = rangeBox()?.querySelector(`input[aria-label="${label}"]`);
+  if (!input) return;
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+};
+const openCustom = async (page) => {
+  rangePills(page).at(-1)?.click();
+  await page.settle(100);
+};
+const closeCustom = async (page, button) => {
+  rangeButton(button)?.click();
+  await page.settle();
+};
+
 m = await mount('/models');
 {
   const story = requests.find((r) => r.model !== r.canonicalModel);
@@ -8342,10 +8368,6 @@ m.unmount();
     setter.call(input, text);
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
-  const choose = (select, value) => {
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
-    select.dispatchEvent(new window.Event('change', { bubbles: true }));
-  };
   const trigger = (page, label) => [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label))?.textContent?.trim() ?? `no ${label} filter`;
   const column = (page, header) => {
     const at = [...page.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === header);
@@ -8425,21 +8447,20 @@ m.unmount();
   // follows starts at the first page, and changing the filter back does not return to the page left behind.
   const pagingCheck = '/requests a filter change on a later page issues one read with no cursor';
   const paged = await mount('/requests', { now: CLOCK_ORIGIN });
-  const range = paged.container.querySelector('select[aria-label="Date range"]');
-  if (!range) controlMissing(pagingCheck, 'Date range');
+  if (!rangePill(paged, '6h')) controlMissing(pagingCheck, 'Range');
   else {
     paged.container.querySelector('button[aria-label="Next page"]')?.click();
     await paged.settle();
     const later = paged.container.querySelector('button[aria-label="Previous page"]')?.disabled === false;
     let spy = countCalls('listRequests');
-    choose(range, '6h');
+    rangePill(paged, '6h')?.click();
     await paged.settle();
     const changed = spy.calls.map(([q]) => ({ cursor: q?.cursor ?? null, from: q?.from }));
     spy.restore();
     results.push({ name: pagingCheck, ok: later && changed.length === 1 && changed[0].cursor === null, missing: [`on a later page ${later}`, JSON.stringify(changed)] });
     // Straight back, with no paging under the other range, so only the change itself can have dropped the cursor.
     spy = countCalls('listRequests');
-    choose(range, '24h');
+    rangePill(paged, '24h')?.click();
     await paged.settle();
     const back = spy.calls.map(([q]) => q?.cursor ?? null);
     spy.restore();
@@ -8469,10 +8490,6 @@ m.unmount();
 // The cache miss reason, effort and request class filters and the custom range live in the address beside the other
 // filters: each control narrows the table to the rows the rollups file under its value and writes its own key.
 {
-  const choose = (select, value) => {
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
-    select.dispatchEvent(new window.Event('change', { bubbles: true }));
-  };
   const filterOf = (page, label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
   const triggerText = (page, label) => filterOf(page, label)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? `no ${label} filter`;
   // A list stays open across a choice, so it is opened only while it is shut.
@@ -8497,7 +8514,6 @@ m.unmount();
     });
   const param = (page, name) => new URLSearchParams(page.location().search).get(name);
   const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
-  const rangeOf = (page) => page.container.querySelector('select[aria-label="Date range"]');
   const KNOWN = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
 
   const reasonCheck = '/requests the Cache miss reason filter follows Outcome and offers the known reasons in their reading order';
@@ -8535,31 +8551,33 @@ m.unmount();
   const FROM = '2026-09-16T12:00:00.000Z';
   const TO = '2026-09-16T13:00:00.000Z';
   const inside = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
-  const windowCheck = '/requests mounts with from and to under Custom range, draws its two instant inputs on the window and lists that window alone';
-  // The two instant inputs, read in the smoke run's zone, UTC.
-  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
+  const windowCheck = '/requests mounts with from and to under the Custom pill printing the span, opens its two instant inputs on the window and lists that window alone';
   const windowSpy = countCalls('listRequests');
   const linked = await mount(`/requests?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
   windowSpy.restore();
-  const range = rangeOf(linked);
-  const option = range?.selectedOptions[0];
+  const pill = pressedRange(linked);
+  const shown = { custom: customPressed(linked), pills: rangePills(linked).length, text: pill?.textContent ?? null, title: pill?.getAttribute('title') ?? '' };
   const windowed = listed(linked);
   const sent = windowSpy.calls.map(([q]) => `${q?.from} ${q?.to}`);
+  // The two instant inputs, read in the smoke run's zone, UTC.
+  await openCustom(linked);
+  const opened = rangeFields();
+  await closeCustom(linked, 'Cancel');
   results.push({
     name: windowCheck,
     ok:
-      range?.options.length === 4 &&
-      range.value === 'custom' &&
-      option?.textContent === 'Custom range' &&
-      (option?.getAttribute('title') ?? '').includes(FROM) &&
-      (option?.getAttribute('title') ?? '').includes(TO) &&
-      JSON.stringify(bounds(linked)) === JSON.stringify(['2026-09-16T12:00', '2026-09-16T13:00']) &&
+      shown.pills === 6 &&
+      shown.custom &&
+      shown.text === spanText(Date.parse(FROM), Date.parse(TO)) &&
+      shown.title.includes(fmtAbsolute(FROM)) &&
+      shown.title.includes(fmtAbsolute(TO)) &&
+      JSON.stringify(opened) === JSON.stringify(['2026-09-16T12:00', '2026-09-16T13:00']) &&
       inside.length > 0 &&
       windowed.length === Math.min(25, inside.length) &&
       windowed.every((r) => r !== null && inside.includes(r)) &&
       sent.length > 0 &&
       sent.every((s) => s === `${FROM} ${TO}`),
-    missing: [`${range?.options.length} options`, range?.value ?? 'no select', option?.textContent ?? 'no option', option?.getAttribute('title') ?? 'no title', JSON.stringify(bounds(linked)), `${windowed.length} rows of ${inside.length}`, ...sent],
+    missing: [JSON.stringify(shown), JSON.stringify(opened), `${windowed.length} rows of ${inside.length}`, ...sent],
   });
 
   const refreshCheck = '/requests Refresh reads the custom range again and says so';
@@ -8579,9 +8597,10 @@ m.unmount();
   });
 
   const presetCheck = '/requests choosing a preset drops the custom range';
-  if (range) choose(range, '6h');
+  rangePill(linked, '6h')?.click();
   await linked.settle();
-  results.push({ name: presetCheck, ok: linked.location().search === '?range=6h' && rangeOf(linked)?.options.length === 4 && JSON.stringify(bounds(linked)) === JSON.stringify([null, null]), missing: [linked.location().search, `${rangeOf(linked)?.options.length} options`, JSON.stringify(bounds(linked))] });
+  const dropped = { custom: rangePills(linked).at(-1)?.textContent ?? null, pills: rangePills(linked).length, pressed: pressedRange(linked)?.textContent ?? null };
+  results.push({ name: presetCheck, ok: linked.location().search === '?range=6h' && JSON.stringify(dropped) === JSON.stringify({ custom: 'Custom', pills: 6, pressed: '6h' }), missing: [linked.location().search, JSON.stringify(dropped)] });
   linked.unmount();
 
   // A half window, one that runs backwards, and an instant past the date range each read as the preset, quietly.
@@ -8592,39 +8611,45 @@ m.unmount();
     const halfSpy = countCalls('listRequests');
     const half = await mount(address, { now: CLOCK_ORIGIN });
     halfSpy.restore();
-    halves.push({ address, options: rangeOf(half)?.options.length ?? 0, to: halfSpy.calls.at(-1)?.[0]?.to ?? null, value: rangeOf(half)?.value ?? null });
+    halves.push({ address, pills: rangePills(half).length, to: halfSpy.calls.at(-1)?.[0]?.to ?? null, value: pressedRange(half)?.textContent ?? null });
     half.unmount();
   }
   const thrown = problems.slice(seen);
-  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.options === 4 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
+  results.push({ name: halfCheck, ok: thrown.length === 0 && halves.every((h) => h.value === '24h' && h.pills === 6 && h.to === isoAt(CLOCK_ORIGIN)), missing: [...halves.map((h) => JSON.stringify(h)), ...thrown.map((p) => p.slice(0, 160))] });
 
-  // Choosing Custom range writes the window the list shows as its two instants, so the choice holds. An edited bound
-  // writes its own instant, and one that would end the window before it starts writes nothing.
-  const chooseCheck = '/requests choosing Custom range writes the shown window as from and to, and an edited bound writes its instant';
-  const typeInto = (input, text) => {
-    if (!input) return;
-    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, text);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-  };
+  // The Custom pill opens on the window the list shows and writes nothing until Apply, which writes that window as its
+  // two instants, so the choice holds. An applied edit writes its own instant, and a bound that would end the window
+  // before it starts holds Apply off and writes nothing.
+  const chooseCheck = '/requests the Custom pill opens on the shown window, Apply writes it as from and to, and an applied edit writes its instant';
   const chosen = await mount('/requests', { now: CLOCK_ORIGIN });
-  if (!rangeOf(chosen)) controlMissing(chooseCheck, 'Date range');
+  if (rangePills(chosen).length === 0) controlMissing(chooseCheck, 'Range');
   else {
-    choose(rangeOf(chosen), 'custom');
+    await openCustom(chosen);
+    const opened = { bounds: rangeFields(), from: param(chosen, 'from'), range: param(chosen, 'range'), to: param(chosen, 'to') };
+    await closeCustom(chosen, 'Apply');
+    const applied = { custom: customPressed(chosen), from: param(chosen, 'from'), open: rangeBox() !== null, to: param(chosen, 'to') };
+    await openCustom(chosen);
+    typeRangeField('From', '2026-09-16T10:00');
     await chosen.settle();
-    const opened = { bounds: bounds(chosen), from: param(chosen, 'from'), range: param(chosen, 'range'), select: rangeOf(chosen)?.value ?? null, to: param(chosen, 'to') };
-    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T10:00');
-    await chosen.settle();
+    await closeCustom(chosen, 'Apply');
     const edited = { from: param(chosen, 'from'), to: param(chosen, 'to') };
-    typeInto(chosen.container.querySelector('input[aria-label="From"]'), '2026-09-16T15:00');
+    await openCustom(chosen);
+    typeRangeField('From', '2026-09-16T15:00');
     await chosen.settle();
-    const backward = { from: param(chosen, 'from'), select: rangeOf(chosen)?.value ?? null };
+    const held = { disabled: rangeButton('Apply')?.disabled ?? null, line: rangeLine() };
+    rangeButton('Apply')?.click();
+    await chosen.settle();
+    const backward = { from: param(chosen, 'from'), open: rangeBox() !== null, to: param(chosen, 'to') };
+    await closeCustom(chosen, 'Cancel');
     results.push({
       name: chooseCheck,
       ok:
-        JSON.stringify(opened) === JSON.stringify({ bounds: ['2026-09-15T14:30', '2026-09-16T14:30'], from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), range: null, select: 'custom', to: isoAt(CLOCK_ORIGIN) }) &&
+        JSON.stringify(opened) === JSON.stringify({ bounds: ['2026-09-15T14:30', '2026-09-16T14:30'], from: null, range: null, to: null }) &&
+        JSON.stringify(applied) === JSON.stringify({ custom: true, from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), open: false, to: isoAt(CLOCK_ORIGIN) }) &&
         JSON.stringify(edited) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', to: isoAt(CLOCK_ORIGIN) }) &&
-        JSON.stringify(backward) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', select: 'custom' }),
-      missing: [JSON.stringify(opened), JSON.stringify(edited), JSON.stringify(backward)],
+        JSON.stringify(held) === JSON.stringify({ disabled: true, line: 'End must be after start.' }) &&
+        JSON.stringify(backward) === JSON.stringify({ from: '2026-09-16T10:00:00.000Z', open: true, to: isoAt(CLOCK_ORIGIN) }),
+      missing: [JSON.stringify(opened), JSON.stringify(applied), JSON.stringify(edited), JSON.stringify(held), JSON.stringify(backward)],
     });
   }
   chosen.unmount();
@@ -8847,11 +8872,7 @@ m.unmount();
     followSwitch(page)?.click();
     await page.settle(100);
     const on = page.location().search;
-    const range = page.container.querySelector('select[aria-label="Date range"]');
-    if (range) {
-      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(range, '6h');
-      range.dispatchEvent(new window.Event('change', { bubbles: true }));
-    }
+    rangePill(page, '6h')?.click();
     await page.settle();
     const changed = page.location().search;
     const checked = followSwitch(page)?.getAttribute('aria-checked') ?? null;
@@ -10986,12 +11007,13 @@ m.unmount();
     input?.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
   const at14 = Date.UTC(2026, 8, 16, 14);
-  // 12:00 to the default end, the instant the range turned custom: an hour bucket at 14:00 holds the end.
+  // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at 14:00
+  // holds the end.
   const customRange = async (page) => {
-    [...page.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
-    await page.settle(100);
-    typeInto(page.container.querySelector('input[aria-label="From"]'), '2026-09-16T12:00');
+    await openCustom(page);
+    typeRangeField('From', '2026-09-16T12:00');
     await page.settle();
+    await closeCustom(page, 'Apply');
   };
 
   const handlersCheck = '/analytics every filter control reads the window up to the instant it changed';
@@ -12425,11 +12447,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
   const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
   results.push({ name: '/analytics has a filter per dimension', ok: ['Key', 'Pool', 'Account', 'Model'].every((d) => dims.includes(d)), missing: dims });
-  const custom = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Custom');
-  custom?.click();
+  await openCustom(m);
+  const pickers = rangeBox()?.querySelectorAll('input[type="datetime-local"]').length ?? 0;
+  await closeCustom(m, 'Cancel');
   await m.settle(300);
-  const pickers = m.container.querySelectorAll('input[type="datetime-local"]').length;
-  results.push({ name: '/analytics custom range shows from/to', ok: pickers === 2, missing: [String(pickers)] });
+  results.push({ name: '/analytics the Custom pill opens from/to in a popover', ok: pickers === 2, missing: [String(pickers)] });
   const hist = m.container.querySelectorAll('.hist__bars').length;
   results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
   await tab(m, 'Traffic');
@@ -12588,17 +12610,25 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
     m = await mount('/analytics');
-    // A fresh mount opens on the day, and the session checks below read the three days Custom opens on, which the
-    // choice writes into the address as two instants.
-    [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+    // A fresh mount opens on the day, and the session checks below read the three days up to its end: the Custom
+    // popover opens on the day and writes nothing until Apply, and a From typed three days before the To it shows
+    // writes the two instants into the address. The run's zone is UTC, so a field's minute is the instant's.
+    await openCustom(m);
+    const pickers = rangeBox()?.querySelectorAll('input[type="datetime-local"]').length ?? 0;
+    const unwritten = m.location().search;
+    const shownTo = rangeFields()[1] ?? '';
+    // A missing field reads as no instant, so the check fails rather than throw and end the run.
+    const shownAt = Date.parse(`${shownTo}Z`);
+    const threeDays = Number.isNaN(shownAt) ? '' : new Date(shownAt - 3 * 24 * 3_600_000).toISOString().slice(0, 16);
+    typeRangeField('From', threeDays);
+    await m.settle();
+    await closeCustom(m, 'Apply');
     await m.settle(300);
-    const range = [...m.container.querySelectorAll('[aria-label="Range"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim()).join();
-    const pickers = m.container.querySelectorAll('.filters input[type="datetime-local"]').length;
     const custom = new URLSearchParams(m.location().search);
     results.push({
-      name: '/analytics the session checks after the remount read the Custom range',
-      ok: range === 'Custom' && pickers === 2 && custom.get('to') !== null && custom.get('from') === isoAt(Date.parse(custom.get('to')) - 3 * 24 * 3_600_000) && custom.get('range') === null,
-      missing: [`range ${range}`, `pickers ${pickers}`, m.location().search],
+      name: '/analytics the session checks after the remount read the three days the Custom popover applies',
+      ok: customPressed(m) && pickers === 2 && unwritten === '' && custom.get('from') === `${threeDays}:00.000Z` && (custom.get('to') ?? '').slice(0, 16) === shownTo && custom.get('range') === null,
+      missing: [`custom pressed ${customPressed(m)}`, `pickers ${pickers}`, `before Apply ${JSON.stringify(unwritten)}`, `shown to ${shownTo}`, m.location().search],
     });
   }
   {
@@ -13036,6 +13066,8 @@ m.unmount();
     ['1h', HOUR - MINUTE],
     ['6h', 6 * HOUR - MINUTE],
     ['24h', 24 * HOUR - MINUTE],
+    ['7d', 7 * 24 * HOUR - MINUTE],
+    ['30d', 30 * 24 * HOUR - MINUTE],
   ];
   const rangeAt = (lastRequestAt, at) => (lastRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(lastRequestAt) <= width)?.[0] ?? null));
   const listed = await api.listSessions();
@@ -13067,7 +13099,7 @@ m.unmount();
       path: at.pathname,
       range: params.get('range'),
       search: params.get('search'),
-      select: page.container.querySelector('select[aria-label="Date range"]')?.value ?? null,
+      pill: pressedRange(page)?.textContent ?? null,
       typed: page.container.querySelector('input.filters__search')?.value ?? null,
     };
   };
@@ -13177,12 +13209,12 @@ m.unmount();
       off.disabled &&
       (off.getAttribute('title') ?? '').includes('no ledgered requests') &&
       followed.length > 0 &&
-      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === (f.want === '24h' ? null : f.want) && f.got.typed === f.session && f.got.select === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.search === f.session && f.got.keys === f.key && f.got.keyFilter === 'Keys (1)' && f.got.keyFilterSet && f.got.range === (f.want === '24h' ? null : f.want) && f.got.typed === f.session && f.got.pill === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClick.path === '/requests' &&
       atClick.keys === lifetime(moved) &&
       atClick.range === '6h' &&
-      atClick.select === '6h' &&
+      atClick.pill === '6h' &&
       pair.length === 2 &&
       pair[0].key !== pair[1].key &&
       pair.every((p) => p.reads.length > 0 && p.reads.every((k) => k === p.key) && p.listedCount > 0 && p.listed.length === 1 && p.listed[0] === p.key && p.drawnCount === p.listedCount && p.drawn.length === 1 && p.drawn[0] === p.keyId && p.offered > 0 && p.checked === (p.historical ? 1 : 0)) &&
@@ -13213,7 +13245,6 @@ m.unmount();
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
   };
   const query = (page) => Object.fromEntries(new URLSearchParams(page.location().search));
-  const bounds = (page) => ['From', 'To'].map((label) => page.container.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
   const pressed = (page) => page.container.querySelector('.segmented[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? null;
   const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
 
@@ -13241,69 +13272,80 @@ m.unmount();
     page.unmount();
   }
   {
-    // The day before the pinned origin, so the end stands under now and the reads carry it to the millisecond.
+    // The day before the pinned origin, so the end stands under now and the reads carry it to the millisecond. The
+    // Custom popover opens on the window at the minute its fields hold.
     const name = "/analytics sends a custom address's millisecond bounds to the API unchanged";
     const spy = countCalls('getAnalyticsSeries');
     const page = await mount('/analytics?from=2026-09-15T14:00:00.123Z&to=2026-09-15T15:59:59.999Z', { now: CLOCK_ORIGIN });
     spy.restore();
     const sent = [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))];
+    const custom = customPressed(page);
+    await openCustom(page);
+    const opened = rangeFields();
+    await closeCustom(page, 'Cancel');
     results.push({
       name,
-      ok: pressed(page) === 'Custom' && JSON.stringify(sent) === JSON.stringify(['2026-09-15T14:00:00.123Z 2026-09-15T15:59:59.999Z']) && JSON.stringify(bounds(page)) === JSON.stringify(['2026-09-15T14:00', '2026-09-15T15:59']),
-      missing: [`range ${pressed(page)}`, ...sent, JSON.stringify(bounds(page))],
+      ok: custom && JSON.stringify(sent) === JSON.stringify(['2026-09-15T14:00:00.123Z 2026-09-15T15:59:59.999Z']) && JSON.stringify(opened) === JSON.stringify(['2026-09-15T14:00', '2026-09-15T15:59']),
+      missing: [`range ${pressed(page)}`, ...sent, JSON.stringify(opened)],
     });
     page.unmount();
   }
   {
-    // A typed pair that does not end after it starts stays beside the address, which would read it as the preset, and
-    // an edit writes its own minute with the other bound kept to the millisecond.
-    const name = '/analytics a backward pair typed into the Custom inputs reads End must be after start. with the address unchanged, and a valid edit writes from and to';
+    // A typed pair that does not end after it starts holds Apply off with the address unchanged, which would read the
+    // pair as the preset, and an applied edit writes its own minute with the other bound kept to the millisecond.
+    const name = '/analytics a backward pair typed into the Custom popover reads End must be after start. with Apply held off and the address unchanged, and an applied edit writes from and to';
     const FROM = '2026-09-15T14:00:00.123Z';
     const TO = '2026-09-15T15:59:59.999Z';
     const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
-    const to = () => page.container.querySelector('input[aria-label="To"]');
-    const message = () => [...page.container.querySelectorAll('.filters__range .pairing__expired')].map((e) => e.textContent?.trim()).join();
-    const sentDuring = async (text) => {
+    const sentDuring = async (text, apply) => {
       const spy = countCalls('getAnalyticsSeries');
-      typeIn(to(), text);
+      typeRangeField('To', text);
+      await page.settle(300);
+      const drawn = { bounds: rangeFields(), held: rangeButton('Apply')?.disabled ?? null, message: rangeLine() };
+      if (apply) await closeCustom(page, 'Apply');
       await page.settle(300);
       spy.restore();
-      return { bounds: bounds(page), message: message(), query: query(page), sent: [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))] };
+      return { ...drawn, query: query(page), sent: [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to}`))] };
     };
-    if (!to()) controlMissing(name, 'To');
+    await openCustom(page);
+    if (!rangeBox()?.querySelector('input[aria-label="To"]')) controlMissing(name, 'To');
     else {
-      const backward = await sentDuring('2026-09-15T13:00');
-      const edited = await sentDuring('2026-09-15T15:30');
+      const backward = await sentDuring('2026-09-15T13:00', false);
+      const edited = await sentDuring('2026-09-15T15:30', true);
       results.push({
         name,
         ok:
-          JSON.stringify(backward) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T13:00'], message: 'End must be after start.', query: { from: FROM, to: TO }, sent: [] }) &&
-          JSON.stringify(edited) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T15:30'], message: '', query: { from: FROM, to: '2026-09-15T15:30:00.000Z' }, sent: [`${FROM} 2026-09-15T15:30:00.000Z`] }),
+          JSON.stringify(backward) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T13:00'], held: true, message: 'End must be after start.', query: { from: FROM, to: TO }, sent: [] }) &&
+          JSON.stringify(edited) === JSON.stringify({ bounds: ['2026-09-15T14:00', '2026-09-15T15:30'], held: false, message: '', query: { from: FROM, to: '2026-09-15T15:30:00.000Z' }, sent: [`${FROM} 2026-09-15T15:30:00.000Z`] }),
         missing: [JSON.stringify(backward), JSON.stringify(edited)],
       });
     }
     page.unmount();
   }
   {
-    // A From typed past the To stays in the draft, and the To typed next ends the pair that From began.
-    const name = '/analytics a From typed past the To and a To typed after it write both new instants';
+    // A From typed past the To holds Apply off, and the To typed next ends the pair that From began.
+    const name = '/analytics a From typed past the To holds Apply off, and a To typed after it applies both new instants';
     const FROM = '2026-09-12T10:00:00.123Z';
     const TO = '2026-09-13T10:00:00.999Z';
     const page = await mount(`/analytics?from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
-    const input = (label) => page.container.querySelector(`input[aria-label="${label}"]`);
+    await openCustom(page);
+    const input = (label) => rangeBox()?.querySelector(`input[aria-label="${label}"]`);
     if (!input('From') || !input('To')) controlMissing(name, input('From') ? 'To' : 'From');
     else {
-      typeIn(input('From'), '2026-09-14T10:00');
+      typeRangeField('From', '2026-09-14T10:00');
       await page.settle(300);
-      const drafted = { bounds: bounds(page), query: query(page) };
-      typeIn(input('To'), '2026-09-15T10:00');
+      const drafted = { bounds: rangeFields(), held: rangeButton('Apply')?.disabled ?? null, query: query(page) };
+      typeRangeField('To', '2026-09-15T10:00');
       await page.settle(300);
-      const written = { bounds: bounds(page), query: query(page) };
+      const typed = { bounds: rangeFields(), held: rangeButton('Apply')?.disabled ?? null };
+      await closeCustom(page, 'Apply');
+      await page.settle(300);
+      const written = { ...typed, query: query(page) };
       results.push({
         name,
         ok:
-          JSON.stringify(drafted) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-13T10:00'], query: { from: FROM, to: TO } }) &&
-          JSON.stringify(written) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-15T10:00'], query: { from: '2026-09-14T10:00:00.000Z', to: '2026-09-15T10:00:00.000Z' } }),
+          JSON.stringify(drafted) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-13T10:00'], held: true, query: { from: FROM, to: TO } }) &&
+          JSON.stringify(written) === JSON.stringify({ bounds: ['2026-09-14T10:00', '2026-09-15T10:00'], held: false, query: { from: '2026-09-14T10:00:00.000Z', to: '2026-09-15T10:00:00.000Z' } }),
         missing: [JSON.stringify(drafted), JSON.stringify(written)],
       });
     }
@@ -13373,28 +13415,29 @@ m.unmount();
     }
   }
   {
-    // A reload reads the preset from its own load, so the label and the window agree an hour on.
-    const name = '/routing-log reads range=3h as Last 3 hours over the three hours before the load, and Custom writes the window as from and to';
+    // A reload reads the preset from its own load, so the pressed pill and the window agree an hour on, and a name the
+    // table does not hold reads as the default.
+    const name = '/routing-log reads range=6h as the six hours before the load, range=3h as the last hour, and Custom writes the window as from and to';
     const windowsOf = (spy) => [...new Set(spy.calls.map(([q]) => `${q?.from} ${q?.to} ${(q?.kinds ?? []).join(',')}`))];
     const reads = [];
     const labels = [];
-    for (const at of [CLOCK_ORIGIN, CLOCK_ORIGIN + HOUR]) {
+    for (const [address, at] of [['/routing-log?range=6h&kinds=held', CLOCK_ORIGIN], ['/routing-log?range=6h&kinds=held', CLOCK_ORIGIN + HOUR], ['/routing-log?range=3h&kinds=held', CLOCK_ORIGIN]]) {
       const spy = countCalls('listRoutingLog');
-      const page = await mount('/routing-log?range=3h&kinds=held', { now: at });
+      const page = await mount(address, { now: at });
       spy.restore();
-      const select = page.container.querySelector('select[aria-label="Range"]');
-      labels.push(select?.selectedOptions[0]?.textContent?.trim() ?? null);
+      labels.push(pressedRange(page)?.textContent?.trim() ?? null);
       reads.push(windowsOf(spy));
-      if (at === CLOCK_ORIGIN) {
-        if (select) await chooseIn(page, select, 'custom');
+      if (reads.length === 1) {
+        await openCustom(page);
+        await closeCustom(page, 'Apply');
         reads.push(query(page));
       }
       page.unmount();
     }
-    const want = (at) => [`${isoAt(at - 3 * HOUR)} ${isoAt(at)} held`];
+    const want = (at, hours) => [`${isoAt(at - hours * HOUR)} ${isoAt(at)} held`];
     results.push({
       name,
-      ok: JSON.stringify(labels) === JSON.stringify(['Last 3 hours', 'Last 3 hours']) && JSON.stringify(reads) === JSON.stringify([want(CLOCK_ORIGIN), { kinds: 'held', from: isoAt(CLOCK_ORIGIN - 3 * HOUR), to: isoAt(CLOCK_ORIGIN) }, want(CLOCK_ORIGIN + HOUR)]),
+      ok: JSON.stringify(labels) === JSON.stringify(['6h', '6h', '1h']) && JSON.stringify(reads) === JSON.stringify([want(CLOCK_ORIGIN, 6), { kinds: 'held', from: isoAt(CLOCK_ORIGIN - 6 * HOUR), to: isoAt(CLOCK_ORIGIN) }, want(CLOCK_ORIGIN + HOUR, 6), want(CLOCK_ORIGIN, 1)]),
       missing: [JSON.stringify(labels), JSON.stringify(reads)],
     });
   }
@@ -14712,9 +14755,10 @@ m.unmount();
   [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
   await analytics.settle(800);
   const week = shaded();
-  [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
-  await analytics.settle(100);
-  type(analytics.container.querySelector('input[aria-label="From"]'), new Date(CLOCK_ORIGIN - 45 * 86_400_000).toISOString().slice(0, 16));
+  await openCustom(analytics);
+  typeRangeField('From', new Date(CLOCK_ORIGIN - 45 * 86_400_000).toISOString().slice(0, 16));
+  await analytics.settle();
+  await closeCustom(analytics, 'Apply');
   await analytics.settle(800);
   const custom = shaded();
   analytics.unmount();

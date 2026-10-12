@@ -5,31 +5,20 @@ import { COST_UNITS } from './analytics';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
-/** One preset of a view's Range select: the name the address carries, the width and the label. */
+/** One preset of the range control's one table: the name the address carries, the width and the label. */
 export interface RangePreset {
   label: string;
   ms: number;
   name: string;
 }
 
-export const REQUEST_RANGES = [
+/** The one preset table of every ranged view: the name the address carries, the width and the label for the titles. */
+export const RANGE_PRESETS = [
   { label: 'Last hour', ms: HOUR, name: '1h' },
   { label: 'Last 6 hours', ms: 6 * HOUR, name: '6h' },
   { label: 'Last 24 hours', ms: DAY, name: '24h' },
-] as const satisfies readonly RangePreset[];
-
-export const ROUTING_LOG_RANGES = [
-  { label: 'Last hour', ms: HOUR, name: '1h' },
-  { label: 'Last 3 hours', ms: 3 * HOUR, name: '3h' },
-  { label: 'Last 6 hours', ms: 6 * HOUR, name: '6h' },
-  { label: 'Last 24 hours', ms: DAY, name: '24h' },
-] as const satisfies readonly RangePreset[];
-
-export const ANALYTICS_RANGES = [
-  { label: '1h', ms: HOUR, name: '1h' },
-  { label: '24h', ms: DAY, name: '24h' },
-  { label: '7d', ms: 7 * DAY, name: '7d' },
-  { label: '30d', ms: 30 * DAY, name: '30d' },
+  { label: 'Last 7 days', ms: 7 * DAY, name: '7d' },
+  { label: 'Last 30 days', ms: 30 * DAY, name: '30d' },
 ] as const satisfies readonly RangePreset[];
 
 /** A view's window as the address carries it: a preset by name with the instants empty, or `custom` with both instants. */
@@ -186,7 +175,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   cacheMissReasons: list('cache_miss_reasons'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
-  range: { default: '24h', kind: 'range', presets: REQUEST_RANGES },
+  range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
 });
 
 export interface AnalyticsAddress {
@@ -231,7 +220,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   pools: list('pools'),
   probes: { kind: 'flag', name: 'probes' },
   unit: { default: 'all', kind: 'choice', name: 'unit', values: COST_UNITS },
-  range: { default: '24h', kind: 'range', presets: ANALYTICS_RANGES },
+  range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },
 });
 
 /** The routing log's filters as the address holds them. */
@@ -258,7 +247,7 @@ export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   pools: list('pools'),
   request: text('request'),
   session: text('session'),
-  range: { default: '1h', kind: 'range', presets: ROUTING_LOG_RANGES },
+  range: { default: '1h', kind: 'range', presets: RANGE_PRESETS },
 });
 
 export interface KeysAddress {
