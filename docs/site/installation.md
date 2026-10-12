@@ -36,12 +36,15 @@ GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs
 cargo build --release
 ```
 
-The binary lands at `target/release/phoebis`. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL
-builds from source, which needs cmake, clang and libclang. The embedded console needs Node 20.19 or a later 20, or 22.12
-or later, and npm on the path: the build script checks `node --version` against that range, then runs `npm ci` and
-`npm run build` in `web/` whenever the bundle is missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the
-Node step and embeds `web/dist` as it is, and a build with no bundle on disk embeds a placeholder page, which the admin
-listener then serves in place of the console.
+The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux or macOS: the store's lock and
+permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal is
+the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
+runtime instead. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which
+needs cmake, clang and libclang. The embedded console needs Node 20.19 or a later 20, or 22.12 or later, and npm on the
+path: the build script checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/`
+whenever the bundle is missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds
+`web/dist` as it is, and a build with no bundle on disk embeds a placeholder page, which the admin listener then serves
+in place of the console.
 
 ## Install as a service
 
@@ -73,7 +76,9 @@ until it was copied again.
 A router that already runs from a file in your home directory moves under the unit after every line of the block but
 `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
 creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
-`/etc/phoebis/storage.key` and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
+`/etc/phoebis/storage.key`, the two price files to `/etc/phoebis/` (`api_prices.yaml` and `subscription_costs.yaml`
+beside the bootstrap file, where `init` pointed their path keys, each where it exists, the first in place of the shipped
+table the block installed) and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
 and everything moved into it to `phoebis` (`chown phoebis:phoebis /etc/phoebis/storage.key` and
 `chown -R phoebis:phoebis /var/lib/phoebis`, since a moved file keeps its owner), and edit the five path keys `init`
 wrote absolute to those places, since `ProtectHome=true` keeps the service out of `/home`:

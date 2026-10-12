@@ -16,9 +16,11 @@ stored, one pool holds it, one key routes into that pool, and Claude Code presen
 ## What you need
 
 A Linux host on `x86_64` or `aarch64` takes the release archive's static binary, which runs on any Linux of its
-architecture with no shared library, glibc version or distribution in the way. Any other host builds from source
-([Build](installation.md#build)). The console needs a browser, the first run a Claude.ai subscription to pair or an
-Anthropic API key to store, and the first request Claude Code on the same machine.
+architecture with no shared library, glibc version or distribution in the way. Another Unix host, macOS or Linux on
+another architecture, builds from source ([Build](installation.md#build)). The router does not build on Windows: a
+Windows machine runs it on a Linux host or in a Linux runtime and reaches it as [A second machine](second-machine.md)
+describes. The console needs a browser, the first run a Claude.ai subscription to pair or an Anthropic API key to store,
+and the first request Claude Code on the same machine.
 
 ## Install
 
