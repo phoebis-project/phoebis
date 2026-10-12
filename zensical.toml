@@ -17,6 +17,7 @@ nav = [
   { "Pools, keys, and routing" = "routing.md" },
   { "Keepalive" = "keepalive.md" },
   { "Statistics" = "statistics.md" },
+  { "API reference" = "api-reference.md" },
   { "Operations" = "operations.md" },
   { "Changelog" = "changelog.md" },
 ]
