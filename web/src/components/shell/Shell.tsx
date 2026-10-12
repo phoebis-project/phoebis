@@ -46,6 +46,12 @@ export function Shell() {
   const { done, logout, queue } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
+  // A navigation closes the menu in the render that brings the new view.
+  const [navFor, setNavFor] = useState(pathname);
+  if (navFor !== pathname) {
+    setNavFor(pathname);
+    setNavOpen(false);
+  }
   const base = `/${pathname.split('/')[1] ?? ''}`;
   const title = PAGE_TITLES[base] ?? 'Phoebis Router';
   // A link into a diagnostics view leaves the mode as the reader set it, so the group shows for the open view too.
@@ -53,8 +59,7 @@ export function Shell() {
 
   useEffect(() => {
     document.title = `${title} - Phoebis Router`;
-    setNavOpen(false);
-  }, [title, pathname]);
+  }, [title]);
 
   return (
     <div className={`shell ${navOpen ? 'nav-open' : ''}`}>

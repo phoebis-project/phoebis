@@ -71,19 +71,15 @@ const parsed = (data: string): unknown | undefined => {
 };
 
 /**
- * The text a body block shows: a JSON value indented, or compact while `compact` holds. A string reads as it was
- * stored while `compact` holds, else a stream reads as its events (`event: name` over its data, indented where it is
- * JSON) and any other string as itself.
+ * The text a body block shows: a JSON value indented, a stream as its events (`event: name` over its data, indented
+ * where it is JSON) and any other string as itself.
  */
-export function bodyText(value: unknown, compact: boolean): string {
+export function bodyText(value: unknown): string {
   if (typeof value === 'string') {
-    // A stream past the large-body threshold costs no frame split until Pretty-print asks for one.
-    if (compact) return value;
     const frames = sseFrames(value);
     return frames === null ? value : frames.map(frameText).join('\n\n');
   }
-  // The third argument is the indentation, and `undefined` keeps the compact form of `JSON.stringify(value)`.
-  return JSON.stringify(value, null, compact ? undefined : 2);
+  return JSON.stringify(value, null, 2);
 }
 
 const frameText = (frame: SseFrame): string => {
@@ -93,6 +89,15 @@ const frameText = (frame: SseFrame): string => {
   if (data !== '') lines.push(data);
   return lines.join('\n');
 };
+
+/**
+ * The text's lines, split on `\n` once. A trailing newline yields no extra empty row, and an empty text one empty row.
+ */
+export function bodyLines(text: string): string[] {
+  const lines = text.split('\n');
+  if (text !== '' && text.endsWith('\n')) lines.pop();
+  return lines;
+}
 
 export type TokenClass = 'tok-event' | 'tok-key' | 'tok-literal' | 'tok-number' | 'tok-punct' | 'tok-string';
 

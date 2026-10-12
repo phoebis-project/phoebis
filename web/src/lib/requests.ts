@@ -1,6 +1,6 @@
 import type { RequestLog } from '@/api/types';
 import { type Funding, fundingOf } from '@/lib/costs';
-import { fmtUsd, shareLabel } from '@/lib/format';
+import { fmtUsd, shareLabel, shareShort } from '@/lib/format';
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage' };
@@ -37,9 +37,9 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costShares' | 'cost
 }
 
 /** The table cell's two lines and title. A share unit draws the model week's share where there is one, else the
- *  7-day's, over the 5-hour share, with every share and the equivalent on the title. A dollar unit draws the dollars
- *  over the funding word or `equivalent`, and an unserved request's dollars alone, with no second line and no
- *  title. */
+ *  7-day's, over the 5-hour share, each in its window's short word, with every share in full and the equivalent on
+ *  the title. A dollar unit draws the dollars over the funding word or `equivalent`, and an unserved request's dollars
+ *  alone, with no second line and no title. */
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
   if (unit.kind === 'unpriced') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: NO_SHARE_TITLE };
@@ -47,9 +47,9 @@ export function costCellOf(unit: CostUnit): { main: string; sub: string; title: 
   const main = unit.shares.find((s) => !SHARED_WINDOWS.includes(s.key)) ?? unit.shares.find((s) => s.key === 'seven_day') ?? unit.shares[0];
   const fiveHour = unit.shares.find((s) => s.key === 'five_hour');
   return {
-    main: shareLabel(main.key, main.share),
+    main: shareShort(main.key, main.share),
     // A row priced on the 5-hour window alone reads it as its main line and not again under it.
-    sub: fiveHour && fiveHour !== main ? shareLabel(fiveHour.key, fiveHour.share) : '',
+    sub: fiveHour && fiveHour !== main ? shareShort(fiveHour.key, fiveHour.share) : '',
     title: [...unit.shares.map((s) => shareLabel(s.key, s.share)), `${fmtUsd(unit.usd)} equivalent`].join(', '),
   };
 }

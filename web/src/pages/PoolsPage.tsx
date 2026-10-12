@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
@@ -20,9 +20,10 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { KEYS_CODEC } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -30,7 +31,7 @@ import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failove
 import { windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -66,6 +67,17 @@ function BreakEven({ range }: { range: Range }) {
   return (
     <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
       Break-even: <RangeFigures range={range} />
+    </span>
+  );
+}
+/** A ceiling past the break-even's low end, as the router caps it: the figures it runs to, or null below the cap. */
+const cappedAt = (seconds: number, breakEven: Range): Range | null =>
+  seconds > breakEven.min ? { max: Math.min(seconds, breakEven.max), min: Math.min(seconds, breakEven.min) } : null;
+/** Beside a ceiling switched on past the break-even: the figures it is capped at, as the idle window's note reads them. */
+function CappedAt({ range }: { range: Range }) {
+  return (
+    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
+      Capped at the break-even, <RangeFigures range={range} />
     </span>
   );
 }
@@ -196,6 +208,7 @@ export function PoolsPage() {
       notify(`Pool ${edit} not found`);
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address's one-shot edit opens the dialog once both lists land, in the pass that takes it out of the address
     setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
   }, [accounts.data, location, navigate, notify, pools.data]);
 
@@ -286,7 +299,6 @@ export function PoolsPage() {
                 accounts={accounts.data}
                 accountById={accountById}
                 attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
-                sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
                 onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
@@ -437,7 +449,7 @@ function CacheTtlOverrides({
             <tbody>
               {rules.models.map((m) => (
                 <tr key={m.model}>
-                  <td className="mono col-fill" title={m.model}>{m.model}</td>
+                  <td className="mono col-fill" title={m.model}>{shortModel(m.model)}</td>
                   <td className="col-fit">
                     <Select value={m.main} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
                       <option value="5m">5 minutes</option>
@@ -487,7 +499,6 @@ function PoolCard({
   accounts,
   accountById,
   attention,
-  sessions,
   now,
   onEdit,
   onDelete,
@@ -503,7 +514,6 @@ function PoolCard({
   onDelete: () => void;
   onEdit: () => void;
   pool: Pool;
-  sessions: Session[];
 }) {
   const ink = useChartInk();
   const standingId = useId();
@@ -512,15 +522,14 @@ function PoolCard({
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
-  const tiers = selectionOrder(pool, accounts ?? [], sessions, now);
+  const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
-  const sentence = poolStatusSentence(pool, accounts, sessions, now);
+  const sentence = poolStatusSentence(pool, accounts, now);
   const features = FEATURES.filter((f) => f.on(pool));
   const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
-  const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
   // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
   // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
   // probe decisions chosen. The title names the failovers apart, which the log draws as a later attempt's placement,
@@ -551,7 +560,7 @@ function PoolCard({
             {pool.status}
           </Badge>
           {keysRead === 'loaded' ? (
-            <Link to={`/keys?pool=${pool.id}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
+            <Link to={`/keys?${KEYS_CODEC.toParams({ pools: [pool.id], search: '', status: 'all' })}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
               {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
             </Link>
           ) : (
@@ -627,7 +636,7 @@ function PoolCard({
                     <td className="serving__standing col-fit" aria-describedby={whyId}>
                       <span className="chips">
                         {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
-                        {!isNext && p.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[p.lastResort]}</Badge>}
+                        {!isNext && p.lastResort && <LastResort placement={p} now={now} />}
                         {!isNext && p.deferred && <Badge tone="neutral">after plan quota</Badge>}
                         {/* The route's budget verdict says this itself; the badge stands for a member the route names
                             an earlier obstacle for. */}
@@ -656,7 +665,7 @@ function PoolCard({
                       {`${m.accountId}: not a known account`}
                     </span>
                   </td>
-                  <td className="right num col-fit">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                  <td className="right num col-fit">{m.activePins === 0 ? <span className="muted">0</span> : m.activePins}</td>
                 </tr>
               );
             })}
@@ -812,15 +821,22 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
-  if (verdict === 'overage') return <Badge tone="serious">overage</Badge>;
+  if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known account'}>unavailable</Badge>;
-  const until = account?.cooldowns.find((c) => c.scope === 'account')?.until;
-  return until ? (
-    <Badge tone="warning" title={fmtAbsolute(until)}>
-      cooldown ends {fmtRelative(until, now)}
+  return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
+}
+
+/** Why an eligible member waits for the rest: at the Pace floor, or winding down with the time left to its end. */
+function LastResort({ placement, now }: { now: number; placement: Placement }) {
+  if (placement.lastResort === 'winding_down' && placement.end !== null) return <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
+  return placement.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[placement.lastResort]}</Badge>;
+}
+
+function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 'warning' }) {
+  return (
+    <Badge tone={tone} title={badge.title}>
+      {badge.text}
     </Badge>
-  ) : (
-    <Badge tone="warning">cooldown</Badge>
   );
 }
 
@@ -1013,7 +1029,7 @@ export function PoolDialog({
   const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
   // The values the dialog opened with, which the discard question compares the form against.
-  const opened = useRef(form);
+  const [opened, setOpened] = useState(form);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
@@ -1029,18 +1045,25 @@ export function PoolDialog({
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveTo, setMoveTo] = useState('');
-  const openedMoveTo = useRef('');
+  const [openedMoveTo, setOpenedMoveTo] = useState('');
   const [moving, setMoving] = useState<ApiKey | null>(null);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   // Held apart from the form so a priority keystroke cannot move the row under the cursor.
   const [memberOrder, setMemberOrder] = useState<string[]>([]);
+  // The reset reads the accounts through a ref: the parent hands down a fresh array on every render, and reacting to
+  // that would wipe the form mid-edit.
+  const accountsNow = useRef(accounts);
+  useLayoutEffect(() => {
+    accountsNow.current = accounts;
+  });
   useEffect(() => {
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the reset runs after the dialog's open effect, which turns the mode on for an expert-only group before the reset names it
     setForm(next);
-    opened.current = next;
-    setMemberOrder(orderedAccountIds(accounts, next.members));
+    setOpened(next);
+    setMemberOrder(orderedAccountIds(accountsNow.current, next.members));
     setLocalKeys([]);
     setMoveError(null);
     setMoved(new Set());
@@ -1050,19 +1073,18 @@ export function PoolDialog({
     setAttempted(false);
     setStale(null);
     setChosen(initialGroup ?? 'identity');
-    // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
-    // that would wipe the form mid-edit.
   }, [open, pool, initialGroup]);
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
-  useEffect(() => setError(null), [form]);
-  // The reset effect seeds the order once per open from the list it found, so a list that lands later, a slow first
-  // read or Try again after a failed one, seeds an order still empty. Keyed on the list alone: every member edit
-  // re-sorts the order through its own handler. The updater reads the order the reset effect queued in the same
-  // commit, since this render's form is still the one from before the open.
-  useEffect(() => {
-    if (open && accounts.length > 0) setMemberOrder((order) => (order.length > 0 ? order : orderedAccountIds(accounts, form.members)));
-  }, [open, accounts]);
+  const [refusedFor, setRefusedFor] = useState(form);
+  if (refusedFor !== form) {
+    setRefusedFor(form);
+    setError(null);
+  }
+  // The reset seeds the order once per open from the list it found, so a list that lands later, a slow first read or
+  // Try again after a failed one, seeds an order still empty. Every member edit re-sorts the order through its own
+  // handler.
+  if (open && accounts.length > 0 && memberOrder.length === 0) setMemberOrder(orderedAccountIds(accounts, form.members));
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
   const setShedAhead = (value: number | null) => set('shedAhead', value);
@@ -1071,7 +1093,6 @@ export function PoolDialog({
   // The id the create call derives from the name, which keys created before the pool is saved use too.
   const draftPoolId = slug(form.name.trim());
   const draftName = form.name.trim() || 'new pool';
-  // Memoized so a keystroke in this form hands the key dialog the same list, sparing its first-pool fill a run.
   const draftCaptureHours = form.capture ? Number(form.captureHours) || 0 : 0;
   const keyDialogPools = useMemo(
     () =>
@@ -1095,6 +1116,9 @@ export function PoolDialog({
           min: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.min : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.min),
         }
       : null;
+  // The router caps the two ceilings at the one break-even too, so a ceiling switched on past it names the one in effect.
+  const parkedCapped = resolved && form.maxParkedOn ? cappedAt(form.maxParkedSeconds, resolved.breakEvenSeconds) : null;
+  const scheduledCapped = resolved && form.horizonOn ? cappedAt(form.horizonSeconds, resolved.breakEvenSeconds) : null;
   // The share is the router's for the saved window, so a typed window names the window the share belongs to.
   const savedIdle = pool?.keepalive.maxIdleSeconds ?? form.maxIdleSeconds;
   const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
@@ -1196,7 +1220,7 @@ export function PoolDialog({
 
   const startMove = (k: ApiKey) => {
     const to = otherPools[0]?.id ?? '';
-    openedMoveTo.current = to;
+    setOpenedMoveTo(to);
     setMoveTo(to);
     setMoveError(null);
     setMoving(k);
@@ -2059,6 +2083,7 @@ export function PoolDialog({
                 <>
                   How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
                   {resolved && !form.maxParkedOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                  {parkedCapped && <CappedAt range={parkedCapped} />}
                 </>
               }
             />
@@ -2074,6 +2099,7 @@ export function PoolDialog({
                 <>
                   A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
                   {resolved && !form.horizonOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                  {scheduledCapped && <CappedAt range={scheduledCapped} />}
                 </>
               }
             />
@@ -2150,7 +2176,7 @@ export function PoolDialog({
         open={open}
         onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
-        unsaved={!sameForm(form, opened.current)}
+        unsaved={!sameForm(form, opened)}
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
@@ -2205,7 +2231,7 @@ export function PoolDialog({
         }}
         title={moving ? `Move key ${moving.name}` : 'Move key'}
         // False while the move is out, so an outside click or Escape reaches the hold above rather than a question.
-        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo.current}
+        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo}
         subtitle="A key reaches only its own pool's members, so moving it ends its current session pins."
         width={440}
         footer={

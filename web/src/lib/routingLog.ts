@@ -1,8 +1,9 @@
-import { PIN_RELEASE_REASON_VALUES, planLabel } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogPage, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { iso, PIN_RELEASE_REASON_VALUES } from '@/api/decode';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
-import { POLL_OUTCOME_LABEL } from './quota';
+import { planLabel, POLL_OUTCOME_LABEL } from './quota';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
@@ -159,7 +160,6 @@ const EVENT_TONE: Record<string, 'critical' | 'serious' | 'warning'> = {
   cooldown_set: 'warning',
   ledger_gap: 'serious',
   model_rejected: 'warning',
-  reauth_required: 'critical',
   window_spent: 'warning',
 };
 
@@ -280,17 +280,16 @@ const RUNG_WORD: Record<string, string> = { content: 'content rung', static: 'st
 /** What a probe's pinned member could not get past. Any other name reads as sent. */
 const OBSTACLE_WORD: Record<string, string> = { attempted: 'already tried', budget_unknown: 'budget unknown', operator: 'by hand', subscription_ended: 'subscription ended' };
 /**
- * A key refusal's summary names its kind alone and its reason in the router's words, so the chip reads the reason. One
- * the console has no words for reads as a key refusal.
+ * A key refusal's words by the structured code the record carries. A code outside the map reads through the fallback.
  */
 const KEY_REFUSAL_WORD: Record<string, string> = {
-  'the key has expired': 'key expired',
-  'the key is disabled': 'key disabled',
-  'the key is not in the registry': 'key unknown',
-  "the key's pool does not exist": 'pool missing',
-  "the key's pool is disabled": 'pool disabled',
-  'the key was replaced under its id': 'key replaced',
-  'the key was revoked': 'key revoked',
+  disabled: 'key disabled',
+  expired: 'key expired',
+  pool_disabled: 'pool disabled',
+  pool_missing: 'pool missing',
+  replaced: 'key replaced',
+  revoked: 'key revoked',
+  unknown: 'key unknown',
 };
 
 /** How the strategy ranks, the hover of a Pace chip on a routing log row. */
@@ -340,7 +339,7 @@ function decisionBy(row: DecisionSummary): Chip {
       return { value: 'no rule fired' };
     case 'refusal':
       if (value === 'client') return { value: 'client drift' };
-      return { value: row.refusal && own(KEY_REFUSAL_WORD, row.refusal.reason) ? KEY_REFUSAL_WORD[row.refusal.reason] : `${words(value)} refused` };
+      return { value: row.refusal && own(KEY_REFUSAL_WORD, row.refusal.code) ? KEY_REFUSAL_WORD[row.refusal.code] : `${words(value)} refused` };
     case 'rule':
       return { value: `${words(value)} rule` };
     case 'rung':
@@ -359,9 +358,8 @@ const rec = (v: unknown): Record<string, unknown> => (v !== null && typeof v ===
 export const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' };
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
 /** The registry's word for who moved an account's state. */
-const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', operator: 'by hand', refresh_failed: 'refresh failed' };
-// `deadline` is the mock's word for a cooldown that ran out, which the router writes as `expired`.
-const CLEARED_WORD: Record<string, string> = { admin: 'by hand', deadline: 'deadline passed', expired: 'deadline passed', operator: 'by hand' };
+const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', funding_retry: 'funding retried', operator: 'by hand', refresh_failed: 'refresh failed' };
+const CLEARED_WORD: Record<string, string> = { admin: 'by hand', expired: 'deadline passed' };
 const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap reached' };
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
@@ -387,7 +385,7 @@ function cooldownBy(e: RoutingEvent): string {
   if (scope.startsWith('model:')) return `404 on ${shortModel(scope.slice('model:'.length))}`;
   const reason = str(d.reason) ?? '';
   const window = str(d.window) ?? '';
-  if (reason !== 'rate_limit' && reason !== 'rate_limited') return words(reason);
+  if (reason !== 'rate_limit') return words(reason);
   if (own(WINDOW_WORD, window)) return `429 on ${WINDOW_WORD[window]}`;
   return window === 'retry_after' ? '429 retry-after' : '429';
 }
@@ -441,8 +439,6 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     // The usage service opens a backoff on a rate limit alone, so the kind decides the word.
     case 'poll_backoff_started':
       return { value: POLL_OUTCOME_LABEL.rate_limited };
-    case 'reauth_required':
-      return { value: 'credential refused' };
     case 'refresh_failed':
       return { value: 'refresh failed' };
     case 'refresh_succeeded':
@@ -560,8 +556,6 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
       return lasted(num(d.duration_ms));
     case 'poll_backoff_started':
       return time('next', d.next_attempt_at);
-    case 'reauth_required':
-      return [pair('state', 'routing off', 'text', now)];
     case 'refresh_failed':
     case 'refresh_uncertain': {
       const cause = str(d.cause);
@@ -624,80 +618,18 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
     case 'key':
     case 'pool':
       return `/${kind}s#${encodeURIComponent(id)}`;
-    default:
-      return `/${kind === 'session' ? 'sessions' : `${kind}s`}?${new URLSearchParams({ [kind]: id })}`;
+    // Neither page has a filter for the entity, so the link opens the view.
+    case 'model':
+      return '/models';
+    case 'session':
+      return '/sessions';
   }
 }
 
-export interface LogLink {
-  accounts?: string[];
-  from: number;
-  kinds?: string[];
-  models?: string[];
-  pools?: string[];
-  request?: string;
-  session?: string;
-  to: number;
-}
+/** A fixed window as two instants, or a preset ending now by name. */
+export type LogWindow = { from: number; to: number } | { range: string };
 
-/** The view's filters as the URL holds them. `from` and `to` are ISO instants, empty for the last hour. */
-export interface LogFilters {
-  accounts: string[];
-  from: string;
-  keys: string[];
-  kinds: string[];
-  models: string[];
-  pools: string[];
-  request: string;
-  session: string;
-  to: string;
-}
-
-/** An instant as the route reads one, else empty: a bare integer is Unix milliseconds. */
-const instantOf = (value: string | null) => {
-  if (!value) return '';
-  const ms = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  return Number.isNaN(ms) ? '' : new Date(ms).toISOString();
-};
-
-/**
- * The view's filters to and from its address. Absent keys read as the defaults, and a kind this build does not know
- * stays, so the route's refusal reaches the page where a link from a newer router would otherwise read as the default
- * set.
- */
-export const ROUTING_LOG_CODEC = {
-  fromParams(params: URLSearchParams): LogFilters {
-    const list = (name: string) => (params.get(name) ?? '').split(',').filter(Boolean);
-    return {
-      accounts: list('accounts'),
-      from: instantOf(params.get('from')),
-      keys: list('keys'),
-      kinds: list('kinds'),
-      models: list('models'),
-      pools: list('pools'),
-      request: params.get('request') ?? '',
-      session: params.get('session') ?? '',
-      to: instantOf(params.get('to')),
-    };
-  },
-  /** A filter at its default is left out, so the unfiltered view has a bare address. */
-  toParams(f: LogFilters): URLSearchParams {
-    const params = new URLSearchParams();
-    const put = (name: string, value: string) => {
-      if (value) params.set(name, value);
-    };
-    put('accounts', f.accounts.join(','));
-    put('keys', f.keys.join(','));
-    put('kinds', f.kinds.join(','));
-    put('models', f.models.join(','));
-    put('pools', f.pools.join(','));
-    put('request', f.request);
-    put('session', f.session);
-    put('from', f.from);
-    put('to', f.to);
-    return params;
-  },
-};
+export type LogLink = { accounts?: string[]; kinds?: string[]; models?: string[]; pools?: string[]; request?: string; session?: string } & LogWindow;
 
 export const identityOf = (row: RoutingLogRow) => (row.type === 'decision' ? `${row.requestId}/${row.seq}` : `event/${row.id}`);
 
@@ -710,49 +642,11 @@ export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
   return (b as RoutingEvent).id - (a as RoutingEvent).id;
 }
 
-/** A poll's answer over the rows shown, one row per identity, so a row the poll reads again never lands twice. */
-export function merged(shown: RoutingLogRow[], polled: RoutingLogRow[]): RoutingLogRow[] {
-  const byIdentity = new Map(shown.map((r) => [identityOf(r), r]));
-  for (const r of polled) byIdentity.set(identityOf(r), r);
-  return [...byIdentity.values()].sort(compareRows);
-}
-
-/** The pages one Follow poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
-export const FOLLOW_PAGES = 8;
-export const FOLLOW_OVERRUN = 'More rows arrived than Follow could fetch. Reload to read them.';
-
-/**
- * One Follow poll: the newest page and each one after it until a page holds a row the list already shows, or the
- * route has no more. `overrun` is the cursor past the last row read when `FOLLOW_PAGES` pages ran out first, so the
- * rows between it and the list stay reachable.
- */
-export async function followPages(read: (cursor: string | undefined) => Promise<RoutingLogPage>, known: ReadonlySet<string>): Promise<{ overrun: string | null; rows: RoutingLogRow[] }> {
-  const rows: RoutingLogRow[] = [];
-  let cursor: string | undefined;
-  for (let n = 0; n < FOLLOW_PAGES; n += 1) {
-    const page = await read(cursor);
-    rows.push(...page.rows);
-    if (page.nextCursor === null || page.rows.some((r) => known.has(identityOf(r)))) return { overrun: null, rows };
-    cursor = page.nextCursor;
-  }
-  return { overrun: cursor ?? null, rows };
-}
-
-/** The log's address for `link`: the plural keys comma-joined, the range as two ISO instants after the filters. */
+/** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */
 export function logHref(link: LogLink): string {
-  const params = new URLSearchParams();
-  const put = (name: string, value: string | undefined) => {
-    if (value) params.set(name, value);
-  };
-  put('accounts', link.accounts?.join(','));
-  put('kinds', link.kinds?.join(','));
-  put('models', link.models?.join(','));
-  put('pools', link.pools?.join(','));
-  put('request', link.request);
-  put('session', link.session);
-  put('from', new Date(link.from).toISOString());
-  put('to', new Date(link.to).toISOString());
-  return `/routing-log?${params}`;
+  const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
+  const search = ROUTING_LOG_CODEC.toParams({ accounts: link.accounts ?? [], keys: [], kinds: link.kinds ?? [], models: link.models ?? [], pools: link.pools ?? [], range, request: link.request ?? '', session: link.session ?? '' }).toString();
+  return search ? `/routing-log?${search}` : '/routing-log';
 }
 
 const QUARTER_HOUR = 15 * MINUTE;
@@ -766,8 +660,11 @@ export const aroundRequest = (at: number, finishedAt: number | null, now: number
  */
 export const requestLink = (id: string, at: number, finishedAt: number | null, now: number): LogLink => ({ request: id, ...aroundRequest(at, finishedAt, now) });
 
-/** A subject that lives on: the last hour, or the hour either side of its last activity, `to` at most now. */
-export const aroundSubject = (lastActivity: number | null, now: number): LogLink => (lastActivity === null ? { from: now - HOUR, to: now } : { from: lastActivity - HOUR, to: Math.min(lastActivity + HOUR, now) });
+/**
+ * A subject that lives on: the last hour as the log's preset, which reads from the reader's load, or the hour either
+ * side of its last activity, `to` at most now.
+ */
+export const aroundSubject = (lastActivity: number | null, now: number): LogLink => (lastActivity === null ? { range: '1h' } : { from: lastActivity - HOUR, to: Math.min(lastActivity + HOUR, now) });
 
 /** A condition: from its start to now. */
 export const sinceCondition = (since: number, now: number): LogLink => ({ from: since, to: now });
@@ -964,9 +861,10 @@ function clientVersionOf(row: DecisionSummary | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** A refusal's reason: a drift's trigger beside the client's version, or a key refusal's sentence. */
-function refusalChips(refusal: { kind: string; reason: string }, version: string | null): Chip[] {
-  if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.reason) ? KEY_REFUSAL_WORD[refusal.reason] : refusal.reason)];
+/** A refusal's reason: a drift's trigger beside the client's version, or a key refusal's words by its code, its
+ *  sentence for a code the console has no words for. */
+function refusalChips(refusal: { code: string; kind: string; reason: string }, version: string | null): Chip[] {
+  if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.code) ? KEY_REFUSAL_WORD[refusal.code] : refusal.reason)];
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
 
@@ -1136,7 +1034,7 @@ function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number)
   const reason = o.reason ?? '';
   if (reason === 'model_rejected' || o.window === 'model_rejection') return `model 404${until}`;
   if (reason === 'fast_rate_limit' || o.window === 'fast') return `fast lane 429${until}`;
-  if (reason === 'rate_limited' || reason === 'rate_limit') return o.window !== null && own(WINDOW_WORD, o.window) ? `429 on ${WINDOW_WORD[o.window]}${until}` : `429${until}`;
+  if (reason === 'rate_limit') return o.window !== null && own(WINDOW_WORD, o.window) ? `429 on ${WINDOW_WORD[o.window]}${until}` : `429${until}`;
   return `${words(reason || 'cooldown')}${until}`;
 }
 
@@ -1212,10 +1110,10 @@ function paceTitle(c: RecordCandidate, now: number): string | null {
   const id = p.window ?? null;
   const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
   // Whole hours would read a deadline under half an hour away as "0 h".
-  const over = p.hours === null ? '' : ` over ${p.hours < 1 ? p.hours.toFixed(1) : Math.round(p.hours)} h`;
+  const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
   const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
-  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. The highest wins.`;
+  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. Inside its tier, the highest above the pace floor wins.`;
 }
 
 /**
@@ -1326,20 +1224,27 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       rows.push({ chips: [plain('pending')], label: 'Cache read' });
     }
   }
+  // The relay answers a hold whose bound ran out with a 429, whatever the exhaustion the selection after it names.
+  const last = record.request.holds[record.request.holds.length - 1];
+  const ranOut = last?.ranOut === true;
+  const ranOutChip = ranOut ? [plain('ran out')] : [];
   if (o.hold !== null) {
     const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
-    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound')], label: 'Hold', title: HOLD_HINT });
+    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   } else if (o.cohortHold !== null) {
     const h = o.cohortHold;
     const on = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
     const held = c?.heldMs ?? h.heldMs;
-    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held')], label: 'Hold', title: HOLD_HINT });
+    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
+  } else if (o.exhaustion !== null && last !== undefined && last.attempt === record.request.attempt) {
+    // The relay keeps every hold across a failover, and an earlier attempt's hold is no part of this decision.
+    rows.push({ chips: [accountChip(last.accountId, 'on'), plain(last.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(last.heldMs), 'held'), ...ranOutChip], label: 'Hold', title: HOLD_HINT });
   }
   if (o.exhaustion !== null) {
     const x = o.exhaustion;
     rows.push({
       chips: [
-        plain(String(own(EXHAUSTION_STATUS, x.kind) ? EXHAUSTION_STATUS[x.kind] : 503), 'status'),
+        plain(String(ranOut ? 429 : own(EXHAUSTION_STATUS, x.kind) ? EXHAUSTION_STATUS[x.kind] : 503), 'status'),
         ...(x.window !== null ? [plain(wordOf(WINDOW_WORD, x.window), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),
@@ -1403,8 +1308,9 @@ const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: '
  */
 const hourlyRate = (perSecond: number, unit: string | null) => (unit === 'usd' ? `${fmtUsd(perSecond * 3_600)}/h` : `${(perSecond * 3_600 * 100).toFixed(1)} %/h`);
 
-/** An event's detail as pairs: When, Account and Pool first, then the kind's own. */
-export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
+/** An event's detail as pairs: When, Account and Pool first, then the kind's own. `rows` are the rows the page holds,
+ *  which a model rejection reads its cooldown's until off. */
+export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[]): DetailPair[] {
   const d = row.detail;
   const pairs: DetailPair[] = [{ chips: [plain(utcSecond(atOf(row)))], label: 'When' }];
   if (row.accountId !== null) pairs.push({ chips: [accountChip(row.accountId)], label: 'Account' });
@@ -1513,6 +1419,10 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       if (row.kind === 'model_rejected') {
         add('Cooldown scope', plain('the model on this account'));
         add('Attempt', attempt === null ? null : plain(String(attempt)));
+        // The event's own fact is the 404 alone. The until is on the cooldown_set row the same answer wrote, found by
+        // the client request since the router dates the two rows with separate clock reads.
+        const set = row.requestId !== null && row.model !== null ? rows.find((r): r is RoutingEvent => r.type === 'event' && r.kind === 'cooldown_set' && r.requestId === row.requestId && r.accountId === row.accountId && str(r.detail.scope) === `model:${row.model}`) : undefined;
+        add('Until', set === undefined ? null : time(set.detail.until));
       }
       add('Request', request);
       break;
@@ -1564,9 +1474,6 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       add('Next attempt', time(d.next_attempt_at));
       add('Last clean poll', time(d.last_clean_poll_at));
       add('Effect', plain("decisions read this account's windows from response heads alone"));
-      break;
-    case 'reauth_required':
-      add('Routing', plain('off until re-paired'));
       break;
     case 'refresh_failed':
     case 'refresh_succeeded':

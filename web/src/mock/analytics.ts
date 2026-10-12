@@ -65,9 +65,14 @@ export interface HourlyRollup {
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
   /** `client_gone` counts the streams the client closed, which the relay files as failed under that code. */
-  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
+  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; undecodable: number; upstream_error: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
+  /**
+   * The hour's plan-window shares, each request priced at its own band and completion and summed. A window any request
+   * prices null reads null.
+   */
+  shares: Record<string, number | null>;
   /** The speed the hour's answers reported, else `fast` where its requests asked for it, else `standard`. */
   speed: 'fast' | 'standard';
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
@@ -176,8 +181,10 @@ function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier:
   const countedPlan = plan(counted);
   for (const r of countedPlan) {
     if (tokens(r) === 0) continue;
+    // The cost is the row's own, its requests priced one by one. The cache splits have no figure per request on the
+    // row, so they price its tokens at its hour.
     const s = sharesOf(r, tier);
-    for (const [window, share] of Object.entries(s.cost)) add(cost, window, share);
+    for (const [window, share] of Object.entries(r.shares)) add(cost, window, share);
     for (const [window, share] of Object.entries(s.read)) add(read, window, share);
     for (const [window, share] of Object.entries(s.write)) add(write, window, share);
   }
@@ -187,7 +194,7 @@ function sharesOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[], tier:
     probeUsd += r.probeCostUsd;
     wastedUsd += r.wastedProbeUsd;
     if (tokens(r) === 0) continue;
-    for (const [window, share] of Object.entries(sharesOf(r, tier).cost)) add(probe, window, share);
+    for (const [window, share] of Object.entries(r.shares)) add(probe, window, share);
   }
   const ratio = probeUsd > 0 ? wastedUsd / probeUsd : null;
   const priced = (map: Map<string, WindowSum>) => [...map.entries()].filter(([, s]) => !s.unpriced);
@@ -224,6 +231,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const rateLimited = sum(counted, (r) => r.requests.rate_limited);
   const overloaded = sum(counted, (r) => r.requests.overloaded);
   const upstreamError = sum(counted, (r) => r.requests.upstream_error);
+  const undecodable = sum(counted, (r) => r.requests.undecodable);
   const clientGone = sum(counted, (r) => r.requests.client_gone);
   const incomplete = sum(counted, (r) => r.requests.incomplete);
   const succeeded = sum(counted, (r) => r.requests.ok);
@@ -232,7 +240,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
   if (overloaded) errors.overloaded_error = overloaded;
-  if (upstreamError) errors.api_error = upstreamError;
+  // A stream the relay could not decode counts under its own code, apart from the upstream's errors around it.
+  if (upstreamError - undecodable) errors.api_error = upstreamError - undecodable;
+  if (undecodable) errors.stream_undecodable = undecodable;
   if (clientGone) errors.client_gone = clientGone;
   if (incomplete) errors.stream_incomplete = incomplete;
 
@@ -280,12 +290,21 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   };
 }
 
+/**
+ * One split of a key group's key: the id, and the earlier holder's generation, null for the live key and the reserved
+ * id.
+ */
+const holderKeyOf = (key: string): { generation: number | null; id: string } => {
+  const [id, generation] = key.split('@');
+  return { generation: generation === undefined ? null : Number(generation), id };
+};
+
 /** The key dimension alone carries a generation in its group key; the reserved id reads out in every dimension. */
 const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
   if (key === '-') return 'unattributed';
-  if (groupBy !== 'key' || !key.includes('@')) return key;
-  const [id, generation] = key.split('@');
-  return earlierHolderLabel(id, Number(generation));
+  const holder = holderKeyOf(key);
+  if (groupBy !== 'key' || holder.generation === null) return key;
+  return earlierHolderLabel(holder.id, holder.generation);
 };
 
 /**
@@ -294,9 +313,8 @@ const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
  */
 const holderOf = (key: string, groupBy: AnalyticsGroupBy): Pick<AnalyticsGroup, 'keyCreatedAt' | 'keyId'> => {
   if (groupBy !== 'key') return { keyCreatedAt: null, keyId: null };
-  if (!key.includes('@')) return { keyCreatedAt: null, keyId: key };
-  const [id, generation] = key.split('@');
-  return { keyCreatedAt: Number(generation), keyId: id };
+  const holder = holderKeyOf(key);
+  return { keyCreatedAt: holder.generation, keyId: holder.id };
 };
 
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
@@ -306,7 +324,7 @@ export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGrou
   const of = q.groupBy === 'user_agent' && named.length ? (r: HourlyRollup) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[q.groupBy];
   const buckets = new Map<string, HourlyRollup[]>();
   for (const r of rows) buckets.set(of(r), [...(buckets.get(of(r)) ?? []), r]);
-  return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
@@ -407,9 +425,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
       if (tier !== undefined && tierCapacity(TABLES, tier, 'seven_day') !== null) s.sevenDay.push(0);
       continue;
     }
-    const cost = tier === undefined ? { five_hour: null, seven_day: null } : sharesOf(r, tier).cost;
-    s.fiveHour.push(cost.five_hour);
-    s.sevenDay.push(cost.seven_day);
+    // The row's own shares, its requests priced one by one at their completions.
+    s.fiveHour.push(tier === undefined ? null : (r.shares.five_hour ?? null));
+    s.sevenDay.push(tier === undefined ? null : (r.shares.seven_day ?? null));
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();

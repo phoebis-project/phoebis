@@ -426,36 +426,39 @@ account's kind on hover and to a screen reader. The companion column reads the m
 account and TTL, the last request, the last and the next probe, and the probes sent today with the requests they kept
 warm, counted from midnight UTC, the lines running main first, then the busy, idle and parked agents, newest last
 request first inside each group, a subagent the mod released while its session lives drawing no line, and the Agents
-column leaving it out of its count. The line ends on its state word with the cause beside it, the cause's sentence on
-hover (see [The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word for the agent, with
-a parked agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`), and repeats the
-state's and the cause's sentences. A session's menu offers "View in analytics" and "View in requests" once it has
-ledgered traffic, the latter opening the request log on the session's requests under the row's key inside the narrowest
-of its ranges that covers the session's last request, "View in routing log",
-which opens the log on that session's decisions, and Release. The analytics view opens on the requests of the key holder
-the row belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending requests stays
-on it, and its tiles once a minute.
+column leaving it out of its count, while a line released because its session ended stays listed. The line ends on its
+state word with the cause beside it, the cause's sentence on hover (see [The five states](#the-five-states)). Under the
+columns it reads the mod's lifecycle word for the agent, with a parked agent's park kind and its deadline or wake time
+(`parked · background · deadline in 1h 12m`), and repeats the state's and the cause's sentences. A live session whose
+every agent the mod released draws no line, so its expanded detail says so in their place: "The mod released every agent
+of this session. Their records keep their slots of the cap until the session leaves the engine." Its row keeps the
+released badge, whose hover names a released main conversation as well as a finished subagent, and an Agents count of 0.
+A session's menu offers "View in analytics" and "View in requests" once it has ledgered traffic, the latter opening the
+request log on the session's requests under the row's key inside the narrowest of its ranges that covers the session's
+last request, "View in routing log" whenever the row has a session, which opens the log on that session's
+decisions, and Release. The analytics view opens on the requests of the key holder the row belongs to. The view reads
+its sessions again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session whose first request that is not auxiliary branched from another conversation at depth 2 or deeper carries a
-fork badge under its id, `fork of 4ef130f1-90e0… at 3, on another account` when the session it branched from is listed
-on a different account and `same account` when it is listed on the row's own, 3 being the depth where the two part, with
-the base's account on hover and read out to a screen reader. Following the badge scrolls to the row of the session it
-branched from and marks that row. Where that session is not listed the badge names it alone, as
-`fork of 4ef130f1-90e0…`, and where it is listed but either session has no pinned account the badge reads `fork at 3`
-and still follows to the row.
+fork badge under its id, `fork, on another account` when the session it branched from is listed on a different account
+and `fork, same account` when it is listed on the row's own, with the whole id of the session it branched from, the
+depth where the two part and the base's account on hover and read out to a screen reader. Following the badge scrolls to
+the row of the session it branched from and marks that row. Where that session is not listed, or either session has no
+pinned account, the badge reads the depth alone, as `fork at 3`, and a listed base's badge still follows to the row.
 
 A pool card that keeps caches warm reads the pool's three resolved ceilings in whole hours after its `keepalive` chip:
 `idle 1h · parked 44h · horizon 44h` for a plan pool on the one-hour entry, its 44.1-hour break-even floored to `44h`,
 and a range such as `44h to 71h` where the pool's combinations differ. The pool dialog's Keepalive group holds the
 switch and the three numbers. A ceiling left off reads the break-even it resolves to, `Break-even: 1d 20h` or
-`Break-even: 1d 20h to 2d 23h`, with what the break-even means on hover. Under `Max idle (s)` the group reads the idle
-window's cost as a share of one re-write, `Costs 2% of one re-write`, and while the field reads 0 or more than the
-break-even, the window in effect, `capped at the break-even, 46m`. The router resolves the figures for the saved pool
-(see [The four fields](#the-four-fields)), so an unsaved edit of the idle window moves only that note, and the dialog
-then names the share as the saved window's, `at the saved 1h 0m`, until the save. Below the fields, Return rate by idle
-age lists the pool's ten buckets (see [The return rate by idle age](#the-return-rate-by-idle-age)), each with the
-windows that returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet" before the
-first.
+`Break-even: 1d 20h to 2d 23h`, with what the break-even means on hover. Switched on past the break-even, the parked and
+scheduled ceilings each read the figure in effect under its field, `Capped at the break-even, 1d 20h`. Under
+`Max idle (s)` the group reads the idle window's cost as a share of one re-write, `Costs 2% of one re-write`, and while
+the field reads 0 or more than the break-even, the window in effect, `capped at the break-even, 46m`. The router
+resolves the figures for the saved pool (see [The four fields](#the-four-fields)), so an unsaved edit of the idle window
+moves only that note, and the dialog then names the share as the saved window's, `at the saved 1h 0m`, until the save.
+Below the fields, Return rate by idle age lists the pool's ten buckets (see
+[The return rate by idle age](#the-return-rate-by-idle-age)), each with the windows that returned out of those that
+reached it and a bar of the rate, or "No idle windows recorded yet" before the first.
 
 ![The Analytics view's Cache warming tab: probes by outcome, wasted probes, and kept-warm
 requests](assets/analytics-cache-warming-light.png#only-light)

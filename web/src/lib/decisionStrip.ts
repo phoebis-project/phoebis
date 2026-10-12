@@ -1,4 +1,4 @@
-import type { DecisionKind, DecisionRecord, DecisionSummary, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { candidateCells, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
@@ -376,7 +376,7 @@ function terminiOf(kind: DecisionKind, shape: StripShape): Terminus[] {
 }
 
 /** The strip's stations, brackets, branch, host, decisive station, leaves and termini for one record. */
-export function stationModel(record: DecisionRecord, row: DecisionSummary | undefined, now: number): StripModel {
+export function stationModel(record: DecisionRecord, now: number): StripModel {
   const walk = record.walk;
   const kind = record.outcome.kind;
   const shape = shapeOf(walk);
@@ -742,3 +742,40 @@ export function layoutStrip(model: StripModel, width: number, measured?: LabelHe
   const reach = Math.min(0, ...Object.values(first.labels).map((l) => l.top), ...first.brackets.map((b) => b.y - BRACKET_WORD_RISE));
   return reach < 0 ? draw(Math.ceil(-reach)) : first;
 }
+
+/** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
+export type StripAnchor =
+  | { kind: 'station'; id: string }
+  | { kind: 'leaf'; index: number }
+  | { kind: 'terminus'; id: TerminusKind };
+
+/** The one open popover across every strip on the page, keyed by the strip that owns it. */
+export interface OpenPopover {
+  anchor: StripAnchor;
+  focus: boolean;
+  pinned: boolean;
+  stripId: string;
+}
+
+let openPopover: OpenPopover | null = null;
+const popoverListeners = new Set<() => void>();
+
+/**
+ * The page's one popover as a module store the strips read through `useSyncExternalStore`, so the routing log's cards
+ * and the request drawer share it with no provider. `set` takes a value or an updater and notifies only on a change.
+ */
+export const popoverStore = {
+  get: (): OpenPopover | null => openPopover,
+  set(next: OpenPopover | null | ((o: OpenPopover | null) => OpenPopover | null)): void {
+    const value = typeof next === 'function' ? next(openPopover) : next;
+    if (value === openPopover) return;
+    openPopover = value;
+    for (const listener of popoverListeners) listener();
+  },
+  subscribe(listener: () => void): () => void {
+    popoverListeners.add(listener);
+    return () => {
+      popoverListeners.delete(listener);
+    };
+  },
+};

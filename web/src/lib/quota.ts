@@ -1,8 +1,16 @@
-import { planLabel } from '@/api/decode';
 import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
+
+/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
+ *  anything else is shown as sent. */
+export function planLabel(tier: string): string {
+  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
+  if (!m) return tier;
+  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
+  return m[2] ? `${name} ${m[2]}x` : name;
+}
 
 /** Remaining share drives the color: green at 50% and above, amber at 20% and above, red below. */
 export function meterTone(remaining: number): MeterTone {

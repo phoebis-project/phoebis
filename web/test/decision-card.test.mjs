@@ -134,7 +134,7 @@ test("the card draws the strip in the walk's place", async () => {
   roots.push(root);
   act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now, onWiden() {}, row }))));
   await settled();
-  const model = stationModel(placed, row, now);
+  const model = stationModel(placed, now);
   // A count rather than the node: an assertion that prints a jsdom element walks the whole window.
   assert.equal(container.querySelectorAll('.decision-card__walk').length, 0, 'the walk list is gone');
   const strips = container.querySelectorAll('.decision-strip');

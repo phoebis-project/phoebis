@@ -53,6 +53,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      - run: node scripts/check-build.mjs
+      - run: npm run lint
       - run: npm test
       - run: npm run smoke
       # The mock pass and the reference smoke are CI's browser checks. The live pass needs a router with a secret

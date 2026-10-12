@@ -295,6 +295,22 @@ test("a weekday band of whole days reads all day where its days start at midnigh
   assert.equal(d.bandCaption(berlin, NOW, 'Europe/Paris', clock24), 'Mon to Fri, all day here (Europe/Paris). In Berlin: Mon to Fri, all day.');
 });
 
+test('a whole-day week reads from its first band day to its last across a clock change', () => {
+  // Israel moves its clocks on Friday 27 March 2026, inside the band's week: the Monday starts at 22:00 UTC the Sunday
+  // before, at UTC+2, and the Friday ends at 21:00 UTC, at UTC+3.
+  const jerusalem = { ...wholeDays, peak: { ...wholeDays.peak, zone: 'Asia/Jerusalem' } };
+  const wednesday = Date.parse('2026-03-25T12:00:00Z');
+  assert.equal(d.bandCaption(jerusalem, wednesday, 'UTC', clock24), 'Sun 22:00 to Fri 21:00 here (UTC). In Jerusalem: Mon to Fri, all day.');
+  // Athens keeps UTC+2 through that Friday, so the week starts at midnight there and still ends an hour early.
+  assert.equal(d.bandCaption(jerusalem, wednesday, 'Europe/Athens', clock24), 'Mon 00:00 to Fri 23:00 here (Europe/Athens). In Jerusalem: Mon to Fri, all day.');
+});
+
+test('an every-day whole-day band reads Every day, all day in its own zone', () => {
+  const everyDay = { ...wholeDays, peak: { ...wholeDays.peak, weekdays: false } };
+  assert.equal(d.bandCaption(everyDay, NOW, 'America/Los_Angeles', clock24), 'Every day, all day in Los Angeles (America/Los_Angeles), the zone the cost model names.');
+  assert.equal(d.bandCaption(everyDay, NOW, 'UTC', clock24), 'Every day, at every hour here (UTC). In Los Angeles: Every day, all day.');
+});
+
 test('a weekday band of whole days still names the next change of the hour its days start at here', () => {
   // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band's days start at
   // 08:00 in Berlin, and the Monday after reads as today.

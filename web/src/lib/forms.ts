@@ -105,11 +105,12 @@ export interface PoolChecks {
 
 /**
  * The id a create derives from a name, and whether the name gave it nothing: `slug` keeps ASCII letters and digits
- * alone, so a name without one falls back to the id `item`.
+ * alone, so a name without one falls back to the id `item`, and only a name without a letter or digit in any script
+ * is no name.
  */
 export function derivedId(name: string): { id: string; unnamed: boolean } {
   const id = slug(name);
-  return { id, unnamed: id === 'item' && !/[a-z0-9]/i.test(name) };
+  return { id, unnamed: id === 'item' && !/[\p{L}\p{N}]/u.test(name) };
 }
 
 /** `value` with every object's keys in sorted order, so a discard question's compare reads values alone. */

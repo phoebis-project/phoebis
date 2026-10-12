@@ -105,7 +105,6 @@ const VIEWS = [
   { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
-  // Last, so every view before it draws the instant it drew without the log in the pass.
   { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
 ];
 
@@ -182,7 +181,8 @@ const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globa
  * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency,
  * the relative labels) happens here, in fixed steps. A step jumps to its end and fires
  * what fell due on the way there, so a timer the page starts in reply counts from the step's end however late
- * the reply lands; every run takes the same steps and draws every view at the same instants.
+ * the reply lands. Every run takes the same steps, and each view sets the clock back to the origin before it loads,
+ * so a view draws at the same instants whatever the measures before it advanced.
  */
 async function advance(ms) {
   for (let spent = 0; spent < ms; spent += CLOCK_STEP_MS) {
@@ -702,12 +702,22 @@ async function poolTooltipColumns(theme) {
       const key = box('chart-tip__key');
       const value = box('chart-tip__value');
       const label = box('chart-tip__label');
+      // The value's text ends where its text nodes' rects end, which the cell's box can run past.
+      const valueText = (() => {
+        const el = row.querySelector('.chart-tip__value');
+        if (!el) return null;
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const rights = [...range.getClientRects()].map((r) => r.right);
+        return rights.length ? edge(Math.max(...rights)) : null;
+      })();
       return {
         cells: [...row.children].map((c) => c.className),
         key: key ? [edge(key.left), edge(key.width)] : null,
         label: label ? edge(label.left) : null,
         text: `${row.querySelector('.chart-tip__value')?.textContent ?? ''} ${row.querySelector('.chart-tip__label')?.textContent ?? ''}`.trim(),
         value: value ? [edge(value.left), edge(value.right)] : null,
+        valueTextEnd: valueText,
       };
     });
   });
@@ -722,7 +732,8 @@ async function poolTooltipColumns(theme) {
   if (!read.every((row) => JSON.stringify(row.cells) === order)) say(`the rows' cells read ${JSON.stringify(read.map((row) => row.cells))}, not key, value and label on every row`);
   if (new Set(read.map((row) => row.key?.[0] ?? null)).size !== 1 || read.some((row) => row.key?.[1] !== 12)) say(`the key cells read ${JSON.stringify(read.map((row) => row.key))}, not one 12 px column`);
   if (new Set(read.map((row) => row.value?.[0] ?? null)).size !== 1) say(`the value cells start at ${read.map((row) => row.value?.[0] ?? null).join(', ')} px, not on one left edge`);
-  if (read.some((row) => row.value === null || row.label === null || row.label < row.value[1])) say(`a label starts inside its row's value: ${JSON.stringify(read.map((row) => [row.value, row.label]))}`);
+  // A row whose value draws no text has no extent to compare, so it leaves the clause.
+  if (read.some((row) => row.label === null || (row.valueTextEnd !== null && row.label < row.valueTextEnd))) say(`a label starts inside its row's value text: ${JSON.stringify(read.map((row) => [row.valueTextEnd, row.label]))}`);
 }
 
 /** A rail entry of the open dialog by its exact label; a hint link can hold a rail label inside its own words. */
@@ -752,7 +763,7 @@ async function closeByEscape(dialog, label, say) {
   const asked = (await question.count()) === 1;
   if (asked) await question.getByRole('button', { name: 'Discard', exact: true }).click();
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed unchanged on Escape'}`);
+  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed without the question on Escape'}`);
 }
 
 /**
@@ -1012,6 +1023,79 @@ async function poolRoutingCards(theme) {
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
+}
+
+/**
+ * The pool dialog's lead track with shed-ahead on: the shedding margin's line stands 26 px tall and reaches past the
+ * track on both sides, taller than the readings' 18 px ticks, and the bar's legend names it "Shedding margin".
+ */
+async function utilizationMargin(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Utilization thresholds').click();
+  } catch (error) {
+    say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  const toggle = dialog.locator('button[role="switch"][aria-label="Shed ahead of pace"]');
+  if ((await toggle.count()) !== 1) say('no Shed ahead of pace switch');
+  else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
+  await settle();
+  const read = await dialog.evaluate((el) => {
+    const lead = el.querySelector('.ubar__track--lead');
+    const box = (node) => node?.getBoundingClientRect() ?? null;
+    const track = box(lead);
+    const line = box(lead?.querySelector('.ubar__margin'));
+    const tick = box(lead?.querySelector('.ubar__tick'));
+    const legend = [...(lead?.closest('.ubar')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+    return { legend, line: track && line ? { above: track.top - line.top, below: line.bottom - track.bottom, height: line.height } : null, tick: tick?.height ?? null };
+  });
+  measurements.push(`${theme} /pools shedding margin ${JSON.stringify(read)}`);
+  if (read.line === null) say('the lead track draws no margin line with shed-ahead on');
+  else {
+    if (Math.abs(read.line.height - 26) > 0.5) say(`the margin line stands ${read.line.height}px tall, not 26`);
+    if (read.line.above <= 0 || read.line.below <= 0) say(`the margin line reaches ${read.line.above}px above the track and ${read.line.below}px below it, not past both edges`);
+    if (read.tick !== null && read.line.height <= read.tick) say(`the margin line is no taller than a reading's ${read.tick}px tick`);
+  }
+  if (!read.legend.includes('Shedding margin')) say(`the bar's legend reads ${JSON.stringify(read.legend)}, without "Shedding margin"`);
+  await closeByEscape(dialog, `${theme} /pools shedding margin dialog`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
+}
+
+/**
+ * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
+ * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong.
+ */
+async function poolMemberPins(theme) {
+  const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
+  const count = (text) => Number((text ?? '').trim().replace(/,/g, '') || Number.NaN);
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.pool')].map((card) => {
+      const tile = [...card.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Active pins');
+      return {
+        active: tile?.querySelector('dd')?.textContent ?? null,
+        members: [...card.querySelectorAll('.serving tbody tr')].map((tr) => tr.lastElementChild?.textContent ?? null),
+        name: card.querySelector('.card__title')?.textContent ?? '',
+      };
+    }),
+  );
+  measurements.push(`${theme} /pools member pins ${JSON.stringify(cards)}`);
+  if (cards.length === 0) say('no pool card to read');
+  for (const card of cards) {
+    const active = count(card.active);
+    const members = card.members.map(count);
+    const sum = members.reduce((n, x) => n + x, 0);
+    if (Number.isNaN(active)) say(`the ${card.name} card draws no Active pins figure`);
+    else if (members.some(Number.isNaN)) say(`the ${card.name} card's Pins column reads ${JSON.stringify(card.members)}`);
+    else if (sum !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins, not its Active pins ${active}`);
+  }
 }
 
 /**
@@ -1492,8 +1576,8 @@ async function poolDialogWalk(theme, mode) {
 /**
  * The cost reference opened from the pool dialog's Cache TTL group keeps its own fixed height, so its footer stays
  * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame under it. Load
- * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the
- * clock, which every view's shot reads, so this runs after the views.
+ * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table draws once
+ * the clock has moved past the reads it waits on.
  */
 async function poolCostReference(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog Cache TTL: ${what}`);
@@ -1596,6 +1680,29 @@ async function poolKeyMenus(theme) {
   if (mock && !(counts.some((n) => n > 1) && counts.includes(1))) say(`the story's pools hold ${JSON.stringify(counts)} keys, not one pool with several and one with a single key`);
   await page.evaluate((y) => window.scrollTo(0, y), scrolled);
   await atRest();
+}
+
+/**
+ * The Keys page's two cards against the viewport: stacked in one column at the pass's 1280 by 800, so the key table
+ * takes the page's width, and side by side from 1440 by 900, where the table keeps its room beside the lifetime cost
+ * card. The viewport then returns to the pass's 1280 by 800.
+ */
+async function keysLayout(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  const tracks = () =>
+    page.evaluate(() => {
+      const layout = document.querySelector('.keys-layout');
+      return layout ? getComputedStyle(layout).gridTemplateColumns.split(' ').filter(Boolean) : null;
+    });
+  const narrow = await tracks();
+  await page.setViewportSize({ height: 900, width: 1440 });
+  await settle();
+  const wide = await tracks();
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  measurements.push(`${theme} /keys layout tracks ${JSON.stringify(narrow)} at 1280 by 800, ${JSON.stringify(wide)} at 1440 by 900`);
+  if (narrow?.length !== 1) say(`the cards sit in ${narrow?.length ?? 'no'} columns at 1280 by 800, not stacked in one`);
+  if (wide?.length !== 2) say(`the cards sit in ${wide?.length ?? 'no'} columns at 1440 by 900, not side by side`);
 }
 
 /**
@@ -1744,7 +1851,9 @@ async function keysPageMenus(theme) {
       if (mock && first?.room && first.room.below < first.room.need) say(`at ${width} px the first row's room below, ${first.room.below} px, holds no list`);
       await read(`the last row of ${full}`, 'last');
       const name = ((await rows.last().locator('td').first().locator('b').textContent()) ?? '').trim();
+      // The search lives in the address, written on Enter rather than after the pause the paused clock never reaches.
       await search.fill(name);
+      await search.press('Enter');
       await settle();
       const filtered = await rows.count();
       if (filtered !== 1) say(`at ${width} px the search for ${JSON.stringify(name)} leaves ${filtered} rows, not one`);
@@ -1755,6 +1864,7 @@ async function keysPageMenus(theme) {
       say(`at ${width} px: ${error instanceof Error ? error.message : String(error)}`);
     }
     await search.fill('').catch(() => {});
+    await search.press('Enter').catch(() => {});
     await settle();
   }
   await page.setViewportSize({ height: 800, width: 1280 });
@@ -1971,7 +2081,7 @@ async function quotaChips(theme) {
       const line = parseFloat(getComputedStyle(el).lineHeight);
       return Math.round(box.height / line);
     };
-    const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' });
+    const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') ?? '' });
     const tone = (el) => (el ? { background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color } : null);
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
@@ -2008,7 +2118,7 @@ async function quotaChips(theme) {
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
-  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's legacy holds an expired window, yet no reset cell reads it");
+  if (mock && !read.resets.some((r) => /^expired .+ ago$/.test(r.text) && r.title.startsWith('no reading since the reset, '))) say("the story's legacy holds an expired window, yet no reset cell reads it with the reset on its title");
 }
 
 /**
@@ -2016,7 +2126,8 @@ async function quotaChips(theme) {
  * it on one line, and a chip with a share draws the background and ink of the card chip of the same tone. Primary's
  * current bar lays its used fill out at the share the page computed, within a pixel, and the lane label's ink reads
  * at 4.5:1 or better over every tone's fill, which the mock pass demands a fill of each tone for, since the story
- * fills bars in all three. Only the mock pass draws the section.
+ * fills bars in all three, and over the live bar's neutral `--surface-3` past the fill. Only the mock pass draws the
+ * section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -2032,6 +2143,16 @@ async function quotaLaneChips(theme) {
         const bar = el.closest('.lane__bar');
         return { background: getComputedStyle(el).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color, tone: [...el.classList].find((n) => n.startsWith('lane__used--'))?.slice('lane__used--'.length) ?? null };
       }),
+      // Past the used fill the label reads on the live bar's own tint, the neutral `--surface-3`, read off a probe.
+      live: [...document.querySelectorAll('.lane__bar--live')].map((bar) => ({ background: getComputedStyle(bar).backgroundColor, ink: getComputedStyle(bar.querySelector('.lane__label') ?? bar).color })),
+      surface3: (() => {
+        const probe = document.createElement('span');
+        probe.style.background = 'var(--surface-3)';
+        document.body.append(probe);
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      })(),
     };
   });
   const lanes = read.chips;
@@ -2053,6 +2174,14 @@ async function quotaLaneChips(theme) {
   if (mock && ['good', 'low', 'warn'].some((tone) => !byTone.has(tone))) say(`the story fills bars in every tone, yet only ${[...byTone.keys()].join(', ') || 'none'} drew`);
   for (const f of byTone.values()) {
     if (f.ratio < 4.5) say(`the label reads ${f.ink} over the ${f.tone} fill ${f.background} at ${f.ratio}:1, under 4.5:1`);
+  }
+  // A tinted bar computes to `color(srgb r g b)`, whose 0 to 1 channels the reader above would take for 0 to 255.
+  const live = [...new Map(read.live.map((b) => [`${b.ink} ${b.background}`, { ...b, ratio: contrastOf(colorChannels(b.ink).rgb, colorChannels(b.background).rgb) }])).values()];
+  measurements.push(`${theme} /quota#quota-windows label over the live bar ${JSON.stringify(live.map((b) => [b.ink, b.background, b.ratio]))}, --surface-3 ${read.surface3}`);
+  if (mock && live.length === 0) say('the story has current windows, yet no live bar is drawn');
+  for (const b of live) {
+    if (b.background !== read.surface3) say(`a live bar draws ${b.background}, not the neutral --surface-3 ${read.surface3}`);
+    if (b.ratio < 4.5) say(`the label reads ${b.ink} over the live bar's ${b.background} at ${b.ratio}:1, under 4.5:1`);
   }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
   if (mock && !lanes.some((c) => c.tone !== null)) say('the story has windows with a share, yet no lane chip is toned');
@@ -2131,11 +2260,18 @@ async function quotaMeters(theme) {
         return tenth(parts.reduce((sum, w) => sum + w, 0) + parseFloat(s.columnGap) * Math.max(0, parts.length - 1) + edges);
       };
       // A reset label stretches to its column too, so its own width is its text's, the widths of its lines summed: an
-      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it.
+      // expired line wraps at the bound, and its widest line alone is narrower than the column that holds it. The text
+      // nodes are read one by one, since a range over the whole label also returns a child element's own box, which
+      // would count that child's text a second time.
       const textWidth = (label) => {
+        const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
         const range = document.createRange();
-        range.selectNodeContents(label);
-        return tenth([...range.getClientRects()].reduce((sum, r) => sum + r.width, 0));
+        let sum = 0;
+        for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+          range.selectNodeContents(node);
+          sum += [...range.getClientRects()].reduce((n, r) => n + r.width, 0);
+        }
+        return tenth(sum);
       };
       const content = (el) => (kind(el) === 'chip' ? chipWidth(el) : kind(el) === 'reset' ? textWidth(el) : null);
       const grid = document.querySelector('.quota-grid');
@@ -2187,7 +2323,7 @@ async function quotaMeters(theme) {
     if (where === 'floor') {
       for (const card of got.cards.filter((c) => Math.abs(c.width - QUOTA_FLOOR) > 0.5)) say(`${card.name} stands ${card.width}px wide ${at}, not on the card grid's ${QUOTA_FLOOR}px floor`);
       if (mock && !got.cards.some((c) => c.cells.some((x) => /^Fable\d+% left$/.test(x.text)))) say(`no card holds the story's widest chip ${at}`);
-      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+, no reading since$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
+      if (mock && !got.cards.some((c) => c.cells.some((x) => /^expired .+ ago$/.test(x.text)))) say(`no card holds the story's expired line ${at}`);
     }
     if (where === 'under') {
       if (mock && got.rows === null) say(`the story has several subscription accounts, yet fewer than two cards stand ${at}`);
@@ -2443,7 +2579,7 @@ async function burnCards(theme) {
     if (!(await tabTo(theme, 'Traffic'))) return;
     const failovers = await read(['Failovers']);
     if (!(await tabTo(theme, 'Burn'))) return;
-    const burn = await read(['Tokens per minute', 'Spend per minute', 'Plan per hour']);
+    const burn = await read(['Spend per minute', 'Plan per hour']);
     if (!(await tabTo(theme, 'Traffic'))) return;
     const rewrites = await read(['Migration rewrites']);
     const cards = { beside: rewrites.beside, boxes: [...failovers.boxes, ...rewrites.boxes, ...burn.boxes] };
@@ -2588,15 +2724,29 @@ async function analyticsTables(theme) {
 /**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
  * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
- * again, its nine figure headers wrapped so the group column keeps its room) and the placements table on Cache
- * (Rung), and the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view
- * returns to Traffic afterwards, as the other Analytics checks leave it.
+ * again, its nine figure headers wrapped so the group column keeps its room, each known reason's header its short
+ * word with the full label on its title) and the placements table on Cache (Rung), and the member budgets on Burn
+ * (Pool and Account, the Spent column as wide as its meter's floor). The view returns to Traffic afterwards, as the
+ * other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
   await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
   try {
     if (!(await tabTo(theme, 'Cache'))) return;
     await tableColumns(theme, 'analytics', '.misses-table table', ['Key']);
+    const heads = await page.evaluate(() => [...(document.querySelector('.misses-table table')?.querySelectorAll('thead th') ?? [])].map((th) => [th.textContent?.trim() ?? '', th.querySelector('span[title]')?.getAttribute('title') ?? null]));
+    measurements.push(`${theme} /analytics misses headers ${JSON.stringify(heads)}`);
+    const known = [
+      ['None', 'No divergence'],
+      ['Model', 'Model changed'],
+      ['System', 'System prompt changed'],
+      ['Tools', 'Tools changed'],
+      ['History', 'History edited'],
+      ['No previous', 'Previous message not found'],
+      ['Unavailable', 'Unavailable'],
+      ['Not asked', 'Not requested'],
+    ];
+    if (JSON.stringify(heads.slice(1, 9)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 9))}, not the short words over their full labels`);
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
@@ -2647,8 +2797,8 @@ function readRequestsTable() {
     // A placeholder row is one cell across the table, so it has no TTFB or Cost cell.
     const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
     const ttfb = cellsOf(columnAt('TTFB'));
-    // The main line or the `.sub` line, whichever the row's shares fill.
-    const shares = cellsOf(columnAt('Cost')).filter((td) => / of (5-hour|7-day)/.test(td.textContent ?? '')).length;
+    // The main line or the `.sub` line, whichever the row's shares fill, each in its window's short word.
+    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (5h|7d|Fable week)/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
       client: wrap.clientWidth,
@@ -2692,12 +2842,12 @@ async function requestsTableFits(theme) {
 
 /**
  * The default set at 1280 by 800 with share labels in the Cost column, the widest text the column draws (a Fable
- * request's "0.12% of 7-day Fable" main line over "0.42% of 5-hour"). The mock pass's alone: the router pass seeds
- * one API key account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells
- * whose main line or `.sub` reads one is asserted above zero: a page with no share cell would measure the table
- * without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's values
- * run wider than the 990 px card with the fills at their floors, so the table scrolls inside its wrap there and the
- * width is a record, as in `requestsTableFits`.
+ * request's "0.12% Fable week" main line over "0.42% 5h"). The mock pass's alone: the router pass seeds one API key
+ * account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells whose main line
+ * or `.sub` reads one is asserted above zero: a page with no share cell would measure the table without the widest
+ * text. The need, the wrap's width and the Cost column's width are recorded: the story's values run wider than the
+ * 990 px card with the fills at their floors, so the table scrolls inside its wrap there and the width is a record, as
+ * in `requestsTableFits`.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
@@ -2747,6 +2897,92 @@ async function requestsTableWide(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+}
+
+/**
+ * The request table with Client hidden through the Columns control, so no drawn column fills: the
+ * table carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at
+ * 1920 by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
+ */
+async function requestsTableNoFill(theme) {
+  const say = (what) => failures.push(`${theme} /requests without its fills: ${what}`);
+  const button = page.locator('.filters__cols button', { hasText: /^Columns/ });
+  const turn = async (labels) => {
+    await button.click();
+    await settle();
+    for (const label of labels) {
+      await page.locator('.cols-popover label', { hasText: new RegExp(`^${label}$`) }).locator('input[type="checkbox"]').click();
+      await settle();
+    }
+    await button.click();
+    await settle();
+  };
+  await turn(['Client']);
+  const measure = () =>
+    page.evaluate(() => {
+      const table = document.querySelector('.requests__table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      const width = table.getBoundingClientRect().width;
+      // The table's own content width, read with the class's auto width set aside for a moment.
+      table.style.width = 'max-content';
+      const content = table.getBoundingClientRect().width;
+      table.style.width = '';
+      return { client: wrap.clientWidth, content: Math.round(content * 100) / 100, heads: [...table.querySelectorAll('thead th')].map((th) => th.textContent?.trim() ?? ''), noFill: table.classList.contains('table--no-fill'), width: Math.round(width * 100) / 100 };
+    });
+  const narrow = await measure();
+  await page.setViewportSize({ height: 1080, width: 1920 });
+  await settle();
+  const wide = await measure();
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await turn(['Client']);
+  await atRest();
+  measurements.push(`${theme} /requests without Client at 1280 by 800 ${JSON.stringify(narrow)}, at 1920 by 1080 ${JSON.stringify(wide)}`);
+  for (const [at, read] of [
+    ['1280 by 800', narrow],
+    ['1920 by 1080', wide],
+  ]) {
+    if (read === null) {
+      say(`no request table to measure at ${at}`);
+      continue;
+    }
+    if (read.heads.includes('Client')) say(`the Columns control left a fill drawn at ${at}: ${JSON.stringify(read.heads)}`);
+    if (!read.noFill) say(`the table does not carry table--no-fill at ${at}`);
+    if (Math.abs(read.width - Math.min(read.content, read.client)) > 1) say(`the table is ${read.width}px wide against its content's ${read.content}px in a ${read.client}px wrap at ${at}`);
+  }
+  if (wide && wide.width >= wide.client) say(`the table spans ${wide.width}px of its wrap's ${wide.client}px at 1920 by 1080 rather than its content width`);
+}
+
+/**
+ * The Burn tab under a grouping other than the account one draws Spend per minute alone, which spans the width of the
+ * grid it sits in, so the tab draws no empty half. The grouping returns to the account one afterwards.
+ */
+async function burnLoneCard(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Burn by key: ${what}`);
+  try {
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const group = page.locator('#burn select[aria-label="Burn group by"]');
+    await group.selectOption('key');
+    await advance(LOAD_MS);
+    const read = await page.evaluate(() => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const spend = card('Spend per minute');
+      const grid = spend?.parentElement;
+      return spend && grid ? { cards: grid.children.length, grid: Math.round(grid.getBoundingClientRect().width), plan: card('Plan per hour') !== undefined, spend: Math.round(spend.getBoundingClientRect().width) } : null;
+    });
+    await group.selectOption('account');
+    await advance(LOAD_MS);
+    measurements.push(`${theme} /analytics Burn by key ${JSON.stringify(read)}`);
+    if (read === null) say('no Spend per minute card to measure');
+    else {
+      if (read.plan || read.cards !== 1) say(`the grid holds ${read.cards} cards${read.plan ? ', Plan per hour among them' : ''}, not Spend per minute alone`);
+      if (Math.abs(read.spend - read.grid) > 1) say(`Spend per minute is ${read.spend}px wide in a ${read.grid}px grid, leaving a half empty`);
+    }
+  } finally {
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
 }
 
 /**
@@ -3051,11 +3287,13 @@ async function fastLane(theme, path) {
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
  * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
  * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
- * line after them (a request billed in dollars draws no chip there, which is recorded). The Phases legend lists the
- * seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request that ended with
- * no answer holds none and draws none). A request that ended with no answer draws no chip, so then the chips are
- * read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or region, so
- * there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list alone.
+ * line after them (a request billed in dollars draws no chip there, which is recorded). The mock pass reads them again
+ * on the story's plan-funded Fable answer, whose three chips read a 5-hour, a 7-day and a 7-day Fable share in that
+ * order. The Phases legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds
+ * tokens (a request that ended with no answer holds none and draws none). A request that ended with no answer draws no
+ * chip, so then the chips are read on the newest request that answered 200. The router's seeded answers name no stop
+ * reason, speed or region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot
+ * stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -3177,6 +3415,38 @@ async function requestDrawerCompact(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+  // The story's plan-funded Fable answer spends a share of all three windows, so its cost row draws the three-chip
+  // layout, in the order the pages draw the windows. A row past the first page is opened at its Details address.
+  if (mock) {
+    const fable = 'req_a6c19e73-5d2';
+    const row = page.locator('.requests__table tbody tr', { has: page.locator(`.sub.mono[title="${fable}"]`) });
+    const listed = (await row.count()) === 1;
+    measurements.push(`${theme} /requests the plan-funded Fable request ${fable} is ${listed ? 'on' : 'off'} the table's first page`);
+    if (listed) await row.getByRole('link', { name: 'Details', exact: true }).click();
+    else {
+      await page.goto(`${base}/requests/${fable}`);
+      await booted();
+    }
+    await advance(LOAD_MS);
+    // Another plan-funded Fable answer's drawer would draw the same three chips, so the address names the one measured.
+    const opened = new URL(page.url()).pathname;
+    if (opened !== `/requests/${fable}`) say(`the Fable read opened ${opened}, not /requests/${fable}`);
+    for (const { height, width } of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      const where = `the Fable request's drawer at ${width} by ${height}`;
+      await page.setViewportSize({ height, width });
+      await settle();
+      const got = await read();
+      measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
+      costRow(where, got);
+      const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
+      if (JSON.stringify(windows) !== JSON.stringify(['5-hour', '7-day', '7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 5-hour, a 7-day and a 7-day Fable share in that order`);
+    }
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
   if (chips > 0) return;
   const answered = page.locator('.requests__table tbody tr', { has: page.locator('.requests__status .badge', { hasText: /^200$/ }) }).first();
   if ((await answered.count()) === 0) {
@@ -3197,8 +3467,7 @@ async function requestDrawerCompact(theme) {
 /**
  * The first link of the Analytics page's Misses by reason panel, on the Cache tab, lands on the Requests page under
  * the linked range, and the first row's drawer reads the link's reason on its Cache row, whose first span is the label
- * a detail follows. Following the link moves the page clock, so the mock pass runs it on a load of its own once every
- * view's shot is taken, and it leaves the Analytics page on its Traffic tab.
+ * a detail follows. The mock pass runs it on a load of its own, and it leaves the Analytics page on its Traffic tab.
  */
 async function reasonLink(theme) {
   const say = (what) => failures.push(`${theme} /analytics reasons panel link: ${what}`);
@@ -3309,13 +3578,98 @@ async function attemptCardAtTheBottom(theme) {
 }
 
 /**
+ * The computed color and font weight of the first drawn `.tok-event`, `.tok-key` and `.tok-string` span under `root`,
+ * each beside its theme token resolved on a probe, or null for a class no drawn row holds.
+ */
+const tokenColors = (root) =>
+  page.evaluate((selector) => {
+    const read = {};
+    for (const cls of ['tok-event', 'tok-key', 'tok-string']) {
+      const span = document.querySelector(`${selector} .body-row .${cls}`);
+      if (!span) {
+        read[cls] = null;
+        continue;
+      }
+      // A computed color holds the value, never the token's name, so the token is resolved on a probe of its own.
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.style.color = `var(--${cls})`;
+      const style = getComputedStyle(span);
+      read[cls] = { color: style.color, token: getComputedStyle(probe).color, weight: style.fontWeight };
+      probe.remove();
+    }
+    return read;
+  }, root);
+
+/**
+ * The wide dialog's text scrolled to its end draws the body's last line at its row, still at most the rows in view
+ * plus 40. The last line is read from the text Copy all hands a `writeText` stub that stands for the one click, so the
+ * expectation is the whole text the DOM never holds.
+ */
+async function bodyEnd(theme, say) {
+  const box = 'dialog[open].dialog--wide .body-block__pre';
+  await page.evaluate(() => {
+    window.__e2eWritten = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (window.__e2eWritten.push(text), Promise.resolve()) } });
+  });
+  const copy = page.locator('dialog[open].dialog--wide .dialog__foot button', { hasText: 'Copy all' });
+  if ((await copy.count()) === 0) say('the wide dialog has no Copy all');
+  else await copy.first().click();
+  await advance(CLOCK_STEP_MS);
+  const lastAt = (selector) =>
+    page.evaluate((sel) => {
+      const pre = document.querySelector(sel);
+      const last = pre?.querySelector('.body-row:last-child');
+      return last ? Math.round(parseFloat(last.style.top) / parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'))) : null;
+    }, selector);
+  const before = await lastAt(box);
+  await page.evaluate((sel) => {
+    const pre = document.querySelector(sel);
+    if (pre) pre.scrollTop = pre.scrollHeight;
+  }, box);
+  // The paused clock owns the page's animation frames, so the scroll's frame lands as the clock steps past it.
+  await advance(CLOCK_STEP_MS);
+  const read = await page.evaluate((sel) => {
+    const written = window.__e2eWritten;
+    delete navigator.clipboard;
+    const pre = document.querySelector(sel);
+    if (!pre) return null;
+    const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
+    const rows = [...pre.querySelectorAll('.body-row')];
+    const text = written[0] ?? null;
+    const lines = text === null ? [] : text.split('\n');
+    if (text !== null && text !== '' && text.endsWith('\n')) lines.pop();
+    const last = rows.at(-1);
+    return {
+      copies: written.length,
+      drawn: rows.length,
+      lastAt: last ? Math.round(parseFloat(last.style.top) / token) : null,
+      lastHolds: last !== undefined && lines.length > 0 && last.textContent === lines.at(-1),
+      lines: lines.length,
+      visible: Math.ceil((pre.scrollTop + pre.clientHeight) / token) - Math.floor(pre.scrollTop / token),
+    };
+  }, box);
+  measurements.push(`${theme} /requests wide body scrolled to its end ${JSON.stringify({ before, ...read })}`);
+  if (read === null) {
+    say('the wide dialog closed before its text scrolled to the end');
+    return;
+  }
+  if (read.copies !== 1) say(`Copy all wrote ${read.copies} texts to the clipboard, not one`);
+  else if (read.lastAt !== read.lines - 1 || !read.lastHolds) say(`scrolled to its end, the text draws line ${read.lastAt} last, not its last line ${read.lines - 1}${read.lastHolds ? '' : ' with that line\'s text'}`);
+  if (read.drawn > read.visible + 40) say(`scrolled to its end, the text draws ${read.drawn} rows for ${read.visible} in view`);
+}
+
+/**
  * "Open wide" on a captured body: the dialog is 1040 px wide at 1280 by 800 and at 1440 by 900 and takes the grouped
  * dialogs' height (800 px, or the viewport less 48), its text fills the body past the drawer's 260 px cap and scrolls
- * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. It runs
- * after the drawer measure, so a drawer is open, and moves down the first page to the first row whose drawer draws a
- * body when that one draws none. In the mock pass it then narrows the list to the laptop key, opens a row whose answer
- * was cut and reads that the block's head, with the cut note and the row's actions (two on the story's cut row, whose
- * answer is small), overflows nowhere at the 400 px drawer and keeps the "Open wide" link on one line.
+ * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. The text
+ * draws as rows of `--body-row`, 18 px each, covering every row in view at both sizes and at most the rows in view
+ * plus 20 above and 20 below, and scrolled to its end it draws the last line of the text Copy all hands the clipboard.
+ * The key, string and event spans the wide view draws take their theme tokens' colors, and an event span its 600
+ * weight. It runs after the drawer measure, so a drawer is open, and moves down the first page to the first row whose
+ * drawer holds a captured body when that one holds none. In the mock pass it then narrows the list to the laptop key,
+ * opens a row whose answer was cut and reads that the block's head, with the cut note and the row's actions (two on the
+ * story's cut row, whose answer is small), overflows nowhere at the 400 px drawer and keeps the "Open wide" link on one
+ * line. The seeded router answers JSON alone, so only the mock pass draws an event span.
  */
 async function wideBodyDialog(theme) {
   const say = (what) => failures.push(`${theme} /requests wide body: ${what}`);
@@ -3331,11 +3685,13 @@ async function wideBodyDialog(theme) {
     say('no drawer on the first page draws a captured body');
     return;
   }
-  const link = page.locator('.drawer .body-block__link', { hasText: 'Open wide' }).first();
+  const link = page.locator('.drawer .link-btn', { hasText: 'Open wide' }).first();
   if ((await link.count()) === 0) {
     say('the body block has no Open wide link');
     return;
   }
+  // The very link clicked, which Escape hands the focus back to: another with the same class and words is not it.
+  const clicked = await link.elementHandle();
   await link.click();
   try {
     await page.waitForSelector('dialog[open].dialog--wide', { timeout: 5_000 });
@@ -3350,12 +3706,22 @@ async function wideBodyDialog(theme) {
       const pre = body?.querySelector('.body-block__pre');
       if (!dialog || !body || !pre) return null;
       const s = getComputedStyle(body);
-      // The text is long when its lines outrun the box, read from the text rather than from the scroll it causes.
-      const lines = (pre.textContent ?? '').split('\n').length;
+      // The text is long when its lines outrun the box, read from the block of rows that holds every line at the row
+      // height rather than from the scroll it causes, since only the rows in view are drawn.
+      const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
+      const lines = Math.round((pre.querySelector('.body-rows')?.getBoundingClientRect().height ?? 0) / token);
+      const rows = [...pre.querySelectorAll('.body-row')];
+      const visible = Math.ceil((pre.scrollTop + pre.clientHeight) / token) - Math.floor(pre.scrollTop / token);
+      const at = rows.map((r) => Math.round(parseFloat(r.style.top) / token));
+      const lastShown = Math.min(lines, Math.ceil((pre.scrollTop + pre.clientHeight) / token)) - 1;
       return {
         body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
         dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
-        pre: { client: pre.clientHeight, lines, long: lines * parseFloat(getComputedStyle(pre).lineHeight) > pre.clientHeight, outer: pre.offsetHeight, scroll: pre.scrollHeight },
+        pre: { client: pre.clientHeight, drawn: rows.length, lines, long: lines * token > pre.clientHeight, outer: pre.offsetHeight, row: rows[0]?.getBoundingClientRect().height ?? null, scroll: pre.scrollHeight, token, visible },
+        span: {
+          drawn: at.length ? [Math.min(...at), Math.max(...at)] : null,
+          shown: [Math.floor(pre.scrollTop / token), lastShown],
+        },
       };
     });
   for (const { height, width } of [
@@ -3377,21 +3743,48 @@ async function wideBodyDialog(theme) {
     if (got.pre.client <= 260) say(`${where}: the text box is ${got.pre.client}px tall, within the drawer's 260px cap`);
     if (Math.abs(got.pre.outer - got.body.inner) > 1) say(`${where}: the text box is ${got.pre.outer}px tall in a body of ${got.body.inner}px`);
     if (got.pre.long && got.pre.scroll <= got.pre.client) say(`${where}: the text of ${got.pre.lines} lines does not scroll inside its box (${got.pre.scroll}px in ${got.pre.client}px)`);
+    if (got.pre.token !== 18) say(`${where}: the row token reads ${got.pre.token}px, not 18px`);
+    if (got.pre.row === null || Math.abs(got.pre.row - got.pre.token) > 0.01) say(`${where}: a drawn row is ${got.pre.row}px tall, not the token's ${got.pre.token}px`);
+    if (got.pre.drawn === 0 || got.pre.drawn > got.pre.visible + 40) say(`${where}: ${got.pre.drawn} rows drawn for ${got.pre.visible} in view`);
+    // The viewer reads its box as it mounts, before the dialog's showModal gives the box a height, so only the
+    // observer's read covers the rows in view. Rows short of them are the mount's window, blank below until a scroll.
+    const { drawn, shown } = got.span;
+    if (drawn === null || drawn[0] > shown[0] || drawn[1] < shown[1]) {
+      say(`${where}: rows ${drawn?.join(' to ') ?? 'none'} drawn for rows ${shown.join(' to ')} in view`);
+    }
     if (got.body.scroll !== got.body.client) say(`${where}: the body scrolls (${got.body.scroll}px in ${got.body.client}px)`);
     if (got.dialog.scroll !== got.dialog.client) say(`${where}: the dialog scrolls (${got.dialog.scroll}px in ${got.dialog.client}px)`);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+  const colors = await tokenColors('dialog[open].dialog--wide');
+  await bodyEnd(theme, say);
   await page.keyboard.press('Escape');
   await settle();
-  const after = await page.evaluate(() => {
+  const after = await page.evaluate((el) => {
     const active = document.activeElement;
-    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: active?.classList.contains('body-block__link') && active.textContent?.trim() === 'Open wide' ? 'Open wide' : (active?.tagName ?? 'nothing') };
-  });
+    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: active === el ? 'the link' : `${active?.tagName ?? 'nothing'} ${active?.textContent?.trim().slice(0, 30) ?? ''}` };
+  }, clicked);
+  await clicked.dispose();
   if (after.dialog) say('Escape left the dialog open');
   if (!after.drawer) say('Escape closed the drawer with the dialog');
-  if (after.focus !== 'Open wide') say(`Escape left the focus on ${after.focus}, not on the Open wide link`);
-  if (!mock) return;
+  if (after.focus !== 'the link') say(`Escape left the focus on ${after.focus}, not on the Open wide link it opened from`);
+  const colorsHeld = () => {
+    measurements.push(`${theme} /requests body token colors ${JSON.stringify(colors)}`);
+    for (const [cls, read] of Object.entries(colors)) {
+      if (read === null) {
+        if (cls !== 'tok-event' || mock) say(`no drawn row holds a .${cls} span`);
+      } else if (read.color !== read.token) say(`a drawn .${cls} span reads ${read.color}, not the ${read.token} of --${cls}`);
+      // --tok-event resolves to the ink's color, so an event span that lost its rule shows only in its weight.
+      if (cls === 'tok-event' && read !== null && read.weight !== '600') {
+        say(`a drawn .tok-event span weighs ${read.weight}, not 600`);
+      }
+    }
+  };
+  if (!mock) {
+    colorsHeld();
+    return;
+  }
   // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
   await page.goto(`${base}/requests?keys=laptop`);
   await booted();
@@ -3407,7 +3800,7 @@ async function wideBodyDialog(theme) {
         return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
       };
       const note = [...head.children].find((c) => c.textContent?.includes('cut at'));
-      const link = head.querySelector('.body-block__link');
+      const link = head.querySelector('.link-btn');
       const buttons = [...head.querySelectorAll('.body-block__actions button')];
       const box = (b) => b.getBoundingClientRect();
       return { actions: { buttons: buttons.length, stacked: buttons.some((b, i) => i > 0 && box(b).left < box(buttons[i - 1]).right) }, client: head.clientWidth, height: Math.round(head.getBoundingClientRect().height), link: link ? linesOf(link) : 0, note: note ? linesOf(note) : 0, scroll: head.scrollWidth };
@@ -3425,6 +3818,35 @@ async function wideBodyDialog(theme) {
     if (cut.scroll > cut.client) say(`the cut body's head needs ${cut.scroll}px of its ${cut.client}px`);
     if (cut.link !== 1) say(`the cut body's Open wide link breaks over ${cut.link} lines`);
   }
+  // The story streams most answers, so a laptop row's Response opened wide draws the event span a JSON answer lacks:
+  // the open drawer's first, then the rows down the page until one does.
+  const responseColors = async () => {
+    const clicked = await page.evaluate(() => {
+      const block = [...document.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === 'Response');
+      const open = block?.querySelector('.link-btn');
+      open?.click();
+      return Boolean(open);
+    });
+    if (!clicked) return {};
+    const drew = await page
+      .waitForSelector('dialog[open].dialog--wide .body-row', { timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    await settle();
+    const read = drew ? await tokenColors('dialog[open].dialog--wide') : {};
+    await page.keyboard.press('Escape');
+    await settle();
+    return read;
+  };
+  for (let i = -1, n = await rows.count(); i < n && colors['tok-event'] === null; i += 1) {
+    if (i >= 0) {
+      await rows.nth(i).click();
+      await advance(LOAD_MS);
+      await loaded();
+    }
+    for (const [cls, read] of Object.entries(await responseColors())) colors[cls] ??= read;
+  }
+  colorsHeld();
 }
 
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
@@ -3847,11 +4269,84 @@ async function escapeReachesFilter(theme, what, station) {
 }
 
 /**
+ * A computed color as 0 to 255 channels and an alpha: the `rgb()` and `rgba()` forms, and the `color(srgb r g b / a)`
+ * form Chromium serializes a mix with transparency as.
+ */
+function colorChannels(css) {
+  const srgb = /^color\(srgb ([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([-\d.e]+))?\)$/.exec(css);
+  if (srgb) return { alpha: srgb[4] === undefined ? 1 : Number(srgb[4]), rgb: [1, 2, 3].map((i) => Number(srgb[i]) * 255) };
+  const [r, g, b, a] = (css.match(/[\d.]+/g) ?? ['0', '0', '0', '0']).map(Number);
+  return { alpha: a === undefined ? 1 : a, rgb: [r, g, b] };
+}
+
+/** `top` over `under`, both read by `colorChannels`, `under` taken as opaque. */
+const composite = (top, under) => top.rgb.map((c, i) => top.alpha * c + (1 - top.alpha) * under.rgb[i]);
+
+/** The WCAG contrast ratio of two opaque colors given as 0 to 255 channels. */
+function contrastOf(a, b) {
+  const luminance = (rgb) => {
+    const [r, g, bl] = rgb.map((v) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+}
+
+/**
+ * The open card's strip draws its idle paths, brackets and nodes in `--strip-idle`, each stroke read as drawn and held
+ * at 1.5:1 or better against the surface behind the strip, a hairline's contrast rather than a text's, in either
+ * theme. The token mixes the secondary ink with transparency, so each stroke is composited over that surface before
+ * the ratio, and the surface itself over what lies under it where it is translucent.
+ */
+async function stripIdleContrast(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log strip idle: ${what}`);
+  const read = await page.evaluate(() => {
+    const strip = document.querySelector('.routing-log__panel .decision-card .decision-strip');
+    if (!strip) return null;
+    // The backgrounds from the strip out to the first opaque one, which a translucent one above it is painted over.
+    const surfaces = [];
+    for (let at = strip; at; at = at.parentElement) {
+      const bg = getComputedStyle(at).backgroundColor;
+      if (bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') continue;
+      surfaces.push(bg);
+      if (!/^rgba\(|\/ /.test(bg)) break;
+    }
+    const probe = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    probe.style.stroke = 'var(--strip-idle)';
+    strip.querySelector('svg')?.append(probe);
+    const token = probe.isConnected ? getComputedStyle(probe).stroke : null;
+    probe.remove();
+    const strokes = [...strip.querySelectorAll('.strip-path.is-idle, .strip-bracket, .strip-node.is-idle')].map((el) => ({ kind: el.getAttribute('class') ?? '', stroke: getComputedStyle(el).stroke }));
+    return { strokes, surfaces, token };
+  });
+  if (read === null) {
+    say('no decision strip is open to read');
+    return;
+  }
+  const layers = read.surfaces.length > 0 ? read.surfaces.map(colorChannels) : [{ alpha: 1, rgb: [255, 255, 255] }];
+  const surface = layers.slice(0, -1).reduceRight((under, top) => ({ alpha: 1, rgb: composite(top, under) }), { alpha: 1, rgb: layers[layers.length - 1].rgb });
+  const ratioOf = (stroke) => contrastOf(composite(colorChannels(stroke), surface), surface.rgb);
+  const kinds = [...new Map(read.strokes.map((s) => [`${s.kind.split(' ').slice(0, 2).join(' ')} ${s.stroke}`, s])).values()];
+  measurements.push(`${theme} /routing-log strip idle token ${read.token} over ${JSON.stringify(read.surfaces)}: ${read.token === null ? 'unread' : `${ratioOf(read.token)}:1`}, ${read.strokes.length} idle strokes ${JSON.stringify(kinds.map((s) => [s.kind, s.stroke, ratioOf(s.stroke)]))}`);
+  if (read.token === null) say('the token could not be read off the strip');
+  else if (ratioOf(read.token) < 1.5) say(`the token ${read.token} reads ${ratioOf(read.token)}:1 over the strip's surface, under 1.5:1`);
+  // A strip whose idle classes moved would leave the loop below nothing to hold, and the token's ratio alone passes.
+  if (read.strokes.length === 0) say('no idle stroke read');
+  for (const s of kinds) {
+    if (s.stroke !== read.token) say(`${s.kind} strokes ${s.stroke}, not the token's ${read.token}`);
+    else if (ratioOf(s.stroke) < 1.5) say(`${s.kind} reads ${ratioOf(s.stroke)}:1 over the strip's surface, under 1.5:1`);
+  }
+}
+
+/**
  * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the strip and the candidate
  * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, every badge of the strip takes the
  * kind badge's box, grown by a line for each line a station's badge wraps to, with its text inside its pill, and the
  * strip is as high as its rows. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
- * placement the page lists. The router's seed places no request by a rung and records no move, so there that check
+ * placement the log lists. The router's seed places no request by a rung and records no move, so there that check
  * stands down and the shed move's badge colors are the story's alone. A station's popover keeps inside the card at the
  * two viewports and at 700 by 800: the mock pass reads the shed move's Move station (the widest popover), its Cool
  * reading (the widest table) and its striped Pick table, and the fresh placement's Pick station, the seeded router's
@@ -3866,8 +4361,11 @@ async function escapeReachesFilter(theme, what, station) {
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
   const decisions = page.locator(DECISION_ROWS);
-  // `firstDecisionOpen` has named the missing card already.
-  if ((await page.locator('.routing-log__panel .decision-strip').count()) === 0) return;
+  // Said here too, so a strip that never opened fails this measure by name rather than leaving it unread.
+  if ((await page.locator('.routing-log__panel .decision-strip').count()) === 0) {
+    say('no decision strip is open to measure');
+    return;
+  }
   const read = () =>
     page.evaluate(() => {
       const box = (el) => {
@@ -3900,6 +4398,28 @@ async function decisionCard(theme) {
                 const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
                 return leaf ? Math.round((leaf.top + leaf.bottom) / 2 - surface.getBoundingClientRect().top) : null;
               })(),
+              // The first row by the layout's rule in decisionStrip.ts, read off the drawn boxes: the deepest of 76 px
+              // under the line, half a leaf under the host's label below it, and the gap and half a leaf under any
+              // other label below it that reaches past the leaves' right edge.
+              expectedRow: (() => {
+                // decisionStrip.ts's LEAF_HALF and LABEL_GAP.
+                const LEAF_HALF = 12;
+                const LABEL_GAP = 3;
+                const at = surface.getBoundingClientRect();
+                let row = Number(surface.dataset.y0) + 76;
+                const leaf = surface.querySelector('.strip-candidate')?.getBoundingClientRect();
+                // The fan drops from the host station's center, so its drawn line names the host.
+                const fan = surface.querySelector('.strip-path--fan')?.getBoundingClientRect();
+                if (!leaf || !fan) return row;
+                const hostX = (fan.left + fan.right) / 2;
+                for (const el of surface.querySelectorAll('.strip-station:not(.strip-station--above)')) {
+                  const box = el.getBoundingClientRect();
+                  const bottom = box.bottom - at.top;
+                  if (Math.abs((box.left + box.right) / 2 - hostX) <= 1) row = Math.max(row, bottom + LEAF_HALF);
+                  else if (box.left < leaf.right) row = Math.max(row, bottom + LABEL_GAP + LEAF_HALF);
+                }
+                return Math.round(row);
+              })(),
               drawn: surface.querySelectorAll('.strip-station').length,
               height: Math.round(surface.getBoundingClientRect().height),
               leaves: Number(surface.dataset.leaves),
@@ -3928,10 +4448,12 @@ async function decisionCard(theme) {
     if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
     if (got.strip.scroll > got.strip.client) say(`${where}: the strip runs ${got.strip.scroll}px in ${got.strip.client}px`);
     if (got.strip.svg !== Math.max(640, got.strip.client)) say(`${where}: the strip's drawing is ${got.strip.svg}px wide in a ${got.strip.client}px strip, not redrawn for its width`);
-    const { leaves, y0 } = got.surface;
-    const first = got.surface.firstRow ?? y0 + 76;
+    const { expectedRow, leaves, y0 } = got.surface;
+    if (got.surface.firstRow === null && leaves > 0) say(`${where}: the strip counts ${leaves} leaves and draws none to read its first row on`);
+    // A strip with no leaf keeps its first row where the rule puts it, which the height below counts from.
+    const first = got.surface.firstRow ?? expectedRow;
     const rows = Math.max(first + Math.max(leaves, 1) * 30 + 4, y0 + 104);
-    if (first < y0 + 76) say(`${where}: the first leaf row stands at ${first}px, above the ${y0 + 76}px it starts at under a line at ${y0}px`);
+    if (Math.abs(first - expectedRow) > 2) say(`${where}: the first leaf row stands at ${first}px, not within 2px of the ${expectedRow}px its drawn labels put it at under a line at ${y0}px`);
     if (got.surface.height !== rows) say(`${where}: the strip is ${got.surface.height}px high, not the ${rows}px its ${leaves} leaves from a first row at ${first}px take`);
     // The record's steps and its placeholders, which the surface carries, are the stations a reader tabs through.
     if (got.surface.drawn !== got.surface.stations) say(`${where}: the strip draws ${got.surface.drawn} stations, not the ${got.surface.stations} of its record's steps and placeholders`);
@@ -3964,6 +4486,11 @@ async function decisionCard(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
+  // The story hour's newer rows hold its rung placements past the default hour's first page.
+  if ((await rung.count()) === 0 && mock) {
+    await page.locator('button[aria-label="Next page"]').click();
+    await advance(LOAD_MS);
+  }
   if ((await rung.count()) === 0) {
     if (mock) say('the story lists no rung placement whose Prefix cell to read');
     return;
@@ -4036,10 +4563,11 @@ async function decisionCard(theme) {
   await stripPointer(theme, "the shed move's card at the strip's 640 px floor", true);
   await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
-  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box.
-  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
-  // The shed move's pick scores two members, so its table has a second row to stripe.
-  await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0]] });
+  // The cool reading draws the story's widest table, ten columns, whose heads wrap to fit the box. It holds a row per
+  // destination, primary and overflow, so its second row stripes. The pick ranks primary alone, since nightly, which
+  // scores above it, sits at its cap.
+  await popoverBounds(theme, "the shed move's Cool reading", async (card) => card.locator('.strip-station[data-station="cool"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
+  await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0]] });
   // The fresh placement at 14:09:41 opens on its request's page too, so the hour the page shows cannot hide it.
   const fresh = 'req_ef099b34-453';
   const placed = (await page.evaluate(() => Date.now())) - (20 * 60 + 19) * 1_000;
@@ -5016,9 +5544,9 @@ async function sessionForkMark(theme) {
  * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
  * center, with the default columns.
  * The badge sits under the id and wraps its words when the column is narrower than they are, so
- * its height is free and its width is what the measurement records beside its cell's. The story forks two sessions
- * beside their bases, so the mock pass requires two links; the router pass measures the links its seed draws and
- * records their count.
+ * its height is free and its width is what the measurement records beside its cell's. The story forks three sessions
+ * beside their bases, one of them without a pin, so the mock pass requires three links. The router pass measures the
+ * links its seed draws and records their count.
  */
 async function sessionForkBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
@@ -5054,7 +5582,7 @@ async function sessionForkBadges(theme) {
   ]) {
     const links = await read();
     measurements.push(`${theme} /sessions fork badges with ${set}: ${links.length} links ${JSON.stringify(links)}`);
-    if (mock && links.length !== 2) say(`${links.length} fork links are drawn with ${set}, not the story's two`);
+    if (mock && links.length !== 3) say(`${links.length} fork links are drawn with ${set}, not the story's three`);
     for (const l of links) {
       const name = `"${l.text}" with ${set}`;
       if (!(l.width > 0)) say(`${name} has no width`);
@@ -5158,7 +5686,7 @@ async function copiedByCommand(button, expected, label, say) {
 
 /**
  * The Settings view's Copy snippet without a clipboard copies the client block beside it. A reload after it brings
- * the accessor back, and the clock stands, so the views after it draw the instants they drew without the measure.
+ * the accessor back for the views after it.
  */
 async function copyFallback(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
@@ -5171,9 +5699,8 @@ async function copyFallback(theme) {
 
 /**
  * The Key created dialog's Copy without a clipboard, inside a modal: a key is created on the Keys view and its
- * secret copied by the command. The creation moves the page clock, so it runs after every shot on a load of its own,
- * and in the mock pass alone: the mock's story is rebuilt at the next load, where the router's registry would keep
- * the key and refuse its second creation.
+ * secret copied by the command. It runs on a load of its own, and in the mock pass alone: the mock's story is rebuilt
+ * at the next load, where the router's registry would keep the key and refuse its second creation.
  */
 async function copyFallbackModal(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -5205,8 +5732,8 @@ async function copyFallbackModal(theme) {
 
 /**
  * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
- * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin and moves only when
- * `advance` moves it.
+ * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin. From there `advance`
+ * moves it forward, and each view of the pass sets it back to the origin before its load.
  */
 async function logIn() {
   await page.clock.install({ time: clockOrigin });
@@ -5231,7 +5758,13 @@ try {
     for (const view of VIEWS) {
       if (view.mockOnly && !mock) continue;
       at = `${theme} ${view.path}`;
-      await page.goto(`${base}${view.path}`);
+      const target = `${base}${view.path}`;
+      // A goto that changes the hash alone would keep the loaded app running under the instant set below, so such a
+      // view goes through a blank page first and its bundle loads anew.
+      if (view.path.includes('#') && page.url().split('#')[0] === target.split('#')[0]) await page.goto('about:blank');
+      // Every view starts from the origin, so no earlier measure's advance moves the instant this one draws at.
+      await page.clock.setSystemTime(clockOrigin);
+      await page.goto(target);
       await booted();
       await advance(LOAD_MS);
       try {
@@ -5279,6 +5812,7 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await poolMemberPins(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);
@@ -5335,21 +5869,32 @@ try {
         await quotaMeters(theme);
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
+      // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
+      // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
+      // scrolls that row into view).
+      await page.evaluate(() => window.scrollTo(0, 0));
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
+      // Read at capture time: a shot of a scrolled page reproduces byte for byte, so no later diff would catch it.
+      const offset = await page.evaluate(() => window.scrollY);
+      if (offset !== 0) failures.push(`${theme} ${view.path}: the shot was taken ${offset} px down the page`);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
+      if (view.path === '/pools') await utilizationMargin(theme);
+      if (view.path === '/keys') await keysLayout(theme);
+      if (view.path === '/analytics') await burnLoneCard(theme);
+      if (view.path === '/requests') await requestsTableNoFill(theme);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
+      if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
     }
   }
-  // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
-  // and the views' shots would then draw other instants than a pass without it.
+  // Only the mock bundle routes the fixture path.
   if (mock) {
     for (const theme of ['light', 'dark']) {
       at = `${theme} /fixtures/grouped-dialog`;
@@ -5362,21 +5907,18 @@ try {
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await poolCostReference(theme);
   }
-  // A step per page moves the page clock as far as the story has pages, so the walk runs after every shot.
   for (const theme of ['light', 'dark']) {
     at = `${theme} /requests default pages`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await requestPageWidths(theme);
   }
-  // The Key created dialog's Copy creates a key and moves the page clock, so it runs after every shot, in the mock
-  // pass alone.
+  // The Key created dialog's Copy creates a key, so it runs in the mock pass alone.
   if (mock) {
     for (const theme of ['light', 'dark']) {
       at = `${theme} /keys copy by command`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await copyFallbackModal(theme);
     }
-    // Following a reasons panel link moves the page clock as well.
     for (const theme of ['light', 'dark']) {
       at = `${theme} /analytics reasons panel link`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AccountCatalog } from '@/api/types';
 import { IconRefresh, IconWarning } from '@/components/ui/icons';
@@ -29,33 +29,37 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
   // Only the newest read lands: a Refresh overtakes the read the dialog opened with, and a close drops both.
   const latest = useRef(0);
 
-  const read = (refresh: boolean) => {
-    const seq = ++latest.current;
-    setLoading(true);
-    setFailure(null);
-    (refresh ? api.getAccountCatalog(accountId, true) : api.getAccountCatalog(accountId)).then(
-      (answer) => {
-        if (seq !== latest.current) return;
-        setCatalog(answer);
-        setLoading(false);
-      },
-      (e: unknown) => {
-        if (seq !== latest.current) return;
-        setFailure(e instanceof Error ? e.message : String(e));
-        setLoading(false);
-      },
-    );
-  };
+  const read = useCallback(
+    (refresh: boolean) => {
+      const seq = ++latest.current;
+      setLoading(true);
+      setFailure(null);
+      (refresh ? api.getAccountCatalog(accountId, true) : api.getAccountCatalog(accountId)).then(
+        (answer) => {
+          if (seq !== latest.current) return;
+          setCatalog(answer);
+          setLoading(false);
+        },
+        (e: unknown) => {
+          if (seq !== latest.current) return;
+          setFailure(e instanceof Error ? e.message : String(e));
+          setLoading(false);
+        },
+      );
+    },
+    [accountId],
+  );
 
+  // The dialog reads once per open and account.
   useEffect(() => {
     if (!open) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- each open starts from an empty catalog, which the read it starts fills
     setCatalog(null);
     read(false);
     return () => {
       latest.current += 1;
     };
-    // read is a closure rebuilt per render; the dialog reads once per open and account.
-  }, [open, accountId]);
+  }, [open, read]);
 
   const models = catalog ? [...catalog.models].sort((a, b) => a.id.localeCompare(b.id)) : [];
   return (

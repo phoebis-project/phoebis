@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { planLabel } from '@/api/decode';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
 import { anchorTier, bandNow, familyOrder, isWeighted, modelWeeks, shareIn, tierCapacity, unreachableBand, weightedWindows, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
+import { planLabel } from '@/lib/quota';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
 

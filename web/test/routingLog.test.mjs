@@ -90,7 +90,7 @@ const DECISIONS = [
   ['exhausted, credits', decision({ accountId: null, by: by('exhaustion', 'fast_credits'), exhaustion: { deadline: null, kind: 'fast_credits', obstacle: null, reason: 'declined', window: null }, fact: [fact('cause', 'declined', 'text')], kind: 'exhausted' }), 'credits', ['cause declined']],
   ['exhausted with nothing dated', decision({ accountId: null, by: by('exhaustion', 'untimed'), exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, fact: [fact('retry', 'none', 'text')], kind: 'exhausted' }), 'no deadline', ['retry none']],
   ['refused, client drift', decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash' } }), 'client drift', ['client 2.1.274']],
-  ['refused, a key revoked after admission', decision({ accountId: null, by: by('refusal', 'key'), fact: [fact('key', 'laptop', null, { id: 'laptop', kind: 'key' })], kind: 'refused', refusal: { kind: 'key', reason: 'the key was revoked' } }), 'key revoked', ['key laptop']],
+  ['refused, a key revoked after admission', decision({ accountId: null, by: by('refusal', 'key'), fact: [fact('key', 'laptop', null, { id: 'laptop', kind: 'key' })], kind: 'refused', refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }), 'key revoked', ['key laptop']],
   ['probe, renewed its pin', decision({ fact: [fact('epoch', 50, 'count')], kind: 'renewed', probe: true }), 'keepalive', ['epoch 50']],
   ['probe, answered exhausted', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(MIDNIGHT), kind: 'timed', obstacle: null, reason: null, window: 'budget' }, fact: [fact('retry', MIDNIGHT, 'time')], kind: 'exhausted', probe: true }), 'budget', ['retry 00:00']],
 ];
@@ -141,7 +141,6 @@ const EVENTS = [
   ['registry changed, several fields', event('registry_changed', { diff: { in_flight_cap: { from: 16, to: 8 }, pace_floor: { from: 0, to: 0.1 }, strategy: { from: 'pace', to: 'priority' } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['fields 3']],
   ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
-  ['re-auth required', event('reauth_required', {}), 'credential refused', ['state routing off']],
   ['refresh succeeded', event('refresh_succeeded', { access_expires_at: ms(20, 52), refresh_expires_at: null, until: ms(20, 52) }), 'refreshed', ['until 20:52']],
   ['refresh failed', event('refresh_failed', { cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }), 'refresh failed', ['cause invalid_grant']],
   ['refresh uncertain', event('refresh_uncertain', { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }), 'refresh uncertain', ['cause refresh_response_lost']],
@@ -165,6 +164,7 @@ const EVENTS = [
   ['catalog changed, models changed', event('catalog_changed', { added: ['claude-sonnet-5-5'], count: 12, removed: ['claude-sonnet-4-5'] }), 'models changed', ['models 12']],
   ['account state changed, a credential refused', event('account_state_changed', { cause: 'auth_failed', detail: null, from: 'ready', to: 'reauth_required' }), 'credential refused', ['state re-auth required']],
   ['account state changed, the credit balance', event('account_state_changed', { cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }), 'credit balance', ['state funding required']],
+  ['account state changed, a funding retry', event('account_state_changed', { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' }), 'funding retried', ['state ready']],
   ['account state changed, a refresh failed', event('account_state_changed', { cause: 'refresh_failed', detail: null, from: 'ready', to: 'reauth_required' }), 'refresh failed', ['state re-auth required']],
   ['account state changed by hand', event('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }), 'by hand', ['state ready']],
   ['account state changed, paired', event('account_state_changed', { cause: 'paired', detail: null, from: 'unpaired', to: 'ready' }), 'paired', ['state ready']],
@@ -182,6 +182,21 @@ for (const [name, row, by, facts, page] of EVENTS) {
     assert.deepEqual(read(row, page), { by, facts });
   });
 }
+
+test("a cooldown's words read the router's spellings alone, and any other reads as sent", () => {
+  assert.equal(read(event('cooldown_cleared', { cause: 'deadline', scope: 'account' })).by, 'deadline', 'the router writes a cooldown that ran out as expired');
+  assert.equal(read(event('cooldown_cleared', { cause: 'operator', scope: 'account' })).by, 'operator', 'and one cleared by hand as admin');
+  assert.equal(read(event('cooldown_set', { reason: 'rate_limited', scope: 'account', until: ms(15, 42), window: 'five_hour' })).by, 'rate limited', 'and a rate limit as rate_limit');
+});
+
+test("the story's funding retry reads funding retried", async () => {
+  const to = Date.now();
+  const page = await new d.MockApi().listRoutingLog({ from: iso(to - 7 * 24 * HOUR), kinds: ['account_state_changed'], limit: 25, to: iso(to) });
+  const retry = page.rows.find((r) => r.detail.cause === 'funding_retry');
+  assert.ok(retry, 'the story holds a funding retry');
+  assert.deepEqual([retry.accountId, retry.detail.from, retry.detail.to], ['overflow', 'funding_required', 'ready']);
+  assert.deepEqual(read(retry, page.rows), { by: 'funding retried', facts: ['state ready'] });
+});
 
 test('a pin created with no placement beside it reads the placement word', () => {
   assert.equal(d.byOf(event('pin_created', { agent_id: 'main', epoch: 52 }, { sessionId: 's-created' }), []).value, 'placement');
@@ -246,6 +261,7 @@ test('every event kind has its words and its tone', () => {
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
   assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
+  assert.equal(d.eventTone('reauth_required'), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
 });
 
 test('every decision kind has its words and its tone', () => {
@@ -300,11 +316,12 @@ test('PIN_RELEASE_LABEL words every release reason and releaseLabel keeps an unk
 test('each entity links to the route of its kind', () => {
   assert.equal(d.entityHref('account', 'primary'), '/accounts/primary');
   assert.equal(d.entityHref('request', 'req_1d9c3e55-0b2'), '/requests/req_1d9c3e55-0b2');
-  assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions?session=407dd39b-dd60');
+  // The Sessions and Models pages read no key for the entity, so the link opens the view itself.
+  assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions');
   assert.equal(d.entityHref('pool', 'all'), '/pools#all');
   assert.equal(d.entityHref('key', 'laptop'), '/keys#laptop');
   assert.equal(d.entityHref('key', 'ci key/2'), '/keys#ci%20key%2F2');
-  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models?model=claude-sonnet-5');
+  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models');
 });
 
 test('each link in builds its URL with its range', () => {
@@ -315,7 +332,7 @@ test('each link in builds its URL with its range', () => {
   // `to` stops at now.
   assert.deepEqual(d.aroundRequest(ms(14, 25), null, NOW), { from: ms(14, 10), to: NOW });
   assert.deepEqual(d.requestLink('req_1d9c3e55-0b2', at, finished, NOW), { from: at - 15 * MINUTE, request: 'req_1d9c3e55-0b2', to: finished + 15 * MINUTE });
-  assert.deepEqual(d.aroundSubject(null, NOW), { from: NOW - HOUR, to: NOW });
+  assert.deepEqual(d.aroundSubject(null, NOW), { range: '1h' });
   assert.deepEqual(d.aroundSubject(ms(11, 0), NOW), { from: ms(10, 0), to: ms(12, 0) });
   assert.deepEqual(d.aroundSubject(ms(14, 10), NOW), { from: ms(13, 10), to: NOW });
   assert.deepEqual(d.sinceCondition(ms(12, 41), NOW), { from: ms(12, 41), to: NOW });
@@ -332,6 +349,14 @@ test('each link in builds its URL with its range', () => {
   assert.deepEqual(Object.fromEntries(request), { from: '2026-09-16T13:47:10.000Z', request: 'req_1d9c3e55-0b2', to: '2026-09-16T14:17:40.000Z' });
   const session = new URL(d.logHref({ session: '407dd39b', ...d.aroundSubject(ms(11, 0), NOW) }), 'http://phoebis.test').searchParams;
   assert.deepEqual(Object.fromEntries(session), { from: '2026-09-16T10:00:00.000Z', session: '407dd39b', to: '2026-09-16T12:00:00.000Z' });
+});
+
+test('logHref writes a preset by name and a window as two instants', () => {
+  assert.equal(d.logHref({ range: '24h' }), '/routing-log?range=24h');
+  assert.equal(d.logHref({ range: '1h' }), '/routing-log');
+  assert.equal(d.logHref({ kinds: ['held'], range: '3h' }), '/routing-log?kinds=held&range=3h');
+  const instants = new URL(d.logHref({ from: ms(13, 30) + 123, to: ms(14, 29, 59) + 999 }), 'http://phoebis.test').searchParams;
+  assert.deepEqual(Object.fromEntries(instants), { from: '2026-09-16T13:30:00.123Z', to: '2026-09-16T14:29:59.999Z' });
 });
 
 test("the log's address keeps a kind this build does not know, so the route's refusal reaches the page", () => {
@@ -361,17 +386,17 @@ test('a Follow poll reads every page that arrived down to a row the list holds',
   // The list holds the oldest 25, and 100 more arrived before the poll.
   const route = arrivals(125);
   const shown = route.rows.slice(100);
-  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)));
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf, (r) => d.compareRows(r, shown.at(-1)) > 0);
   assert.deepEqual(route.reads, [undefined, '25', '50', '75', '100'], 'the fifth page reaches the rows the list holds');
   assert.equal(polled.overrun, null);
-  assert.deepEqual(d.merged(shown, polled.rows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
+  assert.deepEqual(d.merged(shown, polled.rows, d.identityOf, d.compareRows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
 });
 
 test('a Follow poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
   // 300 arrived over the 25 the list holds: eight pages bring the newest 200.
   const route = arrivals(325);
   const shown = route.rows.slice(300);
-  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)));
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf, (r) => d.compareRows(r, shown.at(-1)) > 0);
   assert.equal(route.reads.length, d.FOLLOW_PAGES);
   assert.equal(d.FOLLOW_PAGES, 8);
   assert.deepEqual(polled.rows.map(d.identityOf), route.rows.slice(0, 200).map(d.identityOf));
@@ -535,7 +560,8 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');
   const until = (h, m) => iso(ms(h, m));
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limit', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', 'rate limited until 15:42', 'in a cooldown'], 'the router spells its rate limit rate_limit alone');
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', until: until(14, 42), window: 'fast' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
   const operator = { name: 'operator', reason: null, until: null, window: null };
@@ -614,6 +640,44 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
 });
 
+test('a refusal reads its words by code, and an unknown code reads through the fallback', () => {
+  const refused = (refusal) => decision({ accountId: null, by: by('refusal', refusal.kind), kind: 'refused', refusal });
+  assert.equal(read(refused({ code: 'pool_missing', kind: 'key', reason: 'x' })).by, 'pool missing', 'the code names the words whatever the reason says');
+  assert.equal(read(refused({ code: 'drift', kind: 'client', reason: 'hash' })).by, 'client drift');
+  assert.equal(read(refused({ code: 'later', kind: 'key', reason: 'a new reason' })).by, 'key refused', 'a code the console has no words for reads as a key refusal');
+  // The card's Answer row reads the same words, and the reason's sentence for a code it has none for.
+  const answer = (refusal) => d.outcomeRows(record({ outcome: { accountId: null, kind: 'refused', refusal, upstreamModel: null }, request: { keyId: 'laptop' } }), NOW).map((line) => [line.label, texts(line.chips)]);
+  assert.deepEqual(answer({ code: 'pool_missing', kind: 'key', reason: 'x' }), [['Answer', ['pool missing', 'key laptop']]]);
+  assert.deepEqual(answer({ code: 'later', kind: 'key', reason: 'a new reason' }), [['Answer', ['a new reason', 'key laptop']]]);
+});
+
+test('an exhausted record after a run-out draws ran out on its hold and 429 on its answer', () => {
+  const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
+  const exhausted = (holds) =>
+    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null }, request: { holds } });
+  const hold = (accountId, ranOut, cohort = null) => ({ accountId, attempt: 1, cohort, heldMs: 60_000, ranOut });
+  assert.deepEqual(rows(exhausted([hold('primary', false), hold('secondary', true)])), [
+    ['Hold', ['on secondary', 'strategy pick', 'held 1 min', 'ran out']],
+    ['Answer', ['status 429', 'retry none']],
+  ]);
+  assert.deepEqual(rows(exhausted([hold('primary', false), hold('secondary', false)])), [
+    ['Hold', ['on secondary', 'strategy pick', 'held 1 min']],
+    ['Answer', ['status 404', 'retry none']],
+  ], 'a hold that did not run out leaves the status the kind names');
+  assert.deepEqual(rows(exhausted([hold('primary', true, 'primary')]))[0], ['Hold', ['on primary', 'cohort', 'held 1 min', 'ran out']], "a cohort's hold reads its place as the cohort row does");
+  assert.deepEqual(rows(exhausted([])), [['Answer', ['status 404', 'retry none']]], 'a record that held nowhere draws no hold');
+});
+
+test('an exhausted record draws no hold an earlier attempt waited through', () => {
+  const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
+  const exhausted = (attempt, holds) =>
+    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null }, request: { attempt, holds } });
+  const hold = (attempt) => ({ accountId: 'primary', attempt, cohort: null, heldMs: 60_000, ranOut: false });
+  // Held and freed on attempt 1, then failed over: the relay keeps attempt 1's hold on the request that attempt 2 exhausts.
+  assert.deepEqual(rows(exhausted(2, [hold(1)])), [['Answer', ['status 404', 'retry none']]]);
+  assert.deepEqual(rows(exhausted(2, [hold(1), hold(2)])), [['Hold', ['on primary', 'strategy pick', 'held 1 min']], ['Answer', ['status 404', 'retry none']]], "a hold on the record's own attempt still draws");
+});
+
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
   account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
@@ -621,7 +685,7 @@ const DETAIL_EVENTS = {
   budget_reached: [{ budget_usd: 20, period: 'day', period_end: MIDNIGHT, source_request_id: 'req_1', spent_usd: 20.4 }, ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by']],
   catalog_changed: [{ added: ['claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5'] }, ['Added', 'Removed', 'Models']],
   cooldown_cleared: [{ cause: 'expired', scope: 'account' }, ['Scope', 'Cleared']],
-  cooldown_set: [{ reason: 'rate_limited', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
+  cooldown_set: [{ reason: 'rate_limit', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
   fast_credits_changed: [{ after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: ms(11, 30) }, ['Before', 'After', 'Cause', 'Effect']],
   ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Meaning', 'Effect', 'Request']],
   model_permitted: [{ attempt: 2, rejected_by: ['secondary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request']],
@@ -657,19 +721,19 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   assert.deepEqual(Object.keys(DETAIL_EVENTS).sort(), Object.keys(d.EVENT_KIND_LABEL).sort());
   for (const [kind, [detail, own]] of Object.entries(DETAIL_EVENTS)) {
     const row = event(kind, detail, { actor: 'admin', agentId: 'main', keyId: 'desktop', model: 'claude-haiku-4-5-20251001', poolId: 'all', requestId: 'req_1', sessionId: 's1-0000-4000' });
-    const pairs = d.detailPairs(row, NOW);
+    const pairs = d.detailPairs(row, NOW, []);
     assert.deepEqual(pairs.slice(0, 3).map((p) => [p.label, texts(p.chips)]), [['When', ['2026-09-16 14:00:00 UTC']], ['Account', ['primary']], ['Pool', ['all']]], kind);
     assert.deepEqual(pairs[1].chips[0].entity, { id: 'primary', kind: 'account' }, kind);
     assert.deepEqual(pairs[2].chips[0].entity, { id: 'all', kind: 'pool' }, kind);
     assert.deepEqual(pairs.slice(3).map((p) => p.label), own, kind);
     for (const p of pairs) for (const c of p.chips) assert.ok(!/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
   }
-  const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW);
+  const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, []);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
-  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW).find((p) => p.label === 'Pins');
+  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', 'marked']]);
-  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW).find((p) => p.label === 'Survive a restart');
+  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
@@ -677,7 +741,7 @@ test("a shedding round's rates are the engine's per second, drawn per hour in th
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const round = fixture.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
   const drawn = (row) => {
-    const pairs = d.detailPairs(row, NOW);
+    const pairs = d.detailPairs(row, NOW, []);
     return { pins: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => chipText(r[3])), share: texts(pairs.find((p) => p.label === 'Share').chips) };
   };
   // The router's row: a burn sum of 0.12 and a pin of 0.07 a second, in shares of the 5-hour window.
@@ -745,7 +809,7 @@ test('the settings in force read the twenty in the card order', () => {
 });
 
 test('the event detail draws the pairs its event carries: the effect, the meaning, the reading and the backoff span', () => {
-  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW).map((p) => [p.label, texts(p.chips)]));
+  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW, []).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs('account_state_changed', { cause: 'funding_refused', detail: null, from: 'ready', to: 'funding_required' }).Effect, ['the account leaves every eligible set until funded']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }).Effect, ['the account left the registry and this is its last row']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets']);
@@ -763,8 +827,34 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
 });
 
+test("a model rejection reads its until off the page's cooldown row and has no pair without one", () => {
+  const at = iso(ms(14, 12, 5));
+  const rejection = event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_011', wire_model: 'claude-haiku-4-5' }, { at, model: 'claude-haiku-4-5-20251001', requestId: 'req_011' });
+  const cooldown = (o = {}, detail = {}) => event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', source_request_id: 'req_011', until: ms(15, 24), window: 'model', ...detail }, { at, id: 8, requestId: 'req_011', ...o });
+  const until = (rows) => d.detailPairs(rejection, NOW, rows).find((p) => p.label === 'Until')?.chips.map(chipText);
+  assert.deepEqual(until([cooldown()]), ['15:24']);
+  assert.deepEqual(d.detailPairs(rejection, NOW, [cooldown()]).slice(2).map((p) => p.label), ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Until', 'Request']);
+  assert.deepEqual(until([decision({ at }), cooldown()]), ['15:24'], 'the decisions beside it are passed over');
+  assert.equal(until([]), undefined, 'no cooldown row on the page');
+  assert.equal(until([cooldown({ accountId: 'secondary' })]), undefined, "another account's cooldown");
+  assert.equal(until([cooldown({ requestId: 'req_012' }, { source_request_id: 'req_012' })]), undefined, "another request's cooldown");
+  assert.equal(until([cooldown({}, { scope: 'model:claude-sonnet-5' })]), undefined, 'a cooldown on another model');
+  assert.equal(until([cooldown({}, { scope: 'account' })]), undefined, 'a cooldown on the whole account');
+});
+
+test("a model rejection reads the until off its own request's cooldown row, whatever instant the router dated each", () => {
+  const at = ms(14, 12, 5);
+  const rejection = (o = {}) => event('model_rejected', { attempt: 1, request_id: 'req_011', source_request_id: 'req_011', wire_model: 'claude-haiku-4-5' }, { at: iso(at), model: 'claude-haiku-4-5-20251001', requestId: 'req_011', ...o });
+  const cooldown = (o = {}, detail = {}) => event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', source_request_id: 'req_011', until: ms(15, 24), window: 'model', ...detail }, { at: iso(at + 3), id: 8, requestId: 'req_011', ...o });
+  const until = (row, rows) => d.detailPairs(row, NOW, rows).find((p) => p.label === 'Until')?.chips.map(chipText);
+  assert.deepEqual(until(rejection(), [cooldown()]), ['15:24'], 'the router dated the cooldown 3 ms after the rejection');
+  assert.deepEqual(until(rejection(), [cooldown({ at: iso(at - 2) })]), ['15:24'], 'and 2 ms before it');
+  assert.equal(until(rejection(), [cooldown({ requestId: 'req_012' }, { source_request_id: 'req_012' })]), undefined, "another request's cooldown a few milliseconds on");
+  assert.equal(until(rejection({ requestId: null }), [cooldown({ requestId: null }, { source_request_id: null })]), undefined, 'a rejection that names no request reads no cooldown');
+});
+
 test('the catalog change lists its models fable, opus, sonnet, haiku, newest first', () => {
-  const pairs = Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW).map((p) => [p.label, texts(p.chips)]));
+  const pairs = Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW, []).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
   assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
 });
@@ -799,22 +889,24 @@ test("the Pace cell's title names the share, the hours, the deadline and the rat
   const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
   const reset = Date.UTC(2026, 8, 19, 8, 30);
   const read = { deadline: iso(reset), end: null, hours: 66, remaining: 0.08, reset: iso(reset), score: 0.08 / 66, window: 'seven_day' };
-  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
   const end = ms(16, 44);
   assert.equal(
     title({ deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23, window: 'seven_day_fable' }),
-    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. The highest wins.",
+    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. Inside its tier, the highest above the pace floor wins.",
   );
   assert.equal(
     title({ deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }),
-    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. The highest wins.',
+    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. Inside its tier, the highest above the pace floor wins.',
   );
-  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
-  // Under an hour the hours read one decimal, and from an hour on the whole hours.
-  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 0.4 h to its reset at Sep 19 08:30: 19.05 %/h. The highest wins.');
-  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. The highest wins.');
+  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. Inside its tier, the highest above the pace floor wins.');
+  // Under an hour the span reads in minutes, and from an hour on in whole hours.
+  assert.equal(title({ ...read, hours: 0.42, score: 0.08 / 0.42 }), '8% of the 7-day window left over 25 min to its reset at Sep 19 08:30: 19.05 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 1.4, score: 0.08 / 1.4 }), '8% of the 7-day window left over 1 h to its reset at Sep 19 08:30: 5.71 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 0.2, score: 0.08 / 0.2 }), '8% of the 7-day window left over 12 min to its reset at Sep 19 08:30: 40.00 %/h. Inside its tier, the highest above the pace floor wins.');
+  assert.equal(title({ ...read, hours: 3.4, score: 0.08 / 3.4 }), '8% of the 7-day window left over 3 h to its reset at Sep 19 08:30: 2.35 %/h. Inside its tier, the highest above the pace floor wins.');
   // A pace written without the field reads as the null window.
-  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. The highest wins.');
+  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.');
   const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
   const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
   assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');

@@ -51,9 +51,15 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
   const version = useFormatVersion();
   const zone = viewingZone();
   const week = useMemo(() => bandWeek(costs, now, zone), [costs, now, zone]);
-  // The clock reads the time format from module state, so the setting's version is what redraws these two lines.
-  const caption = useMemo(() => bandCaption(costs, now, zone, minuteClock), [costs, now, zone, version]);
-  const change = useMemo(() => nextLocalChange(costs, now, zone, minuteClock), [costs, now, zone, version]);
+  // The clock reads the time format from module state, so the setting's version is what redraws these two lines. The
+  // memo reads the version so its dependency list can name it.
+  const { caption, change } = useMemo(() => {
+    void version;
+    return {
+      caption: bandCaption(costs, now, zone, minuteClock),
+      change: nextLocalChange(costs, now, zone, minuteClock),
+    };
+  }, [costs, now, zone, version]);
   const nowMinute = useMemo(() => {
     const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', minute: 'numeric', timeZone: zone }).formatToParts(now);
     return Number(parts.find((p) => p.type === 'hour')?.value) * 60 + Number(parts.find((p) => p.type === 'minute')?.value);

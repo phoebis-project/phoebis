@@ -293,7 +293,7 @@ function WindowChip({ name, window: w, className, now }: { className: string; na
 /**
  * One window as three cells of the card grid: the chip, the meter, and the reset label. The grid sizes the chip and
  * the reset to their content and hands the meter the rest, and `qwin__chip` names the chip's cell for the checks that
- * read a row by its cells.
+ * read a row by its cells. Under 900 px the reset label takes a row of its own under the meter.
  */
 function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
@@ -315,8 +315,8 @@ function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number
           resets {fmtRelative(live.resetsAt, now)}
         </span>
       ) : w ? (
-        <span className="qwin__reset muted" title={fmtAbsolute(w.resetsAt)}>
-          expired {fmtRelative(w.resetsAt, now)}, no reading since
+        <span className="qwin__reset muted" title={`no reading since the reset, ${fmtAbsolute(w.resetsAt)}`}>
+          expired {fmtRelative(w.resetsAt, now)}
         </span>
       ) : (
         <span className="qwin__reset muted">not reported</span>
@@ -473,8 +473,8 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
               const end = start + period;
               const stop = Math.min(end, endMs);
               // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended
-              // before that start.
-              if (stop < span.startMs) continue;
+              // at or before that start.
+              if (stop <= span.startMs) continue;
               if (start >= endMs) continue;
               bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
             }

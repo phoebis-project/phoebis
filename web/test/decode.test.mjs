@@ -335,6 +335,12 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
 
+test("a pool member reads the pins on its account under the pool's keys, and none where the route answers none", () => {
+  const pool = fixture('pools').pools[0];
+  const members = [{ account_id: 'business', active_pins: 3, priority: 0 }, { account_id: 'direct', priority: 1 }];
+  assert.deepEqual(d.decodePool({ ...pool, members }).members.map((m) => [m.accountId, m.activePins]), [['business', 3], ['direct', 0]]);
+});
+
 test('a pool decodes the ceilings the router resolved for it, and a pool with no member reads null', () => {
   const row = fixture('pools').pools[0];
   const resolved = d.decodePool(row).keepaliveResolved;
@@ -673,6 +679,14 @@ test("an attempt reads the upstream's request id, and its message id only on the
   assert.deepEqual([missing.upstreamRequestId, missing.upstreamMessageId], [null, null], 'an attempt with no head names neither');
 });
 
+test("an attempt reads the answer's service tier, and none where the answer carried none", () => {
+  const wire = fixture('requests').requests[0].attempts[0];
+  assert.equal(wire.service_tier, null, 'the captured answer carried no tier');
+  assert.equal(d.decodeRequest({ attempts: [wire] }).attempts[0].serviceTier, null);
+  assert.equal(d.decodeRequest({ attempts: [{ ...wire, service_tier: 'priority' }] }).attempts[0].serviceTier, 'priority');
+  assert.equal(d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0].serviceTier, null, 'an attempt without the field reads none');
+});
+
 test('a stream that ended before its end decodes as incomplete and a group reads its own counter', () => {
   const cut = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-incomplete');
   assert.deepEqual([cut.outcome, cut.status, cut.errorCode, cut.transport], ['incomplete', 200, 'stream_incomplete', 'sse'], 'the sixth outcome reads as itself, not the failed fallback');
@@ -955,7 +969,9 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   assert.deepEqual(placed.cache, { hit: true, inputTokens: 1000, promisedTokens: 31200, readTokens: 500 });
   const refused = page.rows.find((r) => r.type === 'decision' && r.kind === 'refused');
   assert.deepEqual(refused.fact, [{ entity: { id: 'retired', kind: 'key' }, key: 'key', unit: null, value: 'retired' }], 'a fact names its entity');
-  assert.deepEqual(refused.refusal, { kind: 'key', reason: 'the key is not in the registry' });
+  assert.deepEqual(refused.refusal, { code: 'unknown', kind: 'key', reason: 'the key is not in the registry' }, "a refusal reads the router's code beside its reason");
+  assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { kind: 'key', reason: 'the key is not in the registry' } }).refusal.code, '', 'a refusal written before its code reads an empty one');
+  assert.equal(d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'refused'), refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }).refusal.code, 'revoked');
   const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
   assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
   assert.deepEqual(exhausted.exhaustion, { deadline: new Date(1_600_000).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
@@ -1007,6 +1023,12 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
   assert.ok(isIso(r.outcome.completion.completedAt));
+  // The fixture's record waited on no hold and refused nothing, so the run-out bit and the refusal code ride on a copy.
+  const held = (h) => ({ account_id: 'business', attempt: 1, cohort: null, held_ms: 60_000, ...h });
+  const ranOut = d.decodeDecisionRecord({ ...body, request: { ...body.request, holds: [held({}), held({ ran_out: true })] } });
+  assert.deepEqual(ranOut.request.holds.map((h) => h.ranOut), [false, true], 'a hold without the bit reads as one the relay did not answer at');
+  const revoked = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } } });
+  assert.deepEqual(revoked.outcome.refusal, { code: 'revoked', kind: 'key', reason: 'the key was revoked' });
 });
 
 test('a row with null optionals decodes to nulls', () => {
@@ -1033,7 +1055,7 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
   const body = fixture('decision');
   const refused = { ...body, pin: null, pin_reason: 'not_looked_up', outcome: { ...body.outcome, account_id: null, completion: null, kind: 'refused', pin_events: [], pin_written: null, refusal: { kind: 'client_drift', reason: 'hash' }, rung: null } };
   const r = d.decodeDecisionRecord(refused);
-  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { kind: 'client_drift', reason: 'hash' }]);
+  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { code: '', kind: 'client_drift', reason: 'hash' }]);
   assert.equal(d.decodeDecisionRecord({ ...refused, pin_reason: 'looked_away' }).pinReason, null, 'a word outside the list reads as none, which the raw answer still carries');
   assert.equal(d.decodeDecisionRecord(body).pinReason, null, "the fixture's placement reads its pin, so it names no reason");
   assert.deepEqual([...d.PIN_REASON_VALUES], ['not_looked_up', 'pinning_off']);
@@ -1196,6 +1218,19 @@ test('an error code named like an object member keeps its count under its code, 
   assert.equal(Object.getPrototypeOf(mocked.errors), null, 'the mock sums into a map with no inherited members too');
 });
 
+test('a session fold reads a probe the router held while its ledger caught up under its held count alone', () => {
+  const served = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
+  const held = { ...served, accountId: null, attempts: [], costUsd: 0, errorCode: 'ledger_behind', kind: 'probe', outcome: 'rejected', status: 503 };
+  const [both] = d.foldGroups([served, held], 'all');
+  assert.deepEqual([both.requests, both.rejected, both.attempts, both.uncached + both.cacheHits + both.cacheMisses, Object.keys(both.errors), both.probes.held], [1, 0, served.attempts.length, 1, [], 1]);
+  assert.equal(both.histograms.durationMs.reduce((a, b) => a + b, 0), 1, 'nor does it join a timing');
+  const [alone] = d.foldGroups([held], 'all');
+  assert.deepEqual([alone.requests, alone.rejected, Object.keys(alone.errors), alone.probes.held], [0, 0, [], 1], 'a group of held probes alone holds no request, as its rollup row does');
+  const [refused] = d.foldGroups([{ ...held, errorCode: 'accounts_unavailable' }], 'all');
+  assert.deepEqual([refused.requests, refused.rejected, Object.keys(refused.errors), refused.probes.held], [1, 1, ['accounts_unavailable'], 0], 'a probe refused for another reason stays a request');
+  assert.equal(d.foldRequests([served, held], 3_600_000, served.at, served.at)[0].groups[0].probes.held, 1, 'the bucketed fold reads it the same');
+});
+
 test('a session fold groups on the client class and narrows to a class pattern the way the rollups do', () => {
   const row = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
   const rows = [row, { ...row, id: 'r-second' }, { ...row, client: null, id: 'r-unclassed' }];
@@ -1291,9 +1326,15 @@ test('a recipe held under the horizon or ended at the parked limit keeps that ca
   assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
 });
 
-test('the downstream snippet is the seven recommended lines with the public URL left to the operator', () => {
-  assert.equal(d.PLACEHOLDER_URL, 'https://router.example.com');
-  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
+test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {
+  const lines = (listeners) => d.snippetFor(listeners).split('\n');
+  const rest = ['CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'];
+  assert.deepEqual(lines({ proxy: '127.0.0.1:8080', proxyTls: false }), ['ANTHROPIC_BASE_URL=http://router.example.com:8080', ...rest]);
+  assert.equal(lines({ proxy: '0.0.0.0:8443', proxyTls: true })[0], 'ANTHROPIC_BASE_URL=https://router.example.com:8443', 'a listener that terminates TLS reads https');
+  assert.equal(lines({ proxy: '[::]:8080', proxyTls: false })[0], 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'the port follows the last colon, so an IPv6 bind reads its own');
+  assert.equal(lines({ proxy: '', proxyTls: false })[0], 'ANTHROPIC_BASE_URL=http://router.example.com', 'a bind with no colon names no port');
+  assert.equal(lines({ proxy: '[::1]', proxyTls: true })[0], 'ANTHROPIC_BASE_URL=https://router.example.com', 'nor does a bracketed address without one');
+  assert.deepEqual(lines(null), ['ANTHROPIC_BASE_URL=https://router.example.com', ...rest], 'without a settings answer the block reads the placeholder host with no port');
 });
 
 test('a session fold groups on the client each row named', () => {
@@ -1495,7 +1536,7 @@ test('settings decode the members the route answers and nothing more', () => {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
       apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
-      listeners: ['metrics', 'proxy'],
+      listeners: ['metrics', 'proxy', 'proxyTls'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
@@ -1503,7 +1544,9 @@ test('settings decode the members the route answers and nothing more', () => {
     },
     'each member carries what the pages read and no other key',
   );
-  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
+  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: wire.listeners.proxy_tls });
+  assert.equal(d.decodeSettings({ ...wire, listeners: { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy } }).listeners.proxyTls, false, 'an answer without proxy_tls reads a listener that terminates no TLS');
+  assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
   const configured = d.decodeSettings({ ...wire, storage: { ...wire.storage, api_prices_path: './api_prices.yaml', subscription_costs_path: './subscription_costs.yaml' } }).storage;
@@ -1519,7 +1562,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
   };
   assert.deepEqual(without('about'), { profile: '', version: '' });
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
-  assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
+  assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
   assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
@@ -1769,10 +1812,11 @@ test("an attention item of a state writer or a parked record decodes under its o
   assert.deepEqual([writer.kind, writer.link, writer.pools, writer.subject], ['writer_degraded', null, [], { id: 'routing', label: 'routing', type: 'router' }], "the router's own component opens nothing and belongs to no pool");
 });
 
-test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and the pools page', () => {
-  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'requests' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
+test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and no link', () => {
+  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'settings' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
   assert.deepEqual(
     [odd.kind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
-    ['pool_exhausted', 'pool', { id: 'r1', page: 'pools' }, ['all'], '1970-01-01T00:00:00.000Z', {}],
+    ['pool_exhausted', 'pool', null, ['all'], '1970-01-01T00:00:00.000Z', {}],
   );
+  assert.equal(d.decodeAttention({ ...fixture('attention').items[0], link: { id: 'main' } }).link, null, 'a link that names no page opens nothing');
 });

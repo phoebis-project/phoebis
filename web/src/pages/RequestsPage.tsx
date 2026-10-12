@@ -1,36 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
-import { Chips } from '@/components/DecisionCard';
+import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestPage, RequestQuery, Usage } from '@/api/types';
+import { type Paging, useFollow } from '@/app/useFollow';
+import { BodyViewer } from '@/components/BodyViewer';
+import { Chips } from '@/components/ChipView';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
-import { MultiSelect } from '@/components/ui/MultiSelect';
+import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { addressWindow, REQUEST_RANGES, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
-import { bodyText, highlightJson } from '@/lib/bodies';
+import { bodyLines, bodyText } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
+import { FOLLOW_OVERRUN } from '@/lib/follow';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, toLocalInput, tokensTotal } from '@/lib/format';
+import { useAsync, useCommittedText, useNow, useQueryFilters } from '@/lib/hooks';
 import { costCellOf, type CostUnit, costUnitOf, FUNDING_WORD, NO_SHARE_TITLE } from '@/lib/requests';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import { StatusBadge } from './DashboardPage';
 
+// `fill` marks the columns the table draws `col-fill`, so the table takes its content width when none of them shows.
 const COLUMNS = [
   { id: 'time', label: 'Time' },
   { id: 'key', label: 'Key' },
   { id: 'pool', label: 'Pool' },
   { id: 'account', label: 'Account' },
   { id: 'model', label: 'Model' },
-  { id: 'client', label: 'Client' },
+  { fill: true, id: 'client', label: 'Client' },
   { id: 'kind', label: 'Kind' },
   { id: 'transport', label: 'Transport' },
   { id: 'status', label: 'Status' },
@@ -45,13 +50,7 @@ const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
 /** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
-const RANGES = [
-  { label: 'Last hour', value: '1h', ms: 3_600_000 },
-  { label: 'Last 6 hours', value: '6h', ms: 6 * 3_600_000 },
-  { label: 'Last 24 hours', value: '24h', ms: 24 * 3_600_000 },
-];
 const PAGE_SIZES = [10, 25, 50, 100];
-const KINDS: readonly RequestKind[] = ['count_tokens', 'inference', 'probe'];
 /** The codes the router and Anthropic answer; any other code a page or the address holds is offered by its number. */
 const STATUS_CODES: readonly (readonly [number, string])[] = [
   [200, 'OK'],
@@ -93,113 +92,13 @@ const requestClassOptions = (rows: RequestLog[], selected: string[]) => {
   return [...[...classes].sort().map((c) => ({ label: c, value: c })), { label: 'unattributed', value: NO_CLASS }, { label: OTHER_DIMENSION, value: OTHER_DIMENSION }];
 };
 
-/** Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them. */
-interface Filters {
-  accounts: string[];
-  /** The user agent pattern. */
-  agent: string;
-  agentTypes: string[];
-  client: string;
-  efforts: string[];
-  /** The custom range as two ISO instants, both empty while the preset applies. */
-  from: string;
-  held: boolean;
-  keys: string[];
-  kind: '' | RequestKind;
-  missReasons: string[];
-  models: string[];
-  outcomes: RequestOutcome[];
-  pools: string[];
-  range: string;
-  requestClasses: string[];
-  rows: number;
-  search: string;
-  speeds: string[];
-  statuses: string[];
-  to: string;
-  turnOrigins: string[];
-}
-
-const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', efforts: [], from: '', held: false, keys: [], kind: '', missReasons: [], models: [], outcomes: [], pools: [], range: '24h', requestClasses: [], rows: 25, search: '', speeds: [], statuses: [], to: '', turnOrigins: [] };
-
 /**
- * An instant as the routing log's address spells one, else empty: a bare integer is Unix milliseconds. One past the
- * dates a `Date` holds reads as empty too, since its ISO form would throw.
+ * Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them,
+ * with the page size as a number and the outcomes and status codes the page could have written.
  */
-const instantOf = (value: string | null): string => {
-  if (!value) return '';
-  const at = new Date(/^\d+$/.test(value) ? Number(value) : Date.parse(value));
-  return Number.isFinite(at.getTime()) ? at.toISOString() : '';
-};
-/** Both instants of the custom range while both read and `from` precedes `to`, else neither, so the preset applies. */
-function linkedWindow(from: string | null, to: string | null): { from: string; to: string } {
-  const start = instantOf(from);
-  const end = instantOf(to);
-  return start !== '' && end !== '' && Date.parse(start) < Date.parse(end) ? { from: start, to: end } : { from: '', to: '' };
-}
+type Filters = Omit<RequestsAddress, 'outcomes' | 'rows'> & { outcomes: RequestOutcome[]; rows: number };
 
-/** Absent keys read as the defaults, and so does a kind, range, page size or status the page could not have written. */
-function filtersFromParams(params: URLSearchParams): Filters {
-  const text = (name: string) => params.get(name) ?? '';
-  const list = (name: string) => text(name).split(',').filter(Boolean);
-  const kind = KINDS.find((k) => k === params.get('kind'));
-  const range = RANGES.find((r) => r.value === params.get('range'));
-  const rows = Number(params.get('rows'));
-  const linked = linkedWindow(params.get('from'), params.get('to'));
-  return {
-    accounts: list('accounts'),
-    agent: text('agent'),
-    agentTypes: list('agent_types'),
-    client: text('client'),
-    efforts: list('efforts'),
-    from: linked.from,
-    held: params.get('held') === '1',
-    keys: list('keys'),
-    kind: kind ?? DEFAULTS.kind,
-    missReasons: list('cache_miss_reasons'),
-    models: list('models'),
-    outcomes: outcomesOf(list('outcomes')),
-    pools: list('pools'),
-    range: range?.value ?? DEFAULTS.range,
-    requestClasses: list('request_classes'),
-    rows: PAGE_SIZES.includes(rows) ? rows : DEFAULTS.rows,
-    search: text('search'),
-    speeds: list('speeds'),
-    statuses: list('statuses').filter((code) => /^\d+$/.test(code)),
-    to: linked.to,
-    turnOrigins: list('turn_origins'),
-  };
-}
-
-/** A filter at its default is left out, so an unfiltered page has a bare address. */
-function paramsFromFilters(f: Filters): URLSearchParams {
-  const params = new URLSearchParams();
-  const put = (name: string, value: string) => {
-    if (value) params.set(name, value);
-  };
-  put('search', f.search);
-  put('client', f.client);
-  put('agent', f.agent);
-  put('agent_types', f.agentTypes.join(','));
-  put('turn_origins', f.turnOrigins.join(','));
-  put('efforts', f.efforts.join(','));
-  put('request_classes', f.requestClasses.join(','));
-  put('speeds', f.speeds.join(','));
-  put('held', f.held ? '1' : '');
-  put('keys', f.keys.join(','));
-  put('pools', f.pools.join(','));
-  put('accounts', f.accounts.join(','));
-  put('models', f.models.join(','));
-  put('statuses', f.statuses.join(','));
-  put('outcomes', f.outcomes.join(','));
-  put('cache_miss_reasons', f.missReasons.join(','));
-  put('kind', f.kind);
-  put('range', f.range === DEFAULTS.range ? '' : f.range);
-  put('from', f.from);
-  put('to', f.to);
-  put('rows', f.rows === DEFAULTS.rows ? '' : String(f.rows));
-  return params;
-}
+const DEFAULTS = REQUESTS_CODEC.fromParams(new URLSearchParams());
 
 /** Keyed by every outcome the ledger records, so one it gains is a type error until it is named here. */
 const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
@@ -245,10 +144,10 @@ function costRowValue(unit: CostUnit) {
   switch (unit.kind) {
     case 'shares':
       return (
-        <>
+        <span className="usage-table__end">
           <Chips chips={unit.shares.map(({ key, share }) => ({ value: shareLabel(key, share) }))} />
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
-        </>
+        </span>
       );
     case 'dollars':
       return <b title={`Billed in dollars: ${FUNDING_WORD[unit.funding]}`}>{fmtUsd(unit.usd)}</b>;
@@ -263,6 +162,29 @@ function costRowValue(unit: CostUnit) {
   }
 }
 
+/**
+ * The Keys control's options: the live keys, then each lifetime the address names that no live key holds, under its
+ * earlier holder's label, so a link from an earlier holder's session reads whole. Until the key list lands no lifetime
+ * can be told from a live key's own, so none is listed.
+ */
+function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
+  if (keys === null) return [];
+  const live = new Map(keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+  const earlier = selected.flatMap((value) => {
+    const at = value.lastIndexOf('@');
+    if (at < 0) return [];
+    const id = value.slice(0, at);
+    const generation = Number(value.slice(at + 1));
+    return live.get(id) === generation ? [] : [{ label: earlierHolderLabel(id, generation), value }];
+  });
+  return [...keys.map((k) => ({ label: k.name, value: k.id })), ...earlier];
+}
+
+/** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
+const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+/** The route answers its rows as `requests`, and Follow reads a list's as `rows`. */
+const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
+
 export function RequestsPage() {
   const { requestId } = useParams();
   const navigate = useNavigate();
@@ -273,78 +195,101 @@ export function RequestsPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
-  const address = searchParams.toString();
+  const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
+  const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   // The cursor and the pages before it belong to the address they were read under, so any change of the address (a
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
-  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[] }>({ for: address, stack: [] });
+  // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
+  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
+  const pagedTo = paging.for === address ? paging.to : undefined;
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  // Written at once rather than in the router's transition: a click that follows typing blurs the search first, and its
-  // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
-  const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { flushSync: true, replace: true });
+  const [follow, setFollow] = useState(false);
+  const update = (patch: Partial<Filters>) => {
+    const next = { ...filters, ...patch };
+    replace({ ...next, rows: String(next.rows) });
+  };
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
-  const linked = filters.from !== '' && filters.to !== '';
-  const query = useMemo<RequestQuery>(() => {
-    const r = RANGES.find((x) => x.value === filters.range) ?? RANGES[2];
+  const custom = filters.range.preset === 'custom';
+  const span = useMemo(() => addressWindow(filters.range, REQUEST_RANGES, '24h', loadedAt), [filters.range, loadedAt]);
+  const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.missReasons, client: filters.client, cursor, efforts: filters.efforts, from: linked ? filters.from : new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: linked ? filters.to : new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
-  }, [filters, cursor, linked, loadedAt]);
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, requestClasses: filters.requestClasses, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(pagedTo ?? span.to), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    [filters, cursor, span, pagedTo],
+  );
+  // Custom starts from the window the list shows, so the choice holds.
+  const chooseRange = (value: string) => update({ range: value === 'custom' ? { from: iso(span.from), preset: 'custom', to: iso(span.to) } : { from: '', preset: value, to: '' } });
+  // A bound that would end the span before it starts writes nothing, since the address would read that pair as the
+  // preset.
+  const setBound = (bound: 'from' | 'to', local: string) => {
+    const ms = Date.parse(local);
+    if (Number.isNaN(ms)) return;
+    const next = bound === 'from' ? { from: ms, to: span.to } : { from: span.from, to: Math.min(ms, clock.now()) };
+    if (next.from >= next.to) return;
+    update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
+  };
   const requests = useAsync(() => api.listRequests(query), [query]);
+  // The open drawer reads one of the rows, so the poll waits for it to close.
+  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
+    address,
+    compare: newestFirst,
+    error: requests.error,
+    identity: (r) => r.id,
+    list: requests.data && listed(requests.data),
+    on: follow && cursor === undefined && !requestId,
+    paging,
+    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then(listed),
+    setFollow,
+    setPaging,
+    stale: requests.stale,
+  });
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {
     resetPaging();
+    setFollowed(null);
     setLoadedAt(clock.now());
   };
-
-  const rows = requests.data?.requests ?? [];
-  const nextCursor = requests.data?.nextCursor ?? null;
-  const goNext = () => {
-    if (!nextCursor) return;
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor] });
-  };
-  const goPrevious = () => {
-    const copy = [...stack];
-    const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy });
-  };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
-  const active = paramsFromFilters({ ...filters, rows: DEFAULTS.rows }).toString() !== '';
-  const reset = () => setSearchParams(paramsFromFilters({ ...DEFAULTS, rows: filters.rows }), { replace: true });
+  const active = REQUESTS_CODEC.toParams({ ...read, rows: DEFAULTS.rows }).toString() !== '';
+  const reset = () => replace({ ...DEFAULTS, rows: read.rows });
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
+  const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
 
   return (
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <div className="stack">
         <div className="filters">
           <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
-          <Select value={linked ? 'linked' : filters.range} onChange={(e) => update({ range: e.target.value, from: '', to: '' })} aria-label="Date range">
-            {RANGES.map((r) => (
-              <option key={r.value} value={r.value}>
+          <Select value={filters.range.preset} onChange={(e) => chooseRange(e.target.value)} aria-label="Date range">
+            {REQUEST_RANGES.map((r) => (
+              <option key={r.name} value={r.name}>
                 {r.label}
               </option>
             ))}
-            {linked && (
-              <option value="linked" title={`${filters.from} to ${filters.to}`}>
-                {`Custom range: ${fmtTime(filters.from)} to ${fmtTime(filters.to)}`}
-              </option>
-            )}
+            <option value="custom" title={custom ? `${filters.range.from} to ${filters.range.to}` : undefined}>
+              Custom range
+            </option>
           </Select>
+          {custom && (
+            <>
+              <Input type="datetime-local" aria-label="From" value={toLocalInput(span.from)} onChange={(e) => setBound('from', e.target.value)} />
+              <Input type="datetime-local" aria-label="To" value={toLocalInput(span.to)} onChange={(e) => setBound('to', e.target.value)} />
+            </>
+          )}
           <MultiSelect
             label="Keys"
-            options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))}
+            options={keyOptions(keys.data, filters.keys)}
             value={filters.keys}
             onChange={(v) => update({ keys: v })}
             disabled={keys.data === null && keys.error !== null}
@@ -387,7 +332,7 @@ export function RequestsPage() {
             value={filters.outcomes}
             onChange={(v) => update({ outcomes: outcomesOf(v) })}
           />
-          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.missReasons)} value={filters.missReasons} onChange={(v) => update({ missReasons: v })} />
+          <MultiSelect label="Cache miss reason" options={missReasonOptions(rows, filters.cacheMissReasons)} value={filters.cacheMissReasons} onChange={(v) => update({ cacheMissReasons: v })} />
           <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
           <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
           <MultiSelect label="Effort" options={[...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v }))} value={filters.efforts} onChange={(v) => update({ efforts: v })} mono />
@@ -418,16 +363,26 @@ export function RequestsPage() {
             </button>
           ) : null}
           <div className="filters__cols">
-            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={linked ? `Rows from ${fmtTime(filters.from)} to ${fmtTime(filters.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(new Date(loadedAt).toISOString())}. Refresh reads up to now`}>
+            <label className="row">
+              <Toggle checked={follow} onChange={toggleFollow} label="Follow" />
+              <span className="secondary">Follow</span>
+            </label>
+            <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={custom ? `Rows from ${fmtTime(filters.range.from)} to ${fmtTime(filters.range.to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(iso(loadedAt))}. Refresh reads up to now`}>
               Refresh
             </Button>
             <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
           </div>
         </div>
 
+        {overrun !== null && (
+          <div className="callout callout--warning requests__overrun" role="status">
+            {FOLLOW_OVERRUN}
+          </div>
+        )}
+
         <Card padded={false} className="card--table">
           <div className="table-wrap">
-            <table className="table table--hover requests__table">
+            <table className={`table table--hover requests__table${fills ? '' : ' table--no-fill'}`}>
               <thead>
                 <tr>
                   {shown.has('time') && <th className="col-fit">Time</th>}
@@ -462,7 +417,7 @@ export function RequestsPage() {
                   : rows.map((r) => (
                       <tr
                         key={r.id}
-                        className={r.id === requestId ? 'is-selected' : ''}
+                        className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
                         onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                         tabIndex={0}
                         // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log alone.
@@ -541,8 +496,8 @@ export function RequestsPage() {
                 {!requests.loading && rows.length === 0 && (
                   <tr>
                     <td colSpan={shown.size + 1}>
-                      {requests.error ? (
-                        <ErrorState title="Could not load the request log" body={requests.error} action={<Button onClick={requests.reload}>Try again</Button>} />
+                      {error ? (
+                        <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
                       ) : (
                         <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
                       )}
@@ -610,7 +565,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   }, [onClose]);
   // The last attempt is the one whose answer the request ended on.
   const serving = r && r.attempts.length > 0 ? r.attempts[r.attempts.length - 1] : null;
-  const answer = serving ? answerChips(serving.response) : [];
+  const answer = serving ? answerChips(serving.response, serving.serviceTier) : [];
 
   return (
     <aside className="drawer" aria-label="Request details">
@@ -791,9 +746,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               <Skeleton height={120} />
             ) : bodies.data ? (
               <div className="bodies">
-                {/* Keyed on the request, so a large body of the next request starts compact again. */}
-                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} stored={bodies.data.requestBytesStored} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} stored={bodies.data.responseBytesStored} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                {/* Keyed on the request, so the next request's block starts with its dialog closed. */}
+                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -809,7 +764,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
  * The answer's facts as the serving attempt's response named them, each its own chip, so no value has to be read out
  * of a joined line.
  */
-function answerChips(response: AttemptResponse): Chip[] {
+function answerChips(response: AttemptResponse, serviceTier: string | null): Chip[] {
   const chips: Chip[] = [];
   if (response.stopReason) chips.push({ value: `stopped: ${response.stopReason}` });
   if (response.speed) chips.push({ title: "The answer's speed", value: response.speed });
@@ -818,6 +773,7 @@ function answerChips(response: AttemptResponse): Chip[] {
   if (response.clearedInputTokens !== null && response.clearedInputTokens > 0) chips.push({ value: `${fmtInt(response.clearedInputTokens)} tokens cleared by context edits` });
   if (response.refusalCategory) chips.push({ value: `category: ${response.refusalCategory}` });
   if (response.refusalRecommendedModel) chips.push({ mono: true, value: `try ${response.refusalRecommendedModel}` });
+  if (serviceTier) chips.push({ title: "The answer's service tier", value: `tier ${serviceTier}` });
   return chips;
 }
 
@@ -858,26 +814,18 @@ function DiagnosticsValue({ source }: { source: DiagnosticsSource | null }) {
   return <span className="muted">none</span>;
 }
 
-/** Indenting a body past this many stored bytes is a long render and a far longer text, so it waits to be asked. */
-const PRETTY_LIMIT = 256 * 1024;
+/** A reader of `read`'s value that runs it once, the first time the value is asked for. */
+function once<T>(read: () => T): () => T {
+  let held: { value: T } | null = null;
+  return () => (held ??= { value: read() }).value;
+}
 
-function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: number; label: string; requestId: string; stored: number; value: unknown }) {
-  // The stored byte count sizes the body, so the first draw serializes it once; the memo keeps the drawer's redraws on
-  // every clock tick and list reload from serializing it again.
-  const large = stored > PRETTY_LIMIT;
-  const [pretty, setPretty] = useState(false);
+function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; label: string; requestId: string; value: unknown }) {
   const [wide, setWide] = useState(false);
-  const text = useMemo(() => bodyText(value, large && !pretty), [large, pretty, value]);
-  // A compact large body stays plain, and a large stream shows its stored text until Pretty-print splits it.
-  const tokens = useMemo(() => (large && !pretty ? null : highlightJson(text)), [large, pretty, text]);
-  const drawn = useMemo(() => (tokens === null ? text : tokens.map((t, i) => (t.cls === null ? t.text : <span key={i} className={t.cls}>{t.text}</span>))), [text, tokens]);
-  // Pretty-print leaves as it is pressed, so the focus moves to the text it indented rather than falling to the page.
-  // Under the open dialog the block's own text is inert, so the dialog's takes it.
-  const pre = useRef<HTMLPreElement>(null);
-  const widePre = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    if (pretty) (wide ? widePre : pre).current?.focus();
-  }, [pretty]);
+  // Indenting a large body is a long serialization and a far longer text, so the drawer draws no body and the indent
+  // runs when the body is first opened wide or copied. The memo keeps it while the drawer shows this body.
+  const textOf = useMemo(() => once(() => bodyText(value)), [value]);
+  const linesOf = useMemo(() => once(() => bodyLines(textOf())), [textOf]);
   // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
   // that opened it. The link takes it as the dialog goes.
   const link = useRef<HTMLButtonElement>(null);
@@ -895,21 +843,13 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
         <span>{label}</span>
         {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
         <span className="body-block__actions">
-          {large && !pretty && (
-            <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
-              Pretty-print
-            </Button>
-          )}
-          <button ref={link} type="button" className="body-block__link" onClick={() => setWide(true)}>
+          <button ref={link} type="button" className="link-btn" onClick={() => setWide(true)}>
             Open wide
           </button>
-          <CopyButton text={text} />
+          <CopyButton text={textOf} label="Copy all" />
         </span>
       </div>
-      <pre ref={pre} className="body-block__pre" tabIndex={0}>
-        {drawn}
-      </pre>
-      {/* Mounted only while open, so the drawer holds one text per block. */}
+      {/* Mounted only while open, so a closed dialog draws no rows. */}
       {wide && (
         <Dialog
           open={wide}
@@ -917,20 +857,9 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
           title={`${label} of ${shortId(requestId, HEAD_ID_CHARS)}`}
           width={1040}
           className="dialog--wide"
-          footer={
-            <>
-              {large && !pretty && (
-                <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
-                  Pretty-print
-                </Button>
-              )}
-              <CopyButton text={text} />
-            </>
-          }
+          footer={<CopyButton text={textOf} label="Copy all" />}
         >
-          <pre ref={widePre} className="body-block__pre" tabIndex={0}>
-            {drawn}
-          </pre>
+          <BodyViewer highlight lines={linesOf()} />
         </Dialog>
       )}
     </div>

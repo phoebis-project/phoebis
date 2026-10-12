@@ -1,14 +1,11 @@
-import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
-import { ChipView } from '@/components/DecisionCard';
-import { Described, StripPopover } from '@/components/StripPopover';
-import { Badge } from '@/components/ui/primitives';
+import { ChipView } from '@/components/ChipView';
+import { StripPopover } from '@/components/StripPopover';
+import { Badge, Described } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
-import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
+import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, type StripAnchor, TERMINUS_RADIUS, terminusName, type PathState } from '@/lib/decisionStrip';
 import { anchorPlan } from '@/lib/stripFacts';
-
-/** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
-export type StripAnchor = { kind: 'station'; id: string } | { kind: 'leaf'; index: number } | { kind: 'terminus'; id: TerminusKind };
 
 const MIN_WIDTH = 640;
 const REDRAW_MS = 120;
@@ -26,6 +23,9 @@ const TERMINUS_LINE_HALF = 8;
 // The idle paths share their first run with the taken one, so the taken path is drawn last to stay on top.
 const PAINT_ORDER: Record<PathState, number> = { idle: 0, inferred: 1, taken: 2 };
 
+/** A strip's own popover, as the store holds it less the strip's id. */
+type Own = Omit<OpenPopover, 'stripId'>;
+
 const keyOf = (a: StripAnchor) => (a.kind === 'leaf' ? `leaf:${a.index}` : `${a.kind}:${a.id}`);
 const sameHeights = (a: LabelHeights, b: LabelHeights) => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, h]) => b[id] === h);
 const classes = (...names: (string | false)[]) => names.filter(Boolean).join(' ');
@@ -35,7 +35,7 @@ const boundsOf = (el: HTMLElement) => el.closest<HTMLElement>('.decision-card') 
 /**
  * The walk as a subway strip: the model from the record, the layout from the slot's width (at least 640 px, re-read on
  * a resize debounced at 120 ms), one SVG for the lines and a button per station, leaf and terminus, each opening the
- * popover of its facts. One popover is open at a time: a hover opens it, a click pins it and marks its anchor, and a
+ * popover of its facts. One popover is open on the page: a hover opens it, a click pins it and marks its anchor, and a
  * click outside, a click on another anchor or Escape closes it. Enter or Space pins it and moves focus into it, Escape
  * from there returns focus to the anchor, and focus leaving both closes it.
  */
@@ -71,7 +71,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
       cancel();
     };
   }, []);
-  const model = useMemo(() => stationModel(record, row, now), [record, row, now]);
+  const model = useMemo(() => stationModel(record, now), [record, now]);
   const counted = useMemo(() => layoutStrip(model, width), [model, width]);
   const [measured, setMeasured] = useState<LabelHeights>({});
   const layout = useMemo(() => (Object.keys(measured).length > 0 ? layoutStrip(model, width, measured) : counted), [counted, measured, model, width]);
@@ -87,19 +87,43 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
       const height = Math.round(button.getBoundingClientRect().height);
       if (id !== undefined && height > 0 && height !== counted.labels[id]?.height) next[id] = height;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the drawn heights exist only once the strip is drawn, so the layout reads them before paint
     if (!sameHeights(next, measured)) setMeasured(next);
   }, [counted, measured]);
   // `focus` is true when a key opened the popover, which then takes focus. A hover or a click leaves focus where it is.
-  const [open, setOpen] = useState<{ anchor: StripAnchor; focus: boolean; pinned: boolean } | null>(null);
+  // The page holds one popover across its strips, so this strip's is the store's while the store names this strip, and
+  // a hover or a pin here replaces another strip's whatever its state.
+  const all = useSyncExternalStore(popoverStore.subscribe, popoverStore.get);
+  const open = all !== null && all.stripId === id ? all : null;
+  const setOpen = useCallback(
+    (update: Own | null | ((o: Own | null) => Own | null)) =>
+      popoverStore.set((o) => {
+        const mine = o !== null && o.stripId === id ? o : null;
+        const next = typeof update === 'function' ? update(mine) : update;
+        // A close here leaves another strip's popover open, and an unchanged one keeps the store as it is.
+        if (next === mine) return o;
+        if (next === null) return null;
+        // A hover and the click that pins it name one anchor by two objects, so the store keeps the first, and the
+        // plan below is read again for a new anchor alone.
+        const anchor = mine !== null && keyOf(mine.anchor) === keyOf(next.anchor) ? mine.anchor : next.anchor;
+        return { ...next, anchor, stripId: id };
+      }),
+    [id],
+  );
+  useEffect(() => () => popoverStore.set((o) => (o !== null && o.stripId === id ? null : o)), [id]);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   // The anchor's button from the last draw: one the new draw leaves out closes its popover as it leaves the document.
+  // eslint-disable-next-line react-hooks/refs -- the buttons register through their ref callbacks, so the last draw's map is the one place that holds them
   const anchorEl = open === null ? undefined : buttons.current.get(keyOf(open.anchor));
+  // The button is looked up when the close runs, so a pin that keeps the anchor keeps this callback and the popover's
+  // placement.
   const close = useCallback(
     (returnFocus: boolean) => {
-      if (returnFocus) anchorEl?.focus({ preventScroll: true });
+      const own = popoverStore.get();
+      if (returnFocus && own !== null && own.stripId === id) buttons.current.get(keyOf(own.anchor))?.focus({ preventScroll: true });
       setOpen(null);
     },
-    [anchorEl],
+    [id, setOpen],
   );
   const anchorRef = (anchor: StripAnchor) => (el: HTMLButtonElement | null) => {
     if (el === null) buttons.current.delete(keyOf(anchor));
@@ -137,7 +161,7 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
     };
     document.addEventListener('mousedown', onOutside);
     return () => document.removeEventListener('mousedown', onOutside);
-  }, [pinned, popoverId]);
+  }, [pinned, popoverId, setOpen]);
   // Captured on the document ahead of every other handler, so a key from the strip or its popover closes the popover
   // alone: a dialog around the card never takes it too. A key from a control outside both is that control's, so the
   // popover a hover opened over it closes and the key runs on, and a filter's open list closes on the same press. Focus
@@ -152,11 +176,11 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
         e.preventDefault();
         e.stopPropagation();
       }
-      close(inPopover || Boolean(anchorEl?.contains(at)));
+      close(inPopover || Boolean(buttons.current.get(keyOf(open.anchor))?.contains(at)));
     };
     document.addEventListener('keydown', onEscape, true);
     return () => document.removeEventListener('keydown', onEscape, true);
-  }, [anchorEl, close, open, popoverId]);
+  }, [close, open, popoverId]);
   const picked = pinned === null ? null : keyOf(pinned);
   // Only a pinned popover marks its anchor expanded: one a hover opened closes as the pointer leaves, out of a reader's
   // reach.
@@ -171,9 +195,8 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   const stacked = model.branch?.kind === 'move';
   const opened = open?.anchor;
   const openedKey = opened === undefined ? null : keyOf(opened);
-  // A hover and the click that pins it name one anchor by two objects, so the plan is kept by the anchor's key, and
-  // the popover places itself again for a new plan or a redrawn strip alone.
-  const plan = useMemo(() => (opened === undefined ? null : anchorPlan(opened, model, record, row, now)), [openedKey, model, record, row, now]);
+  // The popover places itself again for a new plan or a redrawn strip alone.
+  const plan = useMemo(() => (opened === undefined ? null : anchorPlan(opened, model, record, row, now)), [model, now, opened, record, row]);
   const popover = open === null || anchorEl === undefined || plan === null ? null : { anchor: anchorEl, focus: open.focus, pinned: open.pinned, plan };
   return (
     <div className="decision-strip" ref={ref}>

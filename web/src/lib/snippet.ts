@@ -1,14 +1,17 @@
-/** What the operator replaces with the URL that reaches the router's inference listener. */
-export const PLACEHOLDER_URL = 'https://router.example.com';
+/** What the operator replaces with the host name that reaches the router's inference listener. */
+const PLACEHOLDER_HOST = 'router.example.com';
 
 /**
  * The seven lines that point Claude Code at the router.
  *
- * `ANTHROPIC_BASE_URL` stays a placeholder: the router knows the address its proxy listener binds, never the URL a
- * client reaches it at, which a TLS proxy, a port mapping or a host name decides. A bind address copied into the
- * block could send the router key and the request content to a backend port or over plain HTTP, so the page shows
- * it beside the block as a hint.
+ * `ANTHROPIC_BASE_URL` takes its scheme from whether the proxy listener terminates TLS and its port from the
+ * listener's bind, the two parts the router knows. The host stays a placeholder, since the router knows no host a
+ * client reaches it at. Without a settings answer the URL reads the whole placeholder, https with no port, and a bind
+ * that names no port reads none.
  */
-export function snippetFor(): string {
-  return [`ANTHROPIC_BASE_URL=${PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'].join('\n');
+export function snippetFor(listeners: { proxy: string; proxyTls: boolean } | null): string {
+  const port = listeners === null ? '' : (/:(\d+)$/.exec(listeners.proxy)?.[1] ?? '');
+  const scheme = listeners === null || listeners.proxyTls ? 'https' : 'http';
+  const baseUrl = `${scheme}://${PLACEHOLDER_HOST}${port === '' ? '' : `:${port}`}`;
+  return [`ANTHROPIC_BASE_URL=${baseUrl}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'].join('\n');
 }

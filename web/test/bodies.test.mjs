@@ -53,25 +53,16 @@ test('plain text is not a stream', () => {
 });
 
 test("bodyText indents a stream's JSON data under its event line and leaves a plain string as itself", () => {
-  assert.equal(d.bodyText(capture('\n'), false), 'event: message_start\n{\n  "message": {\n    "id": "msg_1"\n  },\n  "type": "message_start"\n}\n\nevent: message_stop\n{\n  "type": "message_stop"\n}');
-  assert.equal(d.bodyText('line one\nline two', false), 'line one\nline two');
+  assert.equal(d.bodyText(capture('\n')), 'event: message_start\n{\n  "message": {\n    "id": "msg_1"\n  },\n  "type": "message_start"\n}\n\nevent: message_stop\n{\n  "type": "message_stop"\n}');
+  assert.equal(d.bodyText('line one\nline two'), 'line one\nline two');
 });
 
 test("bodyText draws no event line for a data-only frame and drops a frame of comment lines alone", () => {
-  assert.equal(d.bodyText(': ping\n\ndata: {"a":1}\n\nid: 7\n\n', false), '{\n  "a": 1\n}');
+  assert.equal(d.bodyText(': ping\n\ndata: {"a":1}\n\nid: 7\n\n'), '{\n  "a": 1\n}');
 });
 
-test("bodyText under compact returns a stream's stored text untouched", () => {
-  const stored = capture('\r\n');
-  const text = d.bodyText(stored, true);
-  assert.equal(text, stored);
-  assert.ok(!/\n {2}/.test(text), 'no indented line');
-});
-
-test('bodyText indents a JSON object over several lines and keeps it on one line under compact', () => {
-  const value = { a: { b: 1 } };
-  assert.equal(d.bodyText(value, false), '{\n  "a": {\n    "b": 1\n  }\n}');
-  assert.equal(d.bodyText(value, true), '{"a":{"b":1}}');
+test('bodyText indents a JSON object over several lines', () => {
+  assert.equal(d.bodyText({ a: { b: 1 } }), '{\n  "a": {\n    "b": 1\n  }\n}');
 });
 
 test("the highlighter classes a nested object's keys, strings, numbers and literals and concatenates back", () => {
@@ -112,4 +103,31 @@ test('an event line is one token and its data is highlighted as JSON', () => {
   assert.deepEqual(tokens.filter((t) => t.cls === 'tok-event').map((t) => t.text), ['event: message_start']);
   assert.deepEqual(tokens.filter((t) => t.cls === 'tok-key').map((t) => t.text), ['"type"']);
   assert.deepEqual(tokens.filter((t) => t.cls === 'tok-string').map((t) => t.text), ['"message_start"']);
+});
+
+test('bodyLines draws no empty row after a trailing newline', () => {
+  assert.deepEqual(d.bodyLines('a\nb\n'), ['a', 'b']);
+});
+
+test('bodyLines draws an empty text as one empty row', () => {
+  assert.deepEqual(d.bodyLines(''), ['']);
+});
+
+test('bodyLines keeps a text without a newline as one row', () => {
+  assert.deepEqual(d.bodyLines('one'), ['one']);
+});
+
+test("the per-line tokens of a pretty body equal the whole text's cut at the newlines", () => {
+  const text = `event: message_start\n${JSON.stringify({ nested: { list: [1, -2.5e-7, true, null], text: 'quote \\" inside' } }, null, 2)}`;
+  assert.ok(text.includes('-2.5e-7') && text.includes('\\"'), 'the fixture holds a negative exponent and an escaped quote');
+  const perLine = text.split('\n').flatMap((line, i) => [...(i === 0 ? [] : [{ cls: null, text: '\n' }]), ...d.highlightJson(line)]);
+  assert.equal(perLine.map((t) => t.text).join(''), text);
+  const classed = (tokens) => tokens.filter((t) => t.cls !== null);
+  assert.deepEqual(classed(perLine), classed(d.highlightJson(text)));
+  assert.deepEqual(classed(perLine).filter((t) => t.cls === 'tok-event').map((t) => t.text), ['event: message_start']);
+});
+
+test('a line that opens a string colors to its own end', () => {
+  const [line] = '"cut here\n  "next": 1'.split('\n');
+  assert.deepEqual(d.highlightJson(line), [{ cls: 'tok-string', text: '"cut here' }]);
 });

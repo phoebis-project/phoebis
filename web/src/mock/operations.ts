@@ -2,8 +2,8 @@ import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Keep
 import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
-import { POOLS, keyById } from './pools';
-import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
+import { keyById } from './pools';
+import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { MINUTE, NOW, ago, ahead } from './time';
@@ -23,6 +23,9 @@ const rng = createRng(2_024);
 // own requests instead, for the runner's sessions on `ci`: no pin keeps them in
 // use, and their account has been at its daily budget since its last served
 // request.
+// `released` marks a session whose every
+// agent, main included, the mod released. `sessionId` writes out the id of a
+// session past the story's ids whose story row names it.
 const sessionSpec: {
   accountId: string;
   agents: number;
@@ -31,6 +34,8 @@ const sessionSpec: {
   keyId: string;
   lastUseFromRows?: boolean;
   model: string;
+  released?: true;
+  sessionId?: string;
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
 }[] = [
@@ -45,9 +50,8 @@ const sessionSpec: {
   // The laptop key allows Haiku 4.5 and Sonnet 4.6 only, so its subagents stay inside that list.
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
-  // The last session with a recipe: four of its agents are written below, so it holds an agent in each lifecycle
-  // word, two of them released.
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 6, companion: 'reporting' },
+  // Five of its agents are written below, so it holds an agent in each lifecycle word, three of them released.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting' },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-6', state: null, agents: 1, companion: 'none' },
@@ -55,6 +59,8 @@ const sessionSpec: {
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
 ];
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
@@ -77,9 +83,11 @@ for (const r of REQUESTS) {
 const sharePrices = (model: string): boolean => ratesOf(TABLES, 'five_hour', anchorTier(TABLES), model) !== null;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
-  // The last entry deliberately falls outside the ledgered ids.
-  const sessionId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
+  // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
+  // out as well, so the rows after this one keep their rolls.
+  const drawnId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
+  const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
   // Both rolls are drawn whatever the spec says, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
@@ -119,8 +127,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     epoch: i < 3 ? 2 : 1,
     historical: false,
     keyGeneration,
-    createdAt: ago(createdAgo),
-    lastUsedAt: lastFromRows === null ? null : ago(lastUsedAgo),
+    // An unpinned session has no pin to date, so the route answers no creation and the last use its own rows read.
+    createdAt: pinned ? ago(createdAgo) : null,
+    lastUsedAt: !pinned ? (seen ? seen.last : null) : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
     pinned,
     requests: seen ? seen.requests : 0,
@@ -191,6 +200,10 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   null,
   null,
+  // One row for each session past the story's ids, so the modulo leaves them scheduled rather than wrapping them onto
+  // the first two causes.
+  null,
+  null,
 ];
 
 // A held or paused subagent under a main agent that keeps probing, which is the
@@ -228,22 +241,26 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
 };
 
 /**
- * The index in `sessionSpec` of the last session with a recipe: its rows past the drawn pair are written, not rolled.
+ * The index in `sessionSpec` of the session whose rows past the drawn pair are written, not rolled.
  */
 const WRITTEN_SESSION = 9;
 /**
- * The four subagents the last warmed session holds beyond its drawn pair, written so the session holds an agent in
- * each lifecycle word, two of them released, and an id of the length Claude Code gives a subagent. The list's order (a
- * released row first, the parked row before the idle one, and the idle row's last request newer than the drawn busy
- * row's) differs from the lifecycle order main, busy, idle, parked, so lines drawn in the list's order read differently
- * from lines sorted into it.
+ * The five subagents the written session holds beyond its drawn pair, written so the session holds an agent in each
+ * lifecycle word, three of them released, one by the session's end, which the view keeps listed, and an id of the
+ * length Claude Code gives a subagent. The list's order (a released row first, the parked row before the idle one, and
+ * the idle row's last request newer than the drawn busy row's) differs from the lifecycle order main, busy, idle,
+ * parked, so lines drawn in the list's order read differently from lines sorted into it.
  */
 const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
   { agentId: '4f0c2a9e7b61d3c58', agentState: 'parked', cause: 'scheduled', deadline: ahead(41 * MINUTE), lastProbeAt: ago(2 * MINUTE), lastRequestAt: ago(6 * MINUTE), nextProbeAt: ahead(150_000), parkKind: 'background', state: 'retained', wakeAt: null },
   { agentId: 'b2d8', agentState: 'idle', cause: 'scheduled', deadline: null, lastProbeAt: ago(MINUTE), lastRequestAt: ago(30_000), nextProbeAt: ahead(200_000), parkKind: null, state: 'retained', wakeAt: null },
   { agentId: '91aa', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(7 * MINUTE), lastRequestAt: ago(12 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
+  { agentId: 'c3a9', agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
 ];
+
+/** What every line of a session the mod released whole reads, written over the drawn row. */
+const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', cause: 'agent_released', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   const mainState = pin.keepalive.state;
@@ -275,8 +292,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
     const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
-    // The last warmed session's rows past its drawn pair are written, so a reader meets every lifecycle word.
-    const written = i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
+    // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
+    // mod released whole keeps its draws, so the rows after it keep theirs.
+    const written = sessionSpec[i].released ? RELEASED_BY_THE_MOD : i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -314,8 +332,10 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
-  // The session's own summary reads the main agent's guard note and cause, the way the admin route does.
+  // The session's own summary reads the main agent's lifecycle word, guard note and cause, the way the admin route
+  // does, so a session the mod released whole reads released.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
+  pin.keepalive.state = main?.agentState ?? null;
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
   pin.keepalive.cause = main?.cause ?? null;
 }
@@ -360,9 +380,22 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
   });
 }
 
-// A pool's active pins are the pinned sessions under its keys, so the pool's figure, its members' pins and the
+// A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
+// another account where they run there. A pin is a routed request's, and the mod's release ends the keepalive record
+// alone, so a released agent holds the pin its routed request wrote where the ledger holds that request, and none
+// otherwise. The pool view reads each member's pins and sums them, so the pool's figure, its members' pins and the
 // dashboard's sum read one count.
-for (const p of POOLS) p.activePins = SESSIONS.filter((x) => x.pinned && keyById.get(x.keyId)?.poolId === p.id).length;
+const ROUTED_PINS = new Set(REQUESTS.filter((r) => r.kind !== 'probe' && r.sessionId !== null).map((r) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`));
+const PINS = new Map<string, Set<string>>();
+for (const r of RECIPES) {
+  const poolId = keyById.get(r.keyId)?.poolId;
+  const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
+  if (poolId === undefined || (r.agentState === 'released' && !ROUTED_PINS.has(pin))) continue;
+  const member = `${poolId}|${r.accountId}`;
+  PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
+}
+/** The pins under a pool's keys on one member's account. */
+export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.
@@ -422,7 +455,7 @@ export const SETTINGS_WIRE = {
   ...settingsFixture,
   about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
   access: { admin_configured: true },
-  listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
+  listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72 },
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },

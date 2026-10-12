@@ -6,6 +6,7 @@ export { MemoryRouter } from 'react-router-dom';
 export { api } from '@/api';
 export { ApiError, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
+export { BodyViewer } from '@/components/BodyViewer';
 export { DecisionCard } from '@/components/DecisionCard';
 export { ChartTooltip } from '@/components/charts/Tooltip';
 export { MultiSelect } from '@/components/ui/MultiSelect';

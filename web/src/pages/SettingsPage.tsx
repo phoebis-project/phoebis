@@ -53,7 +53,7 @@ export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const { theme, setTheme, timeFormat, setTimeFormat } = useAppSettings();
   const s = settings.data;
-  const snippet = snippetFor();
+  const snippet = snippetFor(s?.listeners ?? null);
 
   return (
     <div className="settings">
@@ -125,9 +125,9 @@ export function SettingsPage() {
         <pre className="snippet">{snippet}</pre>
         {s && (
           <p className="muted snippet__hint">
-            Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds. Replace the
-            placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy,
-            a port mapping or another host name can stand between Claude Code and the listener.
+            Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds, so the base URL
+            carries its scheme and port. Replace the placeholder host with the name that reaches the listener, and the
+            scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and it.
           </p>
         )}
         <dl className="envdl">

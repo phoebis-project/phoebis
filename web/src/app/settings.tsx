@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 
@@ -25,7 +25,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [storedExpert, storeExpert] = useLocalStorage<ExpertChoice>('phoebis.expertView', 'off');
   // Read by equality: the hook hands back whatever string the browser holds under the key.
   const expertView = storedExpert === 'on';
-  const setExpertView = (on: boolean) => storeExpert(on ? 'on' : 'off');
+  // The setters keep their identity across renders, so the context value changes with the settings alone.
+  const setExpertView = useCallback((on: boolean) => storeExpert(on ? 'on' : 'off'), [storeExpert]);
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);
@@ -39,17 +40,18 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   }, [resolvedTheme]);
 
   // The module formatters have to answer in the new format before the context change re-renders the components below.
-  const setTimeFormat = (f: TimeFormat) => {
-    applyTimeFormat(f);
-    storeFormat(f);
-    setFormatVersion((v) => v + 1);
-  };
+  const setTimeFormat = useCallback(
+    (f: TimeFormat) => {
+      applyTimeFormat(f);
+      storeFormat(f);
+      setFormatVersion((v) => v + 1);
+    },
+    [storeFormat],
+  );
 
   const value = useMemo<AppSettings>(
     () => ({ expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    // The setters are left out: setExpertView and setTimeFormat are rebuilt every render, and the context value must
-    // not be.
-    [expertView, formatVersion, resolvedTheme, theme, storedFormat],
+    [expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, storedFormat, theme],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
