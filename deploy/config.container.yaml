@@ -1,9 +1,9 @@
 # The container: every listener binds all interfaces and the host publishes the ports it wants (deploy/compose.yaml
 # publishes the proxy to the LAN and the console and metrics on the host's loopback). The admin secret comes from the
-# environment file and the key from the mounted secret; the databases live on the volume at /var/lib/phoebis.
+# environment file and the key from the mounted secret, and the databases live on the volume at /var/lib/phoebis.
 admin:
   # No tls key: the console is served over plain HTTP on whatever address the host publishes 8081 on. On the loopback
-  # publication of the compose example that costs nothing; on a LAN publication the admin secret at login and the
+  # publication of the compose example that costs nothing. On a LAN publication the admin secret at login and the
   # session cookie on every call cross that LAN in the clear. A pair mounted read-only beside this file terminates TLS.
   listen: 0.0.0.0:8081
   secret_env: PHOEBIS_ADMIN_SECRET
@@ -15,13 +15,13 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 0.0.0.0:8317
-  # The container network is plain HTTP by default; the host decides what it publishes.
-  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # The container network is plain HTTP by default. The host decides what it publishes.
+  # The bounds on the request bodies the proxy holds, at their defaults. Uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
-  # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
+  # Signs a restored cch=00000 with this build's formula, off until a server rejects the placeholder.
   # sign_cch_placeholder: false
   # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
   # upstream_gzip: auto
@@ -35,18 +35,18 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
 stats:
-  # Overrides the shipped price table; a missing file is fine, and the volume is where one would be dropped.
+  # Overrides the shipped price table. A missing file is fine, and the volume is where one would be dropped.
   api_prices_path: /var/lib/phoebis/api_prices.yaml
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
   ledger_path: /var/lib/phoebis/ledger.sqlite
-  # Prometheus text format at /metrics; the compose example publishes it on the host's loopback.
+  # Prometheus text format at /metrics. The compose example publishes it on the host's loopback.
   metrics_listen: 0.0.0.0:9464
-  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
+  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this. 0 keeps them forever.
   retention_days: 90
-  # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
+  # Hourly rollups are purged past this. 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400
-  # Overrides the shipped subscription cost model; a missing file is fine, and the volume is where one would be dropped.
+  # Overrides the shipped subscription cost model. A missing file is fine, and the volume is where one would be dropped.
   subscription_costs_path: /var/lib/phoebis/subscription_costs.yaml
 storage:
   encryption_key_file: /run/secrets/router-storage-key

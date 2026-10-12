@@ -1,6 +1,6 @@
 # The router from the registry image under bridge networking: the proxy port is published on every interface, the
 # console and the metrics port on the host's loopback only, so the console's cookie stays off the LAN. Publishing
-# 8081 on a LAN address is one edit to the ports line; the installation page says what that costs. A listener you
+# 8081 on a LAN address is one edit to the ports line. The installation page says what that costs. A listener you
 # publish beyond the host serves plain HTTP unless its `tls` names a certificate pair.
 secrets:
   router-storage-key:
