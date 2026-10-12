@@ -578,8 +578,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {
     const s = await story;
     const lead = (accountId, windowId) => {
-      const w = s.accounts.find((a) => a.id === accountId).windows.find((x) => x.id === windowId);
-      return s.aheadOf(w, w.periodHours * HOUR, s.now);
+      const account = s.accounts.find((a) => a.id === accountId);
+      const w = account.windows.find((x) => x.id === windowId);
+      return s.aheadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
     };
     assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
     assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);

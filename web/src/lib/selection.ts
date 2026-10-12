@@ -1,5 +1,6 @@
 import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy, Session } from '@/api/types';
 import { fmtPeriodEnd, fmtRelative } from './format';
+import { endOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
@@ -38,15 +39,6 @@ export interface Tier {
 
 const HOUR_MS = 3_600_000;
 const WEEK_HOURS = 168;
-
-/** The end an engine rule reads: the saved end while the account is cancelled, else a trial end still ahead. */
-function endOf(account: Account, now: number): number | null {
-  const term = account.subscription;
-  if (!term) return null;
-  if (account.cancelled) return term.endsAt === null ? null : Date.parse(term.endsAt);
-  const trial = term.trialEndsAt === null ? Number.NaN : Date.parse(term.trialEndsAt);
-  return trial > now ? trial : null;
-}
 
 /**
  * Remaining allowance and the reset that refills it: a subscription account reads the shared 7-day window, an

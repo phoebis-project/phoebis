@@ -77,11 +77,39 @@ test("the pace words read ahead, behind or on pace from the window's used and el
   const HOUR = 60 * MINUTE;
   const window = (periodHours, utilization, resetsInMs) => ({ id: periodHours === 5 ? '5h' : '7d', label: periodHours === 5 ? '5-hour' : '7-day', observedAt: new Date(now - 40_000).toISOString(), periodHours, resetsAt: resetsInMs === null ? null : new Date(now + resetsInMs).toISOString(), utilization });
   const session = window(5, 0.62, 2 * HOUR + 14 * MINUTE);
-  assert.equal(d.paceWords(session, now), '7% ahead of pace', '62% used with 55% of the window elapsed');
-  assert.equal(d.paceWords(window(168, 0.41, 77.7 * HOUR), now), '13% behind pace', '41% used with 54% of the week elapsed');
-  assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR), now), 'on pace', 'a lead under a point reads on pace');
-  assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR), now), '1% ahead of pace', 'the smallest lead past a point reads one');
-  assert.equal(d.paceWords(window(5, 0.62, null), now), null, 'a window without a reset time has no pace');
+  assert.equal(d.paceWords(session, now, null), '7% ahead of pace', '62% used with 55% of the window elapsed');
+  assert.equal(d.paceWords(window(168, 0.41, 77.7 * HOUR), now, null), '13% behind pace', '41% used with 54% of the week elapsed');
+  assert.equal(d.paceWords(window(5, 0.506, 2.5 * HOUR), now, null), 'on pace', 'a lead under a point reads on pace');
+  assert.equal(d.paceWords(window(5, 0.512, 2.5 * HOUR), now, null), '1% ahead of pace', 'the smallest lead past a point reads one');
+  assert.equal(d.paceWords(window(5, 0.62, null), now, null), null, 'a window without a reset time has no pace');
   assert.equal(d.remainingTimeShare(session, now).toFixed(4), (134 / 300).toFixed(4), 'two hours and fourteen minutes of the five-hour window still to come');
   assert.equal(d.remainingTimeShare(window(5, 0.62, null), now), null, 'a window without a reset time has no share still to come');
+});
+
+test("the pace words run to the account's end when it comes before the window's reset, and name it", () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const HOUR = 3_600_000;
+  // Two days into a week that resets in five: to an end two days out half the span has gone, to the reset two sevenths.
+  const week = { id: '7d', label: '7-day', observedAt: new Date(now - 40_000).toISOString(), periodHours: 168, resetsAt: new Date(now + 120 * HOUR).toISOString(), utilization: 0.62 };
+  const end = now + 48 * HOUR;
+  assert.equal(d.paceWords(week, now, end), `12% ahead of pace to its end at ${d.formatFact(end, 'time', now)}`);
+  assert.equal(d.paceWords(week, now, null), '33% ahead of pace', 'no end reads the reset');
+  assert.equal(d.paceWords(week, now, Date.parse(week.resetsAt)), '33% ahead of pace', 'an end at the reset is the reset');
+  assert.equal(d.paceWords(week, now, now + 200 * HOUR), '33% ahead of pace', 'an end past the reset is the reset');
+  const soon = now + 3 * HOUR;
+  assert.equal(d.paceWords({ ...week, utilization: 0.9 }, now, soon), `4% behind pace to its end at ${d.formatFact(soon, 'time', now)}`, '48 of 51 hours gone to an end three hours out');
+});
+
+test('the end a pace reads is the saved end while cancelled, else a trial end still ahead, as the router reads it', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const iso = (ms) => new Date(ms).toISOString();
+  const saved = now + 5 * 86_400_000;
+  const trial = now + 8 * 86_400_000;
+  const term = (over) => ({ derivedEndsAt: iso(now + 30 * 86_400_000), endsAt: null, trialEndsAt: null, ...over });
+  assert.equal(d.endOf({ cancelled: true, subscription: term({ endsAt: iso(saved), trialEndsAt: iso(trial) }) }, now), saved, 'the saved end while cancelled');
+  assert.equal(d.endOf({ cancelled: true, subscription: term({ trialEndsAt: iso(trial) }) }, now), null, 'a cancelled account with no saved end has none, its trial aside');
+  assert.equal(d.endOf({ cancelled: false, subscription: term({ endsAt: iso(saved), trialEndsAt: iso(trial) }) }, now), trial, 'a trial still ahead, the saved end standing only while cancelled');
+  assert.equal(d.endOf({ cancelled: false, subscription: term({ trialEndsAt: iso(now - 1) }) }, now), null, 'a trial that has passed');
+  assert.equal(d.endOf({ cancelled: false, subscription: term({}) }, now), null, 'the derived end is a prefill, not an end');
+  assert.equal(d.endOf({ cancelled: false, subscription: null }, now), null, 'an API-key account');
 });

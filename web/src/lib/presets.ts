@@ -1,6 +1,6 @@
 import type { Account, BurnUnit, MemberEligibility, Pool, Session } from '@/api/types';
 import { fmtPct } from './format';
-import { aheadOf, windowOf } from './quota';
+import { aheadOf, endOf, paceEnd, toEndWords, windowOf } from './quota';
 import { WINDOW_HOURS, WINDOW_LABEL } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
@@ -87,6 +87,8 @@ function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs:
 
 /** A member's lead over pace on one of its shared windows, as the router reads it. */
 export interface MemberLead {
+  /** The account's end where the lead runs to it rather than to the window's reset; null otherwise. */
+  end: number | null;
   id: string;
   label: string;
   lead: number;
@@ -148,7 +150,7 @@ export function shedPreview(
   const band = threshold - MIGRATE_BAND;
   const lead = (a: Account, id: '5h' | '7d') => {
     const w = windowOf(a, id);
-    return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now);
+    return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now, endOf(a, now));
   };
   // The router's destination readings: a subscription account's two shared windows by their lead over pace against the
   // band, an API-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
@@ -169,7 +171,7 @@ export function shedPreview(
     if (a === undefined) continue;
     const leads = (['5h', '7d'] as const).flatMap((id) => {
       const l = lead(a, id);
-      return l === null ? [] : [{ id: a.id, label: a.label, lead: l, window: id }];
+      return l === null ? [] : [{ end: paceEnd(windowOf(a, id)?.resetsAt ?? null, endOf(a, now)), id: a.id, label: a.label, lead: l, window: id }];
     });
     const reached = leads.find((l) => l.lead >= threshold);
     if (reached) {
@@ -251,18 +253,18 @@ export function leadWords(lead: number): string {
 /**
  * The shedding card's dry run in up to three sentences: the members ahead of pace by the margin with their leading
  * window and lead, the round they would run with its share in the unit it was taken in, and, when none is ahead, the
- * member closest to the margin. Until the cost model is read no window-share pin enters the round, so a count then
- * would read short, and `table` says whether it has been read.
+ * member closest to the margin. A lead that runs to the account's end names it. Until the cost model is read no
+ * window-share pin enters the round, so a count then would read short, and `table` says whether it has been read.
  */
-export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
+export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready', now: number = Date.now()): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
   if (table === 'loading') return 'The cost model is loading, and window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.hot.length === 0) {
     const c = preview.closest;
-    return `No member is ahead of pace by the margin${c === null ? '' : `: the closest is ${c.label}, ${leadWords(c.lead)}`}.`;
+    return `No member is ahead of pace by the margin${c === null ? '' : `: the closest is ${c.label}, ${leadWords(c.lead)}${toEndWords(c.end, now)}`}.`;
   }
-  const named = preview.hot.map((h) => `${h.label} (${WINDOW_LABEL[h.window]}, ${leadWords(h.lead)})`);
+  const named = preview.hot.map((h) => `${h.label} (${WINDOW_LABEL[h.window]}, ${leadWords(h.lead)}${toEndWords(h.end, now)})`);
   const list = named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
   const members = preview.hot.length === 1 ? '1 member runs' : `${preview.hot.length} members run`;
   const of = preview.averaged

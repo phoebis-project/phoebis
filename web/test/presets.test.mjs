@@ -75,12 +75,20 @@ const replay = (accounts, sessions, over = {}) => d.shedPreview(pool({ members: 
 const WEEK = 168 * 60 * MINUTE;
 
 test('a window leads its pace by its utilization less the share of it that has elapsed', () => {
-  const lead = (resetsAt) => d.aheadOf({ resetsAt, utilization: 0.5 }, WEEK, NOW);
+  const lead = (resetsAt, end = null) => d.aheadOf({ resetsAt, utilization: 0.5 }, WEEK, NOW, end);
   assert.equal(lead(at(NOW + WEEK * 0.9)).toFixed(2), '0.40', 'a tenth of the week gone');
   assert.equal(lead(at(NOW + WEEK * 0.4)).toFixed(2), '-0.10', 'six tenths of the week gone');
   assert.equal(lead(null), 0.5, 'a window with no reset reads nothing elapsed');
   assert.equal(lead(at(NOW + WEEK * 2)), 0.5, 'a reset more than a window out reads nothing elapsed');
   assert.equal(lead(at(NOW - MINUTE)), -0.5, 'a window past its reset reads fully elapsed');
+  // The share runs to the earlier of the reset and the account's end, as the router's `elapsed_share_at` reads it.
+  const reset = at(NOW + WEEK * 0.9);
+  assert.equal(lead(reset, NOW + WEEK / 10).toFixed(2), '0.00', 'an end a tenth of the week out: half the span to it gone');
+  assert.equal(lead(reset, NOW + WEEK * 0.9).toFixed(2), '0.40', 'an end at the reset reads the reset');
+  assert.equal(lead(reset, NOW + WEEK * 3).toFixed(2), '0.40', 'an end past the reset reads the reset');
+  assert.equal(lead(reset, NOW - WEEK / 10), -0.5, "an end at the window's start reads fully elapsed");
+  assert.equal(lead(reset, NOW - WEEK), -0.5, "an end before the window's start reads fully elapsed");
+  assert.equal(lead(null, NOW + MINUTE), 0.5, 'without a reset nothing has elapsed, whatever the end');
 });
 
 test('a member at half its week counts as hot at a margin of a fifth ten percent in and not sixty percent in', () => {
@@ -322,6 +330,25 @@ test('the preview line reads the hot members, the round and the closest member i
   const none = read([primary, nightly, spare], { shedAheadOfPace: 0.2 });
   assert.deepEqual([none.hot, leadOf(none.closest)], [[], ['primary', '5h', '0.14']]);
   assert.equal(d.shedPreviewLine(none, true), 'No member is ahead of pace by the margin: the closest is primary, 14 points ahead.');
+});
+
+test("the preview reads a member's lead to its end and names the end where it comes before the reset", () => {
+  // A fifth of each week gone: `ends` is cancelled with its end a fifth of a week out, so half its span to the end has
+  // gone and it leads by 24 points, where `later` ends past its reset and leads by 54 to the reset.
+  const end = NOW + WEEK / 5;
+  const ends = { ...oauth('ends', windowAt('5h', 0.1, 0), windowAt('7d', 0.74, 0.2)), cancelled: true, subscription: { endsAt: at(end), trialEndsAt: null } };
+  const later = { ...oauth('later', windowAt('5h', 0.1, 0), windowAt('7d', 0.74, 0.2)), cancelled: true, subscription: { endsAt: at(NOW + WEEK * 2), trialEndsAt: null } };
+  const both = d.shedPreview(pool({ members: [member('ends'), member('later')], shedAheadOfPace: 0.2 }), [ends, later], [], NOW, SIZED);
+  assert.deepEqual(both.hot.map((h) => [...leadOf(h), h.end]), [
+    ['ends', '7d', '0.24', end],
+    ['later', '7d', '0.54', null],
+  ]);
+  assert.ok(
+    d.shedPreviewLine(both, true, 'ready', NOW).startsWith(`2 members run ahead of pace by the margin: ends (7-day, 24 points ahead to its end at ${d.formatFact(end, 'time', NOW)}) and later (7-day, 54 points ahead). `),
+    d.shedPreviewLine(both, true, 'ready', NOW),
+  );
+  const under = d.shedPreview(pool({ members: [member('ends')], shedAheadOfPace: 0.3 }), [ends], [], NOW, SIZED);
+  assert.equal(d.shedPreviewLine(under, true, 'ready', NOW), `No member is ahead of pace by the margin: the closest is ends, 24 points ahead to its end at ${d.formatFact(end, 'time', NOW)}.`);
 });
 
 test("the preview's share reads as the hot members' aggregate in one unit and as a per-member average across units", () => {

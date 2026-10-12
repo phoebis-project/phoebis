@@ -8,7 +8,7 @@ import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
 import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
-import { aheadOf } from '@/lib/quota';
+import { aheadOf, endOf } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
@@ -1944,7 +1944,8 @@ function accountRollups(): AccountRollup[] {
     lastSample.set(`${hist.accountId}|${hist.windowId}`, last);
   }
   // An hour's last sample of each window the router reads, with the reset live at the sample's instant and the lead
-  // the router would read then, so the Pace card draws leads on both sides of zero across the story's accounts.
+  // the router would read then, to the account's end where it comes first, so the Pace card draws leads on both sides
+  // of zero across the story's accounts.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
     for (const w of [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])]) {
@@ -1953,7 +1954,7 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const read: WindowSample = { lead: aheadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;
