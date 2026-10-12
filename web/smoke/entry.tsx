@@ -29,11 +29,11 @@ export { PlanRates } from '@/components/costs/PlanRates';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
+export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, revisionAt, shareOf, weightOf, windowMultiple } from '@/lib/costs';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
-export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
+export { earlierHolderLabel, ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, shortModel } from '@/lib/format';
 export { SHED_AHEAD_OF_PACE_DEFAULT } from '@/lib/presets';
 // The pace mark's offset and the end it runs to, so the check and the meter place it by one arithmetic.
 export { endOf, remainingTimeShare } from '@/lib/quota';

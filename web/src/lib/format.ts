@@ -70,6 +70,20 @@ const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fa
  * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.
  */
 export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': 'Fable week' };
+/** The 20x window equivalent with its window named: "1.47% of 20x 5-hour", "2.22% of 20x Fable week", zero as "0%". */
+export const fmtEquivalent = (windowKey: string, share: number): string =>
+  share === 0 ? '0%' : `${fmtShare(share)} of 20x ${EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+/** The short form for a cell: "1.47% 20x 5h", "0.244% 20x 7d", "2.22% 20x Fable week". */
+export const equivalentShort = (windowKey: string, share: number): string => `${fmtShare(share)} 20x ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
+/**
+ * The hover text of every estimated figure, the one sentence the console says about an estimate: the routes answer
+ * the flag and no donor, so no surface names the model whose weight stands in. "Model tier", since the drawer's title
+ * joins it to "Account tier".
+ */
+export const ESTIMATED_TITLE = "Estimated at the model tier's latest weighted model";
+/** A figure's title with the estimate after it as a sentence of its own, or the title alone for a figure not estimated. */
+export const withEstimate = (title: string, estimated: boolean): string => (!estimated ? title : title === '' ? `${ESTIMATED_TITLE}.` : `${title}. ${ESTIMATED_TITLE}.`);
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);
 export const fmtMiB = (bytes: number) => {

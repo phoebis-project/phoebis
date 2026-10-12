@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, endOf, ESTIMATED_TITLE, Expert, failCalls, failNextCall, familyOrder, Field, fmtAbsolute, fmtCompact, fmtPct, fmtPeriodEnd, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, remainingTimeShare, requestEvents, requests, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stationModel, stationName, STEP_NAME, SwitchedNumber, terminusName, tick, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, WINDOW_ROWS, windowMultiple } = await import('./dist/entry.js');
 // Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
 const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
@@ -239,6 +239,17 @@ const logTarget = (href) => {
 };
 /** An instant as the routing log's address writes it. */
 const isoAt = (ms) => new Date(ms).toISOString();
+const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+/** The top bar's Unit select, the one switch every view prices under. */
+const shellUnit = (page) => page.container.querySelector('.topbar select[aria-label="Unit"]');
+const changeSelect = async (page, select, value) => {
+  if (select) {
+    setSelect.call(select, value);
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  await page.settle(900);
+};
+const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -589,6 +600,48 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const primary = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'primary');
   const cooldownLine = [...(primary?.querySelectorAll('.account-mini__foot .muted') ?? [])].map((e) => e.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on primary'] });
+}
+{
+  // The recent requests' Cost cells read as the Requests cells under native, the shell's default: a subscription row
+  // its 20x 5-hour equivalent over its 7-day one, with the mark where the row is estimated, and an API key row its
+  // dollars over API key. The story's API key accounts stop serving before its end, so the ten newest rows may hold
+  // none, and the check then reads the subscription rows alone. A dollar position reads every row's dollars.
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const recentCosts = () =>
+    [...m.container.querySelectorAll('.dash__recent tbody tr')].map((tr) => {
+      const td = tr.lastElementChild;
+      return {
+        id: tr.querySelector('a[href^="/requests/"]')?.getAttribute('href')?.split('/').pop() ?? '',
+        main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : '',
+        sub: td?.querySelector('.sub')?.textContent?.trim() ?? null,
+        title: td?.getAttribute('title') ?? null,
+      };
+    });
+  const native = recentCosts();
+  const plan = native.filter((c) => byId.has(c.id) && costUnitOf(byId.get(c.id), 'native').kind === 'equivalent');
+  const wrongPlan = plan.filter((c) => {
+    const r = byId.get(c.id);
+    const tail = r.estimated ? `. ${ESTIMATED_TITLE}.` : '';
+    return !(new RegExp(`^${r.estimated ? '~' : ''}\\d[\\d.]*% 20x 5h$`).test(c.main) && /^\d[\d.]*% 20x (7d|Fable week)$/.test(c.sub ?? '') && (c.title ?? '').endsWith(` equivalent${tail}`));
+  });
+  const newestApiKey = requests.find((r) => r.attempts.at(-1)?.accountKind === 'api_key');
+  const apiKey = newestApiKey === undefined ? undefined : native.find((c) => c.id === newestApiKey.id);
+  results.push({
+    name: apiKey
+      ? "/ the recent requests' Cost cells read as the Requests cells under native: a subscription row its 20x 5-hour equivalent over its 7-day one, and an API key row its dollars over API key"
+      : "/ the recent requests' Cost cells read a subscription row's 20x 5-hour equivalent over its 7-day one under native, with no API key row among the ten newest to read",
+    ok: native.length === 10 && plan.length > 0 && wrongPlan.length === 0 && (apiKey === undefined || (apiKey.main.startsWith('$') && apiKey.sub === 'API key' && apiKey.title === 'Billed in dollars: API key')),
+    missing: [`${native.length} rows, ${plan.length} subscription rows`, ...wrongPlan.map((c) => JSON.stringify(c)), JSON.stringify(apiKey ?? null)],
+  });
+  await chooseUnit(m, 'all');
+  const dollars = recentCosts().find((c) => c.id === plan[0]?.id);
+  results.push({
+    name: "/ under All in dollars a recent subscription request's Cost cell reads its dollars alone",
+    ok: shellUnit(m)?.value === 'all' && dollars !== undefined && /^\$[\d,.]+$/.test(dollars.main) && dollars.sub === null && dollars.title === null,
+    missing: [String(shellUnit(m)?.value), JSON.stringify(dollars ?? null)],
+  });
+  await chooseUnit(m, 'native');
+  localStorage.removeItem('phoebis.unit');
 }
 m.unmount();
 
@@ -7128,60 +7181,69 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
       missing: [atCap.text, atCap.marker, `bare ${atCap.bare}`],
     });
   }
-  // The Cost cell reads a row's native unit: dollars over the funding word for an answer an API key account served,
-  // and shares for a subscription request on a model the cost model has no weight for (the story's Sonnet 4.6 turns),
-  // which its model tier's latest weighed model prices.
+  // Under native, the shell's default, the Cost cell reads a row in the unit its funding pays in: dollars over the
+  // funding word for an answer an API key account served, and 20x equivalents for a subscription request, the story's
+  // Sonnet 4.6 turns among them, which the cost model does not weigh and which read their model tier's latest weighed
+  // model, estimated. The share position reads the account's own shares.
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
-  const fallbackRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-6' && costUnitOf(r).kind === 'shares');
+  const fallbackRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-6' && costUnitOf(r, 'all').kind === 'shares');
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
-  results.push({ name: 'fixture: a request an API key account served, a subscription request on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && !requests.some((r) => costUnitOf(r).kind === 'unpriced'), missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...requests.filter((r) => costUnitOf(r).kind === 'unpriced').map((r) => `unpriced ${r.id}`)] });
+  const unpriced = requests.filter((r) => costUnitOf(r, 'all').kind === 'unpriced' || costUnitOf(r, 'native').kind === 'unpriced');
+  results.push({ name: 'fixture: a request an API key account served, a subscription request on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && unpriced.length === 0, missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...unpriced.map((r) => `unpriced ${r.id}`)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
     const td = costAt < 0 ? null : (row?.children[costAt] ?? null);
     return { main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : `${rows} rows`, sub: td?.querySelector('.sub')?.textContent?.trim() ?? null, title: td?.getAttribute('title') ?? null };
   };
+  /** An estimated figure's title with the estimate taken off its end, or null for a title that does not end with it. */
+  const unmarked = (title) => {
+    const tail = `. ${ESTIMATED_TITLE}.`;
+    return (title ?? '').endsWith(tail) ? (title ?? '').slice(0, -tail.length) : null;
+  };
   if (apiKeyRow && fallbackRow) {
     const billed = await costCellOf(apiKeyRow.id);
     results.push({ name: "/requests an API key row's Cost cell reads dollars over API key with its title", ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
     const fallback = await costCellOf(fallbackRow.id);
-    results.push({ name: "/requests a subscription row on a model the cost model does not weigh reads its model tier's shares", ok: /^\d[\d.]*% 7d$/.test(fallback.main) && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (fallback.title ?? '').endsWith(' equivalent'), missing: [fallbackRow.id, JSON.stringify(fallback)] });
+    results.push({
+      name: "/requests a subscription row on a model the cost model does not weigh reads its model tier's 20x equivalents with a tilde before its main line and the estimate after its title",
+      ok: fallbackRow.estimated && /^~\d[\d.]*% 20x 5h$/.test(fallback.main) && /^\d[\d.]*% 20x 7d$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
+      missing: [fallbackRow.id, `estimated ${fallbackRow.estimated}`, JSON.stringify(fallback)],
+    });
   }
   if (unservedRow) {
     const unserved = await costCellOf(unservedRow.id);
     results.push({ name: "/requests a row no account served reads $0.00 with no funding word and no title", ok: unserved.main === '$0.00' && unserved.sub === null && unserved.title === null, missing: [unservedRow.id, JSON.stringify(unserved)] });
   }
-  // A subscription request the story prices reads its shares: the model week's or the 7-day share over the 5-hour
-  // one in their windows' short words, every share in full and the dollar equivalent on the title. An overage row of
-  // nightly and a fast row read dollars.
-  const sharedRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'shares' && u.shares.length >= 2; });
-  const overageRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
-  const fastRow = requests.find((r) => { const u = costUnitOf(r); return u.kind === 'dollars' && u.funding === 'fast'; });
+  // A subscription request the story prices on two windows, read with no estimate so its figures lead the cell. An
+  // overage row of nightly and a fast row read dollars.
+  const sharedRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return !r.estimated && u.kind === 'shares' && u.shares.length >= 2; });
+  const overageRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return u.kind === 'dollars' && u.funding === 'overage' && servedBy(r)?.accountId === 'nightly'; });
+  const fastRow = requests.find((r) => { const u = costUnitOf(r, 'all'); return u.kind === 'dollars' && u.funding === 'fast'; });
   results.push({ name: 'fixture: a subscription request priced on two windows, an overage request of nightly and a fast request', ok: sharedRow !== undefined && overageRow !== undefined && fastRow !== undefined, missing: [String(sharedRow?.id), String(overageRow?.id), String(fastRow?.id)] });
-  // Read while the list shows, since the drawer check below compares its chips against this cell's title.
-  const sharedCell = sharedRow ? await costCellOf(sharedRow.id) : null;
-  if (sharedRow) {
-    const shared = sharedCell;
-    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': '7-day Fable' };
+  // Read while the list shows, since the drawer checks below compare their chips against these cells' titles.
+  const nativeCell = sharedRow ? await costCellOf(sharedRow.id) : null;
+  if (sharedRow && nativeCell) {
+    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
     const full = (short) => {
-      const read = /^(\d[\d.]*%) (5h|7d|Fable week)$/.exec(short ?? '');
-      return read ? `${read[1]} of ${FULL[read[2]]}` : null;
+      const read = /^(\d[\d.]*%) 20x (5h|7d|Fable week)$/.exec(short ?? '');
+      return read === null ? null : read[1] === '0%' ? '0%' : `${read[1]} of 20x ${FULL[read[2]]}`;
     };
-    const parts = (shared.title ?? '').split(', ');
+    const parts = (nativeCell.title ?? '').split(', ');
     const named = parts.slice(0, -1);
     results.push({
-      name: "/requests a subscription row's Cost cell reads its shares in their windows' short words, its sub line the 5-hour share, and its title every share in full with the dollar equivalent",
+      name: "/requests a subscription row's Cost cell reads its 20x 5-hour equivalent in the short form, its 7-day under it, and its title every equivalent in full with the dollar equivalent",
       ok:
-        /^\d[\d.]*% (7d|Fable week)$/.test(shared.main) &&
-        /^\d[\d.]*% 5h$/.test(shared.sub ?? '') &&
+        /^\d[\d.]*% 20x 5h$/.test(nativeCell.main) &&
+        /^\d[\d.]*% 20x 7d$/.test(nativeCell.sub ?? '') &&
         /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
-        named.length === costUnitOf(sharedRow).shares.length &&
-        named.every((n) => /^\d[\d.]*% of (5-hour|7-day|7-day Fable)$/.test(n)) &&
-        named.includes(full(shared.main)) &&
-        named.includes(full(shared.sub)),
-      missing: [sharedRow.id, JSON.stringify(shared)],
+        named.length === costUnitOf(sharedRow, 'native').equivalents.length &&
+        named.every((n) => /^(0%|\d[\d.]*% of 20x (5-hour|7-day|Fable week))$/.test(n)) &&
+        named[0] === full(nativeCell.main) &&
+        named[1] === full(nativeCell.sub),
+      missing: [sharedRow.id, JSON.stringify(nativeCell)],
     });
   }
   if (overageRow && fastRow) {
@@ -7193,6 +7255,42 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
       missing: [overageRow.id, JSON.stringify(overage), fastRow.id, JSON.stringify(fast)],
     });
   }
+  // The share position keeps the account's own shares: the model week's or the 7-day share over the 5-hour one in
+  // their windows' short words, every share in full and the dollar equivalent on the title, and the mark of an
+  // estimated row.
+  await chooseUnit(m, 'share');
+  const shareCell = sharedRow ? await costCellOf(sharedRow.id) : null;
+  if (sharedRow && shareCell) {
+    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': '7-day Fable' };
+    const full = (short) => {
+      const read = /^(\d[\d.]*%) (5h|7d|Fable week)$/.exec(short ?? '');
+      return read ? `${read[1]} of ${FULL[read[2]]}` : null;
+    };
+    const parts = (shareCell.title ?? '').split(', ');
+    const named = parts.slice(0, -1);
+    results.push({
+      name: "/requests under the share position a subscription row's Cost cell reads its shares in their windows' short words, its sub line the 5-hour share, and its title every share in full with the dollar equivalent",
+      ok:
+        shellUnit(m)?.value === 'share' &&
+        /^\d[\d.]*% (7d|Fable week)$/.test(shareCell.main) &&
+        /^\d[\d.]*% 5h$/.test(shareCell.sub ?? '') &&
+        /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
+        named.length === costUnitOf(sharedRow, 'all').shares.length &&
+        named.every((n) => /^\d[\d.]*% of (5-hour|7-day|7-day Fable)$/.test(n)) &&
+        named.includes(full(shareCell.main)) &&
+        named.includes(full(shareCell.sub)),
+      missing: [sharedRow.id, String(shellUnit(m)?.value), JSON.stringify(shareCell)],
+    });
+  }
+  if (fallbackRow) {
+    const fallback = await costCellOf(fallbackRow.id);
+    results.push({
+      name: "/requests under the share position a subscription row on a model the cost model does not weigh reads its model tier's shares with the tilde and the estimate too",
+      ok: /^~\d[\d.]*% 7d$/.test(fallback.main) && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (unmarked(fallback.title) ?? '').endsWith(' equivalent'),
+      missing: [fallbackRow.id, JSON.stringify(fallback)],
+    });
+  }
+  await chooseUnit(m, 'native');
   setter.call(heldSearch, '');
   heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(700);
@@ -7208,23 +7306,43 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     const figure = costRow?.querySelector('td:last-child b') ?? null;
     results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
   }
-  if (sharedRow && sharedCell) {
-    // The chips read the shares in the cell's title order, and the equivalent follows them muted in the one run that
-    // ends at the cell's edge.
-    const cell = sharedCell;
+  if (sharedRow && nativeCell && shareCell) {
+    // The chips read the figures in the cell's title order, and the dollar equivalent follows them muted in the one
+    // run that ends at the cell's edge. The row's title names the serving account's tier and the price list and the
+    // cost model in force at the request's instant, each read off the settings the mock answers.
     await m.navigate(`/requests/${sharedRow.id}`);
     await m.settle(300);
-    const costRow = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost');
-    const value = costRow?.querySelector('td:last-child') ?? null;
-    const chips = [...(value?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? '');
-    const equivalent = value?.querySelector('.muted')?.textContent?.trim() ?? null;
-    const titled = (cell.title ?? '').split(', ');
+    const costValue = () => [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+    const readRow = () => {
+      const value = costValue();
+      return {
+        chips: [...(value?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''),
+        ends: value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
+        equivalent: value?.querySelector('.muted')?.textContent?.trim() ?? null,
+        title: value?.getAttribute('title') ?? null,
+      };
+    };
+    const settings = decodeSettings(SETTINGS_WIRE);
+    const dateOf = (entry) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
+    const inForce = `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, sharedRow.at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, sharedRow.at))}`;
+    const native = readRow();
+    const titled = (nativeCell.title ?? '').split(', ');
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads the share chips in order with the equivalent after them",
-      ok: chips.length >= 2 && JSON.stringify(chips) === JSON.stringify(titled.slice(0, -1)) && equivalent === titled[titled.length - 1] && value?.querySelector(':scope > .usage-table__end')?.lastElementChild?.classList.contains('muted') === true,
-      missing: [sharedRow.id, JSON.stringify(chips), String(equivalent), cell.title ?? 'no title'],
+      name: "/requests the drawer's cost row of a subscription row reads the equivalent chips in order with the dollars after them, and its title names the account tier and the two revisions in force",
+      ok: native.chips.length >= 2 && JSON.stringify(native.chips) === JSON.stringify(titled.slice(0, -1)) && native.equivalent === titled[titled.length - 1] && native.ends && sharedRow.tier !== null && native.title === `Account tier ${sharedRow.tier}. ${inForce}`,
+      missing: [sharedRow.id, JSON.stringify(native), nativeCell.title ?? 'no title', `Account tier ${sharedRow.tier}. ${inForce}`],
     });
+    await chooseUnit(m, 'share');
+    const share = readRow();
+    const shareTitled = (shareCell.title ?? '').split(', ');
+    results.push({
+      name: "/requests under the share position the drawer's cost row of a subscription row reads the share chips in order with the equivalent after them",
+      ok: share.chips.length >= 2 && JSON.stringify(share.chips) === JSON.stringify(shareTitled.slice(0, -1)) && share.equivalent === shareTitled[shareTitled.length - 1] && share.ends,
+      missing: [sharedRow.id, JSON.stringify(share), shareCell.title ?? 'no title'],
+    });
+    await chooseUnit(m, 'native');
   }
+  localStorage.removeItem('phoebis.unit');
   {
     // A model that takes no inference geography parameter answers it as not available, which the chip spells out.
     const unavailable = requests.find((r) => servedBy(r)?.response.inferenceGeo === 'not_available');
@@ -11208,7 +11326,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
-  const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   // Takes the grouping's key, the option's value, as the page's own state holds it.
   const burnGroup = async (value) => {
     const select = m.container.querySelector('#burn select[aria-label="Burn group by"]');
@@ -11248,15 +11365,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The unit is the console-wide setting the top bar's switch holds, so no section head draws a control for it and a
     // choice writes nothing to the address.
     const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
-    const shellUnit = (page) => page.container.querySelector('.topbar select[aria-label="Unit"]');
-    const changeSelect = async (page, select, value) => {
-      if (select) {
-        setSelect.call(select, value);
-        select.dispatchEvent(new window.Event('change', { bubbles: true }));
-      }
-      await page.settle(900);
-    };
-    const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
     const groupPage = (page, value) => changeSelect(page, page.container.querySelector('.filters select.groupby-select'), value);
     const costMeta = () => m.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
     // Each head is read on its own tab, since a tab mounts its section alone, and a select under any label counts.
@@ -11584,8 +11692,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         return [tile?.querySelector('.stat__value')?.textContent?.trim(), tile?.querySelector('.stat__note')?.textContent?.trim()];
       };
       const inSession = (r) => requests.filter((x) => x.sessionId === r.sessionId && x.keyId === r.keyId);
-      const billedOnly = requests.find((r) => r.sessionId !== null && r.accountId !== null && inSession(r).filter((x) => x.accountId === r.accountId).every((x) => costUnitOf(x).kind === 'dollars'));
-      const planOnly = requests.find((r) => r.sessionId !== null && inSession(r).every((x) => costUnitOf(x).kind !== 'dollars'));
+      const billedOnly = requests.find((r) => r.sessionId !== null && r.accountId !== null && inSession(r).filter((x) => x.accountId === r.accountId).every((x) => costUnitOf(x, 'all').kind === 'dollars'));
+      const planOnly = requests.find((r) => r.sessionId !== null && inSession(r).every((x) => costUnitOf(x, 'all').kind !== 'dollars'));
       const name = '/analytics a session view reads the Probe cost tile as not in the request log where its fold holds no group';
       if (!billedOnly || !planOnly) results.push({ name, ok: false, missing: [`billed-only session ${billedOnly?.sessionId}`, `plan-only session ${planOnly?.sessionId}`] });
       else {

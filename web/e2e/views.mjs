@@ -2755,7 +2755,8 @@ async function analyticsColumns(theme) {
 
 /**
  * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
- * the columns' widths, the Client text's cut, the TTFB cells' lines, and the Cost cells whose `.sub` reads a share.
+ * the columns' widths, the Client text's cut, the TTFB cells' lines, and the Cost cells that read a share or a 20x
+ * equivalent.
  */
 function readRequestsTable() {
   return page.evaluate(() => {
@@ -2795,8 +2796,9 @@ function readRequestsTable() {
     // A placeholder row is one cell across the table, so it has no TTFB or Cost cell.
     const cellsOf = (at) => (at < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > at ? tr.children[at] : null)).filter((td) => td !== null));
     const ttfb = cellsOf(columnAt('TTFB'));
-    // The main line or the `.sub` line, whichever the row's shares fill, each in its window's short word.
-    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (5h|7d|Fable week)/.test(td.textContent ?? '')).length;
+    // The main line or the `.sub` line, whichever the row's figures fill, each in its window's short word: a share
+    // under the share position, a 20x equivalent under native, the default.
+    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|Fable week)/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
       client: wrap.clientWidth,
@@ -2839,11 +2841,11 @@ async function requestsTableFits(theme) {
 }
 
 /**
- * The default set at 1280 by 800 with share labels in the Cost column, the widest text the column draws (a Fable
- * request's "0.12% Fable week" main line over "0.42% 5h"). The mock pass's alone: the router pass seeds one API key
- * account, whose rows read dollars. The story's plan-funded rows carry shares, so the count of cells whose main line
- * or `.sub` reads one is asserted above zero: a page with no share cell would measure the table without the widest
- * text. The need, the wrap's width and the Cost column's width are recorded: the story's values run wider than the
+ * The default set at 1280 by 800 with window labels in the Cost column, the widest text the column draws (under
+ * native, the default, a request's "1.47% 20x 5h" main line over "0.244% 20x 7d"). The mock pass's alone: the router
+ * pass seeds one API key account, whose rows read dollars. The story's plan-funded rows carry 20x equivalents, so the
+ * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
+ * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's values run wider than the
  * 990 px card with the fills at their floors, so the table scrolls inside its wrap there and the width is a record, as
  * in `requestsTableFits`.
  */
@@ -3470,8 +3472,8 @@ async function requestDrawerCompact(theme) {
     if (got.phases !== 7) say(`${where}: the Phases legend lists ${got.phases} phases, not seven`);
     if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
   };
-  // The cost row's share chips take the status badge's type, sit on one line each inside the cell, and the muted
-  // equivalent follows them on one line inside it. A cost row with no chip (a request billed in dollars) is recorded
+  // The cost row's chips (the 20x equivalents under native, the default) take the status badge's type, sit on one
+  // line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with no chip (a request billed in dollars) is recorded
   // in the router pass, whose seeded requests an API key account serves, and fails the mock pass, whose story's
   // newest request a subscription window paid for.
   const costRow = (where, got) => {
@@ -3480,7 +3482,7 @@ async function requestDrawerCompact(theme) {
       return;
     }
     if (got.cost.chips.length === 0) {
-      if (mock) say(`${where}: the cost row draws no share chip`);
+      if (mock) say(`${where}: the cost row draws no equivalent chip`);
       return;
     }
     const inside = (e) => e.left >= got.cost.cell.left && e.right <= got.cost.cell.right;
@@ -3584,8 +3586,8 @@ async function requestDrawerCompact(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
-  // The story's plan-funded Fable answer spends a share of all three windows, so its cost row draws the three-chip
-  // layout, in the order the pages draw the windows. A row past the first page is opened at its Details address.
+  // The story's plan-funded Fable answer prices all three windows, so its cost row draws the three-chip layout, in
+  // the order the pages draw the windows. A row past the first page is opened at its Details address.
   if (mock) {
     const fable = 'req_a6c19e73-5d2';
     const row = page.locator('.requests__table tbody tr', { has: page.locator(`.sub.mono[title="${fable}"]`) });
@@ -3611,7 +3613,7 @@ async function requestDrawerCompact(theme) {
       measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
       costRow(where, got);
       const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
-      if (JSON.stringify(windows) !== JSON.stringify(['5-hour', '7-day', '7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 5-hour, a 7-day and a 7-day Fable share in that order`);
+      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x Fable week'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order`);
     }
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();

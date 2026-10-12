@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, KeepaliveState, RequestLog, Session, SubscriptionCosts } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor, accountSlots } from '@/components/charts/theme';
@@ -13,7 +14,9 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { costCellOf, costUnitOf } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
+import type { UnitPosition } from '@/lib/unit';
 
 /**
  * A read whose first answer failed holds no data, so its card would wait on a placeholder forever; a refresh that fails
@@ -261,7 +264,23 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
  */
 const MODEL_CHARS = 12;
 
+/**
+ * A recent request's Cost cell. Native reads the request in the unit its funding pays in and the share position its
+ * account's own shares, as the Requests cell does. The three dollar positions read the request's dollars.
+ */
+function RecentCost({ request, unit }: { request: RequestLog; unit: UnitPosition }) {
+  if (unit !== 'native' && unit !== 'share') return <td className="right num col-fit">{fmtUsd(request.costUsd)}</td>;
+  const cell = costCellOf(costUnitOf(request, unit));
+  return (
+    <td className="right num col-fit" title={cell.title || undefined}>
+      {cell.main}
+      {cell.sub && <span className="sub">{cell.sub}</span>}
+    </td>
+  );
+}
+
 function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[] | null }) {
+  const { unit } = useAppSettings();
   return (
     <div className="table-wrap">
       <table className="table dash__recent">
@@ -319,7 +338,7 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                       {fmtCompact(tokensTotal(r.usage))}
                       <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
                     </td>
-                    <td className="right num col-fit">{fmtUsd(r.costUsd)}</td>
+                    <RecentCost request={r} unit={unit} />
                   </tr>
                 );
               })}

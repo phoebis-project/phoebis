@@ -226,6 +226,10 @@ export const fundingOf = (attempt: Pick<Attempt, 'accountKind' | 'overageInUse' 
   return 'plan';
 };
 
+export type NativeUnit = 'equivalent' | 'usd';
+/** The unit a funding pays in: a subscription window in 20x equivalents, everything else in dollars. */
+export const nativeOf = (funding: Funding): NativeUnit => (funding === 'plan' ? 'equivalent' : 'usd');
+
 /** Minutes of a day in the viewing zone. */
 export interface BandRun { from: number; to: number }
 /** A day of the week in the viewing zone: its date, its label ("Wed 16 Sep") and the band's runs on it. */

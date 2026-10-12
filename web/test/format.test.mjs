@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -131,6 +131,29 @@ test("a share's short form names its window in a word, and every spelling of a w
   assert.equal(shareShort('seven_day_overage_included', 0.0012), '0.12% Fable week', 'the overage-included key is the Fable week too');
   assert.equal(shareShort('seven_day_opus', 0.5), '50% seven_day_opus', 'a window the pages do not know keeps its key');
   assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the full form stays for the titles and the other pages');
+});
+
+test('a 20x window equivalent reads as a percent of the named 20x window to three significant digits, and zero as 0%', () => {
+  assert.equal(fmtEquivalent('five_hour', 0.014667), '1.47% of 20x 5-hour');
+  assert.equal(fmtEquivalent('seven_day', 0.002444), '0.244% of 20x 7-day');
+  assert.equal(fmtEquivalent('seven_day_fable', 0.02222), '2.22% of 20x Fable week', 'the model week reads Fable week');
+  assert.equal(fmtEquivalent('seven_day', 3.4), '340% of 20x 7-day', 'a sum past one window stays a percent');
+  assert.equal(fmtEquivalent('seven_day', 0), '0%');
+  assert.equal(fmtEquivalent('seven_day_opus', 0.5), '50% of 20x seven_day_opus', 'a window the pages do not know keeps its key');
+});
+
+test("an equivalent's short form names its 20x window in a word", () => {
+  assert.equal(equivalentShort('five_hour', 0.014667), '1.47% 20x 5h');
+  assert.equal(equivalentShort('seven_day', 0.002444), '0.244% 20x 7d');
+  assert.equal(equivalentShort('seven_day_fable', 0.02222), '2.22% 20x Fable week');
+  assert.equal(equivalentShort('seven_day_opus', 0.5), '50% 20x seven_day_opus', 'a window the pages do not know keeps its key');
+});
+
+test('the estimated title is one sentence that names the model tier and no model', () => {
+  assert.equal(typeof ESTIMATED_TITLE, 'string');
+  assert.match(ESTIMATED_TITLE, /^Estimated [^.;:]+[^.;:\s]$/, 'one sentence, with no stop, semicolon or colon inside it and none at its end');
+  assert.match(ESTIMATED_TITLE, /\bmodel tier\b/, 'the model tier named apart from the account tier');
+  assert.doesNotMatch(ESTIMATED_TITLE, /claude-|fable|haiku|opus|sonnet/i, 'no model or family named, since the routes answer no donor');
 });
 
 test('a dated model id reads undated, any other as sent', () => {
