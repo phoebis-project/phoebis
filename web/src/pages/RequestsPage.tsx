@@ -143,8 +143,8 @@ function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }
 }
 
 /**
- * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, or the dollars
- * with why. An estimated figure reads a tilde before its first value, and the row's title says why.
+ * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, or the dollars.
+ * An estimated figure reads a tilde before its first value, and the row's title says why.
  */
 function costRowValue(unit: CostUnit) {
   const mark = unit.estimated ? '~' : '';
@@ -166,14 +166,14 @@ function costRowValue(unit: CostUnit) {
       );
     case 'dollars':
       return (
-        <b title={`Billed in dollars: ${FUNDING_WORD[unit.funding]}`}>
+        <b>
           {mark}
           {fmtUsd(unit.usd)}
         </b>
       );
     case 'unpriced':
       return (
-        <b title={NO_SHARE_TITLE}>
+        <b>
           {mark}
           {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
         </b>
@@ -189,12 +189,14 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value, titled with the serving account's tier by its plan, the price list and the cost model in
- * force at the request's instant while the settings are at hand, and the estimate.
+ * The drawer's cost value under one title: why a dollar figure stands where it does, the serving account's tier by its
+ * plan, the price list and the cost model in force at the request's instant while the settings are at hand, and the
+ * estimate. A title on an element inside the cell would hide the row's own wherever the figure is hovered.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  const title = withEstimate([r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated);
+  const why = cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : null;
+  const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated);
   return (
     <td className="right num" title={title || undefined}>
       {costRowValue(cost)}

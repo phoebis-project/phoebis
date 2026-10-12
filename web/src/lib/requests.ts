@@ -104,12 +104,12 @@ export function revisionsTitle(settings: Pick<Settings, 'apiPrices' | 'subscript
 
 /**
  * The Dashboard's recent Cost cell, a glance on one line. An equivalent unit reads its lead window's figure alone in
- * the window's short word, the 20x left to the title and the legend, and the title carries the full reading, the
- * revisions in force and the estimate. Every other unit reads as the Requests cell.
+ * the 20x short form, and the title carries the full reading, the revisions in force and the estimate. Every other
+ * unit reads as the Requests cell.
  */
 export function glanceCellOf(unit: CostUnit, revisions: string | null): { main: string; sub: string; title: string } {
   if (unit.kind !== 'equivalent') return costCellOf(unit);
   const [lead] = unit.equivalents;
   const title = [equivalentReading(unit), revisions].filter((part) => part !== null).join('. ');
-  return { main: `${unit.estimated ? '~' : ''}${shareShort(lead.key, lead.share)}`, sub: '', title: withEstimate(title, unit.estimated) };
+  return { main: `${unit.estimated ? '~' : ''}${equivalentShort(lead.key, lead.share)}`, sub: '', title: withEstimate(title, unit.estimated) };
 }

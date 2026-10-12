@@ -86,8 +86,9 @@ the copy fallback (Copied on the Settings snippet with the clipboard API removed
 on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
 row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
 table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their 5-hour
-equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The
-script exits non-zero with the list of failures when any of that does not hold.
+equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there, and
+its width under Window shares, where the cell keeps its two-line shares, is recorded beside it. The script exits
+non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

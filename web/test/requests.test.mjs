@@ -5,7 +5,7 @@ import * as d from './dist/api.js';
 const attempt = (accountKind, overageInUse, speed) => ({ accountKind, overageInUse, response: { speed } });
 const PLAN = attempt('oauth', false, 'standard');
 const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, estimated: false, ...more });
-/** The positions under which a plan request reads its own window shares, as the Requests page drew it before the switch. */
+/** The positions under which a plan request reads its own window shares. */
 const SHARE_POSITIONS = ['all', 'equivalent', 'share', 'usd'];
 const POSITIONS = ['native', ...SHARE_POSITIONS];
 /** A cell title as an estimated figure carries it: its own title, then the estimate as a sentence of its own. */
@@ -152,16 +152,16 @@ test('the revisions in force at a request name the latest price list and cost mo
   assert.equal(d.revisionsTitle(null, '2026-10-09T12:00:00Z'), null, 'no settings at hand, no sentence');
 });
 
-test("the Dashboard's glance cell reads an equivalent unit's lead window alone in its short word, with the full reading and the revisions on the title", () => {
+test("the Dashboard's glance cell reads an equivalent unit's lead window alone in its 20x short form, with the full reading and the revisions on the title", () => {
   const r = request(null, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222, five_hour: 0.014667, seven_day: 0.002444 } });
   const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
   const full = '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x Fable week, $0.0048 equivalent';
-  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), revisions), { main: '1.47% 5h', sub: '', title: `${full}. ${revisions}` });
-  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), null), { main: '1.47% 5h', sub: '', title: full }, 'no settings at hand, the reading alone');
+  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), revisions), { main: '1.47% 20x 5h', sub: '', title: `${full}. ${revisions}` });
+  assert.deepEqual(d.glanceCellOf(d.costUnitOf(r, 'native'), null), { main: '1.47% 20x 5h', sub: '', title: full }, 'no settings at hand, the reading alone');
   const estimated = d.costUnitOf({ ...r, estimated: true }, 'native');
-  assert.deepEqual(d.glanceCellOf(estimated, revisions), { main: '~1.47% 5h', sub: '', title: markedTitle(`${full}. ${revisions}`) });
+  assert.deepEqual(d.glanceCellOf(estimated, revisions), { main: '~1.47% 20x 5h', sub: '', title: markedTitle(`${full}. ${revisions}`) });
   const weekly = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { five_hour: null, seven_day: 0.002444 } }), 'native');
-  assert.deepEqual(d.glanceCellOf(weekly, null), { main: '0.244% 7d', sub: '', title: '0.244% of 20x 7-day, $0.0048 equivalent' }, 'no 5-hour figure, the next window leads');
+  assert.deepEqual(d.glanceCellOf(weekly, null), { main: '0.244% 20x 7d', sub: '', title: '0.244% of 20x 7-day, $0.0048 equivalent' }, 'no 5-hour figure, the next window leads');
 });
 
 test("the Dashboard's glance cell reads every other unit as the Requests cell does", () => {

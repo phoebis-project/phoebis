@@ -2437,6 +2437,28 @@ async function ringLinesSpan(theme) {
 }
 
 /**
+ * The Dashboard's recent requests under Window shares, the mock pass's alone: the share position keeps the Requests
+ * page's two-line shares in the Cost cell, wider than the card leaves at 1280 by 800, so the table's width is recorded
+ * as `recentRowsOneLine` records it under native. A count of cells reading a share is asserted above zero, so the
+ * record is never one of the native table. The switch returns to native, the pass's default, before the next read.
+ */
+async function recentUnderShares(theme) {
+  const unit = page.locator('.topbar select[aria-label="Unit"]');
+  await unit.selectOption('share');
+  await settle();
+  const read = await page.evaluate(() => {
+    const wrap = document.querySelector('.dash-bottom .table-wrap');
+    const costs = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild?.textContent?.trim() ?? '');
+    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|Fable week)/.test(text)).length };
+  });
+  await unit.selectOption('native');
+  await settle();
+  measurements.push(`${theme} / the Recent requests table under Window shares ${read === null ? 'not drawn' : `needs ${read.scroll}px of its card's ${read.client}px${read.scroll > read.client ? ' and scrolls inside it' : ''}, ${read.shares} Cost cells reading a share`}`);
+  if (read === null) failures.push(`${theme} /: no Recent requests table to measure under Window shares`);
+  else if (read.shares === 0) failures.push(`${theme} /: no recent Cost cell reads a share under Window shares, so the record would read the native table`);
+}
+
+/**
  * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
  * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
  * Tokens cells keep their second lines, so the rows' heights are not asserted. The fit is asserted in the router pass
@@ -2850,20 +2872,20 @@ async function requestsTableFits(theme) {
  * native, the default, a request's "1.47% 20x 5h" main line over "0.244% 20x 7d"). The mock pass's alone: the router
  * pass seeds one API key account, whose rows read dollars. The story's plan-funded rows carry 20x equivalents, so the
  * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
- * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's values run wider than the
- * 990 px card with the fills at their floors, so the table scrolls inside its wrap there and the width is a record, as
- * in `requestsTableFits`.
+ * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's
+ * values run wider than the 990 px card with the fills at their floors, so the table scrolls inside its wrap there and
+ * the width is a record, as in `requestsTableFits`.
  */
 async function requestsTableFitsWithShares(theme) {
   const read = await readRequestsTable();
   const cost = read?.columns.find(([label]) => label === 'Cost')?.[1] ?? null;
-  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a share`}`);
+  measurements.push(`${theme} /requests table with shares ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, Cost column ${cost}px, ${read.shares} of ${read.rows} Cost cells read a 20x equivalent or a share`}`);
   if (read === null) {
     failures.push(`${theme} /requests: no request table to measure with shares`);
     return;
   }
   if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured with shares alone`);
-  if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a share, so the table is measured without the widest text`);
+  if (read.shares === 0) failures.push(`${theme} /requests: no Cost cell of the default set reads a 20x equivalent or a share, so the table is measured without the widest text`);
 }
 
 /**
@@ -3478,9 +3500,9 @@ async function requestDrawerCompact(theme) {
     if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
   };
   // The cost row's chips (the 20x equivalents under native, the default) take the status badge's type, sit on one
-  // line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with no chip (a request billed in dollars) is recorded
-  // in the router pass, whose seeded requests an API key account serves, and fails the mock pass, whose story's
-  // newest request a subscription window paid for.
+  // line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with no chip (a
+  // request billed in dollars) is recorded in the router pass, whose seeded requests an API key account serves, and
+  // fails the mock pass, whose story's newest request a subscription window paid for.
   const costRow = (where, got) => {
     if (got.cost === null) {
       say(`${where} has no Estimated cost row to read`);
@@ -5966,6 +5988,7 @@ try {
       if (view.path === '/') {
         await recentRowsOneLine(theme);
         await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
+        if (mock) await recentUnderShares(theme);
         await ringLinesSpan(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);

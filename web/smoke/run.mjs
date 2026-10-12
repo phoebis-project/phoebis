@@ -603,9 +603,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The recent requests' table is a glance, so under native, the shell's default, a subscription row's Cost cell reads
-  // its 5-hour equivalent alone in the window's short word, with every equivalent, the dollar equivalent and the
-  // revisions in force on its title and the mark where the row is estimated, while the Requests cell keeps the full
-  // reading. An API key row reads its dollars over API key. The story's API key accounts stop serving before its end,
+  // its 20x 5-hour equivalent alone in the short form, with every equivalent, the dollar equivalent and the revisions
+  // in force on its title and the mark where the row is estimated, while the Requests cell keeps the full reading. An API key row reads its dollars over API key. The story's API key accounts stop serving before its end,
   // so the ten newest rows may hold none, and the check then reads the subscription rows alone. A dollar position reads
   // every row's dollars.
   const byId = new Map(requests.map((r) => [r.id, r]));
@@ -626,7 +625,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const plan = native.filter((c) => byId.has(c.id) && costUnitOf(byId.get(c.id), 'native').kind === 'equivalent');
   const wrongPlan = plan.filter((c) => {
     const r = byId.get(c.id);
-    const read = new RegExp(`^${r.estimated ? '~' : ''}(\\d[\\d.]*%) 5h$`).exec(c.main);
+    const read = new RegExp(`^${r.estimated ? '~' : ''}(\\d[\\d.]*%) 20x 5h$`).exec(c.main);
     const reading = (c.title ?? '').split(' equivalent. ')[0];
     const parts = reading.split(', ');
     const lead = read === null ? null : read[1] === '0%' ? '0%' : `${read[1]} of 20x 5-hour`;
@@ -643,8 +642,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const apiKey = newestApiKey === undefined ? undefined : native.find((c) => c.id === newestApiKey.id);
   results.push({
     name: apiKey
-      ? "/ the recent requests' Cost cells read a subscription row's 5-hour equivalent alone in its short word with every equivalent and the revisions in force on the title, and an API key row its dollars over API key"
-      : "/ the recent requests' Cost cells read a subscription row's 5-hour equivalent alone in its short word with every equivalent and the revisions in force on the title, with no API key row among the ten newest to read",
+      ? "/ the recent requests' Cost cells read a subscription row's 20x 5-hour equivalent alone in its short form with every equivalent and the revisions in force on the title, and an API key row its dollars over API key"
+      : "/ the recent requests' Cost cells read a subscription row's 20x 5-hour equivalent alone in its short form with every equivalent and the revisions in force on the title, with no API key row among the ten newest to read",
     ok: native.length === 10 && plan.length > 0 && wrongPlan.length === 0 && (apiKey === undefined || (apiKey.main.startsWith('$') && apiKey.sub === 'API key' && apiKey.title === 'Billed in dollars: API key')),
     missing: [`${native.length} rows, ${plan.length} subscription rows`, ...wrongPlan.map((c) => JSON.stringify(c)), JSON.stringify(apiKey ?? null)],
   });
@@ -7318,12 +7317,23 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(300);
   const geography = drawerChips(drawerRowOf(m, 'Answer')).find((c) => c.label === 'geography');
   results.push({ name: "/requests the drawer's Answer row names the geography with its label and value", ok: geography !== undefined && geography.value === 'us' && (geography.title ?? '').startsWith('The inference geography'), missing: [JSON.stringify(geography ?? null)] });
+  // The drawer's cost row carries one title on its value cell, read off the settings the mock answers: why the figure
+  // is billed where it is, the serving account's tier, and the price list and the cost model in force at the instant.
+  const settings = decodeSettings(SETTINGS_WIRE);
+  const dateOf = (entry) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
+  const inForceAt = (at) => `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, at))}`;
   if (apiKeyRow) {
     await m.navigate(`/requests/${apiKeyRow.id}`);
     await m.settle(300);
     const costRow = [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost');
-    const figure = costRow?.querySelector('td:last-child b') ?? null;
-    results.push({ name: "/requests the drawer's cost row of an API key request reads dollars with its billing title", ok: figure !== null && (figure.textContent ?? '').startsWith('$') && figure.getAttribute('title') === 'Billed in dollars: API key', missing: [String(figure?.textContent), String(figure?.getAttribute('title'))] });
+    const value = costRow?.querySelector('td:last-child') ?? null;
+    const figure = value?.querySelector('b') ?? null;
+    const titled = [...(value?.querySelectorAll('[title]') ?? [])].length;
+    results.push({
+      name: "/requests the drawer's cost row of an API key request reads dollars with its billing title on the row's one titled element",
+      ok: figure !== null && (figure.textContent ?? '').startsWith('$') && titled === 0 && value?.getAttribute('title') === `Billed in dollars: API key. ${inForceAt(apiKeyRow.at)}`,
+      missing: [String(figure?.textContent), `${titled} titled elements inside the cell`, String(value?.getAttribute('title'))],
+    });
   }
   if (sharedRow && nativeCell && shareCell) {
     // The chips read the figures in the cell's title order, and the dollar equivalent follows them muted in the one
@@ -7341,9 +7351,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
         title: value?.getAttribute('title') ?? null,
       };
     };
-    const settings = decodeSettings(SETTINGS_WIRE);
-    const dateOf = (entry) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
-    const inForce = `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, sharedRow.at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, sharedRow.at))}`;
+    const inForce = inForceAt(sharedRow.at);
     const native = readRow();
     const titled = (nativeCell.title ?? '').split(', ');
     results.push({
