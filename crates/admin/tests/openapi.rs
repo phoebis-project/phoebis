@@ -19,18 +19,6 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The paths the table registers with a plain `.route(`: outside the document until their area declares them, and
 /// the two catch-alls for good, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &[
-    "/admin/accounts",
-    "/admin/accounts/{id}",
-    "/admin/accounts/{id}/clear-funding",
-    "/admin/accounts/{id}/cooldowns/{scope}",
-    "/admin/accounts/{id}/credentials",
-    "/admin/accounts/{id}/pause",
-    "/admin/accounts/{id}/catalog",
-    "/admin/accounts/{id}/quota",
-    "/admin/accounts/{id}/resume",
-    "/admin/accounts/{id}/usage",
-    "/admin/accounts/{id}/usage/refresh",
-    "/admin/accounts/{id}/verify",
     "/admin/analytics/accounts",
     "/admin/analytics/breakdown",
     "/admin/analytics/budgets",
@@ -100,14 +88,36 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("session_show", &[]),
     ("session_login", &[400, 401, 429]),
     ("session_logout", &[]),
+    ("accounts_list", &[500]),
+    ("accounts_create", &[400, 404, 409, 500, 502, 503]),
+    ("account_show", &[404, 500]),
+    ("account_patch", &[400, 404, 409, 500, 502, 503]),
+    ("account_delete", &[404, 500, 503]),
+    ("account_catalog", &[404, 500]),
+    ("account_clear_funding", &[404, 409, 500, 503]),
+    ("account_cooldown_delete", &[400, 404, 500, 503]),
+    ("account_credentials_delete", &[404, 500, 503]),
+    ("account_pause", &[404, 500, 503]),
+    ("account_quota", &[400, 404, 500]),
+    ("account_resume", &[404, 500, 503]),
+    ("account_usage", &[404, 500]),
+    ("account_usage_refresh", &[404, 500, 503]),
+    ("account_verify", &[400, 404, 409, 500, 502]),
 ];
 
 /// The fixture stems the document carries as examples, each file's `body` member on its operation's answer.
-const EXAMPLE_FILES: &[&str] = &["session"];
+const EXAMPLE_FILES: &[&str] = &[
+    "session",
+    "accounts",
+    "account",
+    "account_catalog",
+    "account_quota",
+    "account_usage",
+];
 
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
 /// names its parameter types declare.
-const QUERY_MODULES: &[(&str, &str)] = &[];
+const QUERY_MODULES: &[(&str, &str)] = &[("accounts", include_str!("../src/accounts.rs"))];
 
 fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/fixtures")

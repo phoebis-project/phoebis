@@ -13,8 +13,10 @@ use phoebis_relay::DiscoveryError;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StateCause, StoreError,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
+use utoipa::ToSchema;
 
+use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
     account, account_json, double_option, failure, failure_with_code, fence_revision, present,
     reload_or_refuse, store_failure, CreatedId,
@@ -25,32 +27,54 @@ pub(crate) const ACTOR: &str = "admin";
 
 pub(crate) const DUPLICATE_ID: &str = "an account with this id exists";
 
-#[derive(serde::Deserialize)]
-struct CreateInput {
-    id: String,
-    kind: String,
-    label: String,
+/// The account to create. A member the route does not name is ignored.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct CreateAccountInput {
+    /// Required, `[a-z0-9][a-z0-9-]{0,63}`.
+    pub id: String,
+    /// Required, `oauth` or `api_key`.
+    #[schema(example = "oauth")]
+    pub kind: String,
+    /// Required, at most 256 bytes.
+    pub label: String,
+    /// Required for `api_key`.
     #[serde(default)]
-    secret: Option<String>,
+    pub secret: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct PatchInput {
+/// The fields to edit, all optional. A member the route does not name is ignored. Every field the body names lands
+/// in one write, fenced against `expected_revision` when the body carries it and against the row the route read
+/// otherwise, so an edit lands whole or not at all. `subscription_ends_at` needs `cancelled` set on the resulting
+/// row, and `cancelled` needs an end on it, stored or given. A bare `cancelled: false` drops the stored end.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct PatchAccountInput {
+    /// At most 256 bytes.
     #[serde(default)]
-    label: Option<String>,
+    pub label: Option<String>,
     #[serde(default)]
-    enabled: Option<bool>,
+    pub enabled: Option<bool>,
+    /// An `api_key` account's new key. An oauth account rejects `secret`. Changing `secret` re-verifies the
+    /// credential against the upstream first, and a check that does not succeed refuses the edit whole.
     #[serde(default)]
-    secret: Option<String>,
+    pub secret: Option<String>,
+    /// Only an oauth account accepts `cancelled`.
     #[serde(default)]
-    cancelled: Option<bool>,
+    pub cancelled: Option<bool>,
+    /// Unix milliseconds, or null to drop the stored end.
     #[serde(default, deserialize_with = "double_option")]
-    subscription_ends_at: Option<Option<i64>>,
-    /// The edit token the row was read at, the `revision` of the account JSON, kept raw and apart from an absent field
-    /// as `PoolInput` and `KeyInput` keep theirs, so a present null is refused with its own sentence rather than read
-    /// as "not sent". The write lands only while the row still answers it; absent, the route fences on its own read.
+    #[schema(value_type = Option<i64>, nullable)]
+    pub subscription_ends_at: Option<Option<i64>>,
+    /// The `revision` the row was read at. `revision` is an opaque token naming one state of one account: an edit,
+    /// a pause or resume, a state change or a disconnect moves it, and an account deleted and created again under
+    /// the same id never answers a token its predecessor did, so an edit read before the deletion, or one whose
+    /// account is replaced while its `secret` is verified, answers `409` and writes nothing. A malformed value
+    /// answers `400`, a stale one `409` under `stale_edit`, and a body without it fences on the route's own read.
+    // The edit token the row was read at, the `revision` of the account JSON, kept raw and apart from an absent field
+    // as `PoolInput` and `KeyInput` keep theirs, so a present null is refused with its own sentence rather than read
+    // as "not sent". The write lands only while the row still answers it. Absent, the route fences on its own read.
     #[serde(default, deserialize_with = "present")]
-    expected_revision: Option<Value>,
+    #[schema(value_type = u64)]
+    pub expected_revision: Option<Value>,
 }
 
 /// The longest `label` or `notes` an account or key route accepts, in bytes.
@@ -78,8 +102,28 @@ pub(crate) fn valid_slug(id: &str) -> bool {
             .all(|(i, b)| b.is_ascii_lowercase() || b.is_ascii_digit() || (b == b'-' && i > 0))
 }
 
+/// Create an account.
+///
+/// The console pairs an OAuth account through `POST /admin/oauth/sessions` with `new` and never calls this route
+/// for the `oauth` kind. The kind stays for a slot created ahead of its pairing by a script.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts",
+    operation_id = "accounts_create",
+    tag = "Accounts",
+    request_body(content = CreateAccountInput, content_type = "application/json"),
+    responses(
+        (status = 201, description = "The account's fields, the same shape `GET /admin/accounts/{id}` answers.", body = crate::routes::Account),
+        (status = 400, description = "- `body must carry id, kind, and label`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `kind must be oauth or api_key`\n- `an oauth account is paired, not keyed`\n- `an api_key account needs a secret`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must carry id, kind, and label"})),
+        (status = 404, description = "`account not found`: the row left between the create and its read-back.", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 409, description = "`an account with this id exists`", body = ErrorBody, example = json!({"error": "an account with this id exists"})),
+        (status = 500, response = StorageFailure),
+        (status = 502, description = "`the key check failed: {reason}`: the models endpoint answered a status other than `200` or `401`, is unreachable, or answered a malformed body. The reason names which, and nothing is created.", body = ErrorBody, example = json!({"error": "the key check failed: {reason}"})),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<CreateInput>(&body) else {
+    let Ok(input) = serde_json::from_slice::<CreateAccountInput>(&body) else {
         return failure(
             StatusCode::BAD_REQUEST,
             "body must carry id, kind, and label",
@@ -188,12 +232,34 @@ async fn verify_staged(
     }
 }
 
+/// Edit an account.
+#[utoipa::path(
+    patch,
+    path = "/admin/accounts/{id}",
+    operation_id = "account_patch",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    request_body(content = PatchAccountInput, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The account's fields, the same shape as `GET /admin/accounts/{id}`.", body = crate::routes::Account),
+        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `only an api_key account has a secret`\n- `only an oauth account is cancelled`\n- `subscription_ends_at needs cancelled`\n- `cancelled needs subscription_ends_at`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "`the account changed while the edit was being saved`",
+            headers(("x-phoebis-error-code" = String, description = "`stale_edit`: the row changed since it was read")),
+            body = ErrorBody, example = json!({"error": "the account changed while the edit was being saved"})),
+        (status = 500, response = StorageFailure),
+        (status = 502, description = "`the key check failed: {reason}`: the models endpoint answered a status other than `200` or `401`, is unreachable, or answered a malformed body. The reason names which, and the stored key stays.", body = ErrorBody, example = json!({"error": "the key check failed: {reason}"})),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn patch(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<PatchInput>(&body) else {
+    let Ok(input) = serde_json::from_slice::<PatchAccountInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
     if let Err(refusal) = within_text_bound("label", input.label.as_deref()) {
@@ -320,6 +386,20 @@ pub(crate) async fn patch(
     }
 }
 
+/// Delete an account.
+#[utoipa::path(
+    delete,
+    path = "/admin/accounts/{id}",
+    operation_id = "account_delete",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 204, description = "The account is removed from every pool and deleted, and its request history stays in the ledger."),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn remove(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -345,8 +425,58 @@ pub(crate) async fn remove(
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// `?refresh=1` reads the upstream again before answering; otherwise the cache answers, filling it on a
-/// miss.
+/// `GET /admin/accounts/{id}/catalog`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct CatalogQuery {
+    /// `1` reads the upstream again before answering. Any other value, or none, answers the cache, filling it on
+    /// a miss.
+    pub refresh: Option<String>,
+}
+
+/// The account's model listing as last read, held until the next scheduled read (every
+/// `routing.catalog_refresh_seconds`) or an eviction replaces it, and read on demand when the account has none. A
+/// failed read is held for sixty seconds.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Catalog {
+    /// Sorted by id. Empty when the fetch failed.
+    pub models: Vec<CatalogModel>,
+    pub fetched_at: i64,
+    /// String or null.
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogModel {
+    pub id: String,
+    pub display_name: String,
+    pub created_at: String,
+    pub max_input_tokens: Option<u64>,
+    pub max_tokens: Option<u64>,
+    /// The effort levels the listing says the model supports, in the API's order (`low`, `medium`, `high`,
+    /// `xhigh`, `max`, then any other name as listed), empty when the listing names none.
+    pub effort_levels: Vec<String>,
+}
+
+/// Read the account's model catalog.
+#[utoipa::path(
+    get,
+    path = "/admin/accounts/{id}/catalog",
+    operation_id = "account_catalog",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id"), CatalogQuery),
+    responses(
+        (status = 200, description = "The account's model listing.", body = Catalog),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
+// `?refresh=1` reads the upstream again before answering, and otherwise the cache answers, filling it on a
+// miss.
 pub(crate) async fn catalog(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -364,21 +494,42 @@ pub(crate) async fn catalog(
     };
     let mut models = fetched.models;
     models.sort_by(|a, b| a.id.cmp(&b.id));
-    Json(json!({
-        "models": models.iter().map(|m| json!({
-            "id": m.id,
-            "display_name": m.display_name,
-            "created_at": m.created_at,
-            "max_input_tokens": m.max_input_tokens,
-            "max_tokens": m.max_tokens,
-            "effort_levels": m.effort_levels,
-        })).collect::<Vec<_>>(),
-        "fetched_at": fetched.fetched_at,
-        "error": fetched.error,
-    }))
+    Json(Catalog {
+        models: models
+            .into_iter()
+            .map(|m| CatalogModel {
+                id: m.id,
+                display_name: m.display_name,
+                created_at: m.created_at,
+                max_input_tokens: m.max_input_tokens,
+                max_tokens: m.max_tokens,
+                effort_levels: m.effort_levels,
+            })
+            .collect(),
+        fetched_at: fetched.fetched_at,
+        error: fetched.error,
+    })
     .into_response()
 }
 
+/// Clear a cooldown.
+#[utoipa::path(
+    delete,
+    path = "/admin/accounts/{id}/cooldowns/{scope}",
+    operation_id = "account_cooldown_delete",
+    tag = "Accounts",
+    params(
+        ("id" = String, Path, description = "The account's id"),
+        ("scope" = String, Path, description = "`account`, `fast` (the fast lane's rate limit), `fast_credits` (the fast lane's usage-credits refusal), or `model:<canonical>`"),
+    ),
+    responses(
+        (status = 204, description = "The cooldown is cleared."),
+        (status = 400, description = "`scope is account, fast, fast_credits or model:<canonical>`", body = ErrorBody, example = json!({"error": "scope is account, fast, fast_credits or model:<canonical>"})),
+        (status = 404, description = "- `account not found`\n- `no such cooldown`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RouterUnavailable),
+    ),
+)]
 pub(crate) async fn clear_cooldown(
     State(state): State<Arc<AdminState>>,
     Path((id, scope)): Path<(String, String)>,
@@ -404,6 +555,21 @@ pub(crate) async fn clear_cooldown(
     }
 }
 
+/// Clear a funding hold.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/clear-funding",
+    operation_id = "account_clear_funding",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 204, description = "No content, once the account leaves `funding_required` for `ready`. The router tries a marked account again after five minutes, or the model rejection interval when that is shorter, and clears it on success, so this operation is for a retry before then."),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 409, description = "`the account is not waiting on funding`", body = ErrorBody, example = json!({"error": "the account is not waiting on funding"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RegistryUnavailable),
+    ),
+)]
 pub(crate) async fn clear_funding(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -430,6 +596,73 @@ pub(crate) async fn clear_funding(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// `GET /admin/accounts/{id}/quota`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct QuotaQuery {
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `7d`.
+    pub range: Option<String>,
+}
+
+/// The account's quota samples and extra usage samples over the range.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Quota {
+    pub account_id: String,
+    pub from: i64,
+    pub to: i64,
+    /// One per window id with its samples.
+    pub windows: Vec<QuotaWindow>,
+    pub extra_usage: Vec<ExtraUsageSample>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QuotaWindow {
+    pub id: String,
+    pub samples: Vec<QuotaSample>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QuotaSample {
+    pub at: i64,
+    pub utilization: Option<f64>,
+    pub resets_at: Option<i64>,
+    pub source: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExtraUsageSample {
+    pub at: i64,
+    pub is_enabled: bool,
+    pub in_use: Option<bool>,
+    pub monthly_limit: Option<i64>,
+    pub used_credits: Option<i64>,
+    pub utilization: Option<f64>,
+    pub currency: Option<String>,
+    pub disabled_reason: Option<String>,
+    pub overage_reset: Option<i64>,
+    pub source: String,
+}
+
+/// Read the account's quota samples.
+#[utoipa::path(
+    get,
+    path = "/admin/accounts/{id}/quota",
+    operation_id = "account_quota",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id"), QuotaQuery),
+    responses(
+        (status = 200, description = "The samples over the range.", body = Quota),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+    ),
+)]
 pub(crate) async fn quota(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
@@ -462,14 +695,71 @@ pub(crate) async fn quota(
         (Ok(q), Ok(e)) => (q, e),
         (Err(e), _) | (_, Err(e)) => return crate::analytics::ledger_failure(e),
     };
-    let mut windows: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut windows: BTreeMap<String, Vec<QuotaSample>> = BTreeMap::new();
     for s in quota {
-        windows.entry(s.window.clone()).or_default().push(json!({ "at": s.bucket * 1_000, "utilization": s.utilization, "resets_at": s.reset_at, "source": s.source }));
+        windows
+            .entry(s.window.clone())
+            .or_default()
+            .push(QuotaSample {
+                at: s.bucket * 1_000,
+                utilization: s.utilization,
+                resets_at: s.reset_at,
+                source: s.source,
+            });
     }
-    Json(json!({
-        "account_id": id, "from": from, "to": to,
-        "windows": windows.into_iter().map(|(id, samples)| json!({ "id": id, "samples": samples })).collect::<Vec<_>>(),
-        "extra_usage": extra.iter().map(|e| json!({ "at": e.bucket * 1_000, "is_enabled": e.is_enabled, "in_use": e.in_use, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "currency": e.currency, "disabled_reason": e.disabled_reason, "overage_reset": e.overage_reset, "source": e.source })).collect::<Vec<_>>(),
-    }))
+    Json(Quota {
+        account_id: id,
+        from,
+        to,
+        windows: windows
+            .into_iter()
+            .map(|(id, samples)| QuotaWindow { id, samples })
+            .collect(),
+        extra_usage: extra
+            .into_iter()
+            .map(|e| ExtraUsageSample {
+                at: e.bucket * 1_000,
+                is_enabled: e.is_enabled,
+                in_use: e.in_use,
+                monthly_limit: e.monthly_limit,
+                used_credits: e.used_credits,
+                utilization: e.utilization,
+                currency: e.currency,
+                disabled_reason: e.disabled_reason,
+                overage_reset: e.overage_reset,
+                source: e.source,
+            })
+            .collect(),
+    })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::openapi::round_trip::round_trips;
+
+    #[test]
+    fn the_account_list_answer_round_trips_through_its_declared_type() {
+        round_trips::<crate::routes::AccountList>("accounts");
+    }
+
+    #[test]
+    fn the_account_answer_round_trips_through_its_declared_type() {
+        round_trips::<crate::routes::Account>("account");
+    }
+
+    #[test]
+    fn the_catalog_answer_round_trips_through_its_declared_type() {
+        round_trips::<super::Catalog>("account_catalog");
+    }
+
+    #[test]
+    fn the_quota_answer_round_trips_through_its_declared_type() {
+        round_trips::<super::Quota>("account_quota");
+    }
+
+    #[test]
+    fn the_usage_answer_round_trips_through_its_declared_type() {
+        round_trips::<crate::routes::Usage>("account_usage");
+    }
 }

@@ -172,7 +172,14 @@ macro_rules! fixture {
 /// The fixture files the document carries as examples: the file stem, the status each is the example of, and the
 /// file, embedded so the document carries what the route answered. `bound_refusals.json` (the bound probes) and
 /// `test_tables.json` (no route) attach to nothing and are not listed.
-const FIXTURES: &[(&str, &str, &str)] = &[fixture!("session", "200")];
+const FIXTURES: &[(&str, &str, &str)] = &[
+    fixture!("session", "200"),
+    fixture!("accounts", "200"),
+    fixture!("account", "200"),
+    fixture!("account_catalog", "200"),
+    fixture!("account_quota", "200"),
+    fixture!("account_usage", "200"),
+];
 
 /// The bodies the fixtures capture for one answer, each with its file stem.
 type Bodies = Vec<(&'static str, Value)>;
