@@ -9,9 +9,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    funding_of, list_requests, price_shares, prompt_tokens, request_by_id, request_events,
-    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions,
-    RequestFilter, RequestRecord, Speed, Tiers,
+    funding_of, list_requests, price_shares, request_by_id, request_events,
+    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, RequestFilter, RequestRecord,
+    Speed, Tiers,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -562,29 +562,16 @@ fn attempt_usd(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) ->
     if !a.has_usage() {
         return None;
     }
-    let table = prices.in_force(r.received_at);
-    let counts = PinUsage {
-        input: a.input_tokens.unwrap_or(0),
-        cache_read: a.cache_read_tokens.unwrap_or(0),
-        write_5m: a.cache_write_5m_tokens.unwrap_or(0),
-        write_1h: a.cache_write_1h_tokens.unwrap_or(0),
-        output: a.output_tokens.unwrap_or(0),
-    };
-    let band = table.band_of(
-        &r.canonical_model,
-        prompt_tokens(
-            counts.input,
-            counts.cache_read,
-            counts.write_5m,
-            counts.write_1h,
-        ),
-    );
-    table
-        .estimate_banded(
+    prices
+        .in_force(r.received_at)
+        .estimate(
             &r.canonical_model,
             Speed::of(a.speed.as_deref()),
-            band,
-            counts,
+            a.input_tokens.unwrap_or(0),
+            a.cache_read_tokens.unwrap_or(0),
+            a.cache_write_5m_tokens.unwrap_or(0),
+            a.cache_write_1h_tokens.unwrap_or(0),
+            a.output_tokens.unwrap_or(0),
         )
         .map(|(usd, _)| usd)
 }

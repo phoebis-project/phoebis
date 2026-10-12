@@ -7,7 +7,6 @@ use std::sync::Arc;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
-use phoebis_routing::PinUsage;
 use phoebis_store::AccountKind;
 
 use crate::db::LedgerDb;
@@ -15,7 +14,7 @@ use crate::db::LedgerDb;
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
 use crate::plan::funding_of;
-use crate::pricing::{prompt_tokens, PriceRevisions, Speed};
+use crate::pricing::{PriceRevisions, Speed};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
 
@@ -133,25 +132,15 @@ fn attempt_dollars(
     // requests would carry a signed zero into the rollups and out to the wire.
     let mut total = CostSplit::default();
     for a in attempts.iter().filter(|a| a.has_usage()) {
-        let counts = PinUsage {
-            input: a.input_tokens.unwrap_or(0),
-            cache_read: a.cache_read_tokens.unwrap_or(0),
-            write_5m: a.cache_write_5m_tokens.unwrap_or(0),
-            write_1h: a.cache_write_1h_tokens.unwrap_or(0),
-            output: a.output_tokens.unwrap_or(0),
-        };
-        let band = table.band_of(
+        if let Some((_, split)) = table.estimate(
             model,
-            prompt_tokens(
-                counts.input,
-                counts.cache_read,
-                counts.write_5m,
-                counts.write_1h,
-            ),
-        );
-        if let Some((_, split)) =
-            table.estimate_banded(model, Speed::of(a.speed.as_deref()), band, counts)
-        {
+            Speed::of(a.speed.as_deref()),
+            a.input_tokens.unwrap_or(0),
+            a.cache_read_tokens.unwrap_or(0),
+            a.cache_write_5m_tokens.unwrap_or(0),
+            a.cache_write_1h_tokens.unwrap_or(0),
+            a.output_tokens.unwrap_or(0),
+        ) {
             total.input_usd += split.input_usd;
             total.cache_read_usd += split.cache_read_usd;
             total.cache_write_usd += split.cache_write_usd;

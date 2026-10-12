@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::{funding_of, price_shares, Funding, PlanTables, WindowShares};
-use crate::pricing::{prompt_tokens, PriceRevisions, PriceTable, Speed};
+use crate::pricing::{PriceRevisions, PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
@@ -3308,29 +3308,16 @@ struct SessionAttempt {
 /// The attempt's dollars on the revision in force when its request arrived, at the cells its own prompt and its
 /// reported speed select, zero for a model the revision lacks.
 fn session_attempt_usd(a: &SessionAttempt, prices: &PriceRevisions) -> f64 {
-    let table = prices.in_force(a.received_at);
-    let counts = PinUsage {
-        input: a.input_tokens,
-        cache_read: a.cache_read_tokens,
-        write_5m: a.cache_write_5m_tokens,
-        write_1h: a.cache_write_1h_tokens,
-        output: a.output_tokens,
-    };
-    let band = table.band_of(
-        &a.canonical_model,
-        prompt_tokens(
-            counts.input,
-            counts.cache_read,
-            counts.write_5m,
-            counts.write_1h,
-        ),
-    );
-    table
-        .estimate_banded(
+    prices
+        .in_force(a.received_at)
+        .estimate(
             &a.canonical_model,
             Speed::of(a.speed.as_deref()),
-            band,
-            counts,
+            a.input_tokens,
+            a.cache_read_tokens,
+            a.cache_write_5m_tokens,
+            a.cache_write_1h_tokens,
+            a.output_tokens,
         )
         .map_or(0.0, |(usd, _)| usd)
 }
