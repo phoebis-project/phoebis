@@ -7,20 +7,18 @@ initialize, validate and start, then six steps in the console and the first requ
 ## What you end with
 
 One `phoebis` process on your machine serving three listeners, every one on loopback: the proxy on `127.0.0.1:8317`,
-which Claude Code sends its requests to, the admin listener on `127.0.0.1:8081`, which serves the console, and the
-metrics listener on `127.0.0.1:9464`. The proxy and the admin listener serve plain HTTP, since the file `init` writes
-names no `tls` pair for either. Beside the bootstrap file sit the storage key and a `data/` directory holding the
-registry and the ledger. In the console, one account is paired or one API key is stored, one pool holds it, one key
-routes into that pool, and Claude Code presents the key on every request.
+which Claude Code sends its requests to, the admin listener on `127.0.0.1:8081`, which serves
+[the console](console.md), and the metrics listener on `127.0.0.1:9464`. The proxy and the admin listener serve plain
+HTTP, since the file `init` writes names no `tls` pair for either. Beside the bootstrap file sit the storage key and a
+`data/` directory holding the registry and the ledger. In the console, one account is paired or one API key is
+stored, one pool holds it, one key routes into that pool, and Claude Code presents the key on every request.
 
 ## What you need
 
 A Linux host on `x86_64` or `aarch64` takes the release archive's static binary, which runs on any Linux of its
-architecture with no shared library, glibc version or distribution in the way. Any other host builds from source,
-which takes the Rust toolchain `rust-toolchain.toml` pins, Node 20.19 or a later 20, or 22.12 or later, with npm on
-the path for the embedded console, and cmake, clang and libclang for BoringSSL ([Build](installation.md#build)). The
-console needs a browser, the first run a Claude.ai subscription to pair or an Anthropic API key to store, and the
-first request Claude Code on the same machine.
+architecture with no shared library, glibc version or distribution in the way. Any other host builds from source
+([Build](installation.md#build)). The console needs a browser, the first run a Claude.ai subscription to pair or an
+Anthropic API key to store, and the first request Claude Code on the same machine.
 
 ## Install
 
@@ -49,14 +47,12 @@ phoebis init --config ~/.config/phoebis/config.yaml
 
 `init` writes the bootstrap file at the path `--config` names, `storage.key` and `data/` beside it, and fills the file
 with `data/router.sqlite` for the registry, `data/ledger.sqlite` for the ledger, the proxy on `127.0.0.1:8317`, the
-admin listener on `127.0.0.1:8081` and metrics on `127.0.0.1:9464`. The key file is created at `0600`, the data
-directory at `0700` and the bootstrap file at `0644`, and each lands on stderr as
-`wrote {path} (mode {mode}, owner {owner})` or `created {path} (directory, mode {mode}, owner {owner})`. The key is
-created once and every stored credential is sealed under it. `init` overwrites nothing: it refuses an existing
-bootstrap file with `{path} already exists, and init never overwrites a configuration`, an existing key with
-`{path} already exists, and init never replaces a key, since every stored credential is sealed under it`, and a data
-directory that holds a registry with
-`{path} exists and a new key cannot open it, so keep the key that sealed it, or name an empty --data-dir`
+admin listener on `127.0.0.1:8081` and metrics on `127.0.0.1:9464`. On a terminal it first asks
+`proxy listen address [127.0.0.1:8317]: ` and `admin listen address [127.0.0.1:8081]: `, and Enter takes the default
+in brackets. The key file is created at `0600`, the data directory at `0700` and the bootstrap file at `0644`, and
+each lands on stderr as `wrote {path} (mode {mode}, owner {owner})` or
+`created {path} (directory, mode {mode}, owner {owner})`. The key is created once and every stored credential is
+sealed under it. `init` overwrites nothing and refuses an existing bootstrap file, key or database
 ([Commands](installation.md#commands)).
 
 The admin secret is generated and printed once, on stdout, as `PHOEBIS_ADMIN_SECRET=<secret>`, with
@@ -89,7 +85,7 @@ what follows.
 
 ## First run
 
-Six steps in the console, each one dialog, in this order.
+Six steps in the console, in this order.
 
 1. Open `http://127.0.0.1:8081/` in the browser, enter the secret `init` printed under Admin secret and choose Log in.
    A wrong value answers `That secret does not match.` ([The console](console.md)).
@@ -108,7 +104,7 @@ Six steps in the console, each one dialog, in this order.
 4. Create a pool. Open Pools and choose Create pool. Give it a Name, tick the account's checkbox in the Members table
    and choose Create pool. The dialog marks Keys "after saving", since a key needs its pool to exist. The toast reads
    `Pool created` ([Pools](routing.md#pools)).
-5. Create a key. Open Keys and choose Create key. Give it a Name, pick the Pool and choose Create key. The Key created
+5. Create a key. Open Keys and choose Create key. Give it a Name, pick the Pool and choose Create. The Key created
    dialog shows the secret once: "Copy the secret now. The router stores only a hash, so it cannot be shown again."
    Under it: "Set it as `CLAUDE_CODE_OAUTH_TOKEN` on the client. The Settings page has the full snippet."
    ([Keys](routing.md#keys)).
