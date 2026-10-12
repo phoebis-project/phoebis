@@ -70,6 +70,9 @@ still draws real money. The table in force is fixed at startup, so a member held
 end or its budget to be raised, rather than for a price correction. A member's rows on a model priced by prompt length
 are summed at the dollars they were booked at, since an hour's sums carry no per-attempt prompt. The rollups file each
 hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
+An account's rollups also book its cooldown time to the hour it elapses in as the interval runs, up to seven days ahead
+of the announcement that set it, a later announcement booking on from there, and a cooldown cleared early gives back
+only the hours it never held.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -119,8 +122,8 @@ since tier and batch modifiers are not known here and subscription quota is the 
 number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the binary.
 `stats.api_prices_path` overrides it with a file of the operator's own, Settings names each table's path and date
 on its About card, and the cost reference dialog the Sessions view opens draws the table
-([Sessions](console.md#sessions)). An attempt on a model the table does not price carries no cost estimate and is
-counted in `phoebis_pricing_unknown_model_total`.
+([The cost reference](console.md#the-cost-reference)). An attempt on a model the table does not price carries no cost
+estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 The nine shipped rows, in USD per million tokens, as the shipped file effective 2026-10-08 lists them, in its order
 (the three Opus models' fast cells are twice each figure):
@@ -175,15 +178,15 @@ charts under every grouping. An answer in overage reads the same in the burn fig
 its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription member's as an API-key
 member's.
 
-The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
-a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
-units per tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
-capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
-the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. Nothing the console
-shows is a unit count.
+The subscription cost model (`crates/ledger/subscription_costs.yaml`, effective 2026-10-11) ships beside the price
+table and holds constants: a token costs its model's weight times its type's multiplier in units on every window, a
+window holds a capacity in units per tier, and a request's share of a window is the units it spent over that capacity,
+over the peak band's capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max
+20x 5-hour window outside the band, so one percent of that window, the step the usage header moves in, is 1,500,000
+units. Nothing the console shows is a unit count.
 
-The capacities the shipped file, effective 2026-10-11, carries, in units per window, keyed by the tier the profile
-reports (a Pro subscription reports `default_claude_ai`):
+The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
+subscription reports `default_claude_ai`):
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
@@ -217,8 +220,10 @@ of its capacity inside the band, so a request completing inside it spends 1/0.7 
 7-day window's factor is 1, so the week has no band. The edges are steps, and Saturday and Sunday are outside the band.
 The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in force
 at its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the shedding round
-prices on plan quota so the order reads what the meter charges. The Tiers and peak band tab of the cost reference
-names this week's hours in your zone ([Sessions](console.md#sessions)).
+prices on plan quota so the order reads what the meter charges. The account, key and request class groupings of the
+analytics read the hourly rollups instead, which fold a request under the hour it arrived in and weigh its share by
+that hour's band rather than by the band at its completion. The Tiers and peak band tab of the cost reference names
+this week's hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
@@ -252,8 +257,8 @@ the file as a whole refuses (a corrupt, full, read-only or unopenable file, an I
 seconds until it lands. A record that fails on its own is dropped with a `ledger_gap` when it carries no money and
 parked in the ledger file when it does, and every parked record is tried again once at the next start or on the
 dashboard's Replay, its parked row deleted in the transaction that lands the record, so its charge counts once. A parked
-record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
-its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
+record keeps its request and attempt rows and not its captured bodies, so a parked request loses its capture and keeps
+its cost. While a batch is under retry the ledger is degraded: the system page shows it,
 `phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
 the spend is read again.
 
@@ -348,9 +353,8 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and
 controls: the [Dashboard](console.md#dashboard) with its attention line, four 24-hour tiles and two capacity rings,
-[Quota](console.md#quota) with the subscription accounts' windows, [Models](console.md#models) with the rules a key's
-requests are judged by, and [Settings](console.md#settings) with the About card that names each price table's path
-and date. The four below keep a pointer here for the pages that link them.
+[Models](console.md#models) with the rules a key's requests are judged by, and [Settings](console.md#settings) with
+the About card that names each price table's path and date.
 
 ### Quota
 
@@ -369,7 +373,7 @@ The decisions and events of the log, the decision card and the query the view ke
 
 ### Analytics
 
-The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts tabs, their ranges, buckets and groupings, are on
+The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts sections, their ranges and groupings, are on
 [Analytics](console.md#analytics).
 
 ## Conditions and gauges
