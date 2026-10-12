@@ -309,8 +309,9 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 ## The console's views
 
-Every filtered view keeps its filters in the page's address under one grammar: a preset range travels by its name and
-reads from the moment the page loads, and a custom span travels as its two instants, `from` and `to`.
+Every filtered view keeps its filters in the page's address under one grammar, the Accounts view's search and status
+staying on the page: a preset range travels by its name and reads from the moment the page loads, and a custom span
+travels as its two instants, `from` and `to`.
 
 ### Dashboard
 

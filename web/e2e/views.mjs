@@ -5837,10 +5837,16 @@ try {
         await quotaMeters(theme);
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
+      // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
+      // the checks above can leave the page scrolled (the Keys menus open a row below the fold).
+      await page.evaluate(() => window.scrollTo(0, 0));
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
+      // Read at capture time: a shot of a scrolled page reproduces byte for byte, so no later diff would catch it.
+      const offset = await page.evaluate(() => window.scrollY);
+      if (offset !== 0) failures.push(`${theme} ${view.path}: the shot was taken ${offset} px down the page`);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/pools') await utilizationMargin(theme);
       if (view.path === '/keys') await keysLayout(theme);
