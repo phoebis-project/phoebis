@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
-import { useFollow } from '@/app/useFollow';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, RequestKind, RequestLog, RequestOutcome, RequestPage, RequestQuery, Usage } from '@/api/types';
+import { type Paging, useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
@@ -182,6 +182,8 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
 
 /** The route's order, which a Follow merge keeps: newest first, and the higher id first at one instant. */
 const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+/** The route answers its rows as `requests`, and Follow reads a list's as `rows`. */
+const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -201,7 +203,7 @@ export function RequestsPage() {
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
   // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
-  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[]; to?: number }>({ for: address, stack: [] });
+  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
@@ -236,40 +238,25 @@ export function RequestsPage() {
     update({ range: { from: iso(next.from), preset: 'custom', to: iso(next.to) } });
   };
   const requests = useAsync(() => api.listRequests(query), [query]);
-  // The open drawer reads one of the rows, so the poll waits for it to close. The route answers its rows as `requests`.
-  const { following, setFollowed } = useFollow<RequestLog>({ address, base: requests.stale ? null : (requests.data?.requests ?? null), compare: newestFirst, identity: (r) => r.id, on: follow && cursor === undefined && !requestId, paged: cursor !== undefined, read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then((page) => ({ nextCursor: page.nextCursor, rows: page.requests })) });
+  // The open drawer reads one of the rows, so the poll waits for it to close.
+  const { fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RequestLog>({
+    address,
+    compare: newestFirst,
+    identity: (r) => r.id,
+    list: requests.data && listed(requests.data),
+    on: follow && cursor === undefined && !requestId,
+    paging,
+    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(to) }).then(listed),
+    setFollow,
+    setPaging,
+    stale: requests.stale,
+  });
 
   const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {
     resetPaging();
     setFollowed(null);
     setLoadedAt(clock.now());
-  };
-
-  const rows = following?.rows ?? requests.data?.requests ?? [];
-  const fresh = following?.fresh ?? new Set<string>();
-  const overrun = following?.overrun ?? null;
-  // Past an overrun, Next walks on from the last row Follow read, so the rows it left are the next page.
-  const nextCursor = overrun?.cursor ?? requests.data?.nextCursor ?? null;
-  // The tint marks what the last poll brought, and no poll follows to take it away.
-  const stopFollowing = () => {
-    setFollow(false);
-    setFollowed((f) => f && { ...f, fresh: new Set() });
-  };
-  const goNext = () => {
-    if (!nextCursor) return;
-    // The rows under the reader would move, so an older page stops the poll.
-    stopFollowing();
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: overrun?.to ?? pagedTo });
-  };
-  const goPrevious = () => {
-    const copy = [...stack];
-    const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy, to: pagedTo });
-  };
-  const toggleFollow = (on: boolean) => {
-    if (on) setFollow(true);
-    else stopFollowing();
   };
   // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
   const active = REQUESTS_CODEC.toParams({ ...read, rows: DEFAULTS.rows }).toString() !== '';

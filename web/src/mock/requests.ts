@@ -1723,12 +1723,12 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}`;
       parts.set(part, [...(parts.get(part) ?? []), r]);
     }
-    for (const [part, rows] of parts) {
+    for (const [part, partRows] of parts) {
       const [effort, requestClass] = part.split('|');
-      const ok = rows.filter((r) => r.status === 200);
+      const ok = partRows.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
-      for (const r of rows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
-      const keptHere = rows.filter((r) => kept.has(r));
+      for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
+      const keptHere = partRows.filter((r) => kept.has(r));
       out.push({
         hour,
         client: CLIENTS[keyId] ?? '-',
@@ -1745,43 +1745,43 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         speed,
         requests: {
           // A stream that ended short committed its 200 and still is no success, so it counts on its own.
-          incomplete: rows.filter((r) => r.outcome === 'incomplete').length,
+          incomplete: partRows.filter((r) => r.outcome === 'incomplete').length,
           ok: ok.filter((r) => r.outcome === 'succeeded').length,
-          rate_limited: rows.filter((r) => r.status === 429).length,
+          rate_limited: partRows.filter((r) => r.status === 429).length,
           // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-          overloaded: rows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          overloaded: partRows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
           // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
           // the same status filter, so the error split that subtracts it never reads negative.
-          undecodable: rows.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
-          upstream_error: rows.filter(upstreamFailed).length,
+          undecodable: partRows.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+          upstream_error: partRows.filter(upstreamFailed).length,
           // The ledger files a stream the client closed as failed, under the code the relay gave it.
-          client_gone: rows.filter((r) => r.errorCode === 'client_gone').length,
+          client_gone: partRows.filter((r) => r.errorCode === 'client_gone').length,
         },
         // Every attempt but the last one moved the request to another member.
-        failovers: rows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        failovers: partRows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
         // The lane hour draws one migration, filed with the first request that moved.
-        migrations: rows.includes(moved[0]) ? migrations : 0,
+        migrations: partRows.includes(moved[0]) ? migrations : 0,
         effort,
         tokens: {
-          uncachedInput: rows.reduce((s, r) => s + r.usage.input, 0),
-          cacheRead: rows.reduce((s, r) => s + r.usage.cacheRead, 0),
-          cacheWrite5m: rows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
-          cacheWrite1h: rows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
-          output: rows.reduce((s, r) => s + r.usage.output, 0),
-          thinking: rows.reduce((s, r) => s + r.usage.thinking, 0),
-          webFetch: rows.reduce((s, r) => s + r.usage.webFetch, 0),
-          webSearch: rows.reduce((s, r) => s + r.usage.webSearch, 0),
+          uncachedInput: partRows.reduce((s, r) => s + r.usage.input, 0),
+          cacheRead: partRows.reduce((s, r) => s + r.usage.cacheRead, 0),
+          cacheWrite5m: partRows.reduce((s, r) => s + r.usage.cacheWrite5m, 0),
+          cacheWrite1h: partRows.reduce((s, r) => s + r.usage.cacheWrite1h, 0),
+          output: partRows.reduce((s, r) => s + r.usage.output, 0),
+          thinking: partRows.reduce((s, r) => s + r.usage.thinking, 0),
+          webFetch: partRows.reduce((s, r) => s + r.usage.webFetch, 0),
+          webSearch: partRows.reduce((s, r) => s + r.usage.webSearch, 0),
         },
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
         expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
-        costUsd: rows.reduce((s, r) => s + r.costUsd, 0),
-        cost: sumSplit(rows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
+        costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
+        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
         // At each answer's completion, the instant its own shares price it at.
-        shares: hourShares(accountId, rows[0].canonicalModel, rows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
-        histograms: histogramsOf(rows),
+        shares: hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        histograms: histogramsOf(partRows),
         keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,

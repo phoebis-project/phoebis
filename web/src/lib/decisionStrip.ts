@@ -1,5 +1,4 @@
 import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
-import type { StripAnchor } from '@/components/DecisionStrip';
 import { own } from '@/lib/analytics';
 import { candidateCells, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
@@ -743,6 +742,12 @@ export function layoutStrip(model: StripModel, width: number, measured?: LabelHe
   const reach = Math.min(0, ...Object.values(first.labels).map((l) => l.top), ...first.brackets.map((b) => b.y - BRACKET_WORD_RISE));
   return reach < 0 ? draw(Math.ceil(-reach)) : first;
 }
+
+/** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
+export type StripAnchor =
+  | { kind: 'station'; id: string }
+  | { kind: 'leaf'; index: number }
+  | { kind: 'terminus'; id: TerminusKind };
 
 /** The one open popover across every strip on the page, keyed by the strip that owns it. */
 export interface OpenPopover {

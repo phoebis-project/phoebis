@@ -1,4 +1,4 @@
-import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy, Session } from '@/api/types';
+import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime } from './format';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
@@ -131,7 +131,7 @@ function resortOf(pool: Pool, account: Account, now: number): { lastResort: Last
 const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' ? 2 : account?.extraUsage?.inUse ? 1 : 0);
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
-export function selectionOrder(pool: Pool, accounts: Account[], sessions: Session[], now: number = Date.now()): Tier[] {
+export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const grouped = kindOrdered(pool);
   const groupFor = (accountId: string) => (grouped ? groupOf(byId.get(accountId)) : 0);
@@ -261,7 +261,7 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
  * `accounts` is null until the account list is read: without it the order places no member and no return or name can
  * be read, so the sentence says what the pool's own verdicts carry and names no account.
  */
-export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessions: Session[], now: number = Date.now()): PoolStatusSentence {
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number = Date.now()): PoolStatusSentence {
   const { status } = pool;
   const word = STATUS_WORD[status];
   const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
@@ -287,7 +287,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessi
   const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
-  const next = selectionOrder(pool, accounts, sessions, now).find((tier) => tier.next.length > 0)?.next ?? [];
+  const next = selectionOrder(pool, accounts, now).find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
   return say([{ text: `${count}, and the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

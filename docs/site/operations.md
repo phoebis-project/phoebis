@@ -354,7 +354,8 @@ To re-pin the profile against a new build:
 
 A GitHub Actions workflow named `Tests` runs on every push to `main` and every pull request. Its `rust` job builds the
 console and embeds it, then runs `cargo fmt --check`, `cargo clippy` with warnings denied and `cargo test` over the
-workspace; its `web` job runs the console's unit tests, its jsdom smoke checks and the mock browser pass under Chromium;
+workspace; its `web` job runs the console's unit tests, its jsdom smoke checks and the mock browser pass under Chromium
+once the production build, the entry chunk check `web/scripts/check-build.mjs` and ESLint with warnings denied pass;
 a third job, `Tests`, reports the two as the one check the branch protection on `main` requires. The documentation
 workflow below and the release workflow are separate, so a failed test never blocks the site's build.
 

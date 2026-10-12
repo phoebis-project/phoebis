@@ -1,7 +1,6 @@
 import type { DecisionRecord, DecisionSummary, PrefixEntry, WalkFact, WalkStep } from '@/api/types';
-import type { StripAnchor } from '@/components/DecisionStrip';
 import { own } from '@/lib/analytics';
-import { PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripModel, type Terminus } from '@/lib/decisionStrip';
+import { PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
 import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, walkLines, warmUntil, WINDOW_WORD, words } from '@/lib/routingLog';

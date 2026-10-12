@@ -299,7 +299,6 @@ export function PoolsPage() {
                 accounts={accounts.data}
                 accountById={accountById}
                 attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
-                sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
                 onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
@@ -500,7 +499,6 @@ function PoolCard({
   accounts,
   accountById,
   attention,
-  sessions,
   now,
   onEdit,
   onDelete,
@@ -516,7 +514,6 @@ function PoolCard({
   onDelete: () => void;
   onEdit: () => void;
   pool: Pool;
-  sessions: Session[];
 }) {
   const ink = useChartInk();
   const standingId = useId();
@@ -525,9 +522,9 @@ function PoolCard({
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
-  const tiers = selectionOrder(pool, accounts ?? [], sessions, now);
+  const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
-  const sentence = poolStatusSentence(pool, accounts, sessions, now);
+  const sentence = poolStatusSentence(pool, accounts, now);
   const features = FEATURES.filter((f) => f.on(pool));
   const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);

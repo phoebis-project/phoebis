@@ -423,8 +423,8 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
 });
 
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
-  // The mock draws its story from the clock it loads at, so the case loads a copy of the bundle at one fixed instant
-  // and reads the same rows on every run.
+  // The mock draws its story from the clock it loads at and its seeded stream, so the case loads a copy of the bundle
+  // at one fixed instant, and the rollups read the same figures on every run in one time zone.
   const at = Date.UTC(2026, 8, 16, 14, 30);
   const wall = Date.now;
   Date.now = () => at;
@@ -529,10 +529,12 @@ test("the unit reads the URL's position and falls to all", () => {
   assert.deepEqual([...d.COST_UNITS], ['all', 'usd', 'share', 'equivalent'], "the select's order, the default first");
   assert.deepEqual(d.UNIT_LABEL, { all: 'All in dollars', equivalent: 'Dollar equivalent', share: 'Window shares', usd: 'Billed dollars' });
   assert.deepEqual(d.UNIT_FUNDING, { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' });
-  for (const unit of d.COST_UNITS) assert.equal(d.unitOf(new URLSearchParams(`?unit=${unit}`)), unit, unit);
-  assert.equal(d.unitOf(new URLSearchParams('?unit=bogus')), 'all', 'a value the page does not know reads as the default');
-  assert.equal(d.unitOf(new URLSearchParams('')), 'all', 'no parameter reads as the default');
-  assert.equal(d.unitOf(new URLSearchParams('?session=s-1')), 'all', 'another parameter names no unit');
+  // The page reads its unit through the address codec.
+  const unitIn = (search) => d.ANALYTICS_CODEC.fromParams(new URLSearchParams(search)).unit;
+  for (const unit of d.COST_UNITS) assert.equal(unitIn(`?unit=${unit}`), unit, unit);
+  assert.equal(unitIn('?unit=bogus'), 'all', 'a value the page does not know reads as the default');
+  assert.equal(unitIn(''), 'all', 'no parameter reads as the default');
+  assert.equal(unitIn('?session=s-1'), 'all', 'another parameter names no unit');
 });
 
 test("one account's shares read from the account filter under the account grouping alone", () => {

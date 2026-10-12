@@ -4304,6 +4304,8 @@ async function stripIdleContrast(theme) {
   measurements.push(`${theme} /routing-log strip idle token ${read.token} over ${JSON.stringify(read.surfaces)}: ${read.token === null ? 'unread' : `${ratioOf(read.token)}:1`}, ${read.strokes.length} idle strokes ${JSON.stringify(kinds.map((s) => [s.kind, s.stroke, ratioOf(s.stroke)]))}`);
   if (read.token === null) say('the token could not be read off the strip');
   else if (ratioOf(read.token) < 1.5) say(`the token ${read.token} reads ${ratioOf(read.token)}:1 over the strip's surface, under 1.5:1`);
+  // A strip whose idle classes moved would leave the loop below nothing to hold, and the token's ratio alone passes.
+  if (read.strokes.length === 0) say('no idle stroke read');
   for (const s of kinds) {
     if (s.stroke !== read.token) say(`${s.kind} strokes ${s.stroke}, not the token's ${read.token}`);
     else if (ratioOf(s.stroke) < 1.5) say(`${s.kind} reads ${ratioOf(s.stroke)}:1 over the strip's surface, under 1.5:1`);
@@ -5838,7 +5840,8 @@ try {
       }
       if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
       // A full-page capture paints the fixed header and sidebar at the window's scroll offset, over the content, and
-      // the checks above can leave the page scrolled (the Keys menus open a row below the fold).
+      // the checks above can leave the page scrolled (`keyDialogGeometry`'s click on the revoked row's menu trigger
+      // scrolls that row into view).
       await page.evaluate(() => window.scrollTo(0, 0));
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.

@@ -15402,8 +15402,9 @@ m.unmount();
 {
   // The Select all row of every multi-select, one case per picker on the pinned clock, late in the run like the
   // keyboard checks before it, so the real time the clicks' reads take moves none of the story's relative times the
-  // earlier checks read. The address key reads what the page wrote, so a row that handed its options over one change at
-  // a time would leave fewer values there than it checked.
+  // earlier checks read. The checked marks read the address back, so a row that handed its options over one change at a
+  // time would leave fewer of them checked than the list holds, which the checked count catches. The address term reads
+  // that the page wrote the picker's own key with every value.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const filterOf = (page, label) =>
     [...page.container.querySelectorAll('.filters .mselect')].find((d) => {
@@ -15439,7 +15440,11 @@ m.unmount();
   for (const [view, pickers] of PICKERS) {
     const page = await mount(view, { now: CLOCK_ORIGIN });
     for (const [label, key] of pickers) {
-      const name = `${view} Select all on ${label} checks every option and a second click clears them`;
+      // The Kinds filter's empty value is the route's default set: every kind but the two hidden ones.
+      const kinds = label === 'Kinds';
+      const name = kinds
+        ? `${view} Select all on Kinds checks every kind and a second click returns the default set`
+        : `${view} Select all on ${label} checks every option and a second click clears them`;
       if (!filterOf(page, label)) {
         controlMissing(name, label);
         continue;
@@ -15451,8 +15456,6 @@ m.unmount();
       const all = read(page, label, key);
       await clickHead(page, label);
       const none = read(page, label, key);
-      // The Kinds filter's empty value is the route's default set: every kind but the two hidden ones.
-      const kinds = label === 'Kinds';
       const opened = kinds ? before.head?.checked === 'mixed' && before.head.selected === 'false' : before.head?.checked === null && before.head.selected === 'false' && before.checked.length === 0;
       const cleared = kinds
         ? none.trigger === 'Kinds (2 hidden)' && !none.set && none.address === null && none.checked.length === none.choices.length - 2 && sameSet(none.checked, before.checked)

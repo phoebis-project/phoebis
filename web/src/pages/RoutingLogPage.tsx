@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingLogQuery, RoutingLogRow } from '@/api/types';
-import { useFollow } from '@/app/useFollow';
+import { type Paging, useFollow } from '@/app/useFollow';
 import { DecisionCard } from '@/components/DecisionCard';
 import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
@@ -55,7 +55,7 @@ export function RoutingLogPage() {
   // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
   // the render that brings it, and one list request follows.
   // `to` holds the range's end a walk from Follow's overrun reads under, the end its cursor came from.
-  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[]; to?: number }>({ for: address, stack: [] });
+  const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
@@ -89,12 +89,18 @@ export function RoutingLogPage() {
   );
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
-  const { following, setFollowed } = useFollow<RoutingLogRow>({ address, base: log.stale ? null : (log.data?.rows ?? null), compare: compareRows, identity: identityOf, on: follow && cursor === undefined, paged: cursor !== undefined, read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }) });
-  const rows = following?.rows ?? log.data?.rows ?? [];
-  const fresh = following?.fresh ?? new Set<string>();
-  const overrun = following?.overrun ?? null;
-  // Past an overrun, Next walks on from the last row Follow read, so the rows it left are the next page.
-  const nextCursor = overrun?.cursor ?? log.data?.nextCursor ?? null;
+  const { fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed, toggleFollow } = useFollow<RoutingLogRow>({
+    address,
+    compare: compareRows,
+    identity: identityOf,
+    list: log.data,
+    on: follow && cursor === undefined,
+    paging,
+    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(to) }),
+    setFollow,
+    setPaging,
+    stale: log.stale,
+  });
 
   const rangeValue = customOpen || filters.range.preset === 'custom' ? 'custom' : filters.range.preset;
   // Custom starts from the window the list shows, so the choice holds.
@@ -117,26 +123,6 @@ export function RoutingLogPage() {
     setFollowed(null);
     setLoadedAt(clock.now());
     log.reload();
-  };
-  // The tint marks what the last poll brought, and no poll follows to take it away.
-  const stopFollowing = () => {
-    setFollow(false);
-    setFollowed((f) => f && { ...f, fresh: new Set() });
-  };
-  const goNext = () => {
-    if (!nextCursor) return;
-    // The rows under the reader would move, so an older page stops the poll.
-    stopFollowing();
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: overrun?.to ?? pagedTo });
-  };
-  const goPrevious = () => {
-    const copy = [...stack];
-    const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy, to: pagedTo });
-  };
-  const toggleFollow = (on: boolean) => {
-    if (on) setFollow(true);
-    else stopFollowing();
   };
   const clear = () => {
     setCustomOpen(false);

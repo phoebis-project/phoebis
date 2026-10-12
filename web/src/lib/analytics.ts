@@ -180,11 +180,6 @@ export const UNIT_LABEL: Record<AnalyticsUnit, string> = { all: 'All in dollars'
  * `usd`, `share` and `equivalent`.
  */
 export const UNIT_FUNDING: Record<AnalyticsUnit, FundingFilter | undefined> = { all: undefined, equivalent: 'plan', share: 'plan', usd: 'billed' };
-/** The position the URL names, `all` for none or an unknown value. */
-export const unitOf = (search: URLSearchParams): AnalyticsUnit => {
-  const unit = search.get('unit');
-  return unit !== null && (COST_UNITS as readonly string[]).includes(unit) ? (unit as AnalyticsUnit) : 'all';
-};
 export const SHARE_NOTE = "Shares read under the account grouping alone, since shares of different accounts' windows do not add.";
 /**
  * The one account whose shares the tiles read: the account filter's one entry under the account grouping, and null

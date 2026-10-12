@@ -123,6 +123,10 @@ test('under a query Select all reaches the visible options alone', () => {
   assert.deepEqual(changes, [['b'], []], 'the second click unselects the visible option');
   type(container.querySelector('.mselect__search'), 'z');
   assert.ok(row(container) === null && container.querySelector('.mselect__empty')?.textContent === 'No matches', 'a query that hides every option draws No matches and no row');
+  type(container.querySelector('.mselect__search'), '');
+  act(() => choices(container)[0].click());
+  type(container.querySelector('.mselect__search'), 'b');
+  assert.deepEqual([changes.at(-1), stateOf(row(container))], [['a'], { checked: null, selected: 'false' }], 'a chosen option the query hides leaves the row unselected, not mixed');
 });
 
 test('the keys reach the Select all row as the first choice, and a list without a search field opens onto it', () => {

@@ -4,11 +4,8 @@ import { ChipView } from '@/components/ChipView';
 import { StripPopover } from '@/components/StripPopover';
 import { Badge, Described } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
-import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, TERMINUS_RADIUS, terminusName, type PathState, type TerminusKind } from '@/lib/decisionStrip';
+import { BRACKET_TICK, BRACKET_WORD_RISE, type LabelHeights, layoutStrip, LEAF_HALF, leafName, type OpenPopover, popoverStore, RADIUS, stationModel, stationName, type StripAnchor, TERMINUS_RADIUS, terminusName, type PathState } from '@/lib/decisionStrip';
 import { anchorPlan } from '@/lib/stripFacts';
-
-/** What a click on the strip names: a station by its model id, a leaf by its index, a terminus by its kind. */
-export type StripAnchor = { kind: 'station'; id: string } | { kind: 'leaf'; index: number } | { kind: 'terminus'; id: TerminusKind };
 
 const MIN_WIDTH = 640;
 const REDRAW_MS = 120;
