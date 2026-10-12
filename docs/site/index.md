@@ -1,92 +1,72 @@
 # Phoebis Router
 
-A router for Claude Code.
-
-Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that land
-on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request back on the
-wire in the shape Claude Code 2.1.269 sends it, under the credentials of an account it holds itself, and picks that
-account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin API with the
-embedded console, and a metrics endpoint in Prometheus text format.
-
-| Page | What it covers |
-| --- | --- |
-| [Installation](installation.md) | The build, the service, the commands, and every bootstrap setting. |
-| [Downstream client](client.md) | The client's environment block and what each variable changes. |
-| [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
-| [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
-| [Keepalive](keepalive.md) | Keeping prompt caches warm: the mod, the four fields, the cost. |
-| [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, and the gauges. |
-| [Operations](operations.md) | Backup, restore, the storage key, upgrades, re-pinning a client build, publishing. |
-| [Changelog](changelog.md) | What changed for an operator, by date. |
-
-## How a request travels
-
-The client sends `/v1/messages` to the proxy listener with the router key in the credential header it would have
-used for Anthropic. The router authenticates the key, resolves its pool, and selects one account: the session's
-pin when it has one, otherwise the pool's strategy (see [Pools, keys, and routing](routing.md)). It puts the
-account's credential where the client put the key, adjusts `anthropic-beta` to what the account may claim, and
-sends the request in the client's own header order and spelling to `api.anthropic.com`.
-The response head is classified before a byte reaches the client, so a 429 on one account fails over to a
-sibling inside the same call. The request, each attempt, and the usage land in the ledger.
+Phoebis Router relays Claude Code's requests to Anthropic under the credentials of an account it holds, and picks that
+account from a pool: a session sticks to one account, a rate limit fails over to a sibling, prompt caches are kept
+warm, and every request lands in a ledger the web console reads. Phoebis is a genus of sulphur butterflies, migrants
+of the Americas that land on the right flower. If you are setting a router up for the first time, start with the
+[Quick start](quickstart.md). The rest of this page is the three listeners, the path a request takes through them, the
+words the other pages use, what the router does not do and where each page fits.
 
 ## The three listeners
+
+One `phoebis` process serves three listeners.
 
 | Listener | Bootstrap key | Serves |
 | --- | --- | --- |
 | Proxy | `proxy.listen` | `/v1/messages` and its companions, the key's own usage page, plus the keepalive route |
-| Admin | `admin.listen` | The console and `/admin/*` |
+| Admin | `admin.listen` | The console and `/admin/*` (see [API reference](api-reference.md)) |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
-The proxy and the admin listener terminate TLS natively or run plain HTTP by their `tls` key; the metrics listener is
+The proxy and the admin listener terminate TLS natively or run plain HTTP by their `tls` key. The metrics listener is
 plain HTTP ([TLS on the listeners](installation.md#tls-on-the-listeners)).
 
-The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`, `POST
-/v1/messages/count_tokens`, `GET /v1/usage` for the key's own usage, `POST /v0/keepalive/events` for the keepalive mod's
-reports, and `GET /v1/models` with the caller's own routable models ([models listing](client.md#the-models-listing)).
+The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`,
+`POST /v1/messages/count_tokens`, `GET /v1/usage`, `GET /v1/models`, `GET /v1/models/{*id}` and
+`POST /v0/keepalive/events` ([What the proxy accepts](client.md#what-the-proxy-accepts)).
 
-## The console
+## How a request travels
 
-The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle, and the sidebar carries eleven views. A Diagnostics heading at its foot adds the Routing log while the expert
-view is on or the log is open.
+The client sends `/v1/messages` to the proxy listener with a key the router issued in the credential header it would
+have used for Anthropic. The router authenticates the key, resolves its pool and selects one account: the session's
+pin when it has one, otherwise the pool's strategy ([Pools, keys and routing](routing.md)). It puts the account's
+credential where the client put the key, edits the body and the headers as [The relay](relay.md) lists them, and
+sends the request in the client's own header order and spelling to `api.anthropic.com`. The response head is
+classified before a byte reaches the client, so a 429 on one account fails over to a sibling inside the same call.
+The request, each attempt and the usage land in the ledger.
 
-![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dl]
-![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dd]
-
-[dl]: assets/dashboard-light.png#only-light
-[dd]: assets/dashboard-dark.png#only-dark
-
-The sidebar shows the views in this order:
-
-| View | Describes |
-| --- | --- |
-| Dashboard | The attention line, 24-hour tiles, pooled capacity left weighed by tier, recent requests and sessions. |
-| Quota | Each account's usage windows and reset timing (see [Statistics](statistics.md)). |
-| Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |
-| Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
-| Keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
-| Models | A key's model rules, cooldowns, and rejections (see [Pools, keys, and routing](routing.md)). |
-| Requests | Individual relayed requests (see [Statistics](statistics.md)). |
-| Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
-| Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Settings | Client setup and the router's version and paths (see [Installation](installation.md)). |
-| Routing log | Each routing decision and the state changes behind it (see [Statistics](statistics.md#routing-log)). |
+## The vocabulary
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
-issues a key. The console and this site call the account kind whose credential is an Anthropic API key "API key";
-the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
-bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_message_id`,
-`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
+issues a key. The console and this site call the account kind whose credential is an Anthropic API key "API key".
+The API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
+bootstrap file's `upstream` block, the `upstream_error` outcome and the `upstream_unreachable` code, the
+`upstream_message_id`, `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds`
+metric). This site calls the client Claude Code and the plugin that reports to the router the keepalive mod.
 
-## What this build does not do
+## What the router does not do
 
+- Claude Code's Remote Control is unavailable behind the router.
 - No upstream other than Anthropic's API. The bootstrap file's `upstream` block adds only a lab's trust anchor and
   resolver override, never another host.
-- Claude Code's Remote Control is unavailable behind the router.
 
-## Status
+## Where to start
 
-Nothing in this build has talked to Anthropic yet. The wire shapes come from a capture of Claude Code 2.1.269 on
-Linux x64 taken on 2026-09-13, and every test runs against a loopback fake upstream that replays those fixtures.
-Until a live run against `api.anthropic.com` happens, treat the relayed shape as verified against the capture
-only.
+The [Quick start](quickstart.md) is for the person with one machine who wants Claude Code answering through the router
+on loopback. [The client](client.md) is for the person pointing Claude Code at the router and for the key holder. Once
+a loopback router works, [A second machine](second-machine.md) covers a LAN host serving several machines.
+[Installation](installation.md) is for the operator installing on a host or in the container and for the one who
+needs every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by
+`curl`. An operator tuning pools and keys, or reading why a request landed where it did, reads
+[Pools, keys and routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and
+[The keepalive mod](keepalive-mod.md) for the one installing and configuring the mod on a client machine.
+[The relay](relay.md) says what the router changes on the wire and sends on its own. [The console](console.md) is for
+the operator reading or using a view. [Statistics](statistics.md) is for the operator reading a figure's meaning or
+alerting on a gauge. [Operations](operations.md) is for the operator running the router for months.
+[Development](development.md) is for the contributor. The [API reference](api-reference.md) is for the operator
+scripting the admin API.
+
+## License
+
+Phoebis Router is released under the MIT license. The text is in
+[`LICENSE`](https://github.com/daystrom-labs/phoebis/blob/main/LICENSE) on GitHub and in the container image at
+`/usr/share/doc/phoebis/LICENSE`.
