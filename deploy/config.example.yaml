@@ -15,12 +15,12 @@ proxy:
   listen: 127.0.0.1:8317
   # tls: {cert_file: ..., key_file: ...} names your certificate pair and the listener terminates TLS.
   # Without tls the listener serves plain HTTP on the address named, loopback or not.
-  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # The bounds on the request bodies the proxy holds, at their defaults. Uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
-  # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
+  # Signs a restored cch=00000 with this build's formula, off until a server rejects the placeholder.
   # sign_cch_placeholder: false
   # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
   # upstream_gzip: auto
@@ -41,18 +41,18 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
 stats:
-  # Overrides the shipped price table; a missing file is fine.
+  # Overrides the shipped price table. A missing file is fine.
   api_prices_path: ./api_prices.yaml
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
   ledger_path: ./data/ledger.sqlite
-  # Prometheus text format at /metrics; bind it where your scraper can reach it.
+  # Prometheus text format at /metrics. Bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
+  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this. 0 keeps them forever.
   retention_days: 90
-  # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
+  # Hourly rollups are purged past this. 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400
-  # Overrides the shipped subscription cost model; a missing file is fine.
+  # Overrides the shipped subscription cost model. A missing file is fine.
   subscription_costs_path: ./subscription_costs.yaml
 storage:
   encryption_key_file: /run/secrets/router-storage-key
