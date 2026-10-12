@@ -175,6 +175,11 @@
   margin-left: auto;
 }
 
+/* The icon stands in for the label at a phone's width alone. */
+.topbar__logout .btn__icon {
+  display: none;
+}
+
 /* `.input` sets `min-width: 0` further down at the same specificity, so the floor names the bar. */
 .topbar .unit-switch {
   min-width: 150px;
@@ -1934,21 +1939,18 @@ textarea.input {
 }
 
 /* A phone's bar holds the switch beside the title, Log out and the theme switch and no more: the legend's button gives
-   way (the Settings page's Unit row keeps it), the controls close up, the switch takes a fixed compact width that
-   draws four of its five short labels whole, and the title yields the rest, since the open menu names the page too. */
+   way (the Settings page's Unit row keeps it), Log out shows its icon alone, and the controls close up, so the title
+   and every short label read whole. */
 @media (max-width: 599px) {
   .topbar {
-    gap: 8px;
-  }
-
-  .topbar__right {
     gap: 6px;
   }
 
+  .topbar__right {
+    gap: 5px;
+  }
+
   .topbar__title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -1957,18 +1959,36 @@ textarea.input {
   }
 
   .topbar .unit-switch {
-    width: 84px;
     min-width: 0;
-    padding: 4px 20px 4px 8px;
-    font-size: 12.5px;
-    text-overflow: ellipsis;
+    padding: 4px 19px 4px 6px;
+    font-size: 12px;
+  }
+
+  /* The switch keeps its labels' width, so a bar too narrow shows as overflow rather than a label cut short. */
+  .topbar .select {
+    flex: none;
   }
 
   .topbar .select > svg {
-    right: 6px;
+    right: 4px;
   }
 
   .topbar .segmented button {
-    padding: 4px 7px;
+    padding: 4px 5px;
+  }
+
+  .topbar__logout {
+    flex: none;
+    justify-content: center;
+    width: 28px;
+    padding: 4px 0;
+  }
+
+  .topbar__logout .btn__icon {
+    display: inline-flex;
+  }
+
+  .topbar__logout-label {
+    display: none;
   }
 }

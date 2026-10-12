@@ -6,7 +6,7 @@ import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { positionOf, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, UNIT_POSITIONS, UNIT_SHORT, type UnitPosition } from '@/lib/unit';
 import { Button, Descriptions, Segmented, Select, Toast, Toggle } from '@/components/ui/primitives';
-import { IconChart, IconGauge, IconGrid, IconInfo, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconArrowRight, IconChart, IconGauge, IconGrid, IconInfo, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
 type NavItem = { icon: ReactNode; label: string; to: string };
@@ -44,7 +44,9 @@ export const PAGE_TITLES: Record<string, string> = {
 /** The unit every view prices in. At 900 px and below the bar spans the viewport, so each position reads its short label. */
 function UnitSwitch({ onChange, short, unit }: { onChange: (u: UnitPosition) => void; short: boolean; unit: UnitPosition }) {
   return (
-    <Select aria-label="Unit" className="unit-switch" value={unit} onChange={(e) => onChange(positionOf(e.target.value))}>
+    // Keyed on the label set: Chromium keeps a select's width when its options' text changes, so a resize across the
+    // breakpoint would draw the short labels in the long labels' box, or a long label cut short in the other direction.
+    <Select key={short ? 'short' : 'long'} aria-label="Unit" className="unit-switch" value={unit} onChange={(e) => onChange(positionOf(e.target.value))}>
       {UNIT_POSITIONS.map((p) => (
         <option key={p} value={p}>
           {short ? UNIT_SHORT[p] : UNIT_LABEL[p]}
@@ -166,8 +168,8 @@ export function Shell() {
           <div className="topbar__right">
             <UnitSwitch unit={unit} onChange={setUnit} short={narrow} />
             <UnitLegend />
-            <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
-              Log out
+            <Button variant="ghost" size="sm" className="topbar__logout" aria-label="Log out" title="Log out" icon={<IconArrowRight size={15} />} onClick={() => void logout()}>
+              <span className="topbar__logout-label">Log out</span>
             </Button>
             <Segmented<ThemeChoice>
               ariaLabel="Theme"

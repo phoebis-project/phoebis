@@ -3165,11 +3165,58 @@ async function stickyStrip(theme) {
 }
 
 /**
+ * The top bar on every view at 1280 and 400 px: nothing scrolls it sideways and its last control ends inside its padding,
+ * the page title reads whole on one line, and Log out is a text button at 1280 px and its icon alone at 400 px, named
+ * by its label and its title for the reader who cannot see the glyph.
+ */
+async function topBarFits(theme, path) {
+  try {
+    for (const width of [1280, 400]) {
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const read = await page.evaluate(() => {
+        const bar = document.querySelector('.topbar');
+        const title = bar?.querySelector('.topbar__title');
+        const logout = bar?.querySelector('.topbar__right button[aria-label="Log out"]');
+        const last = bar?.querySelector('.topbar__right')?.lastElementChild;
+        const icon = logout?.querySelector('svg')?.getBoundingClientRect();
+        // The title's text boxes, one per line it wraps onto.
+        const range = document.createRange();
+        if (title) range.selectNodeContents(title);
+        const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+        return {
+          bar: bar ? [bar.scrollWidth, bar.clientWidth] : null,
+          edge: bar && last ? [Math.round(last.getBoundingClientRect().right), Math.round(bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight))] : null,
+          logout: logout ? { icon: icon !== undefined && icon.width > 0, label: logout.innerText.trim(), title: logout.getAttribute('title'), width: Math.round(logout.getBoundingClientRect().width) } : null,
+          title: title ? { lines, scroll: [title.scrollWidth, title.clientWidth], text: title.textContent } : null,
+        };
+      });
+      measurements.push(`${theme} ${path} top bar at ${width} px ${JSON.stringify(read)}`);
+      const say = (what) => failures.push(`${theme} ${path}: at ${width} px ${what}`);
+      if (read.bar === null || read.title === null || read.logout === null || read.edge === null) {
+        say('the top bar misses its title, Log out or its right group');
+        continue;
+      }
+      if (read.bar[0] !== read.bar[1]) say(`the top bar scrolls sideways, ${JSON.stringify(read.bar)} scroll and client width`);
+      if (read.edge[0] > read.edge[1]) say(`the top bar's last control ends at ${read.edge[0]}, past its padding at ${read.edge[1]}`);
+      if (read.title.scroll[0] !== read.title.scroll[1] || read.title.lines !== 1) say(`the title ${JSON.stringify(read.title.text)} reads cut or wrapped, ${JSON.stringify(read.title.scroll)} scroll and client width over ${read.title.lines} lines`);
+      if (read.logout.title !== 'Log out') say(`Log out carries the title ${JSON.stringify(read.logout.title)}`);
+      if (width === 1280 && (read.logout.label !== 'Log out' || read.logout.icon)) say(`Log out is not a text button: label ${JSON.stringify(read.logout.label)}, icon drawn ${read.logout.icon}`);
+      if (width === 400 && (read.logout.label !== '' || !read.logout.icon || read.logout.width !== 28)) say(`Log out is not its icon alone: label ${JSON.stringify(read.logout.label)}, icon drawn ${read.logout.icon}, ${read.logout.width} px wide`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
+}
+
+/**
  * The unit switch in the top bar at 1280 and 400 px: the Unit select inside the bar and the viewport, clear of Log
  * out and the theme switch, and nothing scrolling the bar sideways. At 1280 px the legend's button sits inside the bar
  * too, and its popover opens over the Analytics filter bar, which sticks under the top bar, with no point of it
  * covered. At 400 px every option reads its short label and the legend's button gives way, since the bar has room for
- * the switch alone beside the title, Log out and the theme switch.
+ * the switch alone beside the title, Log out and the theme switch. At both widths the closed select's text box holds
+ * its widest label, so no position is drawn cut short.
  */
 async function unitControl(theme) {
   const LONG = ['Native', 'All in dollars', 'Billed dollars', 'Window shares', 'Dollar equivalent'];
@@ -3189,8 +3236,16 @@ async function unitControl(theme) {
         const bar = document.querySelector('.topbar');
         const right = bar?.querySelector('.topbar__right');
         const select = right?.querySelector('select[aria-label="Unit"]');
+        // The labels are measured in the select's own font, against the box its padding leaves for the text.
+        const style = select ? getComputedStyle(select) : null;
+        const pen = document.createElement('canvas').getContext('2d');
+        if (pen && style) pen.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
         return {
           bar: box(bar),
+          labels:
+            select && style && pen
+              ? { room: Math.floor(select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)), widest: Math.ceil(Math.max(...[...select.options].map((o) => pen.measureText(o.textContent ?? '').width))) }
+              : null,
           legend: box(right?.querySelector(`button[aria-label="${legend}"]`)),
           logout: box(right?.querySelector('button[aria-label="Log out"]')),
           options: [...(select?.options ?? [])].map((o) => o.textContent),
@@ -3221,6 +3276,7 @@ async function unitControl(theme) {
       if (read.scroll === null || read.scroll[0] !== read.scroll[1]) failures.push(`${theme} /analytics: at ${width} px the top bar scrolls sideways, ${JSON.stringify(read.scroll)} scroll and client width`);
       const labels = width === 400 ? SHORT : LONG;
       if (JSON.stringify(read.options) !== JSON.stringify(labels)) failures.push(`${theme} /analytics: at ${width} px the Unit select's options read ${JSON.stringify(read.options)} against ${JSON.stringify(labels)}`);
+      if (read.labels === null || read.labels.widest > read.labels.room) failures.push(`${theme} /analytics: at ${width} px the Unit select's text box ${read.labels?.room} px is narrower than its widest label ${read.labels?.widest} px`);
       if (width !== 1280 || read.legend === null) continue;
       await page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true }).click();
       await settle();
@@ -5932,6 +5988,8 @@ try {
       const offset = await page.evaluate(() => window.scrollY);
       if (offset !== 0) failures.push(`${theme} ${view.path}: the shot was taken ${offset} px down the page`);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
+      // After the shot, since it resizes the page and back, and before the measures that reload or leave the view.
+      await topBarFits(theme, view.path);
       if (view.path === '/pools') await utilizationMargin(theme);
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
