@@ -13,18 +13,24 @@ const quartet = (h: readonly number[]) => ({ p50: percentileFromHistogram(h, 0.5
 /**
  * A group as the routes answer one, every figure present and the shares null. `foldGroups` fills `costShares` under
  * the account grouping alone, where one account's windows add, since a group of any other dimension spans accounts
- * whose windows do not.
+ * whose windows do not. The 20x equivalents add across accounts, so they fold under every grouping.
  */
 const empty = (key: string, label = key): AnalyticsGroup => ({
   attempts: 0,
+  billed: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+  billedUsd: 0,
+  cacheEquivalent: {},
   cacheHits: 0,
   cacheMisses: 0,
   cacheMissReasons: emptyCacheMissReasons(),
   cacheShares: null,
   cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+  costEquivalent: {},
   costShares: null,
   costUsd: 0,
+  equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
   errors: emptyCounts(),
+  estimated: false,
   exhausted: 0,
   expiredBetweenTurns: 0,
   failed: 0,
@@ -40,6 +46,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   planOutputTokens: null,
   planRequests: null,
   probeCostUsd: 0,
+  probeEquivalent: {},
   probes: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
   probeShares: null,
   rateLimited: 0,
@@ -54,11 +61,18 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
 });
 
 /**
- * A group folded from request rows. A row carries one cost total and no probe or kept-warm facts, so the split and
- * the kept-warm figures stay unknown rather than reading as zero, and `fromRequests` marks the probe figures
- * unmeasured.
+ * A group folded from request rows. A row carries one cost total, one equivalent per window and no probe or kept-warm
+ * facts, so the splits and the kept-warm figures stay unknown rather than reading as zero, and `fromRequests` marks the
+ * probe figures unmeasured.
  */
-const emptyFolded = (key: string, label = key): AnalyticsGroup => ({ ...empty(key, label), cost: { cacheRead: null, cacheWrite: null, input: 0, output: 0 }, fromRequests: true, keptWarm: null });
+const emptyFolded = (key: string, label = key): AnalyticsGroup => ({
+  ...empty(key, label),
+  billed: { cacheRead: null, cacheWrite: null, input: 0, output: 0 },
+  cost: { cacheRead: null, cacheWrite: null, input: 0, output: 0 },
+  equivalentSplit: null,
+  fromRequests: true,
+  keptWarm: null,
+});
 
 /**
  * The header's first product token (`name/version`, up to the first space) cut to 64 bytes, else `other`, as the
@@ -230,6 +244,11 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     g.tokens.webFetch += r.usage.webFetch;
     g.tokens.webSearch += r.usage.webSearch;
     g.costUsd += r.costUsd;
+    // The billed side is the funding filter's complement of the plan, and a window the cost model could not price
+    // adds nothing to the equivalent, as the route's sum skips it.
+    if (!onSide(r, 'plan')) g.billedUsd += r.costUsd;
+    for (const [window, equivalent] of Object.entries(r.costEquivalent ?? {})) if (equivalent !== null) g.costEquivalent[window] = (g.costEquivalent[window] ?? 0) + equivalent;
+    if (r.estimated) g.estimated = true;
     // The ledger classifies by tokens: a read is a hit, a write without a read is a miss, neither is uncached.
     // The diagnosed reason is a breakdown of its own and decides nothing here.
     if (r.usage.cacheRead > 0) g.cacheHits += 1;
@@ -280,16 +299,34 @@ export async function loadSessionRequests(load: (cursor: string | undefined) => 
 }
 
 const plus = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : a + b);
+/** A count a fold may lack: it stays unknown only while no group carries one. */
+const plusKnown = (a: number | null, b: number | null): number | null => (a === null ? b : b === null ? a : a + b);
+const plusSplit = (a: AnalyticsGroup['cost'], b: AnalyticsGroup['cost']): AnalyticsGroup['cost'] => ({ cacheRead: plus(a.cacheRead, b.cacheRead), cacheWrite: plus(a.cacheWrite, b.cacheWrite), input: a.input + b.input, output: a.output + b.output });
+/** Window-keyed entries summed per window, every window either side carries. */
+function addByWindow<T>(into: Record<string, T>, from: Record<string, T>, add: (a: T, b: T) => T) {
+  for (const [window, entry] of Object.entries(from)) into[window] = own(into, window) ? add(into[window], entry) : entry;
+}
+const own = (map: object, key: string): boolean => Object.prototype.hasOwnProperty.call(map, key);
 
 /**
  * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
- * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole.
+ * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole. The plan counts are
+ * the exception: a fold outside the account grouping counts none, and the groups that carry them still total.
  */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
-    out.cost = { cacheRead: plus(out.cost.cacheRead, g.cost.cacheRead), cacheWrite: plus(out.cost.cacheWrite, g.cost.cacheWrite), input: out.cost.input + g.cost.input, output: out.cost.output + g.cost.output };
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    out.cost = plusSplit(out.cost, g.cost);
+    out.billed = plusSplit(out.billed, g.billed);
+    addByWindow(out.costEquivalent, g.costEquivalent, (a, b) => a + b);
+    addByWindow(out.cacheEquivalent, g.cacheEquivalent, (a, b) => ({ read: a.read + b.read, write: a.write + b.write }));
+    addByWindow(out.probeEquivalent, g.probeEquivalent, (a, b) => ({ cost: a.cost + b.cost, wasted: a.wasted + b.wasted }));
+    const split = out.equivalentSplit;
+    out.equivalentSplit = split === null || g.equivalentSplit === null ? null : { cacheRead: split.cacheRead + g.equivalentSplit.cacheRead, cacheWrite: split.cacheWrite + g.equivalentSplit.cacheWrite, input: split.input + g.equivalentSplit.input, output: split.output + g.equivalentSplit.output };
+    if (g.estimated) out.estimated = true;
+    out.planRequests = plusKnown(out.planRequests, g.planRequests);
+    out.planOutputTokens = plusKnown(out.planOutputTokens, g.planOutputTokens);
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;

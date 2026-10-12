@@ -106,7 +106,6 @@
           ],
           "overage_in_use": null,
           "estimated_usd": 0.00355,
-          "pricing_version": "2026-10-08",
           "selection": {
             "strategy": "pace",
             "tier": null,
@@ -135,7 +134,8 @@
             "speed": "standard",
             "stop_reason": null,
             "stop_sequence": null
-          }
+          },
+          "tier": null
         },
         {
           "index": 2,
@@ -162,7 +162,6 @@
           ],
           "overage_in_use": null,
           "estimated_usd": 0.00355,
-          "pricing_version": "2026-10-08",
           "selection": {
             "strategy": "pace",
             "tier": [
@@ -190,7 +189,8 @@
             "speed": "fast",
             "stop_reason": "tool_use",
             "stop_sequence": null
-          }
+          },
+          "tier": "default_claude_max_20x"
         }
       ],
       "held": {
@@ -200,7 +200,10 @@
         "cohort": "direct",
         "held_ms": 1250
       },
-      "diagnostics_source": "router"
+      "diagnostics_source": "router",
+      "cost_equivalent": null,
+      "estimated": false,
+      "tier": "default_claude_max_20x"
     },
     "events": [
       {

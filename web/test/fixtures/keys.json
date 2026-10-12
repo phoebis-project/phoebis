@@ -34,11 +34,23 @@
         "usage_7d": {
           "cost_usd": 0.02135,
           "requests": 5,
-          "tokens": 9000
+          "tokens": 9000,
+          "billed_usd": 0.0107,
+          "equivalent": {
+            "five_hour": 0.000052875,
+            "seven_day": 8.8125e-6
+          },
+          "estimated": false
         },
         "lifetime": {
           "cost_usd": 0.02135,
-          "requests": 5
+          "requests": 5,
+          "billed_usd": 0.0107,
+          "equivalent": {
+            "five_hour": 0.000052875,
+            "seven_day": 8.8125e-6
+          },
+          "estimated": false
         }
       }
     ]

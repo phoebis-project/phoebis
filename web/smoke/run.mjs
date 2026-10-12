@@ -3549,17 +3549,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [...atFifty, JSON.stringify(atTwenty), String(marginLine()?.style.left)],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
-    // 0.60 to its end, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', [
-      '2 members run ahead of pace by the margin',
-      'nightly (5-hour',
-      'secondary (7-day',
-      'A round there would move',
-      'warm',
-      "of the hot members' recent burn together, in window share",
-      'to a cool sibling',
-      '2 pins the cost model cannot price stay.',
-    ]);
+    // 0.60 to its end, both over the typed 50 %, while primary leads by under 0.1 and is the cool destination.
+    // secondary's Sonnet 4.6 pins burn at their model tier's latest weight, so the round counts them and no pin stays
+    // unpriced.
+    const shedPreview = card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
+    const shedNeedles = ['2 members run ahead of pace by the margin', 'nightly (5-hour', 'secondary (7-day', 'A round there would move', 'warm', "of the hot members' recent burn together, in window share", 'to a cool sibling.'];
+    results.push({
+      name: "/pools the shedding preview replays a round over the hot members' pins, secondary's Sonnet 4.6 pins priced at their model tier's weight and none left unpriced",
+      ok: shedNeedles.every((n) => shedPreview.includes(n)) && !shedPreview.includes('cannot price'),
+      missing: [...shedNeedles.filter((n) => !shedPreview.includes(n)), shedPreview],
+    });
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -4814,8 +4813,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
   // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. The mock's cost model has no weight for their Sonnet 4.6, so the round
-  // sheds nothing.
+  // desktop, still all's key, holds there. Their Sonnet 4.6 burns at its model tier's latest weight, so the round
+  // moves one of them, and no pin stays unpriced.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -4851,10 +4850,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
-    // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
-    // count that it ran over laptop's two pins alone.
-    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would (move|mark) 0 sessions \(0 warm\), 0% of the hot members' recent burn together, in window share.* 2 pins the cost model cannot price stay\.$/.test(line),
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, moving one of laptop's two Sonnet 4.6 pins priced at their model tier's weight",
+    // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the one session
+    // with nearly all the slice's burn that it ran over laptop's two pins.
+    ok: /^1 member runs ahead of pace by the margin: primary \(5-hour, \d+ points ahead\)\. A round there would move 1 session \(0 warm\), \d+% of the hot members' recent burn together, in window share, to a cool sibling\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -7130,25 +7129,25 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     });
   }
   // The Cost cell reads a row's native unit: dollars over the funding word for an answer an API key account served,
-  // and the dollar equivalent over "equivalent" for a subscription request the cost model prices no share for (the
-  // story's Sonnet 4.6 turns, a model it has no weight for).
+  // and shares for a subscription request on a model the cost model has no weight for (the story's Sonnet 4.6 turns),
+  // which its model tier's latest weighed model prices.
   const servedBy = (r) => r.attempts[r.attempts.length - 1] ?? null;
   const apiKeyRow = requests.find((r) => servedBy(r)?.accountKind === 'api_key');
-  const unpricedRow = requests.find((r) => costUnitOf(r).kind === 'unpriced');
+  const fallbackRow = requests.find((r) => r.canonicalModel === 'claude-sonnet-4-6' && costUnitOf(r).kind === 'shares');
   // A request no account served (a refusal or an exhaustion) is billed in dollars at zero with no funding to name.
   const unservedRow = requests.find((r) => r.attempts.length === 0 && (r.status === 401 || r.status === 429));
-  results.push({ name: 'fixture: a request an API key account served, a subscription request the mock prices no share for, and one no account served', ok: apiKeyRow !== undefined && unpricedRow !== undefined && unservedRow !== undefined, missing: [String(apiKeyRow?.id), String(unpricedRow?.id), String(unservedRow?.id)] });
+  results.push({ name: 'fixture: a request an API key account served, a subscription request on a model the cost model does not weigh, and one no account served', ok: apiKeyRow !== undefined && fallbackRow !== undefined && unservedRow !== undefined && !requests.some((r) => costUnitOf(r).kind === 'unpriced'), missing: [String(apiKeyRow?.id), String(fallbackRow?.id), String(unservedRow?.id), ...requests.filter((r) => costUnitOf(r).kind === 'unpriced').map((r) => `unpriced ${r.id}`)] });
   const costAt = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
   const costCellOf = async (id) => {
     const { row, rows } = await rowById(id);
     const td = costAt < 0 ? null : (row?.children[costAt] ?? null);
     return { main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : `${rows} rows`, sub: td?.querySelector('.sub')?.textContent?.trim() ?? null, title: td?.getAttribute('title') ?? null };
   };
-  if (apiKeyRow && unpricedRow) {
+  if (apiKeyRow && fallbackRow) {
     const billed = await costCellOf(apiKeyRow.id);
     results.push({ name: "/requests an API key row's Cost cell reads dollars over API key with its title", ok: billed.main.startsWith('$') && billed.sub === 'API key' && (billed.title ?? '').startsWith('Billed in dollars'), missing: [apiKeyRow.id, JSON.stringify(billed)] });
-    const unpriced = await costCellOf(unpricedRow.id);
-    results.push({ name: '/requests a subscription row the mock prices no share for reads dollars over equivalent', ok: unpriced.main.startsWith('$') && unpriced.sub === 'equivalent' && unpriced.title === 'The cost model prices no share for this request', missing: [unpricedRow.id, JSON.stringify(unpriced)] });
+    const fallback = await costCellOf(fallbackRow.id);
+    results.push({ name: "/requests a subscription row on a model the cost model does not weigh reads its model tier's shares", ok: /^\d[\d.]*% 7d$/.test(fallback.main) && /^\d[\d.]*% 5h$/.test(fallback.sub ?? '') && (fallback.title ?? '').endsWith(' equivalent'), missing: [fallbackRow.id, JSON.stringify(fallback)] });
   }
   if (unservedRow) {
     const unserved = await costCellOf(unservedRow.id);
@@ -11384,16 +11383,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const rowsOf = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]);
     const cellsOf = (account) => rowsOf.find(([label]) => label === account)?.[1] ?? [];
     const reads = (cells, want) => cells.length === want.length && cells.every((c, i) => (want[i] === 'share' ? isShare(c) : want[i] === 'count' ? isCount(c) : c === '-'));
-    // nightly's morning ran Fable on the plan, so its row prices three windows. primary served the story's Sonnet 4.6
-    // turns, which the cost model has no weight for, so its two shared windows read unpriced beside its Fable week.
-    // secondary serves Sonnet 4.6 alone and reads unpriced, and studio's one row ran a laptop-lane model with no Fable
-    // week.
+    // nightly's and primary's mornings ran Fable on the plan, so their rows price three windows, primary's Sonnet 4.6
+    // turns among them. The cost model has no weight for Sonnet 4.6, so those turns and secondary's, which serves it
+    // alone, price at their model tier's latest weight on the two shared windows. studio's one row ran a laptop-lane
+    // model with no Fable week. Every other row counts its plan requests, none on an API key account, and prices no
+    // share.
     const tableRead = {
       nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
-      primary: reads(cellsOf('primary'), ['count', 'dash', 'dash', 'share', 'dash', 'dash']),
-      secondary: reads(cellsOf('secondary'), ['count', 'dash', 'dash', 'dash', 'dash', 'dash']),
+      primary: reads(cellsOf('primary'), ['count', 'share', 'share', 'share', 'share', 'share']),
+      secondary: reads(cellsOf('secondary'), ['count', 'share', 'share', 'dash', 'share', 'share']),
       studio: reads(cellsOf('studio'), ['count', 'share', 'share', 'dash', 'share', 'share']),
-      rest: rowsOf.filter(([label]) => !['nightly', 'primary', 'secondary', 'studio'].includes(label)).every(([, cells]) => cells.every((c) => c === '-')),
+      rest: rowsOf.filter(([label]) => !['nightly', 'primary', 'secondary', 'studio'].includes(label)).every(([, cells]) => reads(cells, ['count', 'dash', 'dash', 'dash', 'dash', 'dash'])),
     };
     const tiles = [...shares.container.querySelectorAll('#cost .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector('.stat__note')?.textContent?.trim() ?? '']);
     await groupPage(shares, 'model');
@@ -11406,7 +11406,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`dollar areas ${dollarAreas}`, `account ${JSON.stringify(lineChart)}`, `expected legend ${JSON.stringify(expectedLegend)}`, `model ${JSON.stringify(noted)}`],
     });
     results.push({
-      name: "/analytics under Window shares with the account grouping the share table reads nightly's three windows, primary's Fable week beside its two unpriced windows, secondary's dashes and studio's two windows, and the chart's tooltip names the 5-hour share",
+      name: "/analytics under Window shares with the account grouping the share table reads nightly's and primary's three windows, secondary's two shared windows through its model tier, studio's two windows and every other account's plan count, and the chart's tooltip names the 5-hour share",
       ok: JSON.stringify(heads) === JSON.stringify(['Account', 'Plan requests', '5-hour', '7-day', '7-day Fable', 'Per request', 'Per 1k output']) && Object.values(tableRead).every(Boolean) && tipNamed,
       missing: [heads.join(','), JSON.stringify(rowsOf), JSON.stringify(tableRead), `tooltip ${JSON.stringify(tip)}`],
     });
@@ -11695,43 +11695,40 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
-    // `secondary` serves the story's Sonnet 4.6 traffic, which the cost model has no weight for, so its two windows
-    // price nothing in the range while every other account's 5-hour and 7-day windows carry a figure.
+    // `secondary` serves the story's Sonnet 4.6 traffic, which the cost model has no weight for: its model tier's
+    // latest weighed model stands in, so its two windows carry a figure as every other account's do.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
     const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
     const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
     const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
     results.push({
-      name: "/analytics plan per hour draws each priced account's 5-hour and 7-day shares, a dash for the unpriced account's windows, and one model unlisted entry",
+      name: "/analytics plan per hour draws every subscription account's 5-hour and 7-day shares, the Sonnet 4.6 account's through its model tier, and no model unlisted entry",
       ok:
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('overflow')) &&
         dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
         dashedOf(planItems).length === 4 &&
         fiveHour.length === 4 &&
-        fiveHour.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
+        fiveHour.every((li) => valueOf(li).endsWith('%')) &&
         sevenDay.length === 4 &&
-        sevenDay.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
-        unlisted.length === 1 &&
-        valueOf(unlisted[0]) === '5-hour, 7-day' &&
-        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point',
+        sevenDay.every((li) => valueOf(li).endsWith('%')) &&
+        unlisted.length === 0,
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
-    // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
-    // unweighted model runs on `secondary`, and only the story's sessions that moved off it carry it to a priced
-    // account.
+    // The legend's per-hour mean ends in `%` over a single gap too, so the buckets themselves are read: no bucket with
+    // tokens on a subscription account leaves a window unpriced, the ones Sonnet 4.6 ran on among them.
     const gaps = [];
     const sonnet46 = requests.filter((r) => r.model === 'claude-sonnet-4-6' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
     let carried = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
       const ranSonnet46 = (p) => sonnet46.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
-      const unpriced = burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && (p.fiveHourShare === null || p.sevenDayShare === null));
-      carried += unpriced.filter(ranSonnet46).length;
-      gaps.push(...unpriced.filter((p) => !ranSonnet46(p)).map((p) => `${days}d ${p.group} ${p.at}`));
+      const busy = burn.points.filter((p) => ['nightly', 'primary', 'secondary'].includes(p.group) && p.tokens > 0);
+      carried += busy.filter(ranSonnet46).length;
+      gaps.push(...busy.filter((p) => p.fiveHourShare === null || p.sevenDayShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour and 7-day shares unless Sonnet 4.6 ran on it', ok: gaps.length === 0 && carried > 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a subscription account carries its 5-hour and 7-day shares, the buckets Sonnet 4.6 ran on among them', ok: gaps.length === 0 && carried > 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
@@ -11785,8 +11782,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
     // lines, dots and tooltip. `primary` is a Max 20x account the cost model sizes: its middle hour priced, and the
-    // hours either side carried traffic on a model the cost model has no weight for, so the 5-hour series reads
-    // [null, 0.05, null] and the 7-day one [null, 0.005, null].
+    // hours either side carried traffic on a model of no tier the cost model weighs, which no story model is, so the
+    // route is stubbed and the 5-hour series reads [null, 0.05, null] and the 7-day one [null, 0.005, null].
     const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'primary', sevenDayShare: h === 1 ? 0.005 : null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
     const measure = window.HTMLElement.prototype.getBoundingClientRect;

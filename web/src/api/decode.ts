@@ -1,8 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritePoint,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
+  CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritePoint,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES, DIAGNOSTICS_SOURCE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -30,6 +30,15 @@ const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.
 /** A map the route keys by window id, each entry read by `entry`, or null where the route answered null (an api_key
  *  group, a grouping other than account). */
 const shareMap = <T>(v: unknown, entry: (e: Rec) => T): Record<string, T> | null => (v === null || v === undefined ? null : Object.fromEntries(Object.entries(rec(v)).map(([k, e]) => [k, entry(rec(e))])));
+/** A map the route keys by window id under every grouping, each entry read by `entry`. An answer from before the
+ *  member reads empty, as a group with no plan row does. */
+const equivalentMap = <T>(v: unknown, entry: (e: Rec) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([k, e]) => [k, entry(rec(e))]));
+/** Dollars or 20x equivalents by token kind, as the routes split a group's figure. */
+const costSplit = (v: unknown): CostSplit => {
+  const c = rec(v);
+  return { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) };
+};
+const sharedEquivalent = (v: unknown): SharedEquivalent => ({ fiveHour: num(rec(v).five_hour), sevenDay: num(rec(v).seven_day) });
 
 /** The wire carries Unix milliseconds; every page formats ISO strings. */
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -266,7 +275,7 @@ export function decodeKey(v: unknown): ApiKey {
     id: str(k.id),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
-    lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
+    lifetime: { billedUsd: num(rec(k.lifetime).billed_usd), cost: num(rec(k.lifetime).cost_usd), equivalent: sharedEquivalent(rec(k.lifetime).equivalent), estimated: bool(rec(k.lifetime).estimated), requests: num(rec(k.lifetime).requests) },
     longContextTwins: bool(k.long_context_twins, true),
     modelRules: list(k.model_rules).map(decodeModelRule),
     modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
@@ -282,7 +291,14 @@ export function decodeKey(v: unknown): ApiKey {
     // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
     status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
     updatedAt: isoOr(k.updated_at, epoch),
-    usage7d: { cost: num(rec(k.usage_7d).cost_usd), requests: num(rec(k.usage_7d).requests), tokens: num(rec(k.usage_7d).tokens) },
+    usage7d: {
+      billedUsd: num(rec(k.usage_7d).billed_usd),
+      cost: num(rec(k.usage_7d).cost_usd),
+      equivalent: sharedEquivalent(rec(k.usage_7d).equivalent),
+      estimated: bool(rec(k.usage_7d).estimated),
+      requests: num(rec(k.usage_7d).requests),
+      tokens: num(rec(k.usage_7d).tokens),
+    },
   };
 }
 
@@ -344,11 +360,14 @@ export function decodePool(v: unknown): Pool {
     affinityMode: AFFINITY_MODE_VALUES.find((x) => x === str(p.affinity_mode)) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     autoModeServer: bool(p.auto_mode_server, true),
+    billed24h: num(p.billed_24h),
     bodyCaptureHours: num(p.body_capture_hours),
     burnWindowSeconds: num(p.burn_window_seconds, POOL_ENGINE_DEFAULTS.burnWindowSeconds),
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
+    equivalent24h: sharedEquivalent(p.equivalent_24h),
+    estimated24h: bool(p.estimated_24h),
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
     keepalive: {
@@ -392,7 +411,7 @@ export function decodePool(v: unknown): Pool {
     status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
     strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'pace',
     subagentPlacement: SUBAGENT_PLACEMENT_VALUES.find((x) => x === str(p.subagent_placement)) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
-    traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
+    traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), billedUsd: num(b.billed_usd), costUsd: num(b.cost_usd), equivalent: sharedEquivalent(b.equivalent), estimated: bool(b.estimated), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
     updatedAt: isoOr(p.updated_at, epoch),
     warmSessions: WARM_SESSIONS_VALUES.find((x) => x === str(p.warm_sessions)) ?? POOL_ENGINE_DEFAULTS.warmSessions,
     windDownMinutes: num(p.wind_down_minutes, POOL_ENGINE_DEFAULTS.windDownMinutes),
@@ -448,18 +467,20 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
+    costEquivalent: r.cost_equivalent === null || r.cost_equivalent === undefined ? null : nullableNumberMap(r.cost_equivalent),
+    costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
     diagnosticsSource: DIAGNOSTICS_SOURCE_VALUES.find((s) => s === str(r.diagnostics_source)) ?? null,
-    durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
+    durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), estimated: bool(r.estimated),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), held: cohortHoldOf(r.held), id: str(r.id),
     keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
     poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),
-    status: numOrNull(r.status), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
+    status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
 
@@ -642,15 +663,17 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   const h = rec(g.histograms);
   const p = rec(g.percentiles);
   const t = rec(g.tokens);
-  const c = rec(g.cost);
   const keyId = strOrNull(g.key_id);
   const keyCreatedAt = numOrNull(g.key_created_at);
   return {
-    attempts: num(g.attempts), cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
+    attempts: num(g.attempts), billed: costSplit(g.billed), billedUsd: num(g.billed_usd),
+    cacheEquivalent: equivalentMap(g.cache_equivalent, (e) => ({ read: num(e.read), write: num(e.write) })),
+    cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
     cacheShares: shareMap(g.cache_shares, (e) => ({ read: num(e.read), write: num(e.write) })),
-    cost: { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) }, costUsd: num(g.cost_usd),
+    cost: costSplit(g.cost), costEquivalent: numberMap(g.cost_equivalent), costUsd: num(g.cost_usd),
     costShares: g.cost_shares === null || g.cost_shares === undefined ? null : nullableNumberMap(g.cost_shares),
-    errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
+    equivalentSplit: g.equivalent_split === null || g.equivalent_split === undefined ? null : costSplit(g.equivalent_split),
+    errors: counts(g.errors), estimated: bool(g.estimated), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), keyCreatedAt, keyId,
     // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
@@ -661,6 +684,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     planOutputTokens: numOrNull(g.plan_output_tokens),
     planRequests: numOrNull(g.plan_requests),
     probeCostUsd: num(g.probe_cost_usd),
+    probeEquivalent: equivalentMap(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
@@ -675,8 +699,11 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
   return {
     at: isoOr(p.at, epoch),
     cachedTokens: num(p.cached_tokens),
+    estimated: bool(p.estimated),
+    fiveHourEquivalent: numOrNull(p.five_hour_equivalent),
     fiveHourShare: numOrNull(p.five_hour_share),
     group: str(p.group),
+    sevenDayEquivalent: numOrNull(p.seven_day_equivalent),
     sevenDayShare: numOrNull(p.seven_day_share),
     tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
@@ -719,7 +746,19 @@ export function decodeAccountRollups(v: unknown): AccountRollup[] {
 
 export function decodeDashboard(v: unknown): Overview {
   const d = rec(v);
-  return { activePins: num(rec(d.sessions).active_pins), cost24h: num(d.cost_24h), errorRate24h: numOrNull(d.error_rate_24h), hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), cost: num(h.cost), errors: num(h.errors), requests: num(h.requests), tokens: num(h.tokens) })), requests24h: num(d.requests_24h), tokens24h: num(d.tokens_24h), tokensCached24h: num(d.tokens_cached_24h), topErrorCode: strOrNull(d.top_error_code) };
+  return {
+    activePins: num(rec(d.sessions).active_pins),
+    billed24h: num(d.billed_24h),
+    cost24h: num(d.cost_24h),
+    equivalent24h: sharedEquivalent(d.equivalent_24h),
+    errorRate24h: numOrNull(d.error_rate_24h),
+    estimated24h: bool(d.estimated_24h),
+    hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), billed: num(h.billed), cost: num(h.cost), equivalent: sharedEquivalent(h.equivalent), errors: num(h.errors), requests: num(h.requests), tokens: num(h.tokens) })),
+    requests24h: num(d.requests_24h),
+    tokens24h: num(d.tokens_24h),
+    tokensCached24h: num(d.tokens_cached_24h),
+    topErrorCode: strOrNull(d.top_error_code),
+  };
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
@@ -734,7 +773,7 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 /** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
@@ -818,11 +857,18 @@ export const effectiveLabel = (effective: string): string => {
   if (at === null) return effective;
   return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? new Date(at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }) : fmtDate(at);
 };
-/** The `api_prices` envelope: its rows keyed by model in the file's order, the date from the file it carries. */
+const pricedModels = (content: Rec): ModelPrice[] => Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row)));
+/** One dated entry of the price table, read as leniently as the entry in force. */
+const priceRevision = (v: unknown): PriceRevision => {
+  const effective = str(rec(v).effective, '');
+  return { effective, effectiveDate: effectiveDateOf(effective), models: pricedModels(rec(rec(v).content)) };
+};
+/** The `api_prices` envelope: its rows keyed by model in the file's order, the date from the file it carries, and
+ *  every dated entry of the file. */
 export const decodePricing = (envelope: unknown): Settings['apiPrices'] => {
   const content = rec(rec(envelope).content);
   const effective = str(content.effective, '');
-  return { effective, effectiveDate: effectiveDateOf(effective), models: Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row))), source: str(rec(envelope).source) };
+  return { effective, effectiveDate: effectiveDateOf(effective), models: pricedModels(content), revisions: list(rec(envelope).revisions).map(priceRevision), source: str(rec(envelope).source) };
 };
 
 const TYPE_KEYS: [keyof TypeMultiplier, string][] = [['cacheRead', 'cache_read'], ['cacheWrite1h', 'cache_write_1h'], ['cacheWrite5m', 'cache_write_5m'], ['input', 'input'], ['output', 'output']];
@@ -832,10 +878,12 @@ const COSTS_UNREADABLE = "The cost model's answer could not be read.";
 const emptyCosts = (): SubscriptionCosts => ({
   capacity: {},
   effective: '',
+  modelTier: {},
   modelWeight: {},
   modelWindows: {},
   overrides: {},
   peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+  tierOrder: [],
   typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
   unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
 });
@@ -878,10 +926,12 @@ const strictCosts = (content: unknown): SubscriptionCosts => {
   return {
     capacity: byKey(c.capacity, (t) => ({ fiveHour: finiteOrNull(map(t).five_hour), sevenDay: finiteOrNull(map(t).seven_day) })),
     effective: text(c.effective),
+    modelTier: byKey(c.model_tier, text),
     modelWeight: byKey(c.model_weight, finiteOrNull),
     modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: finite(map(w).capacity_factor), of: text(map(w).of) })),
     overrides: byKey(c.overrides, override),
     peak: { capacityFactor: { fiveHour: finite(factor.five_hour), sevenDay: finite(factor.seven_day) }, fromHour: finite(peak.from_hour), toHour: finite(peak.to_hour), weekdays: flag(peak.weekdays), zone: text(peak.zone) },
+    tierOrder: [...must(Array.isArray(c.tier_order) && c.tier_order.every((t) => typeof t === 'string'), c.tier_order as string[])],
     typeMultiplier: { cacheRead: finite(multiplier.cache_read), cacheWrite1h: finite(multiplier.cache_write_1h), cacheWrite5m: finite(multiplier.cache_write_5m), input: finite(multiplier.input), output: finite(multiplier.output) },
     unit: { definedBy: { band: text(definedBy.band), tier: text(definedBy.tier), window: text(definedBy.window) }, unitsPerWindow: finite(unit.units_per_window) },
   };
@@ -897,14 +947,29 @@ const readCosts = (content: unknown): SubscriptionCosts | null => {
 };
 /** The subscription cost model from the envelope's `content`; a content that is absent or cannot be read is the empty model. */
 export const decodeSubscriptionCosts = (content: unknown): SubscriptionCosts => (content === undefined ? emptyCosts() : (readCosts(content) ?? emptyCosts()));
+/** Every dated entry of the cost model, or null when the list or one entry cannot be read, as a member of the entry
+ *  in force cannot. */
+const readRevisions = (v: unknown): CostRevision[] | null => {
+  if (!Array.isArray(v)) return null;
+  const revisions: CostRevision[] = [];
+  for (const entry of v) {
+    const effective = isMap(entry) && typeof entry.effective === 'string' ? entry.effective : null;
+    const content = effective === null ? null : readCosts(entry.content);
+    if (effective === null || content === null) return null;
+    revisions.push({ content, effective, effectiveDate: effectiveDateOf(effective) });
+  }
+  return revisions;
+};
 /**
  * The settings answer's `subscription_costs` envelope. An answer without it reads as the empty model with no problem;
- * one whose envelope cannot be read reads as the empty model with the problem the cost views show.
+ * one whose envelope cannot be read, its entry in force or any entry of its `revisions`, reads as the empty model with
+ * the problem the cost views show.
  */
 const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] => {
-  if (envelope === undefined) return { ...emptyCosts(), problem: null, source: '' };
+  if (envelope === undefined) return { ...emptyCosts(), problem: null, revisions: [], source: '' };
   const costs = isMap(envelope) && typeof envelope.source === 'string' ? readCosts(envelope.content) : null;
-  return costs === null ? { ...emptyCosts(), problem: COSTS_UNREADABLE, source: str(rec(envelope).source) } : { ...costs, problem: null, source: str(rec(envelope).source) };
+  const revisions = costs === null ? null : readRevisions(rec(envelope).revisions);
+  return costs === null || revisions === null ? { ...emptyCosts(), problem: COSTS_UNREADABLE, revisions: [], source: str(rec(envelope).source) } : { ...costs, problem: null, revisions, source: str(rec(envelope).source) };
 };
 
 export function decodeSettings(v: unknown): Settings {

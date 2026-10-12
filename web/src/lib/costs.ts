@@ -1,4 +1,4 @@
-import type { Attempt, SubscriptionCosts, TypeMultiplier } from '@/api/types';
+import type { Attempt, ModelTiers, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import { undatedModel } from '@/lib/format';
 
 /**
@@ -42,11 +42,47 @@ export const pricedWindow = (costs: SubscriptionCosts, window: string): { diviso
 /** The model's row key: its id as sent, else its undated name, since the price rows carry dated ids. */
 const keyOf = (costs: SubscriptionCosts, model: string): string | null => (own(costs.modelWeight, model) ? model : own(costs.modelWeight, undatedModel(model)) ? undatedModel(model) : null);
 
-export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => {
+/** The model's own weight on `window`: its override on the window, else its row's weight. The fallback reads this
+ *  and never `weightOf`, so `weightOf` can read the fallback without a loop. */
+const ownWeightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => {
   const key = keyOf(costs, model);
   if (key === null) return null;
   const byWindow = costs.overrides[key]?.weightByWindow;
   return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
+};
+
+export const weightOf = (costs: SubscriptionCosts, model: string, window: string): number | null => ownWeightOf(costs, model, window);
+
+/** The model's tier: its `model_tier` entry, else its undated id's, else the id's segment after `claude-` when
+ *  `tier_order` names it. Named apart from routingLog's `tierOf`, the engine's account tier, which the test entry
+ *  star-exports beside this module. */
+export const modelTierOf = (costs: ModelTiers, model: string): string | null => {
+  const undated = undatedModel(model);
+  if (own(costs.modelTier, model)) return costs.modelTier[model];
+  if (own(costs.modelTier, undated)) return costs.modelTier[undated];
+  const named = undated.startsWith('claude-') ? undated.slice('claude-'.length).split('-')[0] : '';
+  return costs.tierOrder.includes(named) ? named : null;
+};
+
+const SHARED_WINDOWS = ['five_hour', 'seven_day'];
+
+/** The model tier's latest weighed model: the first by version descending, then id, among the models of the tier the
+ *  file weighs on both shared windows. */
+export const latestWeighted = (costs: SubscriptionCosts, tier: string): string | null =>
+  Object.keys(costs.modelWeight)
+    .filter((model) => modelTierOf(costs, model) === tier && SHARED_WINDOWS.every((window) => ownWeightOf(costs, model, window) !== null))
+    .sort(newestFirst)[0] ?? null;
+
+/** The weight a model prices at on `window`, and whether it stands in: the model's own (an override counts), else the
+ *  model tier's latest weighed model's base weight marked estimated, else null. The donor's override names the donor
+ *  alone, so it never reaches another model. */
+export const weightOrFallback = (costs: SubscriptionCosts, model: string, window: string): { estimated: boolean; weight: number } | null => {
+  const weight = ownWeightOf(costs, model, window);
+  if (weight !== null) return { estimated: false, weight };
+  const tier = modelTierOf(costs, model);
+  const donor = tier === null ? null : latestWeighted(costs, tier);
+  const base = donor === null ? null : costs.modelWeight[donor];
+  return base === null || base === undefined ? null : { estimated: true, weight: base };
 };
 
 /** The model weeks a model carries: `seven_day_fable` for a Fable model, by the family its undated id names. */
@@ -117,10 +153,10 @@ export const bandFactor = (costs: SubscriptionCosts, window: string, at: number)
   return inside === null ? null : factorOf(costs, window, inside);
 };
 
-/** Per million tokens of each type, the share of the tier's window out of band; null for an unpriced model or tier. */
-export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, model: string): Record<TokenType, number> | null => {
+/** Per million tokens of each type at `weight`, the share of the tier's window out of band, null for an unpriced
+ *  window or tier. The model's own multipliers apply whichever model's weight stands in. */
+const ratesAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, weight: number | null): Record<TokenType, number> | null => {
   const w = pricedWindow(costs, window);
-  const weight = weightOf(costs, model, window);
   const capacity = w === null ? null : tierCapacity(costs, tier, w.priced);
   if (w === null || weight === null || capacity === null) return null;
   const m = multipliersOf(costs, model);
@@ -128,20 +164,53 @@ export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, 
   return { cacheRead: per('cacheRead'), cacheWrite1h: per('cacheWrite1h'), cacheWrite5m: per('cacheWrite5m'), input: per('input'), output: per('output') };
 };
 
-/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it; null
- *  where unpriced. */
-export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean): number | null => {
-  const rates = ratesOf(costs, window, tier, model);
+/** Per million tokens of each type, the share of the tier's window out of band; null for an unpriced model or tier. */
+export const ratesOf = (costs: SubscriptionCosts, window: string, tier: string, model: string): Record<TokenType, number> | null => ratesAt(costs, window, tier, model, weightOf(costs, model, window));
+
+const shareAt = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean, weight: number | null): number | null => {
+  const rates = ratesAt(costs, window, tier, model, weight);
   if (rates === null) return null;
   const units = TOKEN_TYPES.reduce((s, k) => s + (usage[k] * rates[k]) / 1_000_000, 0);
   return units * factorOf(costs, window, inside);
 };
+
+/** The share of the tier's own window `usage` spends for a request completing inside the band or outside it; null
+ *  where unpriced. */
+export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, inside: boolean): number | null => shareAt(costs, window, tier, model, usage, inside, weightOf(costs, model, window));
 
 /** The share `usage` spends for a request completing at `at`; null where unpriced, and where the band's state at `at`
  *  cannot be read, since a share on an assumed state could read half what the ledger charges. */
 export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
   const inside = inBand(costs, at);
   return inside === null ? null : shareIn(costs, window, tier, model, usage, inside);
+};
+
+/** `shareOf` at `weightOrFallback`'s weight, the flag beside the share. */
+export const shareOrFallback = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): { estimated: boolean; share: number } | null => {
+  const inside = inBand(costs, at);
+  const weight = inside === null ? null : weightOrFallback(costs, model, window);
+  const share = inside === null || weight === null ? null : shareAt(costs, window, tier, model, usage, inside, weight.weight);
+  return share === null || weight === null ? null : { estimated: weight.estimated, share };
+};
+
+/** The 20x window equivalent: the share under the anchor tier, no account tier read (spec 5.1 rule 1), so it adds
+ *  across accounts. */
+export const equivalentOf = (costs: SubscriptionCosts, window: string, model: string, usage: Usage, at: number): { equivalent: number; estimated: boolean } | null => {
+  const priced = shareOrFallback(costs, window, anchorTier(costs), model, usage, at);
+  return priced === null ? null : { equivalent: priced.share, estimated: priced.estimated };
+};
+
+/** The entry in force at `at` (an instant or an ISO string): the latest `effectiveDate` at or before it, else the
+ *  first, since a blank history reads worse than the earliest known table. Null for an empty list. */
+export const revisionAt = <T extends { effective: string; effectiveDate: string | null }>(revisions: T[], at: string | number): T | null => {
+  const atMs = typeof at === 'number' ? at : Date.parse(at);
+  let found: T | null = null;
+  let foundMs = -Infinity;
+  for (const r of revisions) {
+    const ms = r.effectiveDate === null ? Number.NaN : Date.parse(r.effectiveDate);
+    if (ms <= atMs && ms >= foundMs) [found, foundMs] = [r, ms];
+  }
+  return found ?? revisions[0] ?? null;
 };
 
 /** Who paid for an attempt: the subscription's window, its overage, a fast answer's usage credits, or an API key. */
@@ -462,19 +531,20 @@ const familyKey = (model: string): { rank: number; version: number[] } => {
   return { rank: rank === -1 ? FAMILIES.length : rank, version: version.map((v) => Number.parseInt(v, 10) || 0) };
 };
 
+/** The newer version first, the numeric segments compared from the left, then the id. */
+function newestFirst(a: string, b: string): number {
+  const x = familyKey(a).version;
+  const y = familyKey(b).version;
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    const step = (y[i] ?? 0) - (x[i] ?? 0);
+    if (step !== 0) return step;
+  }
+  return a.localeCompare(b);
+}
+
 /** The models family by family, Fable, Opus, Sonnet, Haiku, then any other, each family's newest version first: the
  *  order the shipped files keep, so a file kept in another order lists the same. */
-export const familyOrder = (models: string[]): string[] =>
-  [...models].sort((a, b) => {
-    const x = familyKey(a);
-    const y = familyKey(b);
-    if (x.rank !== y.rank) return x.rank - y.rank;
-    for (let i = 0; i < Math.max(x.version.length, y.version.length); i += 1) {
-      const step = (y.version[i] ?? 0) - (x.version[i] ?? 0);
-      if (step !== 0) return step;
-    }
-    return a.localeCompare(b);
-  });
+export const familyOrder = (models: string[]): string[] => [...models].sort((a, b) => familyKey(a).rank - familyKey(b).rank || newestFirst(a, b));
 
 /** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples
  *  are against. */

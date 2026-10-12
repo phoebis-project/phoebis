@@ -1,5 +1,8 @@
+import { decodePricing } from '@/api/decode';
 import type { CatalogModel, ModelPrice, PriceCells } from '@/api/types';
-import type { Usage } from '@/lib/costs';
+import { revisionAt, type Usage } from '@/lib/costs';
+import { undatedModel } from '@/lib/format';
+import { FIXTURES } from './generated/fixtures';
 
 // Stored out of id order, so a page that renders it verbatim rather than sorting it fails the smoke check
 // that reads the catalog popup as sorted by id. The effort levels are the ones the API documents for each model.
@@ -12,41 +15,51 @@ export const CATALOG: CatalogModel[] = [
   { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5', createdAt: '2026-07-01', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
 ];
 
-/**
- * The mock's own Anthropic price list, USD per million tokens, grouped by model
- * class with the newest generation of each first: the story's requests are
- * priced in dollars through `priceFor`, which prices a model the list does not
- * name at Sonnet 5's row. A row may carry a long-context set, the cells an
- * answer prices at when its prompt is longer than the set's `over`.
- */
-export const PRICES: ModelPrice[] = [
-  { model: 'claude-fable-5-1', inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null, longContext: null },
-  { model: 'claude-fable-5', inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null, longContext: null },
-  { model: 'claude-opus-5-5', inputPerM: 4, outputPerM: 20, cacheReadPerM: 0.2, cacheWrite5mPerM: 5, cacheWrite1hPerM: 8, fast: { inputPerM: 8, outputPerM: 40, cacheReadPerM: 0.4, cacheWrite5mPerM: 10, cacheWrite1hPerM: 16 }, longContext: null },
-  { model: 'claude-opus-5', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 }, longContext: null },
-  { model: 'claude-opus-4-8', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: { inputPerM: 10, outputPerM: 50, cacheReadPerM: 1, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20 }, longContext: null },
-  { model: 'claude-opus-4-7', inputPerM: 5, outputPerM: 25, cacheReadPerM: 0.5, cacheWrite5mPerM: 6.25, cacheWrite1hPerM: 10, fast: null, longContext: null },
-  { model: 'claude-sonnet-5', inputPerM: 2, outputPerM: 10, cacheReadPerM: 0.2, cacheWrite5mPerM: 2.5, cacheWrite1hPerM: 4, fast: null, longContext: null },
-  { model: 'claude-sonnet-4-6', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null, longContext: null },
-  { model: 'claude-sonnet-4-5', inputPerM: 3, outputPerM: 15, cacheReadPerM: 0.3, cacheWrite5mPerM: 3.75, cacheWrite1hPerM: 6, fast: null, longContext: null },
-  { model: 'claude-haiku-5-5', inputPerM: 0.1, outputPerM: 0.5, cacheReadPerM: 0.01, cacheWrite5mPerM: 0.125, cacheWrite1hPerM: 0.2, fast: null, longContext: { over: 100_000, inputPerM: 0.5, outputPerM: 2.5, cacheReadPerM: 0.05, cacheWrite5mPerM: 0.625, cacheWrite1hPerM: 1 } },
-  { model: 'claude-haiku-4-5-20251001', inputPerM: 1, outputPerM: 5, cacheReadPerM: 0.1, cacheWrite5mPerM: 1.25, cacheWrite1hPerM: 2, fast: null, longContext: null },
-];
+interface EntryWire {
+  content: Record<string, unknown> & { effective: string };
+  effective: string;
+}
+interface EnvelopeWire extends EntryWire {
+  revisions: EntryWire[];
+  source: string;
+}
 
-const priceIndex = new Map(PRICES.map((p) => [p.model, p]));
-const FALLBACK = priceIndex.get('claude-sonnet-5')!;
+/** The dates the story's past gives the shipped revisions, in their order: the story runs the month before its clock,
+ *  so a shipped date would put every request before the first revision. */
+const STORY_PRICE_DATES = ['2026-09-01', '2026-09-08'];
+const STORY_COST_DATES = ['2026-09-01'];
 
-export function priceFor(model: string): ModelPrice {
-  return priceIndex.get(model) ?? FALLBACK;
+/** The envelope with each revision's date, and the entry in force's, moved to the story's own, the tables untouched.
+ *  A revision count the dates do not match fails the mock build rather than dating an entry by guess. */
+function redated(envelope: EnvelopeWire, dates: string[]): EnvelopeWire {
+  if (envelope.revisions.length !== dates.length) throw new Error(`the story dates ${dates.length} revisions, and the fixture lists ${envelope.revisions.length}`);
+  const moved = new Map(envelope.revisions.map((r, i) => [r.effective, dates[i]]));
+  const move = <T extends EntryWire>(entry: T): T => ({ ...entry, content: { ...entry.content, effective: moved.get(entry.content.effective) ?? entry.content.effective }, effective: moved.get(entry.effective) ?? entry.effective });
+  return { ...move(envelope), revisions: envelope.revisions.map(move) };
+}
+
+const settingsBody = FIXTURES.settings.body as { api_prices: EnvelopeWire; subscription_costs: EnvelopeWire };
+/** The shipped price table as the settings route answers it, dated into the story's past. */
+export const API_PRICES_WIRE = redated(settingsBody.api_prices, STORY_PRICE_DATES);
+/** The shipped cost model as the settings route answers it, dated into the story's past. */
+export const SUBSCRIPTION_COSTS_WIRE = redated(settingsBody.subscription_costs, STORY_COST_DATES);
+const PRICE_REVISIONS = decodePricing(API_PRICES_WIRE).revisions;
+
+/** The row the entry in force at `at` prices `model` at, a dated id at its undated row as the ledger reads it. Null for
+ *  a model the entry lacks, which the ledger prices at nothing. */
+export function priceFor(model: string, at: string | number): ModelPrice | null {
+  const models = revisionAt(PRICE_REVISIONS, at)?.models ?? [];
+  return models.find((p) => p.model === model) ?? models.find((p) => p.model === undatedModel(model)) ?? null;
 }
 
 /**
  * The cells an answer prices at, as the ledger selects them: the fast cells for a fast answer on a row that has
  * them, else the long-context cells when the prompt (uncached input, cache reads and cache writes together) is
- * over the threshold, else the standard cells.
+ * over the threshold, else the standard cells. Null for a model the entry in force lacks.
  */
-export function cellsFor(model: string, usage: Pick<Usage, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input'>, fast = false): PriceCells {
-  const row = priceFor(model);
+export function cellsFor(model: string, usage: Pick<Usage, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input'>, fast: boolean, at: string | number): PriceCells | null {
+  const row = priceFor(model, at);
+  if (row === null) return null;
   if (fast && row.fast) return row.fast;
   const prompt = usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
   return row.longContext && prompt > row.longContext.over ? row.longContext : row;

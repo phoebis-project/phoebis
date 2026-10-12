@@ -2603,9 +2603,9 @@ async function burnCards(theme) {
 /**
  * The Plan per hour legend's model unlisted entry against its neighbors: the entry before it, a planned account's
  * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
- * unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story the entry draws
- * for `secondary`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
- * traffic, so there the pass records that the entry is not drawn.
+ * unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story every model has a
+ * model tier the cost model weighs, `secondary`'s Sonnet 4.6 pricing at its tier's latest weight, so the entry must
+ * not draw there. The router's seed bills no subscription traffic, so there the pass records that it is not drawn.
  */
 async function planLegend(theme) {
   try {
@@ -2632,10 +2632,8 @@ async function planLegend(theme) {
       failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
       return;
     }
-    if (read.unlisted === null) {
-      if (mock) failures.push(`${theme} /analytics: the story's secondary account runs on a model the cost model cannot price, yet no model unlisted entry draws`);
-      return;
-    }
+    if (read.unlisted === null) return;
+    if (mock) failures.push(`${theme} /analytics: every story model prices through its model tier, yet a model unlisted entry draws`);
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
     if (read.tierUnknown) failures.push(...compare(read.unlisted, read.tierUnknown, ['type', 'swatch', 'color'], `${theme} /analytics: the model unlisted entry against the tier unknown entry`));
   } finally {

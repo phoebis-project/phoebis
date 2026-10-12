@@ -137,177 +137,333 @@
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -82800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -79200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -75600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -72000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -68400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -64800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -61200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -57600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -54000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -50400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -46800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -43200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -39600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -36000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -32400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -28800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -25200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -21600000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -18000000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -14400000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -10800000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -7200000,
             "requests": 0,
             "failed": 0,
             "tokens": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
+            "billed_usd": 0.0,
+            "equivalent": {
+              "five_hour": 0.0,
+              "seven_day": 0.0
+            },
+            "estimated": false
           },
           {
             "at": -3600000,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0142
+            "cost_usd": 0.0142,
+            "billed_usd": 0.0071,
+            "equivalent": {
+              "five_hour": 0.00003525,
+              "seven_day": 5.875e-6
+            },
+            "estimated": false
           },
           {
             "at": 0,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0107
+            "cost_usd": 0.0107,
+            "billed_usd": 0.0036,
+            "equivalent": {
+              "five_hour": 0.00003525,
+              "seven_day": 5.875e-6
+            },
+            "estimated": false
           }
-        ]
+        ],
+        "billed_24h": 0.0107,
+        "equivalent_24h": {
+          "five_hour": 0.0000705,
+          "seven_day": 0.00001175
+        },
+        "estimated_24h": false
       }
     ]
   }

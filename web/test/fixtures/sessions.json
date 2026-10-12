@@ -34,7 +34,9 @@
         },
         "presence_age_seconds": null,
         "forked_from": null,
-        "fork_depth": null
+        "fork_depth": null,
+        "burn_equivalent": 0.0,
+        "estimated": false
       },
       {
         "key_id": "desktop",
@@ -68,7 +70,9 @@
         },
         "presence_age_seconds": null,
         "forked_from": null,
-        "fork_depth": null
+        "fork_depth": null,
+        "burn_equivalent": null,
+        "estimated": false
       },
       {
         "key_id": "desktop",
@@ -102,7 +106,9 @@
         "presence_age_seconds": null,
         "historical": false,
         "forked_from": "s0",
-        "fork_depth": 2
+        "fork_depth": 2,
+        "burn_equivalent": null,
+        "estimated": false
       },
       {
         "key_id": "desktop",
@@ -136,7 +142,9 @@
         },
         "presence_age_seconds": null,
         "forked_from": null,
-        "fork_depth": null
+        "fork_depth": null,
+        "burn_equivalent": null,
+        "estimated": false
       },
       {
         "key_id": "desktop",
@@ -170,7 +178,9 @@
         },
         "presence_age_seconds": null,
         "forked_from": null,
-        "fork_depth": null
+        "fork_depth": null,
+        "burn_equivalent": null,
+        "estimated": false
       }
     ]
   }

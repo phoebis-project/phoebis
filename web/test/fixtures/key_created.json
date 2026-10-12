@@ -32,11 +32,23 @@
     "usage_7d": {
       "cost_usd": 0.0,
       "requests": 0,
-      "tokens": 0
+      "tokens": 0,
+      "billed_usd": 0.0,
+      "equivalent": {
+        "five_hour": 0.0,
+        "seven_day": 0.0
+      },
+      "estimated": false
     },
     "lifetime": {
       "cost_usd": 0.0,
-      "requests": 0
+      "requests": 0,
+      "billed_usd": 0.0,
+      "equivalent": {
+        "five_hour": 0.0,
+        "seven_day": 0.0
+      },
+      "estimated": false
     },
     "secret": "phoebis-fixture"
   }

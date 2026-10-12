@@ -19,11 +19,12 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
  * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's
  * `corrections`, one factor per model the fit corrected. The window-keyed maps are open the same way, one entry
- * per window the rows priced or sampled: a group's `costShares` (a share per window, an unpriced window dropped),
- * its `cacheShares` and `probeShares` (an object per window) and an account hour's `windows` (a sample per window).
+ * per window the rows priced or sampled: a group's `costShares` and `costEquivalent` (a figure per window, an unpriced
+ * window dropped), its `cacheShares`, `cacheEquivalent`, `probeShares` and `probeEquivalent` (an object per window)
+ * and an account hour's `windows` (a sample per window).
  * Matched by path only where the fixture's own shape there is an object, so a same-named scalar
  * (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.cacheShares', '.probeShares', '.windows'];
+const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.costEquivalent', '.cacheShares', '.cacheEquivalent', '.probeShares', '.probeEquivalent', '.windows'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map

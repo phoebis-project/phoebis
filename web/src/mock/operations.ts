@@ -1,6 +1,7 @@
 import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
-import { anchorTier, ratesOf } from '@/lib/costs';
+import { anchorTier, tierCapacity, weightOrFallback } from '@/lib/costs';
 import { accountById } from './accounts';
+import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
 import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS } from './requests';
@@ -78,9 +79,18 @@ for (const r of REQUESTS) {
   else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
-/** Whether the cost model weighs `model` on the 5-hour window (a dated id reads its undated name): a weighted model
- *  prices every type, and one without a weight has no share for any usage. */
-const sharePrices = (model: string): boolean => ratesOf(TABLES, 'five_hour', anchorTier(TABLES), model) !== null;
+/** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
+ *  weighed model's where it has none of its own. Null for a model of no weighted tier, which has no share for any
+ *  usage. */
+const pinWeight = (model: string) => weightOrFallback(TABLES, model, 'five_hour');
+
+/** A pin's burn as a 20x 5-hour equivalent: the account tier's own share scaled by its capacity over the anchor's. */
+const burnEquivalentOf = (burn: number | null, accountId: string): number | null => {
+  const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
+  const own = tier === undefined ? null : tierCapacity(TABLES, tier, 'five_hour');
+  const anchor = tierCapacity(TABLES, anchorTier(TABLES), 'five_hour');
+  return burn === null || own === null || anchor === null ? null : (burn * own) / anchor;
+};
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -112,8 +122,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
   const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
-  // A pin on a model the cost model does not weigh has no burn to rank by, as the route answers it.
-  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : sharePrices(spec.model) ? burnRoll : null;
+  // A pin on a model of no weighted tier has no burn to rank by, as the route answers it.
+  const weight = pinned && unit === 'window_share' ? pinWeight(spec.model) : null;
+  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weight !== null ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   return {
@@ -135,6 +146,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     requests: seen ? seen.requests : 0,
     burn,
     burnAt: pinned ? burnAtRoll : null,
+    burnEquivalent: unit === 'window_share' ? burnEquivalentOf(burn, spec.accountId) : null,
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,
@@ -143,6 +155,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     agents: spec.agents,
     companion: spec.companion,
     companionSince: spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
+    estimated: weight?.estimated ?? false,
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
@@ -355,6 +368,7 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     agents: 0,
     burn: null,
     burnAt: null,
+    burnEquivalent: null,
     burnUnit: null,
     cacheTtlMs: null,
     companion: 'none',
@@ -448,15 +462,18 @@ const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, 
 
 /**
  * The settings answer in the route's own shape, so the mock's settings reach the pages through the decoder the router's
- * answer goes through. The route answers the price table and the cost model the ledger ships, so the captured
- * `api_prices` and `subscription_costs` envelopes stand as they are.
+ * answer goes through. The route answers the price table and the cost model the ledger ships, here with their
+ * revisions dated into the story's past, so the dialog, the About card and the drawer read the dates the story's
+ * requests price at.
  */
 export const SETTINGS_WIRE = {
   ...settingsFixture,
   about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
   access: { admin_configured: true },
+  api_prices: API_PRICES_WIRE,
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080', proxy_tls: false },
   retention: { body_capture_max_hours: 72 },
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
+  subscription_costs: SUBSCRIPTION_COSTS_WIRE,
 };

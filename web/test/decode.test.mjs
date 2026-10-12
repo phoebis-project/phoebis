@@ -229,6 +229,13 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal(k.longContextTwins, true);
   assert.equal(k.lifetime.requests, 5);
   assert.equal(k.usage7d.tokens > 0, true);
+  const wire = fixture('keys').keys[0];
+  const read = (u) => ({ billedUsd: u.billed_usd, equivalent: { fiveHour: u.equivalent.five_hour, sevenDay: u.equivalent.seven_day }, estimated: u.estimated });
+  for (const [name, decoded, sent] of [['usage7d', k.usage7d, wire.usage_7d], ['lifetime', k.lifetime, wire.lifetime]]) {
+    assert.deepEqual({ billedUsd: decoded.billedUsd, equivalent: decoded.equivalent, estimated: decoded.estimated }, read(sent), `the ${name} reads its billed dollars, its 20x equivalents and its estimated flag`);
+  }
+  assert.ok(k.usage7d.equivalent.fiveHour > 0 && k.usage7d.billedUsd > 0, 'the captured key spent on both sides');
+  assert.equal(d.decodeKey({ ...wire, usage_7d: { ...wire.usage_7d, estimated: true } }).usage7d.estimated, true, 'a fallback-priced week reads estimated');
   assert.equal(typeof k.sessionsOnRetiredSecret, 'number');
   assert.equal(k.retiredSecretLastUsedAt, null, 'a key whose retired secret never authenticated carries no time');
   assert.equal(
@@ -329,6 +336,18 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.status, 'active');
   assert.equal(p.traffic24h.length, 25);
   assert.ok(isIso(p.traffic24h[0].at));
+  const wire = fixture('pools').pools[0];
+  assert.deepEqual([p.billed24h, p.equivalent24h, p.estimated24h], [wire.billed_24h, { fiveHour: wire.equivalent_24h.five_hour, sevenDay: wire.equivalent_24h.seven_day }, wire.estimated_24h], "the day's billed dollars, 20x equivalents and estimated flag");
+  assert.ok(p.equivalent24h.fiveHour > 0, 'the captured pool served plan traffic');
+  const busy = wire.traffic_24h.findIndex((b) => b.requests > 0);
+  const bucket = wire.traffic_24h[busy];
+  assert.deepEqual(
+    [p.traffic24h[busy].billedUsd, p.traffic24h[busy].equivalent, p.traffic24h[busy].estimated],
+    [bucket.billed_usd, { fiveHour: bucket.equivalent.five_hour, sevenDay: bucket.equivalent.seven_day }, bucket.estimated],
+    "a bucket's billed dollars, 20x equivalents and estimated flag",
+  );
+  const marked = d.decodePool({ ...wire, estimated_24h: true, traffic_24h: [{ ...bucket, estimated: true }] });
+  assert.deepEqual([marked.estimated24h, marked.traffic24h[0].estimated], [true, true], 'a fallback-priced day and bucket read estimated');
   assert.deepEqual(p.members.map((m) => m.accountId), ['business', 'direct']);
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
@@ -669,6 +688,54 @@ test("a request's cost shares decode keyed by window, null when billed in dollar
   assert.equal(d.decodeRequest({}).costShares, null, 'a row without the member reads null');
 });
 
+test("a request's 20x equivalents decode keyed by window and null when billed, and the row and its attempts read their estimated flag and tier", () => {
+  const wire = fixture('requests').requests;
+  const page = d.decodeRequestPage(fixture('requests'));
+  const planWire = wire.find((r) => r.id === 'r-captured');
+  const plan = page.requests.find((r) => r.id === 'r-captured');
+  assert.deepEqual(plan.costEquivalent, planWire.cost_equivalent, 'a plan request reads its equivalents under the route');
+  assert.ok(Object.values(plan.costEquivalent).every((e) => typeof e === 'number' && e > 0), 'each a priced fraction of a 20x window');
+  assert.deepEqual([plan.estimated, plan.tier], [planWire.estimated, planWire.tier]);
+  assert.equal(typeof plan.tier, 'string', 'a subscription request names the tier it was served on');
+  const failoverWire = wire.find((r) => r.id === 'r-failover');
+  const failover = page.requests.find((r) => r.id === 'r-failover');
+  assert.equal(failover.costEquivalent, null, 'a billed request reads no equivalent');
+  assert.deepEqual(failover.attempts.map((a) => a.tier), failoverWire.attempts.map((a) => a.tier), 'each attempt reads its own tier');
+  assert.ok(failover.attempts.some((a) => a.tier === null) && failover.attempts.some((a) => a.tier !== null), 'an API key attempt reads none beside the subscription attempt that served');
+  assert.deepEqual(d.decodeRequest({ cost_equivalent: { five_hour: 0.01, seven_day: null } }).costEquivalent, { five_hour: 0.01, seven_day: null }, 'a window the model has no weight on keeps its key with null');
+  assert.equal(d.decodeRequest({ ...planWire, estimated: true }).estimated, true, 'a fallback-priced request reads estimated');
+});
+
+test('an answer from before the 20x equivalents reads them empty, zero, null or false, and a cost model without its model tiers reads the problem', () => {
+  const zero = { fiveHour: 0, sevenDay: 0 };
+  const group = d.decodeAnalyticsGroup({});
+  assert.deepEqual(
+    [group.billed, group.billedUsd, group.cacheEquivalent, group.costEquivalent, group.equivalentSplit, group.estimated, group.probeEquivalent],
+    [{ cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, 0, {}, {}, null, false, {}],
+    'a group',
+  );
+  const point = d.decodeBurnPoint({});
+  assert.deepEqual([point.estimated, point.fiveHourEquivalent, point.sevenDayEquivalent], [false, null, null], 'a burn point');
+  const day = d.decodeDashboard({ hourly: [{ at: 0 }] });
+  assert.deepEqual([day.billed24h, day.equivalent24h, day.estimated24h, day.hourly[0].billed, day.hourly[0].equivalent], [0, zero, false, 0, zero], 'the dashboard');
+  const key = d.decodeKey({});
+  assert.deepEqual([key.lifetime.billedUsd, key.lifetime.equivalent, key.lifetime.estimated, key.usage7d.billedUsd, key.usage7d.equivalent, key.usage7d.estimated], [0, zero, false, 0, zero, false], 'a key');
+  const pool = d.decodePool({ traffic_24h: [{ at: 0 }] });
+  assert.deepEqual([pool.billed24h, pool.equivalent24h, pool.estimated24h, pool.traffic24h[0].billedUsd, pool.traffic24h[0].equivalent, pool.traffic24h[0].estimated], [0, zero, false, 0, zero, false], 'a pool');
+  const session = d.decodeSession({});
+  assert.deepEqual([session.burnEquivalent, session.estimated], [null, false], 'a session');
+  const request = d.decodeRequest({ attempts: [{ index: 1 }] });
+  assert.deepEqual([request.costEquivalent, request.estimated, request.tier, request.attempts[0].tier], [null, false, null, null], 'a request');
+  const wire = fixture('settings');
+  const { revisions: _prices, ...pricesBefore } = wire.api_prices;
+  const { revisions: _costs, ...costsBefore } = wire.subscription_costs;
+  const { model_tier: _tier, tier_order: _order, ...contentBefore } = costsBefore.content;
+  const before = d.decodeSettings({ ...wire, api_prices: pricesBefore, subscription_costs: { ...costsBefore, content: contentBefore } });
+  assert.deepEqual(before.apiPrices.revisions, [], 'a price table read leniently lists no revision');
+  assert.equal(before.apiPrices.models.length, Object.keys(pricesBefore.content.models).length, 'and keeps its rows');
+  assert.deepEqual([before.subscriptionCosts.problem, before.subscriptionCosts.tierOrder, before.subscriptionCosts.revisions], ["The cost model's answer could not be read.", [], []], 'a cost model read strictly cannot price without its model tiers');
+});
+
 test("an attempt reads the upstream's request id, and its message id only on the answer that served", () => {
   const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
   assert.deepEqual(
@@ -817,6 +884,22 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, held: 3 } }).probes.held, 3, 'a group reads its held probes off the route');
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
   assert.ok(points.length >= 24 && isIso(points[0].at));
+  // The 20x equivalents, the billed side and the plan counts read under the key grouping, where no share does.
+  const wire = fixture('analytics_breakdown').rows.find((r) => r.key === 'desktop');
+  const split = (c) => ({ cacheRead: c.cache_read, cacheWrite: c.cache_write, input: c.input, output: c.output });
+  assert.equal(wire.cost_shares, null, 'the key grouping answers no share');
+  assert.deepEqual(desktop.costEquivalent, wire.cost_equivalent, 'the key grouping reads the 20x equivalent by window');
+  assert.ok(Object.keys(desktop.costEquivalent).length > 0, 'the captured key served plan traffic');
+  assert.deepEqual(desktop.cacheEquivalent, wire.cache_equivalent);
+  assert.deepEqual(desktop.probeEquivalent, wire.probe_equivalent);
+  assert.deepEqual([desktop.billedUsd, desktop.billed], [wire.billed_usd, split(wire.billed)], 'the billed rows alone');
+  assert.deepEqual(desktop.equivalentSplit, { cacheRead: wire.equivalent_split.cache_read, cacheWrite: wire.equivalent_split.cache_write, input: wire.equivalent_split.input, output: wire.equivalent_split.output });
+  assert.equal(desktop.estimated, wire.estimated);
+  assert.deepEqual([desktop.planRequests, desktop.planOutputTokens], [wire.plan_requests, wire.plan_output_tokens], 'the plan counts read under the key grouping');
+  assert.ok(typeof desktop.planRequests === 'number' && typeof desktop.planOutputTokens === 'number', 'as numbers');
+  const point = points.find((p) => p.groups.length > 0);
+  const pointWire = fixture('analytics_series').points.find((p) => p.groups.length > 0).groups[0];
+  assert.deepEqual([point.groups[0].costEquivalent, point.groups[0].billedUsd], [pointWire.cost_equivalent, pointWire.billed_usd], 'a series point carries the same members');
   const rollups = d.decodeAccountRollups(fixture('analytics_accounts'));
   assert.ok(rollups.every((r) => isIso(r.hour) && typeof r.peak['5h'] === 'number'));
 });
@@ -833,10 +916,17 @@ test('an account-grouped breakdown row carries its shares keyed by window and a 
   assert.deepEqual(business.probeShares, {});
   const probed = d.decodeAnalyticsGroup({ probe_shares: { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } } });
   assert.deepEqual(probed.probeShares, { five_hour: { cost: 0.25, wasted: null }, seven_day: { cost: 0.05, wasted: 0.0125 } }, 'a wasted null reads through');
+  const businessWire = fixture('analytics_breakdown_accounts').rows.find((r) => r.key === 'business');
+  assert.deepEqual([business.costEquivalent, business.cacheEquivalent], [businessWire.cost_equivalent, businessWire.cache_equivalent], 'the account grouping reads the equivalents beside the shares');
+  const directWire = fixture('analytics_breakdown_accounts').rows.find((r) => r.key === 'direct');
   const direct = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'direct');
-  assert.deepEqual([direct.cacheShares, direct.costShares, direct.planOutputTokens, direct.planRequests, direct.probeShares], [null, null, null, null, null], 'an api_key group');
-  for (const row of fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup)) {
-    assert.deepEqual([row.cacheShares, row.costShares, row.planOutputTokens, row.planRequests, row.probeShares], [null, null, null, null, null], `a key-grouped row: ${row.key}`);
+  assert.deepEqual([direct.cacheShares, direct.costShares, direct.probeShares], [null, null, null], 'an api_key group');
+  assert.deepEqual([direct.planOutputTokens, direct.planRequests, direct.costEquivalent, direct.billedUsd], [directWire.plan_output_tokens, directWire.plan_requests, {}, directWire.billed_usd], 'an api_key group counts no plan request and reads its dollars billed');
+  for (const [i, row] of fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup).entries()) {
+    const sent = fixture('analytics_breakdown').rows[i];
+    assert.deepEqual([row.cacheShares, row.costShares, row.probeShares], [null, null, null], `a key-grouped row: ${row.key}`);
+    assert.deepEqual([row.planOutputTokens, row.planRequests], [sent.plan_output_tokens, sent.plan_requests], `a key-grouped row counts its plan requests: ${row.key}`);
+    assert.equal(typeof row.planRequests, 'number', `as a number: ${row.key}`);
   }
   const point = fixture('analytics_series_accounts').points.map(d.decodeAnalyticsPoint).find((p) => p.groups.some((g) => g.key === 'business'));
   assert.equal(typeof point.groups.find((g) => g.key === 'business').costShares.five_hour, 'number', 'a series point carries the same shares');
@@ -855,11 +945,15 @@ test('the burn series decodes each point with its instant, both token sides, and
     wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
     'the fixture reports a subscription point with both window shares priced, output tokens among its count',
   );
+  assert.ok(wire.five_hour_equivalent > 0 && wire.seven_day_equivalent > 0, 'the fixture prices the point in the 20x equivalent too');
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
+    estimated: wire.estimated,
+    fiveHourEquivalent: wire.five_hour_equivalent,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
+    sevenDayEquivalent: wire.seven_day_equivalent,
     sevenDayShare: wire.seven_day_share,
     tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
@@ -868,14 +962,16 @@ test('the burn series decodes each point with its instant, both token sides, and
   });
   const direct = burn.points[burn.points.length - 1];
   assert.deepEqual(
-    [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.unit, direct.usd],
-    ['direct', null, null, 'usd', body.points.at(-1).usd],
+    [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.fiveHourEquivalent, direct.sevenDayEquivalent, direct.unit, direct.usd],
+    ['direct', null, null, null, null, 'usd', body.points.at(-1).usd],
     'an API-key point spends dollars and reads no window',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
-  // Every grouping but the account one answers the shares and the unit as null.
+  // Every grouping but the account one answers the shares and the unit as null, and the equivalents under every one.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, group: 'desktop', seven_day_share: null, unit: null }] }).points;
   assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
+  assert.deepEqual([keyed.fiveHourEquivalent, keyed.sevenDayEquivalent], [wire.five_hour_equivalent, wire.seven_day_equivalent]);
+  assert.equal(d.decodeBurnPoint({ ...wire, estimated: true }).estimated, true, 'a fallback-priced bucket reads estimated');
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
@@ -1275,6 +1371,37 @@ test('a session fold marks what request rows cannot supply and a sum carries the
   assert.ok(bucket.groups.every((g) => g.fromRequests === true && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
 });
 
+test('a sum of groups adds the 20x equivalents per window, the billed side and the plan counts, and carries a fold\'s gaps', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const [folded] = d.foldGroups(rows, 'all');
+  const [first, second] = fixture('analytics_breakdown').rows;
+  const a = d.decodeAnalyticsGroup({ ...first, probe_equivalent: { five_hour: { cost: 0.25, wasted: 0.125 } } });
+  const b = d.decodeAnalyticsGroup({ ...second, estimated: true, probe_equivalent: { five_hour: { cost: 0.5, wasted: 0 }, seven_day: { cost: 0.05, wasted: 0 } } });
+  const keys = (...maps) => [...new Set(maps.flatMap((m) => Object.keys(m)))];
+  const close = (got, want, what) => assert.ok(typeof got === 'number' && Math.abs(got - want) <= Math.abs(want) * 1e-12, `${what}: ${got} against ${want}`);
+  const routeOnly = d.sumGroups([a, b]);
+  for (const w of keys(a.costEquivalent, b.costEquivalent)) close(routeOnly.costEquivalent[w], (a.costEquivalent[w] ?? 0) + (b.costEquivalent[w] ?? 0), `costEquivalent.${w}`);
+  for (const w of keys(a.cacheEquivalent, b.cacheEquivalent)) {
+    for (const half of ['read', 'write']) close(routeOnly.cacheEquivalent[w][half], (a.cacheEquivalent[w]?.[half] ?? 0) + (b.cacheEquivalent[w]?.[half] ?? 0), `cacheEquivalent.${w}.${half}`);
+  }
+  assert.deepEqual(routeOnly.probeEquivalent, { five_hour: { cost: 0.75, wasted: 0.125 }, seven_day: { cost: 0.05, wasted: 0 } }, 'a window any group carries, its halves added');
+  close(routeOnly.billedUsd, a.billedUsd + b.billedUsd, 'billedUsd');
+  for (const k of ['cacheRead', 'cacheWrite', 'input', 'output']) close(routeOnly.billed[k], a.billed[k] + b.billed[k], `billed.${k}`);
+  for (const k of ['cacheRead', 'cacheWrite', 'input', 'output']) close(routeOnly.equivalentSplit[k], a.equivalentSplit[k] + b.equivalentSplit[k], `equivalentSplit.${k}`);
+  assert.equal(routeOnly.estimated, true, 'one estimated group marks the sum');
+  assert.equal(d.sumGroups([a, a]).estimated, false);
+  assert.deepEqual([routeOnly.planRequests, routeOnly.planOutputTokens], [a.planRequests + b.planRequests, a.planOutputTokens + b.planOutputTokens], 'the plan counts sum');
+  const mixed = d.sumGroups([a, b, folded]);
+  assert.deepEqual([mixed.billed.cacheRead, mixed.billed.cacheWrite], [null, null], "a fold's unknown cache halves leave the billed halves unknown");
+  close(mixed.billed.input, a.billed.input + b.billed.input + folded.billed.input, 'billed.input with the fold');
+  assert.equal(mixed.equivalentSplit, null, 'a fold carries one total, so the split by kind is unknown');
+  close(mixed.billedUsd, a.billedUsd + b.billedUsd + folded.billedUsd, 'billedUsd with the fold');
+  for (const w of keys(a.costEquivalent, b.costEquivalent, folded.costEquivalent)) close(mixed.costEquivalent[w], (a.costEquivalent[w] ?? 0) + (b.costEquivalent[w] ?? 0) + (folded.costEquivalent[w] ?? 0), `costEquivalent.${w} with the fold`);
+  assert.equal(folded.planRequests, null, 'a fold under no account grouping counts no plan request');
+  assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [routeOnly.planRequests, routeOnly.planOutputTokens], 'a null count is skipped while another group carries one');
+  assert.deepEqual([d.sumGroups([folded]).planRequests, d.sumGroups([folded]).planOutputTokens], [null, null], 'and null when every group reads null');
+});
+
 test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
   for (const cause of ['evicted', 'expired', 'expired_at_restart']) {
@@ -1448,6 +1575,17 @@ test('the dashboard reads the live pin count the route answers beside the rollup
   assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 
+test('the dashboard reads its billed dollars, its 20x equivalents and its estimated flag for the day and per hour', () => {
+  const wire = fixture('dashboard');
+  const o = d.decodeDashboard(wire);
+  const shared = (e) => ({ fiveHour: e.five_hour, sevenDay: e.seven_day });
+  assert.deepEqual([o.billed24h, o.equivalent24h, o.estimated24h], [wire.billed_24h, shared(wire.equivalent_24h), wire.estimated_24h]);
+  assert.ok(o.billed24h > 0 && o.equivalent24h.fiveHour > 0, 'the captured day spent on both sides');
+  const busy = wire.hourly.findIndex((h) => h.requests > 0);
+  assert.deepEqual([o.hourly[busy].billed, o.hourly[busy].equivalent], [wire.hourly[busy].billed, shared(wire.hourly[busy].equivalent)], "an hour's billed dollars and equivalents");
+  assert.equal(d.decodeDashboard({ ...wire, estimated_24h: true }).estimated24h, true, 'a fallback-priced day reads estimated');
+});
+
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);
@@ -1535,12 +1673,12 @@ test('settings decode the members the route answers and nothing more', () => {
     {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
-      apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
+      apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
       listeners: ['metrics', 'proxy', 'proxyTls'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
-      subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'source', 'typeMultiplier', 'unit'],
+      subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
     },
     'each member carries what the pages read and no other key',
   );
@@ -1573,16 +1711,19 @@ test('a settings member the answer leaves out decodes to its default', () => {
     {
       capacity: {},
       effective: '',
+      modelTier: {},
       modelWeight: {},
       modelWindows: {},
       overrides: {},
       peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
       problem: null,
+      revisions: [],
       source: '',
+      tierOrder: [],
       typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
       unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
     },
-    'an answer without the cost model reads as an empty one, with no capacity, no weight and no problem',
+    'an answer without the cost model reads as an empty one, with no capacity, no weight, no model tier and no problem',
   );
 });
 
@@ -1606,8 +1747,15 @@ test('settings decode the subscription cost model from its envelope', () => {
   const fable = content.model_windows.seven_day_fable;
   assert.deepEqual(costs.modelWindows.seven_day_fable, { capacityFactor: fable.capacity_factor, of: fable.of });
   assert.deepEqual(Object.keys(costs.overrides), Object.keys(content.overrides));
+  assert.deepEqual(costs.tierOrder, content.tier_order, 'the model tiers in display order');
+  assert.deepEqual(costs.modelTier, content.model_tier, "each model's tier");
+  assert.ok(costs.tierOrder.length > 0 && Object.keys(costs.modelTier).length > 0, 'the shipped model names its tiers');
+  assert.deepEqual(costs.revisions.map((r) => r.effective), wire.subscription_costs.revisions.map((r) => r.effective), 'every revision of the cost model, in the order sent');
+  assert.deepEqual(costs.revisions.map((r) => r.content.modelWeight), wire.subscription_costs.revisions.map((r) => r.content.model_weight), "each revision's own content");
   assert.deepEqual(s.apiPrices.models.map((p) => p.model), Object.keys(wire.api_prices.content.models), "the price rows in the file's order");
   assert.deepEqual([s.apiPrices.effective, s.apiPrices.source], [wire.api_prices.content.effective, wire.api_prices.source]);
+  assert.deepEqual(s.apiPrices.revisions.map((r) => r.effective), wire.api_prices.revisions.map((r) => r.effective), 'every revision of the price table, in the order sent');
+  assert.deepEqual(s.apiPrices.revisions.map((r) => r.models.map((m) => m.model)), wire.api_prices.revisions.map((r) => Object.keys(r.content.models)), "each revision's own rows");
   const bare = { ...wire };
   delete bare.subscription_costs;
   assert.deepEqual(Object.keys(d.decodeSettings(bare).subscriptionCosts.capacity), [], 'an answer without the cost model sizes no tier');
@@ -1634,12 +1782,15 @@ test('a cost model answer with a member missing or of the wrong type reads as th
   const unreadable = {
     capacity: {},
     effective: '',
+    modelTier: {},
     modelWeight: {},
     modelWindows: {},
     overrides: {},
     peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
     problem: "The cost model's answer could not be read.",
+    revisions: [],
     source: envelope.source,
+    tierOrder: [],
     typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
     unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
   };
@@ -1655,8 +1806,17 @@ test('a cost model answer with a member missing or of the wrong type reads as th
     'a window weight that is null': (c) => { c.overrides['claude-haiku-4-5'].weight_by_window.seven_day = null; },
     'a zone that is not a string': (c) => { c.peak.zone = 5; },
     'an override multiplier sent as a string': (c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = '0.2'; },
+    'a model tier map with a tier that is a number': (c) => { c.model_tier['claude-opus-5-5'] = 3; },
+    'no model tier order': (c) => { delete c.tier_order; },
   };
   for (const [what, edit] of Object.entries(malformed)) assert.deepEqual(decoded(edit), unreadable, what);
+  const revision = (edit) => {
+    const sent = structuredClone(envelope);
+    edit(sent.revisions[1].content);
+    return d.decodeSettings({ ...wire, subscription_costs: sent }).subscriptionCosts;
+  };
+  assert.deepEqual(revision((c) => { delete c.tier_order; }), unreadable, 'one unreadable revision makes the envelope unreadable');
+  assert.deepEqual(revision(() => undefined).revisions.map((r) => r.effective), envelope.revisions.map((r) => r.effective), 'every revision reads when each does');
   assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: { ...envelope, content: undefined } }).subscriptionCosts, unreadable, 'an envelope without its content');
   assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: null }).subscriptionCosts, { ...unreadable, source: '' }, 'an envelope that is not an object');
   const read = decoded(() => undefined);
@@ -1678,6 +1838,13 @@ test('a pricing effective date that is not a date decodes as the string sent wit
   }
   const dated = pricingOf('2026-10-01');
   assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
+  // The revisions read as leniently as the entry in force: free text is kept, and the rest of the list still reads.
+  const [first, ...rest] = wire.api_prices.revisions;
+  const listed = d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: [{ ...first, effective: 'v3', content: { ...first.content, effective: 'v3' } }, ...rest] } }).apiPrices.revisions;
+  assert.deepEqual([listed[0].effective, listed[0].effectiveDate], ['v3', null], "a revision's free-text date is kept as sent");
+  assert.equal(listed[0].models.length, Object.keys(first.content.models).length, 'its rows still decode');
+  assert.deepEqual(listed.slice(1).map((r) => r.effectiveDate), rest.map((r) => `${r.effective}T00:00:00.000Z`), 'the dated revisions parse');
+  assert.deepEqual(d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: 'none' } }).apiPrices.revisions, [], 'a list the answer garbles reads as none');
 });
 
 test("a key group's label is built from the holder's id and creation instant, in the viewer's zone", () => {
@@ -1714,6 +1881,12 @@ test("a table's effective date reads as the calendar date the file names in ever
     assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
     assert.equal(d.effectiveLabel('2026-10-01T23:00'), 'Oct 01, 2026', "a date with a time reads in the browser's zone");
     assert.equal(d.effectiveLabel('v3'), 'v3');
+    // Each revision's date is its UTC midnight, so the label reads the calendar date the file names here too.
+    const { apiPrices, subscriptionCosts } = d.decodeSettings(fixture('settings'));
+    for (const r of [...apiPrices.revisions, ...subscriptionCosts.revisions]) {
+      assert.equal(r.effectiveDate, `${r.effective}T00:00:00.000Z`, `${r.effective} parses to its midnight`);
+      assert.equal(d.effectiveLabel(r.effective), new Date(r.effectiveDate).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }), `${r.effective} reads its calendar date`);
+    }
   } finally {
     if (zone === undefined) delete process.env.TZ;
     else process.env.TZ = zone;
@@ -1779,6 +1952,11 @@ test('a session decodes its burn unit, and a pin the cost model cannot price rea
   const pinned = d.decodeSession(wire);
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
+  assert.deepEqual([pinned.burnEquivalent, pinned.estimated], [wire.burn_equivalent, wire.estimated], "the pin's burn as a 20x equivalent and its estimated flag");
+  assert.equal(typeof pinned.burnEquivalent, 'number', 'a plan pin carries one');
+  assert.deepEqual([d.decodeSession({ ...wire, burn_equivalent: 0.25, estimated: true }).burnEquivalent, d.decodeSession({ ...wire, burn_equivalent: 0.25, estimated: true }).estimated], [0.25, true]);
+  const unpinned = rows.find((s) => s.burn === null);
+  assert.equal(d.decodeSession(unpinned).burnEquivalent, null, 'a session with no pin burns nothing');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
   assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['cause', 'lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
   assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'nor does a recipe');

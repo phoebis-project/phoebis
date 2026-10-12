@@ -1,10 +1,10 @@
 import type {
-  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { fundingOf, modelWeeks, shareOf } from '@/lib/costs';
+import { equivalentOf, fundingOf, modelWeeks, shareOrFallback } from '@/lib/costs';
 import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -32,6 +32,8 @@ const kindOf = (accountId: string): AccountKind => {
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
+/** The account tier an attempt lands under: the subscription's, none for an API key account. */
+const accountTier = (accountId: string): string | null => accountById.get(accountId)?.subscription?.rateLimitTier ?? null;
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
@@ -179,10 +181,12 @@ function usageFor(model: string, kind: RequestKind): Usage {
   };
 }
 
-/** An answer prices at the cells the ledger selects for it: the model's fast cells for a fast answer on a row that
- *  has them, else the long-context cells when its prompt is over the threshold, else the standard cells. */
-export function costSplitOf(model: string, u: Usage, fast = false): CostSplit {
-  const p = cellsFor(model, u, fast);
+/** An answer prices at the cells the ledger selects for it in the price entry in force at `at`, its arrival: the
+ *  model's fast cells for a fast answer on a row that has them, else the long-context cells when its prompt is over
+ *  the threshold, else the standard cells. A model the entry lacks prices at nothing. */
+export function costSplitOf(model: string, u: Usage, fast: boolean, at: string | number): CostSplit {
+  const p = cellsFor(model, u, fast, at);
+  if (p === null) return { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
   return {
     cacheRead: (u.cacheRead * p.cacheReadPerM) / 1_000_000,
     cacheWrite: (u.cacheWrite5m * p.cacheWrite5mPerM + u.cacheWrite1h * p.cacheWrite1hPerM) / 1_000_000,
@@ -191,8 +195,8 @@ export function costSplitOf(model: string, u: Usage, fast = false): CostSplit {
   };
 }
 
-export function costOf(model: string, u: Usage, fast = false): number {
-  const c = costSplitOf(model, u, fast);
+export function costOf(model: string, u: Usage, fast: boolean, at: string | number): number {
+  const c = costSplitOf(model, u, fast, at);
   return c.input + c.cacheRead + c.cacheWrite + c.output;
 }
 
@@ -404,6 +408,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       // on the standard tier.
       serviceTier: upstreamStatus === 200 && !count ? 'standard' : null,
       startedAt: iso(cursor),
+      tier: accountTier(accountId),
       // The upstream names its request on every answer, an error document included, and a message on a 200 alone.
       upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
@@ -445,6 +450,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
         outcome: refuses ? 'upstream_error' : 'rate_limited',
         overageInUse: kind === 'oauth' ? false : null,
         startedAt: iso(cursor),
+        tier: accountTier(accountId),
         upstreamRequestId: upstreamId('req_011C'),
         upstreamStatus: refuses ? 404 : 429,
         windows,
@@ -537,7 +543,7 @@ function buildRequests(): RequestLog[] {
       ttftMs,
       durationMs,
       usage,
-      costUsd: Math.round(costOf(model, usage) * 10_000) / 10_000,
+      costUsd: Math.round(costOf(model, usage, false, atMs) * 10_000) / 10_000,
       diagnosticsSource: sourceOf(attempts, lane.keyId),
       errorCode,
       sessionId,
@@ -591,6 +597,7 @@ function buildRequests(): RequestLog[] {
             cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason,
             index: 0,
             overageInUse: studio === 'oauth' ? false : null,
+            tier: accountTier('studio'),
             windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
           },
         ],
@@ -598,7 +605,7 @@ function buildRequests(): RequestLog[] {
         durationMs: Date.parse(answered.startedAt) + (answered.durationMs ?? 0) - atMs,
         canonicalModel: drawn,
         capturedBodies: false,
-        costUsd: Math.round(costOf(drawn, moved.usage) * 10_000) / 10_000,
+        costUsd: Math.round(costOf(drawn, moved.usage, false, atMs) * 10_000) / 10_000,
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
         model: drawn,
@@ -651,7 +658,7 @@ function buildRequests(): RequestLog[] {
     if (!fastTurn(r.keyId, r.model, r.kind)) continue;
     r.shape = { ...r.shape, requestedSpeed: 'fast' };
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
-    r.costUsd = Math.round(costOf(r.model, r.usage, true) * 10_000) / 10_000;
+    r.costUsd = Math.round(costOf(r.model, r.usage, true, r.at) * 10_000) / 10_000;
   }
   // A stream the client closed: its 200 head went out and no upstream error followed, so the request ends canceled
   // with the usage it had reached, under the code the relay files a client's leaving with. One drawn row takes it, so
@@ -870,6 +877,7 @@ function storyRow(seed: StorySeed): RequestLog {
       // The tier is read off the answer's usage, which a token count's answer carries none of.
       serviceTier: a.status === 200 && kind !== 'count_tokens' ? (seed.tier ?? 'standard') : null,
       startedAt: iso(a.at),
+      tier: accountTier(a.accountId),
       upstreamMessageId: a.status === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus: a.status,
@@ -898,7 +906,7 @@ function storyRow(seed: StorySeed): RequestLog {
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
-    costUsd: answered ? Math.round(costOf(seed.model, usage, fast) * 10_000) / 10_000 : 0,
+    costUsd: answered ? Math.round(costOf(seed.model, usage, fast, seed.at) * 10_000) / 10_000 : 0,
     diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
@@ -1527,18 +1535,21 @@ function seedHolds() {
 }
 
 /**
- * A row's shares of its account's windows, as the request route answers them: null for a request no subscription
- * window paid, else each window the model applies to under the account's tier at the request's completion, a window
- * the cost model cannot price carried as null and an account without a tier an empty map.
+ * A row's shares of its account's windows and its 20x equivalents, as the request route answers them: null for a
+ * request no subscription window paid, else each window the model applies to at the request's completion, the shares
+ * under the account's tier and the equivalents under none, a window the cost model cannot price carried as null and
+ * an account without a tier an empty share map. `estimated` is true where a window priced at the model tier's fallback
+ * weight.
  */
-function costSharesOf(r: RequestLog): CostShares | null {
+function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'estimated'> {
   const serving = r.attempts[r.attempts.length - 1] ?? null;
-  if (serving === null || fundingOf(serving) !== 'plan') return null;
+  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, estimated: false };
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
-  if (tier === undefined) return {};
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.canonicalModel)];
-  return Object.fromEntries(windows.map((w) => [w, shareOf(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs)]));
+  const equivalents = windows.map((w) => [w, equivalentOf(TABLES, w, r.canonicalModel, r.usage, finishedMs)] as const);
+  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, shareOrFallback(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs)?.share ?? null]));
+  return { costEquivalent: Object.fromEntries(equivalents.map(([w, e]) => [w, e?.equivalent ?? null])), costShares: shares, estimated: equivalents.some(([, e]) => e?.estimated === true) };
 }
 
 /**
@@ -1571,7 +1582,7 @@ function phaseRequests() {
       streamEndAt: closes ? iso(finishedMs - tail) : null,
       writtenAt: last === undefined ? null : iso(Date.parse(last.startedAt) + write),
     };
-    r.costShares = costSharesOf(r);
+    Object.assign(r, costFiguresOf(r), { tier: last === undefined ? null : accountTier(last.accountId) });
   }
 }
 
@@ -1664,24 +1675,31 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
 };
 
 /**
- * An hour's plan-window shares: each request priced at its own band and completion, then summed, so a request across a
- * band edge reads as its own shares do. A request is priced here rather than its cost shares read, which are null on
- * every request the plan did not fund. A window any request prices null reads null, and a request with no token, or on
- * an account without a tier, prices nothing.
+ * An hour's plan-window shares and 20x equivalents: each request priced at its own band and completion, then summed,
+ * so a request across a band edge reads as its own shares do. A request is priced here rather than its cost shares
+ * read, which are null on every request the plan did not fund. A window any request prices null reads null, and a
+ * request with no token prices nothing, nor, for the shares alone, one on an account without a tier.
  */
-function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Record<string, number | null> {
+function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalents' | 'estimated' | 'shares'> {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
   const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, model)];
-  const out: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
+  const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
+  const equivalents: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
+  const add = (into: Record<string, number | null>, w: string, figure: number | null) => {
+    const sum = into[w];
+    into[w] = figure === null || sum === null ? null : sum + figure;
+  };
+  let estimated = false;
   for (const { at, usage } of priced) {
-    if (tier === undefined || tokensTotal(usage) === 0) continue;
+    if (tokensTotal(usage) === 0) continue;
     for (const w of windows) {
-      const share = shareOf(TABLES, w, tier, model, usage, at);
-      const sum = out[w];
-      out[w] = share === null || sum === null ? null : sum + share;
+      const equivalent = equivalentOf(TABLES, w, model, usage, at);
+      add(equivalents, w, equivalent?.equivalent ?? null);
+      if (equivalent?.estimated) estimated = true;
+      if (tier !== undefined) add(shares, w, shareOrFallback(TABLES, w, tier, model, usage, at)?.share ?? null);
     }
   }
-  return out;
+  return { equivalents, estimated, shares };
 }
 
 const upstreamFailed = (r: RequestLog) => r.status !== 200 && r.status !== 429 && r.status !== 529;
@@ -1779,9 +1797,10 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
-        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
+        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at))),
         // At each answer's completion, the instant its own shares price it at.
-        shares: hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        ...hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        tier: accountTier(accountId),
         histograms: histogramsOf(partRows),
         keptWarm: { requests: keptHere.length, tokens: keptHere.reduce((s, r) => s + r.usage.cacheRead, 0) },
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
@@ -1915,11 +1934,12 @@ function historicalRollups(): HourlyRollup[] {
         cacheMisses: Math.round(ok * h.float(0.1, 0.25)),
         ...synthesizeMissReasons(hm, ok, lane.keyId !== 'ci'),
         uncached: Math.max(0, ok - Math.round(ok * 0.85)),
-        costUsd: costOf(model, usage, fast),
-        cost: costSplitOf(model, usage, fast),
+        costUsd: costOf(model, usage, fast, t),
+        cost: costSplitOf(model, usage, fast, t),
         // A synthesized hour holds no request of its own, so its tokens price as one answer at the hour, as its dollars
         // do.
-        shares: hourShares(accountId, model, [{ at: t, usage }]),
+        ...hourShares(accountId, model, [{ at: t, usage }]),
+        tier: accountTier(accountId),
         histograms: {
           durationMs: histogramOf(duration),
           outputTps: histogramOf(sampled(h, ok, big ? 55 : 80, 0.35)),
@@ -1944,7 +1964,7 @@ function historicalRollups(): HourlyRollup[] {
         const probes = h.int(2, 6);
         const failed = h.chance(0.08) ? 1 : 0;
         const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS };
-        const probeCost = costOf(model, probeUsage);
+        const probeCost = costOf(model, probeUsage, false, t);
         out.push({
           hour: iso(t),
           client: CLIENTS[lane.keyId] ?? '-',
@@ -1968,8 +1988,9 @@ function historicalRollups(): HourlyRollup[] {
           ...synthesizeMissReasons(hm, probes, true),
           uncached: 0,
           costUsd: probeCost,
-          cost: costSplitOf(model, probeUsage),
-          shares: hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
+          cost: costSplitOf(model, probeUsage, false, t),
+          ...hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
+          tier: accountTier(accountId),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
           keptWarm: { requests: 0, tokens: 0 },
           probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
@@ -1993,6 +2014,25 @@ const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
+/** Rollups' billed dollars, their plan rows' 20x equivalents on the two shared windows and whether a plan row priced
+ *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing. */
+const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent' | 'estimated'> => {
+  const plan = rows.filter((r) => r.funding === 'plan');
+  return {
+    billedUsd: sumOf(rows.filter((r) => r.funding !== 'plan'), (r) => r.costUsd),
+    equivalent: { fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0) },
+    estimated: plan.some((r) => r.estimated),
+  };
+};
+/** The same over request rows, as the pools and dashboard routes sum theirs. */
+export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent' | 'estimated'> => {
+  const plan = rows.filter((r) => r.costEquivalent !== null);
+  return {
+    billedUsd: sumOf(rows.filter((r) => r.costEquivalent === null), (r) => r.costUsd),
+    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0) },
+    estimated: plan.some((r) => r.estimated),
+  };
+};
 const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
@@ -2017,14 +2057,25 @@ function deriveFigures() {
     // A bare id totals its live key alone, so an earlier holder's rows count for neither figure.
     const mine = COUNTED_ROLLUPS.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
     const week = mine.filter(inWeek);
+    const life = sidesOf(mine);
     Object.assign(k, {
-      lifetime: { cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)), requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)) },
-      usage7d: { cost: sumOf(week, (r) => r.costUsd), requests: sumOf(week, requestsIn), tokens: sumOf(week, tokensIn) },
+      lifetime: {
+        billedUsd: Math.max(k.lifetime.billedUsd, life.billedUsd),
+        cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)),
+        equivalent: { fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour), sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay) },
+        estimated: k.lifetime.estimated || life.estimated,
+        requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)),
+      },
+      usage7d: { ...sidesOf(week), cost: sumOf(week, (r) => r.costUsd), requests: sumOf(week, requestsIn), tokens: sumOf(week, tokensIn) },
     });
   }
   for (const p of poolById.values()) {
     const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id);
-    const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => ({ at: iso(TOTALS_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
+    const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => {
+      const at = TOTALS_FROM + i * HOUR;
+      const hour = mine.filter((r) => Date.parse(r.at) >= at && Date.parse(r.at) < at + HOUR);
+      return { ...requestSidesOf(hour), at: iso(at), costUsd: 0, failed: 0, requests: 0, tokens: 0 };
+    });
     for (const r of mine) {
       const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
@@ -2032,7 +2083,8 @@ function deriveFigures() {
       bucket.requests += 1;
       bucket.tokens += tokensTotal(r.usage);
     }
-    Object.assign(p, { cost24h: sumOf(mine, (r) => r.costUsd), requests24h: mine.length, traffic24h });
+    const day = requestSidesOf(mine);
+    Object.assign(p, { billed24h: day.billedUsd, cost24h: sumOf(mine, (r) => r.costUsd), equivalent24h: day.equivalent, estimated24h: day.estimated, requests24h: mine.length, traffic24h });
   }
 }
 
